@@ -467,6 +467,354 @@ class FivetranIntegration:
         except Exception:
             return None
     
+    # =========================================================================
+    # DEBUG METHODS
+    # =========================================================================
+    
+    def get_sync_details(self, connector_id: str, sync_id: str = None) -> Dict[str, Any]:
+        """
+        Get detailed sync information for a connector.
+        
+        Args:
+            connector_id: The connector ID
+            sync_id: Optional specific sync ID (if not provided, gets latest)
+            
+        Returns:
+            Dict with detailed sync information
+        """
+        try:
+            # Get connector details
+            result = self._request('GET', f'/connectors/{connector_id}')
+            connector_data = result.get('data', {})
+            
+            # Get sync state details
+            status = connector_data.get('status', {})
+            
+            sync_details = {
+                'connector_id': connector_id,
+                'connector_name': connector_data.get('schema'),
+                'service': connector_data.get('service'),
+                'sync_state': status.get('sync_state'),
+                'setup_state': status.get('setup_state'),
+                'update_state': status.get('update_state'),
+                'is_historical_sync': status.get('is_historical_sync', False),
+                'tasks_remaining': status.get('tasks', []),
+                'warnings': status.get('warnings', []),
+                'schedule_type': connector_data.get('schedule_type'),
+                'sync_frequency_minutes': connector_data.get('sync_frequency'),
+                'succeeded_at': connector_data.get('succeeded_at'),
+                'failed_at': connector_data.get('failed_at'),
+                'paused': connector_data.get('paused', False),
+            }
+            
+            # Try to get more detailed sync metadata
+            try:
+                sync_result = self._request(
+                    'GET',
+                    f'/connectors/{connector_id}/sync',
+                    params={'limit': 5}
+                )
+                sync_data = sync_result.get('data', {})
+                sync_details['recent_syncs'] = sync_data.get('logs', [])
+                sync_details['sync_id'] = sync_data.get('sync_id')
+            except Exception:
+                pass
+            
+            return sync_details
+            
+        except Exception as e:
+            logger.error(f"Failed to get sync details: {e}")
+            return {
+                'connector_id': connector_id,
+                'error': str(e),
+            }
+    
+    def get_connector_config(self, connector_id: str) -> Dict[str, Any]:
+        """
+        Get connector configuration details.
+        
+        Args:
+            connector_id: The connector ID
+            
+        Returns:
+            Dict with connector configuration (credentials masked)
+        """
+        try:
+            result = self._request('GET', f'/connectors/{connector_id}')
+            connector_data = result.get('data', {})
+            
+            # Get config but mask sensitive fields
+            config = connector_data.get('config', {})
+            masked_config = {}
+            sensitive_fields = ['password', 'secret', 'key', 'token', 'credential', 'auth']
+            
+            for key, value in config.items():
+                # Mask sensitive fields
+                if any(s in key.lower() for s in sensitive_fields):
+                    if isinstance(value, str) and len(value) > 4:
+                        masked_config[key] = value[:2] + '****' + value[-2:]
+                    else:
+                        masked_config[key] = '****'
+                else:
+                    masked_config[key] = value
+            
+            return {
+                'connector_id': connector_id,
+                'connector_name': connector_data.get('schema'),
+                'service': connector_data.get('service'),
+                'service_version': connector_data.get('service_version'),
+                'created_at': connector_data.get('created_at'),
+                'group_id': connector_data.get('group_id'),
+                'networking_method': connector_data.get('networking_method'),
+                'proxy_agent_id': connector_data.get('proxy_agent_id'),
+                'config': masked_config,
+                'schedule_type': connector_data.get('schedule_type'),
+                'sync_frequency_minutes': connector_data.get('sync_frequency'),
+                'daily_sync_time': connector_data.get('daily_sync_time'),
+                'paused': connector_data.get('paused', False),
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get connector config: {e}")
+            return {
+                'connector_id': connector_id,
+                'error': str(e),
+            }
+    
+    def get_schema_changes(self, 
+                           connector_id: str, 
+                           since: Optional[datetime] = None) -> Dict[str, Any]:
+        """
+        Get schema change history for a connector.
+        
+        Note: Fivetran's schema change tracking may be limited.
+        This method attempts to detect changes by comparing current vs expected schema.
+        
+        Args:
+            connector_id: The connector ID
+            since: Optional datetime to filter changes after
+            
+        Returns:
+            Dict with schema change information
+        """
+        try:
+            # Get current schema
+            result = self._request('GET', f'/connectors/{connector_id}/schemas')
+            schema_data = result.get('data', {})
+            
+            schemas = []
+            total_tables = 0
+            enabled_tables = 0
+            disabled_tables = 0
+            
+            for schema_name, schema_info in schema_data.get('schemas', {}).items():
+                tables = []
+                for table_name, table_info in schema_info.get('tables', {}).items():
+                    total_tables += 1
+                    is_enabled = table_info.get('enabled', True)
+                    if is_enabled:
+                        enabled_tables += 1
+                    else:
+                        disabled_tables += 1
+                    
+                    # Get column info
+                    columns = []
+                    for col_name, col_info in table_info.get('columns', {}).items():
+                        columns.append({
+                            'name': col_name,
+                            'enabled': col_info.get('enabled', True),
+                            'hashed': col_info.get('hashed', False),
+                            'is_primary_key': col_info.get('is_primary_key', False),
+                        })
+                    
+                    tables.append({
+                        'name': table_name,
+                        'enabled': is_enabled,
+                        'sync_state': table_info.get('sync_state'),
+                        'columns': columns,
+                        'column_count': len(columns),
+                    })
+                
+                schemas.append({
+                    'name': schema_name,
+                    'enabled': schema_info.get('enabled', True),
+                    'tables': tables,
+                    'table_count': len(tables),
+                })
+            
+            # Try to get schema change logs if available
+            change_logs = []
+            try:
+                # This endpoint may vary by Fivetran API version
+                logs_result = self._request(
+                    'GET',
+                    f'/connectors/{connector_id}/schema-changes',
+                    params={'limit': 20}
+                )
+                change_logs = logs_result.get('data', {}).get('changes', [])
+            except Exception:
+                # Schema change logs may not be available
+                pass
+            
+            return {
+                'connector_id': connector_id,
+                'total_schemas': len(schemas),
+                'total_tables': total_tables,
+                'enabled_tables': enabled_tables,
+                'disabled_tables': disabled_tables,
+                'schemas': schemas,
+                'change_logs': change_logs,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get schema changes: {e}")
+            return {
+                'connector_id': connector_id,
+                'error': str(e),
+            }
+    
+    def get_failure_details(self, connector_id: str) -> Dict[str, Any]:
+        """
+        Get detailed failure information for a connector.
+        
+        Args:
+            connector_id: The connector ID
+            
+        Returns:
+            Dict with failure details and debugging information
+        """
+        try:
+            # Get connector details
+            result = self._request('GET', f'/connectors/{connector_id}')
+            connector_data = result.get('data', {})
+            
+            status = connector_data.get('status', {})
+            
+            failure_info = {
+                'connector_id': connector_id,
+                'connector_name': connector_data.get('schema'),
+                'service': connector_data.get('service'),
+                'setup_state': status.get('setup_state'),
+                'sync_state': status.get('sync_state'),
+                'update_state': status.get('update_state'),
+                'is_broken': status.get('setup_state') == 'broken',
+                'last_failure': connector_data.get('failed_at'),
+                'last_success': connector_data.get('succeeded_at'),
+            }
+            
+            # Get warnings and tasks
+            failure_info['warnings'] = status.get('warnings', [])
+            failure_info['pending_tasks'] = status.get('tasks', [])
+            
+            # Try to get recent sync logs for error messages
+            try:
+                sync_result = self._request(
+                    'GET',
+                    f'/connectors/{connector_id}/sync',
+                    params={'limit': 10}
+                )
+                logs = sync_result.get('data', {}).get('logs', [])
+                
+                # Filter for error-related logs
+                error_logs = [
+                    log for log in logs
+                    if any(word in str(log.get('message', '')).lower() 
+                           for word in ['error', 'fail', 'exception', 'timeout', 'refused'])
+                ]
+                
+                failure_info['recent_errors'] = error_logs[:5]
+                failure_info['all_recent_logs'] = logs
+                
+            except Exception:
+                failure_info['recent_errors'] = []
+            
+            # Calculate time since last failure
+            if failure_info['last_failure']:
+                try:
+                    failed_at = self._parse_datetime(failure_info['last_failure'])
+                    if failed_at:
+                        hours_since_failure = (datetime.now() - failed_at).total_seconds() / 3600
+                        failure_info['hours_since_failure'] = round(hours_since_failure, 1)
+                except Exception:
+                    pass
+            
+            # Determine failure severity
+            if failure_info['is_broken']:
+                failure_info['severity'] = 'critical'
+            elif failure_info['warnings']:
+                failure_info['severity'] = 'warning'
+            elif failure_info['last_failure'] and not failure_info.get('last_success'):
+                failure_info['severity'] = 'high'
+            else:
+                failure_info['severity'] = 'low'
+            
+            return failure_info
+            
+        except Exception as e:
+            logger.error(f"Failed to get failure details: {e}")
+            return {
+                'connector_id': connector_id,
+                'error': str(e),
+            }
+    
+    def get_all_failures(self, group_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get all connectors with failures or warnings.
+        
+        Args:
+            group_id: Optional group ID to filter by
+            
+        Returns:
+            Dict with all failing connectors
+        """
+        connectors = self.get_connectors(group_id)
+        
+        failures = []
+        warnings = []
+        
+        for connector in connectors:
+            if connector.status == ConnectorStatus.BROKEN:
+                failures.append({
+                    'connector_id': connector.id,
+                    'connector_name': connector.name,
+                    'service': connector.service,
+                    'status': 'broken',
+                    'failed_at': connector.failed_at.isoformat() if connector.failed_at else None,
+                })
+            elif connector.status == ConnectorStatus.DISCONNECTED:
+                failures.append({
+                    'connector_id': connector.id,
+                    'connector_name': connector.name,
+                    'service': connector.service,
+                    'status': 'disconnected',
+                    'failed_at': connector.failed_at.isoformat() if connector.failed_at else None,
+                })
+            elif connector.is_stale:
+                warnings.append({
+                    'connector_id': connector.id,
+                    'connector_name': connector.name,
+                    'service': connector.service,
+                    'status': 'stale',
+                    'hours_since_success': round(connector.hours_since_success, 1) if connector.hours_since_success else None,
+                    'expected_frequency_hours': connector.sync_frequency / 60,
+                })
+            elif connector.paused:
+                warnings.append({
+                    'connector_id': connector.id,
+                    'connector_name': connector.name,
+                    'service': connector.service,
+                    'status': 'paused',
+                })
+        
+        return {
+            'total_connectors': len(connectors),
+            'failing_count': len(failures),
+            'warning_count': len(warnings),
+            'healthy_count': len(connectors) - len(failures) - len(warnings),
+            'failures': failures,
+            'warnings': warnings,
+        }
+    
     def close(self):
         """Close the HTTP client."""
         self._client.close()

@@ -478,6 +478,296 @@ class AirflowIntegration:
         except Exception:
             return None
     
+    # =========================================================================
+    # DEBUG METHODS
+    # =========================================================================
+    
+    def get_task_log(self,
+                     dag_id: str,
+                     dag_run_id: str,
+                     task_id: str,
+                     try_number: int = 1) -> Dict[str, Any]:
+        """
+        Get task execution logs.
+        
+        Args:
+            dag_id: The DAG ID
+            dag_run_id: The DAG run ID
+            task_id: The task ID
+            try_number: The attempt number (default 1)
+            
+        Returns:
+            Dict with task logs and metadata
+        """
+        try:
+            # Get task instance info first
+            task_instance = self._request(
+                'GET',
+                f'/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}'
+            )
+            
+            # Get task logs
+            logs_response = self._request(
+                'GET',
+                f'/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/logs/{try_number}'
+            )
+            
+            return {
+                'dag_id': dag_id,
+                'dag_run_id': dag_run_id,
+                'task_id': task_id,
+                'try_number': try_number,
+                'state': task_instance.get('state'),
+                'operator': task_instance.get('operator'),
+                'start_date': task_instance.get('start_date'),
+                'end_date': task_instance.get('end_date'),
+                'duration': task_instance.get('duration'),
+                'logs': logs_response.get('content', ''),
+                'log_preview': logs_response.get('content', '')[:2000] if logs_response.get('content') else None,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get task logs: {e}")
+            return {
+                'dag_id': dag_id,
+                'task_id': task_id,
+                'error': str(e),
+            }
+    
+    def get_xcom_values(self,
+                        dag_id: str,
+                        dag_run_id: str,
+                        task_id: str) -> Dict[str, Any]:
+        """
+        Get XCom values pushed by a task.
+        
+        Args:
+            dag_id: The DAG ID
+            dag_run_id: The DAG run ID
+            task_id: The task ID
+            
+        Returns:
+            Dict with XCom values
+        """
+        try:
+            result = self._request(
+                'GET',
+                f'/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/xcomEntries'
+            )
+            
+            xcoms = []
+            for entry in result.get('xcom_entries', []):
+                # Get the actual value for each xcom
+                try:
+                    value_result = self._request(
+                        'GET',
+                        f'/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances/{task_id}/xcomEntries/{entry.get("key")}'
+                    )
+                    value = value_result.get('value')
+                except Exception:
+                    value = None
+                
+                xcoms.append({
+                    'key': entry.get('key'),
+                    'value': value,
+                    'execution_date': entry.get('execution_date'),
+                    'timestamp': entry.get('timestamp'),
+                })
+            
+            return {
+                'dag_id': dag_id,
+                'dag_run_id': dag_run_id,
+                'task_id': task_id,
+                'xcom_entries': xcoms,
+                'total_entries': len(xcoms),
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get XCom values: {e}")
+            return {
+                'dag_id': dag_id,
+                'task_id': task_id,
+                'error': str(e),
+            }
+    
+    def get_dag_code(self, dag_id: str) -> Dict[str, Any]:
+        """
+        Get DAG source code.
+        
+        Args:
+            dag_id: The DAG ID
+            
+        Returns:
+            Dict with DAG source code and details
+        """
+        try:
+            # Get DAG details
+            dag_details = self._request('GET', f'/dags/{dag_id}/details')
+            
+            # Get source code (available in Airflow 2.3+)
+            try:
+                source_result = self._request('GET', f'/dags/{dag_id}/source')
+                source_code = source_result.get('content', '')
+            except Exception:
+                # Fallback: try to get file location
+                source_code = None
+            
+            return {
+                'dag_id': dag_id,
+                'file_location': dag_details.get('file_location'),
+                'file_token': dag_details.get('file_token'),
+                'description': dag_details.get('description'),
+                'schedule_interval': dag_details.get('schedule_interval'),
+                'timetable_description': dag_details.get('timetable_description'),
+                'tags': [t.get('name') for t in dag_details.get('tags', [])],
+                'owners': dag_details.get('owners', []),
+                'params': dag_details.get('params', {}),
+                'source_code': source_code,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get DAG code: {e}")
+            return {
+                'dag_id': dag_id,
+                'error': str(e),
+            }
+    
+    def get_recent_failures(self,
+                            dag_id: Optional[str] = None,
+                            limit: int = 10,
+                            include_logs: bool = False) -> Dict[str, Any]:
+        """
+        Get recent failed DAG runs with details.
+        
+        Args:
+            dag_id: Optional DAG ID to filter by
+            limit: Number of failures to return
+            include_logs: Whether to include task logs for failed tasks
+            
+        Returns:
+            Dict with recent failure details
+        """
+        failures = []
+        
+        try:
+            if dag_id:
+                # Get failures for specific DAG
+                runs = self.get_dag_runs(dag_id, limit=limit * 2, state='failed')
+                runs = runs[:limit]
+            else:
+                # Get failures across all DAGs
+                # Need to iterate through DAGs to find failures
+                dags = self.get_dags(only_active=True)
+                all_failures = []
+                
+                for dag in dags[:50]:  # Limit DAGs to check
+                    dag_failures = self.get_dag_runs(dag.dag_id, limit=5, state='failed')
+                    for run in dag_failures:
+                        all_failures.append(run)
+                
+                # Sort by execution date and take top N
+                all_failures.sort(
+                    key=lambda r: r.execution_date or datetime.min,
+                    reverse=True
+                )
+                runs = all_failures[:limit]
+            
+            for run in runs:
+                failure = {
+                    'dag_id': run.dag_id,
+                    'run_id': run.run_id,
+                    'execution_date': run.execution_date.isoformat() if run.execution_date else None,
+                    'start_date': run.start_date.isoformat() if run.start_date else None,
+                    'end_date': run.end_date.isoformat() if run.end_date else None,
+                    'duration_minutes': run.duration_minutes,
+                    'external_trigger': run.external_trigger,
+                }
+                
+                # Get failed task info
+                try:
+                    tasks = self.get_task_instances(run.dag_id, run.run_id)
+                    failed_tasks = [t for t in tasks if t.is_failed]
+                    
+                    failure['failed_tasks'] = [
+                        {
+                            'task_id': t.task_id,
+                            'state': t.state.value,
+                            'operator': t.operator,
+                            'duration': t.duration,
+                            'try_number': t.try_number,
+                        }
+                        for t in failed_tasks
+                    ]
+                    
+                    # Optionally include logs for failed tasks
+                    if include_logs and failed_tasks:
+                        first_failed = failed_tasks[0]
+                        log_result = self.get_task_log(
+                            run.dag_id,
+                            run.run_id,
+                            first_failed.task_id,
+                            first_failed.try_number
+                        )
+                        failure['first_failure_log'] = log_result.get('log_preview', '')[:500]
+                        
+                except Exception as e:
+                    failure['task_error'] = str(e)
+                
+                failures.append(failure)
+            
+            return {
+                'total_failures': len(failures),
+                'dag_id': dag_id,
+                'failures': failures,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get recent failures: {e}")
+            return {
+                'dag_id': dag_id,
+                'error': str(e),
+            }
+    
+    def get_dag_task_details(self, dag_id: str) -> Dict[str, Any]:
+        """
+        Get detailed task structure for a DAG.
+        
+        Args:
+            dag_id: The DAG ID
+            
+        Returns:
+            Dict with task structure and dependencies
+        """
+        try:
+            result = self._request('GET', f'/dags/{dag_id}/tasks')
+            
+            tasks = []
+            for task in result.get('tasks', []):
+                tasks.append({
+                    'task_id': task.get('task_id'),
+                    'operator_name': task.get('operator_name'),
+                    'pool': task.get('pool'),
+                    'pool_slots': task.get('pool_slots'),
+                    'priority_weight': task.get('priority_weight'),
+                    'retries': task.get('retries'),
+                    'retry_delay': task.get('retry_delay'),
+                    'downstream_task_ids': task.get('downstream_task_ids', []),
+                    'trigger_rule': task.get('trigger_rule'),
+                })
+            
+            return {
+                'dag_id': dag_id,
+                'total_tasks': len(tasks),
+                'tasks': tasks,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get DAG task details: {e}")
+            return {
+                'dag_id': dag_id,
+                'error': str(e),
+            }
+    
     def close(self):
         """Close the HTTP client."""
         self._client.close()

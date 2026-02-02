@@ -700,6 +700,155 @@ class DbtIntegration:
         recommendations.sort(key=lambda x: priority_order.get(x['priority'], 2))
         
         return recommendations[:100]  # Limit output
+    
+    # =========================================================================
+    # DEBUG METHODS
+    # =========================================================================
+    
+    def get_model_sql(self, model_name: str) -> Dict[str, Any]:
+        """
+        Get raw and compiled SQL for a model.
+        
+        Args:
+            model_name: Name of the model
+            
+        Returns:
+            Dict with raw_sql, compiled_sql, and model metadata
+        """
+        if not self.manifest:
+            raise ValueError("Manifest not loaded. Call load_manifest() first.")
+        
+        model = self.manifest.get_model_by_name(model_name)
+        if not model:
+            raise ValueError(f"Model not found: {model_name}")
+        
+        return {
+            'model': model.name,
+            'full_name': model.full_name,
+            'path': model.path,
+            'materialization': model.materialization.value,
+            'raw_sql': model.raw_sql,
+            'compiled_sql': model.compiled_sql,
+            'database': model.database,
+            'schema': model.schema,
+            'alias': model.alias,
+        }
+    
+    def get_test_results(self, model_name: str = None) -> Dict[str, Any]:
+        """
+        Get test results for a model or all models.
+        
+        Args:
+            model_name: Optional model name to filter results
+            
+        Returns:
+            Dict with test results summary and details
+        """
+        if not self.manifest:
+            raise ValueError("Manifest not loaded. Call load_manifest() first.")
+        
+        tests = []
+        if model_name:
+            tests = self.manifest.get_tests_for_model(model_name)
+        else:
+            tests = list(self.manifest.tests.values())
+        
+        results = {
+            'total_tests': len(tests),
+            'by_type': {},
+            'by_severity': {},
+            'tests': [],
+        }
+        
+        for test in tests:
+            # Count by type
+            test_type = test.test_metadata.get('name', 'singular')
+            results['by_type'][test_type] = results['by_type'].get(test_type, 0) + 1
+            
+            # Count by severity
+            results['by_severity'][test.severity] = results['by_severity'].get(test.severity, 0) + 1
+            
+            # Add test details
+            results['tests'].append({
+                'name': test.name,
+                'type': test.test_type,
+                'test_name': test_type,
+                'model': test.model_name,
+                'column': test.column_name,
+                'severity': test.severity,
+                'tags': test.tags,
+            })
+        
+        return results
+    
+    def get_model_dependencies(self, model_name: str, include_sources: bool = True) -> Dict[str, Any]:
+        """
+        Get direct dependencies for a model.
+        
+        Args:
+            model_name: Name of the model
+            include_sources: Whether to include source dependencies
+            
+        Returns:
+            Dict with direct upstream and downstream dependencies
+        """
+        if not self.manifest:
+            raise ValueError("Manifest not loaded. Call load_manifest() first.")
+        
+        model = self.manifest.get_model_by_name(model_name)
+        if not model:
+            raise ValueError(f"Model not found: {model_name}")
+        
+        # Direct upstream models
+        direct_upstream = []
+        source_deps = []
+        
+        for dep_id in model.depends_on:
+            if dep_id in self.manifest.models:
+                upstream_model = self.manifest.models[dep_id]
+                direct_upstream.append({
+                    'name': upstream_model.name,
+                    'full_name': upstream_model.full_name,
+                    'type': 'model',
+                    'materialization': upstream_model.materialization.value,
+                })
+            elif include_sources and dep_id in self.manifest.sources:
+                source = self.manifest.sources[dep_id]
+                source_deps.append({
+                    'name': source.name,
+                    'full_name': source.full_name,
+                    'type': 'source',
+                    'source_name': source.source_name,
+                    'has_freshness': source.has_freshness_config,
+                })
+        
+        # Direct downstream models
+        target_id = None
+        for uid, m in self.manifest.models.items():
+            if m.name == model_name:
+                target_id = uid
+                break
+        
+        direct_downstream = []
+        if target_id:
+            for m in self.manifest.models.values():
+                if target_id in m.depends_on:
+                    direct_downstream.append({
+                        'name': m.name,
+                        'full_name': m.full_name,
+                        'type': 'model',
+                        'materialization': m.materialization.value,
+                    })
+        
+        return {
+            'model': model_name,
+            'full_name': model.full_name,
+            'upstream_models': direct_upstream,
+            'source_dependencies': source_deps,
+            'downstream_models': direct_downstream,
+            'total_upstream': len(direct_upstream) + len(source_deps),
+            'total_downstream': len(direct_downstream),
+        }
 
 
 # =============================================================================
@@ -868,6 +1017,230 @@ class DbtCloudClient:
             params=params
         )
         return data.get("data", [])
+    
+    # =========================================================================
+    # DEBUG METHODS
+    # =========================================================================
+    
+    def get_run_logs(self, run_id: int) -> Dict[str, Any]:
+        """
+        Get execution logs for a dbt Cloud run.
+        
+        Args:
+            run_id: The run ID
+            
+        Returns:
+            Dict with run details and logs
+        """
+        # Get run details
+        run = self.get_run(run_id)
+        
+        # Get run steps (contains log output)
+        try:
+            steps_data = self._request(
+                "GET",
+                f"/accounts/{self.account_id}/runs/{run_id}/steps/"
+            )
+            steps = steps_data.get("data", [])
+        except Exception:
+            steps = []
+        
+        # Try to get debug logs artifact
+        debug_logs = None
+        try:
+            debug_logs = self._request(
+                "GET",
+                f"/accounts/{self.account_id}/runs/{run_id}/artifacts/dbt.log"
+            )
+        except Exception:
+            pass  # Debug logs may not be available
+        
+        return {
+            'run_id': run_id,
+            'job_id': run.get('job_definition_id'),
+            'status': run.get('status_humanized'),
+            'status_code': run.get('status'),
+            'started_at': run.get('started_at'),
+            'finished_at': run.get('finished_at'),
+            'duration_seconds': run.get('duration'),
+            'trigger': run.get('trigger_humanized'),
+            'error_message': run.get('status_message'),
+            'steps': [
+                {
+                    'name': step.get('name'),
+                    'status': step.get('status_humanized'),
+                    'logs': step.get('logs'),
+                    'truncated': step.get('logs_truncated', False),
+                    'duration_seconds': step.get('duration'),
+                }
+                for step in steps
+            ],
+            'debug_logs': debug_logs,
+        }
+    
+    def get_model_run_results(self, run_id: int, model_name: str = None) -> Dict[str, Any]:
+        """
+        Get detailed run results for models from a specific run.
+        
+        Args:
+            run_id: The run ID
+            model_name: Optional model name to filter results
+            
+        Returns:
+            Dict with model execution details
+        """
+        try:
+            results = self.get_run_artifact(run_id, "run_results.json")
+        except Exception as e:
+            raise ValueError(f"Could not retrieve run_results.json: {e}")
+        
+        model_results = []
+        for result in results.get("results", []):
+            unique_id = result.get("unique_id", "")
+            node_name = unique_id.split(".")[-1] if unique_id else ""
+            
+            # Filter by model name if provided
+            if model_name and node_name != model_name:
+                continue
+            
+            model_results.append({
+                'unique_id': unique_id,
+                'name': node_name,
+                'status': result.get('status'),
+                'execution_time': result.get('execution_time'),
+                'rows_affected': result.get('adapter_response', {}).get('rows_affected'),
+                'message': result.get('message'),
+                'timing': result.get('timing', []),
+                'thread_id': result.get('thread_id'),
+            })
+        
+        return {
+            'run_id': run_id,
+            'elapsed_time': results.get('elapsed_time'),
+            'generated_at': results.get('metadata', {}).get('generated_at'),
+            'dbt_version': results.get('metadata', {}).get('dbt_version'),
+            'models': model_results,
+            'total_models': len(model_results),
+        }
+    
+    def get_test_results(self, run_id: int) -> Dict[str, Any]:
+        """
+        Get test results from a specific dbt Cloud run.
+        
+        Args:
+            run_id: The run ID
+            
+        Returns:
+            Dict with test execution results
+        """
+        try:
+            results = self.get_run_artifact(run_id, "run_results.json")
+        except Exception as e:
+            raise ValueError(f"Could not retrieve run_results.json: {e}")
+        
+        test_results = {
+            'run_id': run_id,
+            'total_tests': 0,
+            'passed': 0,
+            'failed': 0,
+            'warned': 0,
+            'skipped': 0,
+            'tests': [],
+        }
+        
+        for result in results.get("results", []):
+            unique_id = result.get("unique_id", "")
+            
+            # Filter for tests only
+            if not unique_id.startswith("test."):
+                continue
+            
+            status = result.get("status", "").lower()
+            test_results['total_tests'] += 1
+            
+            if status == "pass":
+                test_results['passed'] += 1
+            elif status == "fail":
+                test_results['failed'] += 1
+            elif status == "warn":
+                test_results['warned'] += 1
+            elif status == "skip":
+                test_results['skipped'] += 1
+            
+            test_results['tests'].append({
+                'unique_id': unique_id,
+                'name': unique_id.split(".")[-1],
+                'status': status,
+                'execution_time': result.get('execution_time'),
+                'message': result.get('message'),
+                'failures': result.get('failures', 0),
+            })
+        
+        return test_results
+    
+    def get_recent_failures(self, job_id: int = None, limit: int = 10) -> Dict[str, Any]:
+        """
+        Get recent failed runs with error details.
+        
+        Args:
+            job_id: Optional job ID to filter by
+            limit: Number of failures to return
+            
+        Returns:
+            Dict with recent failure details
+        """
+        # Get failed runs
+        params = {"limit": limit * 2, "status": "20", "order_by": "-id"}  # 20 = Error
+        if job_id:
+            params["job_definition_id"] = job_id
+        
+        data = self._request(
+            "GET",
+            f"/accounts/{self.account_id}/runs/",
+            params=params
+        )
+        
+        runs = data.get("data", [])[:limit]
+        
+        failures = []
+        for run in runs:
+            run_id = run.get("id")
+            
+            # Get basic failure info
+            failure = {
+                'run_id': run_id,
+                'job_id': run.get('job_definition_id'),
+                'job_name': run.get('job', {}).get('name', 'Unknown'),
+                'status_message': run.get('status_message'),
+                'started_at': run.get('started_at'),
+                'finished_at': run.get('finished_at'),
+                'duration_seconds': run.get('duration'),
+                'trigger': run.get('trigger_humanized'),
+            }
+            
+            # Try to get more detailed error info
+            try:
+                steps = self._request(
+                    "GET",
+                    f"/accounts/{self.account_id}/runs/{run_id}/steps/"
+                ).get("data", [])
+                
+                # Find failed step
+                for step in steps:
+                    if step.get("status") == 20:  # Failed
+                        failure['failed_step'] = step.get('name')
+                        failure['step_logs'] = step.get('logs', '')[:1000]  # Truncate
+                        break
+            except Exception:
+                pass
+            
+            failures.append(failure)
+        
+        return {
+            'total_failures': len(failures),
+            'job_id': job_id,
+            'failures': failures,
+        }
 
 
 class DbtCloudScanner:

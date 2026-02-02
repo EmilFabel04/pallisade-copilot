@@ -6,6 +6,7 @@ import { DashboardHeader } from '../../components/dashboard/Header';
 import { SessionProvider } from '../../components/providers/SessionProvider';
 import { DashboardProviders } from '../../components/providers/DashboardProviders';
 import { SidebarProvider } from '../../contexts/SidebarContext';
+import { DashboardMain } from '../../components/dashboard/DashboardMain';
 import '../globals.css';
 
 export default async function DashboardLayout({
@@ -23,18 +24,17 @@ export default async function DashboardLayout({
     <SessionProvider session={session}>
       <SidebarProvider>
         <DashboardProviders>
-          <div className="dashboard-layout">
+          <div className="min-h-screen bg-[#030303]">
             <Sidebar />
-            <div className="dashboard-main">
+            <DashboardMain>
               <DashboardHeader />
-              <main className="dashboard-content">
+              <main className="flex-1 p-6 overflow-y-auto">
                 {children}
               </main>
-            </div>
+            </DashboardMain>
           </div>
         </DashboardProviders>
       </SidebarProvider>
     </SessionProvider>
   );
 }
-

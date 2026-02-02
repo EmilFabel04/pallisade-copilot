@@ -39,6 +39,7 @@ model User {
   remediationPlans RemediationPlan[]
   tasks            Task[]
   chatSessions     ChatSession[]
+  copilotSessions  CopilotSession[]
   notifications    Notification[]
   scanSchedules    ScanSchedule[]
   auditLogs        AuditLog[]
@@ -139,6 +140,11 @@ model Organization {
   
   // User feedback on ML suppressions
   suppressionOverrides SuppressionOverride[]
+  
+  // Copilot platform
+  copilotSessions  CopilotSession[]
+  lineageEvents    LineageEvent[]
+  debugSessions    DebugSession[]
 
   @@index([domain])
 }
@@ -1083,6 +1089,180 @@ enum MessageRole {
   USER
   ASSISTANT
   SYSTEM
+}
+
+// ============================================
+// COPILOT SESSIONS (Enhanced AI Assistant)
+// ============================================
+
+model CopilotSession {
+  id              String   @id @default(cuid())
+  title           String   @default("New Chat")
+  
+  // Context - what is this chat about?
+  contextType     CopilotContextType @default(GENERAL)
+  pipelineStackId String?
+  nodeIds         String[] // Array of node IDs being discussed
+  
+  // Debug session tracking
+  isDebugSession  Boolean  @default(false)
+  debugIssueId    String?
+  
+  // LLM configuration
+  model           String   @default("claude-sonnet")
+  
+  // Conversation summary for long chats
+  memorySummary   String?  @db.Text
+  
+  // Token tracking
+  totalInputTokens  Int    @default(0)
+  totalOutputTokens Int    @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  user            User     @relation(fields: [userId], references: [id])
+  userId          String
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  organizationId  String
+  messages        CopilotMessage[]
+  debugSession    DebugSession?
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([contextType])
+}
+
+model CopilotMessage {
+  id            String      @id @default(cuid())
+  role          MessageRole
+  content       String      @db.Text
+  
+  // Tool calls made by AI
+  toolCalls     Json?
+  
+  // Tool results returned
+  toolResults   Json?
+  
+  // Context retrieved for this message
+  contextUsed   Json?
+  
+  // Token tracking
+  inputTokens   Int?
+  outputTokens  Int?
+  
+  createdAt     DateTime    @default(now())
+  
+  session       CopilotSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId     String
+
+  @@index([sessionId])
+}
+
+enum CopilotContextType {
+  GENERAL       // General Q&A about the data stack
+  PIPELINE      // Focused on a specific pipeline
+  DEBUGGING     // Active debugging session
+  BUILDING      // Building/configuring pipeline
+}
+
+// ============================================
+// OPENLINEAGE EVENT STORAGE
+// ============================================
+
+model LineageEvent {
+  id              String   @id @default(cuid())
+  
+  // Event metadata
+  eventType       String   // START, RUNNING, COMPLETE, FAIL, ABORT
+  eventTime       DateTime
+  
+  // Job identification
+  jobNamespace    String
+  jobName         String
+  
+  // Run identification
+  runId           String
+  parentRunId     String?
+  
+  // Input/output datasets (JSON arrays)
+  inputs          Json     // Array of input datasets
+  outputs         Json     // Array of output datasets
+  
+  // Facets (additional metadata)
+  jobFacets       Json?
+  runFacets       Json?
+  
+  // Processing status
+  processed       Boolean  @default(false)
+  processedAt     DateTime?
+  
+  createdAt       DateTime @default(now())
+  
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  organizationId  String
+
+  @@index([organizationId])
+  @@index([jobNamespace, jobName])
+  @@index([runId])
+  @@index([eventTime])
+  @@index([processed])
+}
+
+// ============================================
+// DEBUG SESSION TRACKING
+// ============================================
+
+model DebugSession {
+  id              String   @id @default(cuid())
+  
+  // Issue identification
+  issueType       String   // sync_failure, test_failed, stale_data, query_error, etc.
+  title           String
+  description     String?  @db.Text
+  
+  // Symptom tracking (where the issue was first observed)
+  symptomNodeId   String?
+  symptomDetails  Json?
+  
+  // Root cause analysis
+  rootCauseNodeId String?
+  rootCauseType   String?
+  rootCauseDetails Json?
+  
+  // Status and resolution
+  status          DebugStatus @default(INVESTIGATING)
+  resolution      String?     @db.Text
+  resolvedAt      DateTime?
+  
+  // Timing
+  startedAt       DateTime @default(now())
+  mttr            Int?     // Mean time to resolution in minutes
+  
+  // Investigation steps taken
+  investigationSteps Json? // Array of steps/findings during investigation
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  organizationId  String
+  copilotSession  CopilotSession? @relation(fields: [copilotSessionId], references: [id])
+  copilotSessionId String? @unique
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([issueType])
+}
+
+enum DebugStatus {
+  INVESTIGATING    // Still looking into the issue
+  ROOT_CAUSE_FOUND // Identified the root cause
+  FIXING           // Working on a fix
+  RESOLVED         // Issue resolved
+  WONT_FIX         // Decided not to fix
 }
 
 // ============================================

@@ -3,14 +3,14 @@
 @tailwind utilities;
 
 :root {
-  --bg: #030303;
-  --bg-soft: #080808;
+  --bg: #020202;
+  --bg-soft: #060606;
   --text: #f5f5f5;
-  --muted: #a0a0a0;
-  --accent: #8b0b10;
-  --accent-2: #c41e24;
-  --card: #0a0a0a;
-  --border: #1a1a1a;
+  --muted: #888888;
+  --accent: #7a0a0e;
+  --accent-2: #a51a1f;
+  --card: #080808;
+  --border: #141414;
 }
 
 * { box-sizing: border-box; }
@@ -37,19 +37,19 @@ body {
 }
 .orb-1 {
   width: 600px; height: 600px;
-  background: radial-gradient(circle, rgba(139,11,16,0.8), transparent 70%);
+  background: radial-gradient(circle, rgba(122,10,14,0.6), transparent 70%);
   top: -200px; left: -100px;
   animation-delay: 0s;
 }
 .orb-2 {
   width: 500px; height: 500px;
-  background: radial-gradient(circle, rgba(196,30,36,0.6), transparent 70%);
+  background: radial-gradient(circle, rgba(165,26,31,0.4), transparent 70%);
   bottom: -150px; right: -100px;
   animation-delay: -10s;
 }
 .orb-3 {
   width: 400px; height: 400px;
-  background: radial-gradient(circle, rgba(139,11,16,0.5), transparent 70%);
+  background: radial-gradient(circle, rgba(122,10,14,0.35), transparent 70%);
   top: 50%; left: 60%;
   animation-delay: -5s;
 }
@@ -1126,17 +1126,23 @@ body::before {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  margin-left: 240px;
+  transition: margin-left 0.3s ease;
+}
+
+.dashboard-main.sidebar-collapsed {
+  margin-left: 68px;
 }
 
 .dashboard-content {
   flex: 1;
-  padding: 32px;
+  padding: 24px;
   overflow-y: auto;
 }
 
-/* Sidebar */
+/* Sidebar - Note: Sidebar component now handles its own styles */
 .dashboard-sidebar {
-  width: 280px;
+  width: 240px;
   background: linear-gradient(180deg, rgba(10,10,10,0.98), rgba(5,5,5,0.98));
   border-right: 1px solid rgba(255,255,255,0.06);
   display: flex;

@@ -5,85 +5,37 @@ import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
 import { useSidebar } from '@/contexts/SidebarContext';
 
+// Navigation items for the co-pilot platform
 const navigation = [
   {
-    name: 'Overview',
+    name: 'Dashboard',
     href: '/dashboard',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011-1v4a1 1 0 001 1m-6 0h6" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
       </svg>
     ),
   },
   {
-    name: 'Scans',
-    href: '/dashboard/reports',
+    name: 'Chat',
+    href: '/dashboard/chat',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
       </svg>
     ),
   },
   {
-    name: 'Findings',
-    href: '/dashboard/findings',
+    name: 'Lineage',
+    href: '/dashboard/lineage',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
       </svg>
     ),
   },
   {
-    name: 'Schedules',
-    href: '/dashboard/schedules',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  },
-  {
-    name: 'Contracts',
-    href: '/dashboard/contracts',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-      </svg>
-    ),
-  },
-  {
-    name: 'AI Assistant',
-    href: '/dashboard/assistant',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
-      </svg>
-    ),
-  },
-  {
-    name: 'Sandbox Lab',
-    href: '/dashboard/sandbox',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611l-2.302.384a4.5 4.5 0 01-5.666-5.666l.384-2.302c.293-1.717 2.379-2.299 3.611-1.067L19.8 15.3z" />
-      </svg>
-    ),
-  },
-];
-
-const secondaryNav = [
-  {
-    name: 'Pipeline',
-    href: '/dashboard/pipeline',
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
-      </svg>
-    ),
-    badge: 'NEW',
-  },
-  {
-    name: 'Data Sources',
+    name: 'Sources',
     href: '/dashboard/sources',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -92,17 +44,20 @@ const secondaryNav = [
     ),
   },
   {
-    name: 'Notifications',
-    href: '/dashboard/integrations',
+    name: 'Pipeline',
+    href: '/dashboard/pipeline',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
       </svg>
     ),
   },
+];
+
+const secondaryNav = [
   {
     name: 'Team',
-    href: '/dashboard/settings/team',
+    href: '/dashboard/team',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
@@ -114,7 +69,7 @@ const secondaryNav = [
     href: '/dashboard/settings',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.204-.107-.397.165-.71.505-.78.929l-.15.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
       </svg>
     ),
@@ -125,89 +80,118 @@ export function Sidebar() {
   const pathname = usePathname();
   const { isCollapsed, toggleSidebar } = useSidebar();
 
+  const isActive = (href: string) => {
+    if (href === '/dashboard') {
+      return pathname === '/dashboard';
+    }
+    return pathname.startsWith(href);
+  };
+
   return (
     <aside 
-      className={`dashboard-sidebar ${isCollapsed ? 'collapsed' : ''}`}
-      style={{ width: isCollapsed ? '72px' : '280px' }}
+      className={`
+        fixed left-0 top-0 h-screen z-40
+        bg-[#050505] border-r border-white/[0.04]
+        flex flex-col
+        transition-all duration-300 ease-in-out
+        ${isCollapsed ? 'w-[68px]' : 'w-[240px]'}
+      `}
     >
       {/* Logo */}
-      <div className={`sidebar-header ${isCollapsed ? 'justify-center' : ''}`}>
-        <Link href="/" className="flex items-center gap-2.5 group">
-          <img 
-            src="/pallisade_emblem.svg" 
-            alt="Pallisade" 
-            className="w-9 h-9 transition-transform group-hover:scale-105 flex-shrink-0" 
-          />
+      <div className={`h-14 flex items-center border-b border-white/[0.04] ${isCollapsed ? 'justify-center px-3' : 'px-4'}`}>
+        <Link href="/dashboard" className="flex items-center gap-2.5 group">
+          <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
+            <img 
+              src="/pallisade_emblem.svg" 
+              alt="Pallisade" 
+              className="w-7 h-7"
+            />
+          </div>
           {!isCollapsed && (
-            <span className="font-bold text-xl tracking-tight bg-gradient-to-r from-white to-[var(--muted)] bg-clip-text text-transparent whitespace-nowrap overflow-hidden">
-              pallisade
+            <span className="font-semibold text-[15px] text-white tracking-tight">
+              Pallisade
             </span>
           )}
         </Link>
       </div>
 
       {/* Main Navigation */}
-      <nav className="sidebar-nav">
-        <div className="nav-section">
-          {!isCollapsed && <div className="nav-section-title">Platform</div>}
-          <ul className="nav-list">
-            {navigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
-              return (
-                <li key={item.name}>
-                  <Link
-                    href={item.href}
-                    className={`nav-item ${isActive ? 'active' : ''} ${isCollapsed ? 'justify-center px-0' : ''}`}
-                    title={isCollapsed ? item.name : undefined}
-                  >
-                    <span className="flex-shrink-0">{item.icon}</span>
-                    {!isCollapsed && <span>{item.name}</span>}
-                    {!isCollapsed && 'badge' in item && item.badge && (
-                      <span className="ml-auto px-1.5 py-0.5 text-[10px] font-medium rounded bg-[var(--accent)] text-white">
-                        {item.badge}
-                      </span>
-                    )}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+      <nav className="flex-1 py-3 px-2 overflow-y-auto">
+        <div className="space-y-0.5">
+          {navigation.map((item) => {
+            const active = isActive(item.href);
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={`
+                  flex items-center gap-3 px-3 py-2 rounded-lg
+                  transition-all duration-150
+                  ${active 
+                    ? 'bg-white/[0.08] text-white' 
+                    : 'text-white/60 hover:text-white hover:bg-white/[0.04]'
+                  }
+                  ${isCollapsed ? 'justify-center' : ''}
+                `}
+                title={isCollapsed ? item.name : undefined}
+              >
+                <span className={`flex-shrink-0 ${active ? 'text-[#ff0000]' : ''}`}>
+                  {item.icon}
+                </span>
+                {!isCollapsed && (
+                  <span className="text-[13px] font-medium">{item.name}</span>
+                )}
+              </Link>
+            );
+          })}
         </div>
 
-        <div className="nav-section">
-          {!isCollapsed && <div className="nav-section-title">Configure</div>}
-          <ul className="nav-list">
-            {secondaryNav.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
-              return (
-                <li key={item.name}>
-                  <Link
-                    href={item.href}
-                    className={`nav-item ${isActive ? 'active' : ''} ${isCollapsed ? 'justify-center px-0' : ''}`}
-                    title={isCollapsed ? item.name : undefined}
-                  >
-                    <span className="flex-shrink-0">{item.icon}</span>
-                    {!isCollapsed && <span>{item.name}</span>}
-                    {!isCollapsed && 'badge' in item && item.badge && (
-                      <span className="ml-auto px-1.5 py-0.5 text-[10px] font-medium rounded bg-[var(--accent)] text-white">
-                        {item.badge}
-                      </span>
-                    )}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+        {/* Divider */}
+        <div className="my-4 mx-3 h-px bg-white/[0.06]" />
+
+        {/* Secondary Navigation */}
+        <div className="space-y-0.5">
+          {secondaryNav.map((item) => {
+            const active = isActive(item.href);
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={`
+                  flex items-center gap-3 px-3 py-2 rounded-lg
+                  transition-all duration-150
+                  ${active 
+                    ? 'bg-white/[0.08] text-white' 
+                    : 'text-white/60 hover:text-white hover:bg-white/[0.04]'
+                  }
+                  ${isCollapsed ? 'justify-center' : ''}
+                `}
+                title={isCollapsed ? item.name : undefined}
+              >
+                <span className={`flex-shrink-0 ${active ? 'text-[#ff0000]' : ''}`}>
+                  {item.icon}
+                </span>
+                {!isCollapsed && (
+                  <span className="text-[13px] font-medium">{item.name}</span>
+                )}
+              </Link>
+            );
+          })}
         </div>
       </nav>
 
-      {/* Footer with Collapse Toggle and Sign Out */}
-      <div className="sidebar-footer">
-        {/* Collapse Toggle Button */}
+      {/* Footer */}
+      <div className="p-2 border-t border-white/[0.06]">
+        {/* Collapse Toggle */}
         <button
           onClick={toggleSidebar}
-          className={`nav-item w-full text-left mb-2 ${isCollapsed ? 'justify-center px-0' : ''}`}
-          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className={`
+            w-full flex items-center gap-3 px-3 py-2 rounded-lg
+            text-white/50 hover:text-white hover:bg-white/[0.04]
+            transition-all duration-150
+            ${isCollapsed ? 'justify-center' : ''}
+          `}
+          title={isCollapsed ? 'Expand' : 'Collapse'}
         >
           <svg 
             className={`w-5 h-5 flex-shrink-0 transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`} 
@@ -217,19 +201,24 @@ export function Sidebar() {
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
           </svg>
-          {!isCollapsed && <span>Collapse</span>}
+          {!isCollapsed && <span className="text-[13px]">Collapse</span>}
         </button>
         
         {/* Sign Out */}
         <button
           onClick={() => signOut({ callbackUrl: '/' })}
-          className={`nav-item w-full text-left ${isCollapsed ? 'justify-center px-0' : ''}`}
+          className={`
+            w-full flex items-center gap-3 px-3 py-2 rounded-lg
+            text-white/50 hover:text-white hover:bg-white/[0.04]
+            transition-all duration-150
+            ${isCollapsed ? 'justify-center' : ''}
+          `}
           title={isCollapsed ? 'Sign out' : undefined}
         >
           <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
           </svg>
-          {!isCollapsed && <span>Sign out</span>}
+          {!isCollapsed && <span className="text-[13px]">Sign out</span>}
         </button>
       </div>
     </aside>
