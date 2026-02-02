@@ -1,0 +1,631 @@
+"""
+BigQuery Database Adapter - Enterprise Grade
+
+Full-featured adapter for Google BigQuery with support for:
+- Deep column statistics using INFORMATION_SCHEMA
+- Query history from JOBS_BY_PROJECT
+- Partitioning and clustering information
+- Cost estimation
+"""
+
+import logging
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, timedelta
+
+from .base import (
+    DatabaseAdapter,
+    DatabaseType,
+    AdapterCapabilities,
+    TableMetadata,
+    ColumnMetadata,
+    ColumnStats,
+    QueryHistoryEntry
+)
+
+logger = logging.getLogger(__name__)
+
+
+class BigQueryAdapter(DatabaseAdapter):
+    """
+    Enterprise BigQuery adapter.
+    
+    Capabilities:
+    - Column statistics from INFORMATION_SCHEMA
+    - Query history from JOBS_BY_PROJECT
+    - Partitioning and clustering info
+    - Cost tracking via bytes_billed
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.database_type = DatabaseType.BIGQUERY
+        self.dialect = "bigquery"
+        
+        self._capabilities = AdapterCapabilities(
+            supports_sql=True,
+            supports_transactions=False,  # BigQuery is append-only
+            supports_column_stats=True,
+            supports_histograms=False,  # Limited histogram support
+            supports_cardinality=True,
+            supports_percentiles=True,  # APPROX_QUANTILES
+            supports_query_history=True,
+            query_history_days=180,  # 6 months in INFORMATION_SCHEMA
+            supports_sampling=True,
+            supports_tablesample=True,  # TABLESAMPLE SYSTEM
+            supports_information_schema=True,
+            supports_schema_changes=True,
+            supports_explain=True,  # EXPLAIN / dry run
+            supports_partitions=True,
+            supports_clustering=True,
+            supports_table_last_modified=True,
+        )
+        
+        # Parse config
+        self.project = config.get('project')
+        self.dataset = config.get('dataset')
+        self.location = config.get('location', 'US')
+        self.credentials_json = config.get('credentials_json')  # Service account JSON
+        
+        self._client = None
+    
+    # =========================================================================
+    # CONNECTION MANAGEMENT
+    # =========================================================================
+    
+    def connect(self) -> bool:
+        """Establish connection to BigQuery."""
+        try:
+            from google.cloud import bigquery
+            from google.oauth2 import service_account
+            
+            if self.credentials_json:
+                # Use service account
+                credentials = service_account.Credentials.from_service_account_info(
+                    self.credentials_json
+                )
+                self._client = bigquery.Client(
+                    project=self.project,
+                    credentials=credentials,
+                    location=self.location,
+                )
+            else:
+                # Use default credentials (e.g., from environment)
+                self._client = bigquery.Client(
+                    project=self.project,
+                    location=self.location,
+                )
+            
+            self._connection = self._client  # For compatibility
+            
+            logger.info(f"Connected to BigQuery: {self.project}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to connect to BigQuery: {e}")
+            self._client = None
+            self._connection = None
+            return False
+    
+    def disconnect(self) -> None:
+        """Close BigQuery client."""
+        if self._client:
+            try:
+                self._client.close()
+                logger.info("Disconnected from BigQuery")
+            except Exception as e:
+                logger.warning(f"Error closing BigQuery client: {e}")
+            finally:
+                self._client = None
+                self._connection = None
+    
+    def test_connection(self) -> Tuple[bool, Optional[str]]:
+        """Test BigQuery connection."""
+        try:
+            if not self._client:
+                self.connect()
+            
+            # Simple query to test connection
+            result = list(self._client.query("SELECT 1 as test").result())
+            
+            return True, f"BigQuery ({self.project})"
+            
+        except Exception as e:
+            return False, str(e)
+    
+    def _execute_query_impl(self, query: str, params: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """Execute query and return results."""
+        if params:
+            # BigQuery uses @param syntax for named parameters
+            from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter
+            
+            job_config = QueryJobConfig()
+            job_config.query_parameters = [
+                ScalarQueryParameter(k, "STRING", str(v)) 
+                for k, v in params.items()
+            ]
+            result = self._client.query(query, job_config=job_config).result()
+        else:
+            result = self._client.query(query).result()
+        
+        return [dict(row) for row in result]
+    
+    # =========================================================================
+    # TABLE DISCOVERY
+    # =========================================================================
+    
+    def get_tables(self, 
+                   database: Optional[str] = None,
+                   schema: Optional[str] = None,
+                   include_views: bool = False) -> List[str]:
+        """Get list of tables in BigQuery."""
+        dataset = schema or self.dataset
+        
+        type_filter = "table_type = 'BASE TABLE'" if not include_views else "table_type IN ('BASE TABLE', 'VIEW')"
+        
+        query = f"""
+            SELECT 
+                table_catalog || '.' || table_schema || '.' || table_name as full_name
+            FROM `{self.project}.{dataset}.INFORMATION_SCHEMA.TABLES`
+            WHERE {type_filter}
+            ORDER BY table_name
+        """
+        
+        result = self.execute_query(query)
+        return [row['full_name'] for row in result]
+    
+    def get_table_metadata(self, table: str) -> TableMetadata:
+        """Get comprehensive table metadata from BigQuery."""
+        # Parse table name
+        parts = table.replace('`', '').split('.')
+        if len(parts) == 3:
+            project, dataset, tbl = parts
+        elif len(parts) == 2:
+            project, dataset, tbl = self.project, parts[0], parts[1]
+        else:
+            project, dataset, tbl = self.project, self.dataset, parts[0]
+        
+        # Get basic metadata
+        query = f"""
+            SELECT 
+                t.table_catalog as project,
+                t.table_schema as dataset,
+                t.table_name,
+                t.table_type,
+                t.creation_time,
+                ts.row_count,
+                ts.size_bytes,
+                ts.last_modified_time,
+                ARRAY_TO_STRING(t.ddl_target_table.partition_column_names, ', ') as partition_columns,
+                ARRAY_TO_STRING(t.ddl_target_table.clustering_columns, ', ') as clustering_columns
+            FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLES` t
+            LEFT JOIN `{project}.{dataset}.__TABLES__` ts 
+                ON ts.table_id = t.table_name
+            WHERE t.table_name = '{tbl}'
+        """
+        
+        try:
+            result = self.execute_query(query)
+        except:
+            # Fallback without DDL info
+            query = f"""
+                SELECT 
+                    table_id as table_name,
+                    'BASE TABLE' as table_type,
+                    creation_time,
+                    row_count,
+                    size_bytes,
+                    last_modified_time
+                FROM `{project}.{dataset}.__TABLES__`
+                WHERE table_id = '{tbl}'
+            """
+            result = self.execute_query(query)
+        
+        if not result:
+            raise ValueError(f"Table not found: {table}")
+        
+        row = result[0]
+        
+        # Get columns
+        columns = self.get_columns(table)
+        
+        # Parse partition/clustering columns
+        partition_cols = []
+        clustering_cols = []
+        if row.get('partition_columns'):
+            partition_cols = [c.strip() for c in row['partition_columns'].split(',')]
+        if row.get('clustering_columns'):
+            clustering_cols = [c.strip() for c in row['clustering_columns'].split(',')]
+        
+        return TableMetadata(
+            full_name=f"{project}.{dataset}.{tbl}",
+            database=project,
+            schema=dataset,
+            table_name=tbl,
+            row_count=row.get('row_count'),
+            size_bytes=row.get('size_bytes'),
+            created_at=row.get('creation_time'),
+            last_modified=row.get('last_modified_time'),
+            columns=columns,
+            is_partitioned=len(partition_cols) > 0,
+            partition_columns=partition_cols,
+            clustering_columns=clustering_cols,
+            table_type=row.get('table_type', 'BASE TABLE'),
+        )
+    
+    def get_columns(self, table: str) -> List[ColumnMetadata]:
+        """Get detailed column information."""
+        parts = table.replace('`', '').split('.')
+        if len(parts) == 3:
+            project, dataset, tbl = parts
+        elif len(parts) == 2:
+            project, dataset, tbl = self.project, parts[0], parts[1]
+        else:
+            project, dataset, tbl = self.project, self.dataset, parts[0]
+        
+        query = f"""
+            SELECT 
+                column_name,
+                data_type,
+                is_nullable,
+                ordinal_position,
+                description
+            FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS`
+            WHERE table_name = '{tbl}'
+            ORDER BY ordinal_position
+        """
+        
+        result = self.execute_query(query)
+        
+        return [
+            ColumnMetadata(
+                name=row['column_name'],
+                data_type=row['data_type'],
+                is_nullable=row['is_nullable'] == 'YES',
+                ordinal_position=row['ordinal_position'],
+                comment=row.get('description'),
+            )
+            for row in result
+        ]
+    
+    # =========================================================================
+    # COLUMN STATISTICS
+    # =========================================================================
+    
+    def get_column_stats(self, 
+                         table: str, 
+                         columns: Optional[List[str]] = None,
+                         sample_size: Optional[int] = None) -> List[ColumnStats]:
+        """Get column statistics from BigQuery."""
+        all_columns = self.get_columns(table)
+        
+        if columns:
+            all_columns = [c for c in all_columns if c.name in columns]
+        
+        stats_list = []
+        
+        for col in all_columns:
+            stats = self._get_single_column_stats(table, col, sample_size)
+            stats_list.append(stats)
+        
+        return stats_list
+    
+    def _get_single_column_stats(self, 
+                                  table: str, 
+                                  col: ColumnMetadata,
+                                  sample_size: Optional[int] = None) -> ColumnStats:
+        """Get statistics for a single column."""
+        col_name = f"`{col.name}`"
+        sample_clause = f"TABLESAMPLE SYSTEM ({min(sample_size / 1000, 100)} PERCENT)" if sample_size else ""
+        
+        # Check data type
+        is_numeric = col.data_type.upper() in (
+            'INT64', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC', 'INTEGER', 'FLOAT'
+        )
+        is_timestamp = col.data_type.upper() in ('TIMESTAMP', 'DATE', 'DATETIME', 'TIME')
+        is_string = col.data_type.upper() in ('STRING', 'BYTES')
+        
+        # Base stats
+        base_query = f"""
+            SELECT 
+                COUNT(*) as total_count,
+                COUNTIF({col_name} IS NOT NULL) as non_null_count,
+                COUNTIF({col_name} IS NULL) as null_count,
+                APPROX_COUNT_DISTINCT({col_name}) as distinct_count
+            FROM `{table}` {sample_clause}
+        """
+        
+        base_result = self.execute_query(base_query)
+        base = base_result[0] if base_result else {}
+        
+        total = base.get('total_count', 0)
+        null_count = base.get('null_count', 0)
+        distinct = base.get('distinct_count', 0)
+        
+        stats = ColumnStats(
+            column_name=col.name,
+            data_type=col.data_type,
+            total_count=total,
+            null_count=null_count,
+            distinct_count=distinct,
+            null_rate=null_count / total if total > 0 else 0,
+            distinct_rate=distinct / total if total > 0 else 0,
+        )
+        
+        # Numeric stats
+        if is_numeric:
+            try:
+                numeric_query = f"""
+                    SELECT 
+                        MIN({col_name}) as min_val,
+                        MAX({col_name}) as max_val,
+                        AVG({col_name}) as avg_val,
+                        SUM({col_name}) as sum_val,
+                        STDDEV({col_name}) as std_dev,
+                        VARIANCE({col_name}) as variance
+                    FROM `{table}` {sample_clause}
+                """
+                numeric_result = self.execute_query(numeric_query)
+                if numeric_result:
+                    n = numeric_result[0]
+                    stats.min_value = n.get('min_val')
+                    stats.max_value = n.get('max_val')
+                    stats.avg_value = n.get('avg_val')
+                    stats.sum_value = n.get('sum_val')
+                    stats.std_dev = n.get('std_dev')
+                    stats.variance = n.get('variance')
+                
+                # Percentiles using APPROX_QUANTILES
+                pct_query = f"""
+                    SELECT 
+                        APPROX_QUANTILES({col_name}, 100)[OFFSET(25)] as p25,
+                        APPROX_QUANTILES({col_name}, 100)[OFFSET(50)] as p50,
+                        APPROX_QUANTILES({col_name}, 100)[OFFSET(75)] as p75,
+                        APPROX_QUANTILES({col_name}, 100)[OFFSET(90)] as p90,
+                        APPROX_QUANTILES({col_name}, 100)[OFFSET(99)] as p99
+                    FROM `{table}` {sample_clause}
+                """
+                pct_result = self.execute_query(pct_query)
+                if pct_result:
+                    p = pct_result[0]
+                    stats.percentile_25 = p.get('p25')
+                    stats.percentile_50 = p.get('p50')
+                    stats.percentile_75 = p.get('p75')
+                    stats.percentile_90 = p.get('p90')
+                    stats.percentile_99 = p.get('p99')
+                    
+            except Exception as e:
+                logger.warning(f"Error getting numeric stats for {col.name}: {e}")
+        
+        # Timestamp stats
+        if is_timestamp:
+            try:
+                ts_query = f"""
+                    SELECT 
+                        MIN({col_name}) as min_ts,
+                        MAX({col_name}) as max_ts
+                    FROM `{table}` {sample_clause}
+                """
+                ts_result = self.execute_query(ts_query)
+                if ts_result:
+                    t = ts_result[0]
+                    stats.min_timestamp = t.get('min_ts')
+                    stats.max_timestamp = t.get('max_ts')
+            except Exception as e:
+                logger.warning(f"Error getting timestamp stats for {col.name}: {e}")
+        
+        # String stats
+        if is_string:
+            try:
+                string_query = f"""
+                    SELECT 
+                        MIN(LENGTH({col_name})) as min_len,
+                        MAX(LENGTH({col_name})) as max_len,
+                        AVG(LENGTH({col_name})) as avg_len,
+                        COUNTIF({col_name} = '') as empty_count,
+                        COUNTIF(TRIM({col_name}) = '' AND {col_name} != '') as whitespace_count
+                    FROM `{table}` {sample_clause}
+                """
+                string_result = self.execute_query(string_query)
+                if string_result:
+                    s = string_result[0]
+                    stats.min_length = s.get('min_len')
+                    stats.max_length = s.get('max_len')
+                    stats.avg_length = s.get('avg_len')
+                    stats.empty_string_count = s.get('empty_count', 0)
+                    stats.whitespace_only_count = s.get('whitespace_count', 0)
+            except Exception as e:
+                logger.warning(f"Error getting string stats for {col.name}: {e}")
+        
+        # Top values
+        try:
+            top_query = f"""
+                SELECT {col_name} as value, COUNT(*) as cnt
+                FROM `{table}` {sample_clause}
+                WHERE {col_name} IS NOT NULL
+                GROUP BY {col_name}
+                ORDER BY cnt DESC
+                LIMIT 10
+            """
+            top_result = self.execute_query(top_query)
+            stats.top_values = [
+                {'value': str(r['value']), 'count': r['cnt']} 
+                for r in top_result
+            ]
+        except Exception as e:
+            logger.warning(f"Error getting top values for {col.name}: {e}")
+        
+        return stats
+    
+    # =========================================================================
+    # FRESHNESS
+    # =========================================================================
+    
+    def get_table_freshness(self, 
+                            table: str, 
+                            timestamp_column: Optional[str] = None) -> Dict[str, Any]:
+        """Get freshness information for a BigQuery table."""
+        ts_col = timestamp_column or self.detect_timestamp_column(table)
+        
+        if not ts_col:
+            # Try to get from __TABLES__ metadata
+            parts = table.replace('`', '').split('.')
+            if len(parts) == 3:
+                project, dataset, tbl = parts
+            elif len(parts) == 2:
+                project, dataset, tbl = self.project, parts[0], parts[1]
+            else:
+                project, dataset, tbl = self.project, self.dataset, parts[0]
+            
+            query = f"""
+                SELECT 
+                    last_modified_time,
+                    row_count,
+                    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), TIMESTAMP_MILLIS(last_modified_time), HOUR) as hours_ago
+                FROM `{project}.{dataset}.__TABLES__`
+                WHERE table_id = '{tbl}'
+            """
+            result = self.execute_query(query)
+            if result:
+                row = result[0]
+                return {
+                    'last_updated': row.get('last_modified_time'),
+                    'hours_since_update': row.get('hours_ago', 0),
+                    'row_count': row.get('row_count', 0),
+                    'timestamp_column': '_METADATA',
+                    'source': 'table_metadata'
+                }
+            
+            return {
+                'error': 'No timestamp column found',
+                'timestamp_column': None
+            }
+        
+        query = f"""
+            SELECT 
+                MAX(`{ts_col}`) as last_update,
+                COUNT(*) as row_count,
+                TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(`{ts_col}`), HOUR) as hours_ago
+            FROM `{table}`
+        """
+        
+        result = self.execute_query(query)
+        
+        if result:
+            row = result[0]
+            return {
+                'last_updated': row.get('last_update'),
+                'hours_since_update': row.get('hours_ago', 0),
+                'row_count': row.get('row_count', 0),
+                'timestamp_column': ts_col,
+                'source': 'column'
+            }
+        
+        return {'error': 'Failed to get freshness', 'timestamp_column': ts_col}
+    
+    # =========================================================================
+    # DATA SAMPLING
+    # =========================================================================
+    
+    def sample_data(self, 
+                    table: str, 
+                    n: int = 1000,
+                    columns: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """Get random sample from BigQuery."""
+        cols = ', '.join(f'`{c}`' for c in columns) if columns else '*'
+        
+        # Use RAND() for random sampling
+        query = f"""
+            SELECT {cols}
+            FROM `{table}`
+            WHERE RAND() < {n * 2} / (SELECT COUNT(*) FROM `{table}`)
+            LIMIT {n}
+        """
+        
+        return self.execute_query(query)
+    
+    # =========================================================================
+    # QUERY HISTORY
+    # =========================================================================
+    
+    def _get_query_history_impl(self, 
+                                hours: int,
+                                user: Optional[str],
+                                database: Optional[str]) -> List[QueryHistoryEntry]:
+        """Get query history from BigQuery INFORMATION_SCHEMA."""
+        where_clauses = [
+            f"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours} HOUR)",
+            "job_type = 'QUERY'"
+        ]
+        
+        if user:
+            where_clauses.append(f"user_email = '{user}'")
+        
+        where = " AND ".join(where_clauses)
+        
+        # Use region-specific view
+        query = f"""
+            SELECT 
+                job_id as query_id,
+                query as query_text,
+                creation_time as start_time,
+                end_time,
+                TIMESTAMP_DIFF(end_time, creation_time, MILLISECOND) as duration_ms,
+                state as status,
+                error_result.message as error_message,
+                total_bytes_billed,
+                user_email as user_name
+            FROM `{self.project}.region-{self.location.lower()}.INFORMATION_SCHEMA.JOBS_BY_PROJECT`
+            WHERE {where}
+            AND query IS NOT NULL
+            ORDER BY creation_time DESC
+            LIMIT 10000
+        """
+        
+        try:
+            results = self.execute_query(query)
+            
+            return [
+                QueryHistoryEntry(
+                    query_id=row['query_id'],
+                    query_text=row['query_text'],
+                    start_time=row['start_time'],
+                    end_time=row.get('end_time'),
+                    duration_ms=row.get('duration_ms'),
+                    status='SUCCESS' if row.get('status') == 'DONE' else row.get('status', 'UNKNOWN'),
+                    error_message=row.get('error_message'),
+                    bytes_scanned=row.get('total_bytes_billed'),
+                    user_name=row.get('user_name'),
+                )
+                for row in results
+            ]
+        except Exception as e:
+            logger.error(f"Error fetching query history: {e}")
+            return []
+    
+    # =========================================================================
+    # SQL GENERATION
+    # =========================================================================
+    
+    def quote_identifier(self, identifier: str) -> str:
+        """Quote BigQuery identifier."""
+        if '.' in identifier:
+            parts = identifier.split('.')
+            return '.'.join(f'`{p}`' for p in parts)
+        return f'`{identifier}`'
+    
+    def get_current_timestamp_sql(self) -> str:
+        """BigQuery current timestamp."""
+        return "CURRENT_TIMESTAMP()"
+    
+    def get_interval_sql(self, hours: int) -> str:
+        """BigQuery interval subtraction."""
+        return f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {hours} HOUR)"
+    
+    def get_limit_sql(self, n: int) -> str:
+        """BigQuery LIMIT clause."""
+        return f"LIMIT {n}"
+    
+    def get_random_sample_sql(self, table: str, n: int) -> str:
+        """BigQuery random sample."""
+        return f"SELECT * FROM `{table}` ORDER BY RAND() LIMIT {n}"
+

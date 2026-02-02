@@ -1,0 +1,85 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+*.lcov
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+/dist
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local
+.env
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# prisma
+prisma/migrations/
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+scanner/venv/
+scanner/env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# CircleCI
+.circleci/artillery-results.json
+.circleci/lighthouse-results/
+
+# Security scan results
+snyk-results.json
+trufflehog-results.json
+semgrep-results.json
+npm-audit-results.json
+codeql-results.sarif
+
+# Lighthouse
+.lighthouseci/
+
+# Coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# OS
+.DS_Store
+Thumbs.db

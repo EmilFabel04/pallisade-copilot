@@ -1,0 +1,72 @@
+# ===========================================
+# Pallisade Scanner - Dependencies
+# ===========================================
+
+# FastAPI and server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.2
+python-multipart==0.0.6
+slowapi>=0.1.9  # Rate limiting
+
+# Database connectors
+snowflake-connector-python>=3.5.0
+psycopg[binary]>=3.1.0
+psycopg2-binary>=2.9.9
+google-cloud-bigquery>=3.13.0
+mysql-connector-python>=8.2.0
+pymysql>=1.1.0
+redshift-connector>=2.0.915
+pyodbc>=5.0.1  # SQL Server / Azure SQL / Azure Synapse
+
+# Data processing
+sqlalchemy>=2.0.0
+pandas>=2.2.0  # Updated for Python 3.14 compatibility
+numpy>=1.26.0  # Updated for Python 3.14 compatibility
+
+# DuckDB for sandbox testing (in-memory, fast, SQL-compatible)
+duckdb>=0.9.2
+
+# Faker for synthetic data generation
+faker>=22.0.0
+
+# Machine Learning
+scikit-learn>=1.4.0  # Updated for Python 3.14 compatibility
+
+# Advanced ML - Anomaly Detection & Drift
+pyod>=1.1.0                 # Multivariate anomaly detection (ECOD, IForest, COPOD)
+alibi-detect>=0.11.0        # Distribution drift detection (KSDrift, TabularDrift)
+ydata-profiling>=4.6.0      # Auto-profiling for baseline building
+
+# LLM for semantic column classification
+openai>=1.0.0               # GPT-4o-mini for column classification
+
+# SQL parsing for universal lineage
+sqlglot==20.11.0
+
+# Security and utilities
+cryptography==41.0.7
+python-dotenv==1.0.0
+
+# HTTP and API clients
+httpx==0.25.2
+aiohttp==3.9.1
+
+# YAML parsing (for dbt schema files)
+PyYAML==6.0.1
+
+# Google auth (for BigQuery)
+google-auth==2.25.0
+
+# Git operations
+GitPython==3.1.40
+
+# Structured logging
+structlog==23.2.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+
+# ggshield is installed separately in Dockerfile for latest version

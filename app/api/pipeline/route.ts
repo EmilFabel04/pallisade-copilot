@@ -1,0 +1,293 @@
+/**
+ * Pipeline API
+ * 
+ * GET - Fetch user's pipeline stack
+ * POST - Save pipeline stack
+ */
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import prisma from '@/lib/db';
+
+// GET - Fetch the user's pipeline stack(s)
+export async function GET(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: { organizationId: true },
+    });
+
+    if (!user?.organizationId) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    }
+
+    const organizationId = user.organizationId;
+    const searchParams = request.nextUrl.searchParams;
+    const stackId = searchParams.get('id');
+    const listAll = searchParams.get('all') === 'true';
+
+    // If listAll=true, return all stacks (for dropdown/selection)
+    if (listAll) {
+      const stacks = await prisma.pipelineStack.findMany({
+        where: { organizationId },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          healthScore: true,
+          lastScanAt: true,
+          _count: { select: { nodes: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      return NextResponse.json({
+        stacks: stacks.map(s => ({
+          id: s.id,
+          name: s.name,
+          status: s.status,
+          healthScore: s.healthScore,
+          lastScanAt: s.lastScanAt?.toISOString(),
+          nodeCount: s._count.nodes,
+        })),
+      });
+    }
+
+    // Get specific stack or first one
+    const stack = stackId
+      ? await prisma.pipelineStack.findUnique({
+          where: { id: stackId },
+          include: {
+            nodes: { orderBy: { createdAt: 'asc' } },
+            edges: true,
+          },
+        })
+      : await prisma.pipelineStack.findFirst({
+          where: { organizationId },
+          include: {
+            nodes: { orderBy: { createdAt: 'asc' } },
+            edges: true,
+          },
+        });
+
+    if (!stack) {
+      return NextResponse.json({ stack: null, stacks: [] });
+    }
+
+    // Verify ownership
+    if (stack.organizationId !== organizationId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // Transform to match frontend types
+    return NextResponse.json({
+      stack: {
+        id: stack.id,
+        name: stack.name,
+        description: stack.description || '',
+        status: stack.status,
+        healthScore: stack.healthScore,
+        lastScanAt: stack.lastScanAt?.toISOString(),
+        nodes: stack.nodes.map(node => ({
+          id: node.id,
+          name: node.name,
+          layer: node.layer,
+          toolType: node.toolType,
+          config: node.config,
+          positionX: node.positionX,
+          positionY: node.positionY,
+          status: node.status,
+          lastTestedAt: node.lastTestedAt?.toISOString(),
+          lastError: node.lastError,
+          healthScore: node.healthScore,
+          lastScanAt: node.lastScanAt?.toISOString(),
+          findingsCount: node.findingsCount,
+          criticalCount: node.criticalCount,
+          highCount: node.highCount,
+        })),
+        edges: stack.edges.map(edge => ({
+          id: edge.id,
+          sourceId: edge.sourceId,
+          targetId: edge.targetId,
+          label: edge.label,
+          dataFlow: edge.dataFlow,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Failed to fetch pipeline:', error);
+    return NextResponse.json({ error: 'Failed to fetch pipeline' }, { status: 500 });
+  }
+}
+
+// POST - Save the pipeline stack
+export async function POST(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: { organizationId: true },
+    });
+
+    if (!user?.organizationId) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 404 });
+    }
+
+    const organizationId = user.organizationId;
+    const body = await request.json();
+    
+    const { id, name, description, nodes, edges } = body;
+
+    // Check if creating new or updating existing
+    const isNew = id === 'new';
+
+    if (isNew) {
+      // Create new stack with nodes and edges
+      const stack = await prisma.pipelineStack.create({
+        data: {
+          name: name || 'My Data Pipeline',
+          description: description || null,
+          status: 'DRAFT',
+          organizationId,
+          nodes: {
+            create: nodes.map((node: any) => ({
+              name: node.name,
+              layer: node.layer,
+              toolType: node.toolType,
+              config: node.config,
+              positionX: node.positionX,
+              positionY: node.positionY,
+              status: node.status,
+            })),
+          },
+        },
+        include: { nodes: true },
+      });
+
+      // Create edges (need node IDs from DB)
+      const nodeIdMap = new Map<string, string>();
+      nodes.forEach((node: any, index: number) => {
+        nodeIdMap.set(node.id, stack.nodes[index].id);
+      });
+
+      // Create edges with mapped IDs
+      await Promise.all(
+        edges.map((edge: any) =>
+          prisma.pipelineEdge.create({
+            data: {
+              sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
+              targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
+              label: edge.label,
+              dataFlow: edge.dataFlow,
+              stackId: stack.id,
+            },
+          })
+        )
+      );
+
+      return NextResponse.json({ id: stack.id, success: true });
+    } else {
+      // Update existing stack
+      // Get existing nodes for ID mapping
+      const existingStack = await prisma.pipelineStack.findUnique({
+        where: { id },
+        include: { nodes: true, edges: true },
+      });
+
+      if (!existingStack || existingStack.organizationId !== organizationId) {
+        return NextResponse.json({ error: 'Stack not found' }, { status: 404 });
+      }
+
+      // Update stack metadata
+      await prisma.pipelineStack.update({
+        where: { id },
+        data: {
+          name,
+          description,
+          status: nodes.length > 0 ? 'CONFIGURING' : 'DRAFT',
+        },
+      });
+
+      // Get existing node IDs
+      const existingNodeIds = new Set(existingStack.nodes.map(n => n.id));
+      const newNodeIds = new Set(nodes.map((n: any) => n.id));
+
+      // Delete removed nodes
+      const nodesToDelete = existingStack.nodes.filter(n => !newNodeIds.has(n.id));
+      await prisma.pipelineNode.deleteMany({
+        where: { id: { in: nodesToDelete.map(n => n.id) } },
+      });
+
+      // Upsert nodes
+      const nodeIdMap = new Map<string, string>();
+      for (const node of nodes) {
+        if (existingNodeIds.has(node.id)) {
+          // Update existing
+          await prisma.pipelineNode.update({
+            where: { id: node.id },
+            data: {
+              name: node.name,
+              layer: node.layer,
+              toolType: node.toolType,
+              config: node.config,
+              positionX: node.positionX,
+              positionY: node.positionY,
+              status: node.status,
+            },
+          });
+          nodeIdMap.set(node.id, node.id);
+        } else {
+          // Create new
+          const created = await prisma.pipelineNode.create({
+            data: {
+              name: node.name,
+              layer: node.layer,
+              toolType: node.toolType,
+              config: node.config,
+              positionX: node.positionX,
+              positionY: node.positionY,
+              status: node.status,
+              stackId: id,
+            },
+          });
+          nodeIdMap.set(node.id, created.id);
+        }
+      }
+
+      // Delete all existing edges and recreate
+      await prisma.pipelineEdge.deleteMany({
+        where: { stackId: id },
+      });
+
+      // Create edges with mapped IDs
+      await Promise.all(
+        edges.map((edge: any) =>
+          prisma.pipelineEdge.create({
+            data: {
+              sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
+              targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
+              label: edge.label,
+              dataFlow: edge.dataFlow,
+              stackId: id,
+            },
+          })
+        )
+      );
+
+      return NextResponse.json({ id, success: true });
+    }
+  } catch (error) {
+    console.error('Failed to save pipeline:', error);
+    return NextResponse.json({ error: 'Failed to save pipeline' }, { status: 500 });
+  }
+}
