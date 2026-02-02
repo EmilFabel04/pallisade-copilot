@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
     const organizationId = user.organizationId;
     const searchParams = request.nextUrl.searchParams;
-    const stackId = searchParams.get('id');
+    const stackId = searchParams.get('id') || searchParams.get('stackId');
     const listAll = searchParams.get('all') === 'true';
 
     // If listAll=true, return all stacks (for dropdown/selection)
@@ -76,8 +76,33 @@ export async function GET(request: NextRequest) {
           },
         });
 
+    // Get all stacks for the dropdown (always include)
+    const allStacks = await prisma.pipelineStack.findMany({
+      where: { organizationId },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        status: true,
+        healthScore: true,
+        lastScanAt: true,
+        _count: { select: { nodes: true } },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const stacksList = allStacks.map(s => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      status: s.status,
+      healthScore: s.healthScore,
+      lastScanAt: s.lastScanAt?.toISOString(),
+      nodeCount: s._count.nodes,
+    }));
+
     if (!stack) {
-      return NextResponse.json({ stack: null, stacks: [] });
+      return NextResponse.json({ stack: null, stacks: stacksList });
     }
 
     // Verify ownership
@@ -110,6 +135,7 @@ export async function GET(request: NextRequest) {
           findingsCount: node.findingsCount,
           criticalCount: node.criticalCount,
           highCount: node.highCount,
+          integrationId: node.integrationId,
         })),
         edges: stack.edges.map(edge => ({
           id: edge.id,
@@ -119,6 +145,7 @@ export async function GET(request: NextRequest) {
           dataFlow: edge.dataFlow,
         })),
       },
+      stacks: stacksList,
     });
   } catch (error) {
     console.error('Failed to fetch pipeline:', error);
@@ -146,56 +173,61 @@ export async function POST(request: NextRequest) {
     const organizationId = user.organizationId;
     const body = await request.json();
     
-    const { id, name, description, nodes, edges } = body;
+    const { id, name, description, nodes = [], edges = [] } = body;
 
     // Check if creating new or updating existing
-    const isNew = id === 'new';
+    // Treat undefined, null, or 'new' as creating a new stack
+    const isNew = !id || id === 'new';
 
     if (isNew) {
-      // Create new stack with nodes and edges
+      // Create new stack (with optional nodes and edges)
       const stack = await prisma.pipelineStack.create({
         data: {
           name: name || 'My Data Pipeline',
           description: description || null,
-          status: 'DRAFT',
+          status: nodes.length > 0 ? 'CONFIGURING' : 'DRAFT',
           organizationId,
-          nodes: {
-            create: nodes.map((node: any) => ({
-              name: node.name,
-              layer: node.layer,
-              toolType: node.toolType,
-              config: node.config,
-              positionX: node.positionX,
-              positionY: node.positionY,
-              status: node.status,
-            })),
-          },
+          ...(nodes.length > 0 ? {
+            nodes: {
+              create: nodes.map((node: any) => ({
+                name: node.name,
+                layer: node.layer,
+                toolType: node.toolType,
+                config: node.config,
+                positionX: node.positionX,
+                positionY: node.positionY,
+                status: node.status,
+              })),
+            },
+          } : {}),
         },
         include: { nodes: true },
       });
 
-      // Create edges (need node IDs from DB)
-      const nodeIdMap = new Map<string, string>();
-      nodes.forEach((node: any, index: number) => {
-        nodeIdMap.set(node.id, stack.nodes[index].id);
-      });
+      // Create edges if nodes were provided (need node IDs from DB)
+      if (nodes.length > 0 && edges.length > 0) {
+        const nodeIdMap = new Map<string, string>();
+        nodes.forEach((node: any, index: number) => {
+          nodeIdMap.set(node.id, stack.nodes[index].id);
+        });
 
-      // Create edges with mapped IDs
-      await Promise.all(
-        edges.map((edge: any) =>
-          prisma.pipelineEdge.create({
-            data: {
-              sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
-              targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
-              label: edge.label,
-              dataFlow: edge.dataFlow,
-              stackId: stack.id,
-            },
-          })
-        )
-      );
+        // Create edges with mapped IDs
+        await Promise.all(
+          edges.map((edge: any) =>
+            prisma.pipelineEdge.create({
+              data: {
+                sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
+                targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
+                label: edge.label,
+                dataFlow: edge.dataFlow,
+                stackId: stack.id,
+              },
+            })
+          )
+        );
+      }
 
-      return NextResponse.json({ id: stack.id, success: true });
+      return NextResponse.json({ stack: { id: stack.id, name: stack.name }, success: true });
     } else {
       // Update existing stack
       // Get existing nodes for ID mapping

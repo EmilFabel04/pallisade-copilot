@@ -66,7 +66,7 @@ def create_app() -> FastAPI:
         )
     
     # Register Routers
-    from .routers import health_router, database_router
+    from .routers import health_router, database_router, lineage_router
     from .routers.copilot import router as copilot_router
     
     # Health endpoint
@@ -77,6 +77,9 @@ def create_app() -> FastAPI:
     
     # Database discovery API
     app.include_router(database_router, prefix="/api/v1", tags=["Database"])
+    
+    # Lineage extraction API
+    app.include_router(lineage_router, prefix="/api/v1", tags=["Lineage"])
     
     logger.info("app_started", version=settings.version, environment=settings.environment)
     

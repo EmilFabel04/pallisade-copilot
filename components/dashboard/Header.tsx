@@ -3,14 +3,17 @@
 import { useSession } from 'next-auth/react';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
+import { PipelineSelector } from './PipelineSelector';
 
 // Map routes to page titles
 const pageTitles: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/dashboard/chat': 'Chat',
+  '/dashboard/assistant': 'AI Assistant',
   '/dashboard/lineage': 'Lineage',
   '/dashboard/sources': 'Data Sources',
   '/dashboard/pipeline': 'Pipeline',
+  '/dashboard/integrations': 'Integrations',
   '/dashboard/team': 'Team',
   '/dashboard/settings': 'Settings',
 };
@@ -28,8 +31,10 @@ export function DashboardHeader() {
 
   return (
     <header className="h-14 flex items-center justify-between px-6 border-b border-white/[0.04] bg-[#050505]/90 backdrop-blur-sm sticky top-0 z-30">
-      {/* Left - Page Title */}
+      {/* Left - Pipeline Selector & Page Title */}
       <div className="flex items-center gap-4">
+        <PipelineSelector />
+        <div className="w-px h-6 bg-white/[0.08]" />
         <h1 className="text-[15px] font-medium text-white">{pageTitle}</h1>
       </div>
 

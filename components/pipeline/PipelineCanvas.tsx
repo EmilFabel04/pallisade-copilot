@@ -440,9 +440,9 @@ function PipelineCanvasInner({
       >
         <Background
           variant={BackgroundVariant.Dots}
-          gap={24}
-          size={1}
-          color="rgba(255,255,255,0.05)"
+          gap={20}
+          size={2}
+          color="rgba(255,255,255,0.15)"
         />
         <Controls className="!bg-[#141419] !border-[rgba(255,255,255,0.1)] !rounded-xl" />
         

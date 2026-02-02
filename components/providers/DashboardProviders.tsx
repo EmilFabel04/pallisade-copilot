@@ -9,6 +9,7 @@
 import { ReactNode } from "react";
 import { FixTestProvider } from "@/components/dashboard/FixTestContext";
 import { TeamBootstrapper } from "./TeamBootstrapper";
+import { PipelineProvider } from "@/contexts/PipelineContext";
 
 interface DashboardProvidersProps {
   children: ReactNode;
@@ -16,10 +17,12 @@ interface DashboardProvidersProps {
 
 export function DashboardProviders({ children }: DashboardProvidersProps) {
   return (
-    <FixTestProvider>
-      <TeamBootstrapper />
-      {children}
-    </FixTestProvider>
+    <PipelineProvider>
+      <FixTestProvider>
+        <TeamBootstrapper />
+        {children}
+      </FixTestProvider>
+    </PipelineProvider>
   );
 }
 

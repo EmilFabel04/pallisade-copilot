@@ -23,11 +23,74 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { message, session_id, pipeline_stack_id, node_ids, model = 'claude-sonnet' } = body;
+    const { 
+      message, 
+      sessionId, 
+      pipeline_stack_id, 
+      pipelineStackId, // Support both formats
+      node_ids, 
+      model = 'claude-sonnet' 
+    } = body;
+    
+    const effectivePipelineStackId = pipelineStackId || pipeline_stack_id;
 
     if (!message) {
       return NextResponse.json({ error: 'Message required' }, { status: 400 });
     }
+
+    // Get or create chat session
+    let chatSession;
+    if (sessionId) {
+      // Verify session belongs to user
+      chatSession = await prisma.copilotSession.findFirst({
+        where: {
+          id: sessionId,
+          userId: user.id,
+        },
+      });
+      if (!chatSession) {
+        return NextResponse.json({ error: 'Session not found' }, { status: 404 });
+      }
+    } else {
+      // Create new session with pipeline context
+      chatSession = await prisma.copilotSession.create({
+        data: {
+          title: 'New Chat',
+          userId: user.id,
+          organizationId: user.organizationId,
+          model,
+          pipelineStackId: effectivePipelineStackId || null,
+        },
+      });
+    }
+
+    // Fetch conversation history for context
+    const previousMessages = await prisma.copilotMessage.findMany({
+      where: { sessionId: chatSession.id },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        role: true,
+        content: true,
+      },
+    });
+
+    // Save user message to database
+    const userMessage = await prisma.copilotMessage.create({
+      data: {
+        sessionId: chatSession.id,
+        role: 'USER',
+        content: message,
+      },
+    });
+
+    // Build conversation history for the AI
+    const conversationHistory = [
+      ...previousMessages.map(m => ({
+        role: m.role.toLowerCase() as 'user' | 'assistant',
+        content: m.content,
+      })),
+      { role: 'user' as const, content: message },
+    ];
 
     // Fetch pipeline nodes (integrations) from the database
     const pipelineStack = await prisma.pipelineStack.findFirst({
@@ -60,7 +123,7 @@ export async function POST(request: Request) {
     
     console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({ name: i.name, type: i.type, status: i.status })));
 
-    // Call the scanner copilot API
+    // Call the scanner copilot API with full conversation history
     const response = await fetch(`${SCANNER_API_URL}/api/v1/copilot/chat`, {
       method: 'POST',
       headers: {
@@ -69,7 +132,8 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         message,
-        session_id,
+        messages: conversationHistory, // Full conversation history for context
+        session_id: chatSession.id,
         pipeline_stack_id: pipeline_stack_id || pipelineStack?.id,
         node_ids,
         model,
@@ -77,22 +141,71 @@ export async function POST(request: Request) {
       }),
     });
 
+    let aiContent: string;
+    let toolCalls: any[] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+
     if (!response.ok) {
       // If scanner API is not available, return a helpful message
       const errorText = await response.text();
       console.error('Scanner API error:', errorText);
-      
-      return NextResponse.json({
-        session_id: session_id || 'local',
-        message: getLocalFallbackResponse(message),
-        tool_calls: [],
-        input_tokens: 0,
-        output_tokens: 0,
+      aiContent = getLocalFallbackResponse(message);
+    } else {
+      const data = await response.json();
+      aiContent = data.message || getLocalFallbackResponse(message);
+      toolCalls = data.tool_calls || [];
+      inputTokens = data.input_tokens || 0;
+      outputTokens = data.output_tokens || 0;
+    }
+
+    // Save AI response to database
+    const aiMessage = await prisma.copilotMessage.create({
+      data: {
+        sessionId: chatSession.id,
+        role: 'ASSISTANT',
+        content: aiContent,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        inputTokens,
+        outputTokens,
+      },
+    });
+
+    // Update session title if this is the first message (generate from user message)
+    const messageCount = await prisma.copilotMessage.count({
+      where: { sessionId: chatSession.id },
+    });
+    
+    if (messageCount <= 2) {
+      // Generate title from first user message
+      const title = generateSessionTitle(message);
+      await prisma.copilotSession.update({
+        where: { id: chatSession.id },
+        data: { 
+          title,
+          totalInputTokens: { increment: inputTokens },
+          totalOutputTokens: { increment: outputTokens },
+        },
+      });
+    } else {
+      // Just update token counts
+      await prisma.copilotSession.update({
+        where: { id: chatSession.id },
+        data: {
+          totalInputTokens: { increment: inputTokens },
+          totalOutputTokens: { increment: outputTokens },
+        },
       });
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    return NextResponse.json({
+      sessionId: chatSession.id,
+      message: aiContent,
+      messageId: aiMessage.id,
+      tool_calls: toolCalls,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+    });
 
   } catch (error) {
     console.error('Copilot chat error:', error);
@@ -100,13 +213,34 @@ export async function POST(request: Request) {
     // Return a local fallback response
     const body = await request.clone().json().catch(() => ({}));
     return NextResponse.json({
-      session_id: body.session_id || 'local',
+      sessionId: body.sessionId || null,
       message: getLocalFallbackResponse(body.message || ''),
       tool_calls: [],
       input_tokens: 0,
       output_tokens: 0,
     });
   }
+}
+
+/**
+ * Generate a session title from the first user message
+ */
+function generateSessionTitle(message: string): string {
+  // Remove context blocks
+  const cleanMessage = message.replace(/\[FINDING CONTEXT\][\s\S]*?\[QUESTION\]\n?/g, '').trim();
+  
+  // Truncate to reasonable length
+  if (cleanMessage.length <= 50) {
+    return cleanMessage;
+  }
+  
+  // Try to find a natural break point
+  const truncated = cleanMessage.substring(0, 50);
+  const lastSpace = truncated.lastIndexOf(' ');
+  if (lastSpace > 30) {
+    return truncated.substring(0, lastSpace) + '...';
+  }
+  return truncated + '...';
 }
 
 function getLocalFallbackResponse(message: string): string {

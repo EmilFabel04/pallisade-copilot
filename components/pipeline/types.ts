@@ -143,6 +143,17 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'api_token', label: 'API Token', type: 'password', required: false, placeholder: 'Dagster Cloud token' },
       ],
     },
+    { 
+      id: 'prefect', 
+      name: 'Prefect', 
+      description: 'Prefect workflow orchestration', 
+      layer: 'TRANSFORMATION',
+      configFields: [
+        { name: 'api_url', label: 'Prefect API URL', type: 'text', required: true, placeholder: 'https://api.prefect.cloud/api' },
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your Prefect API key' },
+        { name: 'workspace_id', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Prefect Cloud workspace ID' },
+      ],
+    },
   ],
   WAREHOUSE: [
     { 

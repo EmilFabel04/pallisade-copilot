@@ -217,6 +217,18 @@ class ToolRegistry:
             alternative_integrations={"SNOWFLAKE", "BIGQUERY"},
         ))
         
+        self._register(Tool(
+            name="get_table_dependencies",
+            description="Get upstream (source) and downstream (dependent) tables for a specific table. Shows what feeds into this table and what depends on it.",
+            category=ToolCategory.LINEAGE,
+            parameters=[
+                ToolParameter("table_name", "string", "The fully qualified table name (dataset.table or schema.table)"),
+                ToolParameter("direction", "string", "Which dependencies to get", required=False, 
+                             enum=["upstream", "downstream", "both"], default="both"),
+            ],
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES"},
+        ))
+        
         # ==========================================
         # DBT TOOLS
         # ==========================================

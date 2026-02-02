@@ -117,6 +117,22 @@ class CopilotContext:
                 lines.append(f"### {layer.value.title()} Layer")
                 for integration in layer_integrations:
                     lines.append(f"- **{integration.name}** ({integration.type})")
+                    # Include relevant config details for the AI
+                    if integration.config:
+                        config = integration.config
+                        if config.get('project_id') or config.get('project'):
+                            project = config.get('project_id') or config.get('project')
+                            lines.append(f"  - Project: `{project}`")
+                        if config.get('datasets'):
+                            datasets = config.get('datasets')
+                            if isinstance(datasets, list):
+                                lines.append(f"  - Datasets: {', '.join([f'`{d}`' for d in datasets])}")
+                            else:
+                                lines.append(f"  - Dataset: `{datasets}`")
+                        if config.get('database'):
+                            lines.append(f"  - Database: `{config.get('database')}`")
+                        if config.get('schema'):
+                            lines.append(f"  - Schema: `{config.get('schema')}`")
                 lines.append("")
         
         # Add lineage summary if available

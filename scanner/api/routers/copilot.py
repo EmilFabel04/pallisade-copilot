@@ -33,9 +33,15 @@ class IntegrationData(BaseModel):
     status: str
     config: Dict[str, Any] = {}
 
+class ConversationMessage(BaseModel):
+    """A message in the conversation history."""
+    role: str = Field(..., description="Message role: 'user' or 'assistant'")
+    content: str = Field(..., description="Message content")
+
 class ChatRequest(BaseModel):
     """Request for chat endpoint."""
     message: str = Field(..., description="User's message")
+    messages: Optional[List[ConversationMessage]] = Field(None, description="Full conversation history")
     session_id: Optional[str] = Field(None, description="Existing session ID")
     pipeline_stack_id: Optional[str] = Field(None, description="Pipeline stack to focus on")
     node_ids: Optional[List[str]] = Field(None, description="Specific nodes to focus on")
@@ -127,10 +133,15 @@ async def chat(
         # Initialize LLM
         llm = CopilotLLM(model=request.model)
         
-        # Create message
-        messages = [Message(role="user", content=request.message)]
-        
-        # TODO: Load conversation history if session_id provided
+        # Build messages from conversation history or single message
+        if request.messages and len(request.messages) > 0:
+            messages = [
+                Message(role=m.role, content=m.content) 
+                for m in request.messages
+            ]
+            logger.info(f"Using conversation history with {len(messages)} messages")
+        else:
+            messages = [Message(role="user", content=request.message)]
         
         # Get response
         response = await llm.chat(messages, context)

@@ -261,41 +261,123 @@ class ToolExecutor:
     
     async def _execute_search_lineage(self, args: Dict[str, Any]) -> ToolResult:
         """Search for nodes in lineage."""
+        import asyncio
+        
         query = args["query"].lower()
         node_type = args.get("node_type", "all")
         limit = args.get("limit", 20)
         
-        if not self.context.graph:
-            return ToolResult(success=False, error="No lineage graph available")
-        
-        results = []
-        for node in self.context.graph.nodes.values():
-            # Filter by type
-            if node_type != "all" and node.node_type.value != node_type:
-                continue
+        # If we have an in-memory graph, use it
+        if self.context.graph and len(self.context.graph.nodes) > 0:
+            results = []
+            for node in self.context.graph.nodes.values():
+                # Filter by type
+                if node_type != "all" and node.node_type.value != node_type:
+                    continue
+                
+                # Match query (simple pattern matching)
+                if self._matches_pattern(node.name.lower(), query):
+                    results.append({
+                        "id": node.id,
+                        "name": node.name,
+                        "type": node.node_type.value,
+                        "platform": node.platform,
+                        "upstream_count": node.upstream_count,
+                        "downstream_count": node.downstream_count,
+                    })
+                
+                if len(results) >= limit:
+                    break
             
-            # Match query (simple pattern matching)
-            if self._matches_pattern(node.name.lower(), query):
-                results.append({
-                    "id": node.id,
-                    "name": node.name,
-                    "type": node.node_type.value,
-                    "platform": node.platform,
-                    "upstream_count": node.upstream_count,
-                    "downstream_count": node.downstream_count,
-                })
-            
-            if len(results) >= limit:
-                break
+            return ToolResult(
+                success=True,
+                data={
+                    "query": query,
+                    "count": len(results),
+                    "nodes": results,
+                    "source": "lineage_graph"
+                }
+            )
         
+        # No in-memory graph - try to search warehouse metadata directly
+        if self.adapters:
+            # Use the first available warehouse adapter
+            adapter = next(iter(self.adapters.values()), None)
+            if adapter:
+                try:
+                    # Build warehouse-specific lineage query
+                    lineage_query = self._build_lineage_search_query(query, adapter, limit)
+                    if lineage_query:
+                        results = await asyncio.to_thread(adapter.execute_query, lineage_query)
+                        serialized = self._serialize_query_results(results[:limit])
+                        
+                        return ToolResult(
+                            success=True,
+                            data={
+                                "query": query,
+                                "count": len(serialized),
+                                "nodes": serialized,
+                                "source": "warehouse_metadata"
+                            }
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to search warehouse for lineage: {e}")
+        
+        # Fallback: explain that lineage needs to be extracted first
         return ToolResult(
-            success=True,
-            data={
-                "query": query,
-                "count": len(results),
-                "nodes": results
-            }
+            success=False,
+            error="No lineage data available. Use query_warehouse with INFORMATION_SCHEMA to discover table dependencies, or extract lineage first."
         )
+    
+    def _build_lineage_search_query(self, query: str, adapter, limit: int) -> Optional[str]:
+        """Build a warehouse-specific query to search for table dependencies."""
+        adapter_type = type(adapter).__name__.upper()
+        
+        # Clean up the query pattern
+        search_pattern = query.replace("*", "%")
+        if "%" not in search_pattern:
+            search_pattern = f"%{search_pattern}%"
+        
+        if "BIGQUERY" in adapter_type:
+            # For BigQuery, search views and their referenced tables
+            project = getattr(adapter, 'project', None)
+            dataset = getattr(adapter, 'dataset', None)
+            
+            if project and dataset:
+                return f"""
+                    SELECT 
+                        table_name,
+                        table_type,
+                        COALESCE(ddl, '') as definition
+                    FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLES`
+                    WHERE LOWER(table_name) LIKE '{search_pattern}'
+                    LIMIT {limit}
+                """
+        
+        elif "SNOWFLAKE" in adapter_type:
+            return f"""
+                SELECT 
+                    TABLE_NAME as table_name,
+                    TABLE_TYPE as table_type,
+                    ROW_COUNT as row_count
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE LOWER(TABLE_NAME) LIKE '{search_pattern}'
+                LIMIT {limit}
+            """
+        
+        elif "POSTGRES" in adapter_type:
+            return f"""
+                SELECT 
+                    table_name,
+                    table_type,
+                    (SELECT reltuples::bigint FROM pg_class WHERE relname = t.table_name) as row_count
+                FROM information_schema.tables t
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                AND LOWER(table_name) LIKE '{search_pattern}'
+                LIMIT {limit}
+            """
+        
+        return None
     
     def _matches_pattern(self, text: str, pattern: str) -> bool:
         """Simple wildcard pattern matching."""
@@ -315,6 +397,32 @@ class ToolExecutor:
         else:
             # pattern*pattern
             return text.startswith(parts[0]) and text.endswith(parts[-1])
+    
+    def _serialize_query_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Serialize query results to handle datetime and other non-JSON types."""
+        from datetime import datetime, date
+        from decimal import Decimal
+        
+        def serialize_value(val):
+            if val is None:
+                return None
+            elif isinstance(val, (datetime, date)):
+                return val.isoformat()
+            elif isinstance(val, Decimal):
+                return float(val)
+            elif isinstance(val, bytes):
+                return val.decode('utf-8', errors='replace')
+            elif isinstance(val, dict):
+                return {k: serialize_value(v) for k, v in val.items()}
+            elif isinstance(val, (list, tuple)):
+                return [serialize_value(v) for v in val]
+            else:
+                return val
+        
+        return [
+            {k: serialize_value(v) for k, v in row.items()}
+            for row in results
+        ]
     
     # ==========================================
     # WAREHOUSE TOOL IMPLEMENTATIONS
@@ -365,6 +473,9 @@ class ToolExecutor:
             # Execute synchronous adapter method in thread pool
             results = await asyncio.to_thread(adapter.execute_query, sql)
             
+            # Serialize results to handle datetime and other non-JSON types
+            serialized_results = self._serialize_query_results(results[:limit])
+            
             logger.info(f"Query returned {len(results)} rows")
             
             return ToolResult(
@@ -372,7 +483,7 @@ class ToolExecutor:
                 data={
                     "sql": sql,
                     "row_count": len(results),
-                    "rows": results[:limit]
+                    "rows": serialized_results
                 }
             )
         except Exception as e:
@@ -399,6 +510,243 @@ class ToolExecutor:
             return ToolResult(success=True, data=stats)
         except Exception as e:
             return ToolResult(success=False, error=str(e))
+    
+    async def _execute_get_table_dependencies(self, args: Dict[str, Any]) -> ToolResult:
+        """Get upstream and downstream dependencies for a table."""
+        import asyncio
+        
+        table_name = args["table_name"]
+        direction = args.get("direction", "both")
+        
+        # Find warehouse adapter
+        warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
+        adapter = None
+        adapter_type = None
+        for wh_type in warehouse_types:
+            if wh_type in self._adapters:
+                adapter = self._adapters[wh_type]
+                adapter_type = wh_type
+                break
+        
+        if not adapter:
+            return ToolResult(success=False, error="No warehouse connected")
+        
+        try:
+            # Connect if not already connected
+            if not adapter.is_connected:
+                connected = adapter.connect()
+                if not connected:
+                    return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
+            
+            dependencies = {"upstream": [], "downstream": [], "table": table_name}
+            
+            if adapter_type == "BIGQUERY":
+                dependencies = await self._get_bigquery_dependencies(adapter, table_name, direction)
+            elif adapter_type == "SNOWFLAKE":
+                dependencies = await self._get_snowflake_dependencies(adapter, table_name, direction)
+            elif adapter_type == "POSTGRES":
+                dependencies = await self._get_postgres_dependencies(adapter, table_name, direction)
+            else:
+                return ToolResult(
+                    success=False,
+                    error=f"Dependency tracking not yet implemented for {adapter_type}"
+                )
+            
+            return ToolResult(success=True, data=dependencies)
+            
+        except Exception as e:
+            logger.error(f"Failed to get table dependencies: {e}")
+            return ToolResult(success=False, error=str(e))
+    
+    async def _get_bigquery_dependencies(self, adapter, table_name: str, direction: str) -> Dict:
+        """Get BigQuery table dependencies using INFORMATION_SCHEMA."""
+        import asyncio
+        
+        project = getattr(adapter, 'project', None)
+        dataset = getattr(adapter, 'dataset', None)
+        
+        # Parse table name
+        parts = table_name.split('.')
+        if len(parts) == 2:
+            target_dataset, target_table = parts
+        elif len(parts) == 3:
+            _, target_dataset, target_table = parts
+        else:
+            target_dataset = dataset
+            target_table = table_name
+        
+        dependencies = {"upstream": [], "downstream": [], "table": table_name}
+        
+        # Get views/tables that reference this table (downstream = things that depend on this)
+        if direction in ("downstream", "both"):
+            try:
+                # Query views that reference this table
+                downstream_query = f"""
+                    SELECT 
+                        v.table_name as dependent_name,
+                        v.table_type as dependent_type,
+                        'view_definition' as source
+                    FROM `{project}.{target_dataset}.INFORMATION_SCHEMA.TABLES` v
+                    WHERE v.table_type IN ('VIEW', 'MATERIALIZED VIEW')
+                    AND v.ddl LIKE '%{target_table}%'
+                    AND v.table_name != '{target_table}'
+                """
+                results = await asyncio.to_thread(adapter.execute_query, downstream_query)
+                for row in results:
+                    dependencies["downstream"].append({
+                        "name": f"{target_dataset}.{row['dependent_name']}",
+                        "type": row.get('dependent_type', 'VIEW'),
+                        "relationship": "depends_on"
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get downstream dependencies: {e}")
+        
+        # For upstream, we need to parse the view definition
+        if direction in ("upstream", "both"):
+            try:
+                # Check if target table is a view
+                view_query = f"""
+                    SELECT ddl, table_type
+                    FROM `{project}.{target_dataset}.INFORMATION_SCHEMA.TABLES`
+                    WHERE table_name = '{target_table}'
+                """
+                results = await asyncio.to_thread(adapter.execute_query, view_query)
+                
+                if results and results[0].get('table_type') in ('VIEW', 'MATERIALIZED VIEW'):
+                    ddl = results[0].get('ddl', '')
+                    # Simple extraction of referenced tables from the view DDL
+                    # Look for patterns like `dataset.table` or FROM/JOIN clauses
+                    import re
+                    table_refs = re.findall(r'`([^`]+\.[^`]+)`', ddl)
+                    for ref in table_refs:
+                        ref_parts = ref.split('.')
+                        ref_table = ref_parts[-1] if ref_parts else ref
+                        if ref_table != target_table:
+                            dependencies["upstream"].append({
+                                "name": ref,
+                                "type": "TABLE",
+                                "relationship": "source"
+                            })
+            except Exception as e:
+                logger.warning(f"Failed to get upstream dependencies: {e}")
+        
+        return dependencies
+    
+    async def _get_snowflake_dependencies(self, adapter, table_name: str, direction: str) -> Dict:
+        """Get Snowflake table dependencies using OBJECT_DEPENDENCIES."""
+        import asyncio
+        
+        dependencies = {"upstream": [], "downstream": [], "table": table_name}
+        
+        # Parse table name
+        parts = table_name.upper().split('.')
+        if len(parts) >= 2:
+            schema = parts[-2]
+            table = parts[-1]
+        else:
+            table = table_name.upper()
+            schema = None
+        
+        if direction in ("downstream", "both"):
+            try:
+                downstream_query = f"""
+                    SELECT DISTINCT
+                        REFERENCING_OBJECT_NAME as dependent_name,
+                        REFERENCING_OBJECT_TYPE as dependent_type
+                    FROM SNOWFLAKE.ACCOUNT_USAGE.OBJECT_DEPENDENCIES
+                    WHERE REFERENCED_OBJECT_NAME = '{table}'
+                    {f"AND REFERENCED_SCHEMA = '{schema}'" if schema else ""}
+                """
+                results = await asyncio.to_thread(adapter.execute_query, downstream_query)
+                for row in results:
+                    dependencies["downstream"].append({
+                        "name": row['dependent_name'],
+                        "type": row.get('dependent_type', 'UNKNOWN'),
+                        "relationship": "depends_on"
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get Snowflake downstream deps: {e}")
+        
+        if direction in ("upstream", "both"):
+            try:
+                upstream_query = f"""
+                    SELECT DISTINCT
+                        REFERENCED_OBJECT_NAME as source_name,
+                        REFERENCED_OBJECT_TYPE as source_type
+                    FROM SNOWFLAKE.ACCOUNT_USAGE.OBJECT_DEPENDENCIES
+                    WHERE REFERENCING_OBJECT_NAME = '{table}'
+                    {f"AND REFERENCING_SCHEMA = '{schema}'" if schema else ""}
+                """
+                results = await asyncio.to_thread(adapter.execute_query, upstream_query)
+                for row in results:
+                    dependencies["upstream"].append({
+                        "name": row['source_name'],
+                        "type": row.get('source_type', 'UNKNOWN'),
+                        "relationship": "source"
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get Snowflake upstream deps: {e}")
+        
+        return dependencies
+    
+    async def _get_postgres_dependencies(self, adapter, table_name: str, direction: str) -> Dict:
+        """Get PostgreSQL table dependencies using pg_depend."""
+        import asyncio
+        
+        dependencies = {"upstream": [], "downstream": [], "table": table_name}
+        
+        # Parse table name
+        parts = table_name.split('.')
+        if len(parts) == 2:
+            schema, table = parts
+        else:
+            schema = 'public'
+            table = table_name
+        
+        if direction in ("downstream", "both"):
+            try:
+                downstream_query = f"""
+                    SELECT DISTINCT
+                        v.table_name as dependent_name,
+                        v.table_type as dependent_type
+                    FROM information_schema.view_table_usage vtu
+                    JOIN information_schema.views v 
+                        ON v.table_schema = vtu.view_schema 
+                        AND v.table_name = vtu.view_name
+                    WHERE vtu.table_name = '{table}'
+                    AND vtu.table_schema = '{schema}'
+                """
+                results = await asyncio.to_thread(adapter.execute_query, downstream_query)
+                for row in results:
+                    dependencies["downstream"].append({
+                        "name": f"{schema}.{row['dependent_name']}",
+                        "type": row.get('dependent_type', 'VIEW'),
+                        "relationship": "depends_on"
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get Postgres downstream deps: {e}")
+        
+        if direction in ("upstream", "both"):
+            try:
+                upstream_query = f"""
+                    SELECT DISTINCT
+                        vtu.table_name as source_name,
+                        'TABLE' as source_type
+                    FROM information_schema.view_table_usage vtu
+                    WHERE vtu.view_name = '{table}'
+                    AND vtu.view_schema = '{schema}'
+                """
+                results = await asyncio.to_thread(adapter.execute_query, upstream_query)
+                for row in results:
+                    dependencies["upstream"].append({
+                        "name": f"{schema}.{row['source_name']}",
+                        "type": row.get('source_type', 'TABLE'),
+                        "relationship": "source"
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get Postgres upstream deps: {e}")
+        
+        return dependencies
     
     # ==========================================
     # DBT TOOL IMPLEMENTATIONS
