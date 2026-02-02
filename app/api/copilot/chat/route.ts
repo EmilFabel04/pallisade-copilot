@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://localhost:8000';
+const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 export async function POST(request: Request) {
   try {
@@ -48,14 +48,17 @@ export async function POST(request: Request) {
     });
 
     // Convert pipeline nodes to integration format for the scanner
+    // Note: type must be uppercase to match the scanner's tool registry
     const integrations = pipelineStack?.nodes.map(node => ({
       id: node.id,
       name: node.name,
-      type: node.toolType,
+      type: node.toolType.toUpperCase(), // Scanner expects BIGQUERY, SNOWFLAKE, etc.
       layer: node.layer.toLowerCase(),
       status: node.status === 'CONNECTED' ? 'ACTIVE' : node.status,
       config: node.config || {},
     })) || [];
+    
+    console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({ name: i.name, type: i.type, status: i.status })));
 
     // Call the scanner copilot API
     const response = await fetch(`${SCANNER_API_URL}/api/v1/copilot/chat`, {

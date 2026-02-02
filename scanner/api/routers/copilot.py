@@ -106,6 +106,9 @@ async def chat(
                 }
                 for i in request.integrations
             ]
+            logger.info(f"Received integrations: {[{'type': i['type'], 'status': i['status']} for i in integration_data]}")
+        else:
+            logger.warning("No integrations received in chat request")
         
         # Build context
         context_builder = CopilotContextBuilder()
@@ -116,6 +119,10 @@ async def chat(
             node_ids=request.node_ids,
             integrations_data=integration_data,
         )
+        
+        # Log the context
+        logger.info(f"Built context with integration_types: {context.integration_types}")
+        logger.info(f"Available tools: {context.available_tools}")
         
         # Initialize LLM
         llm = CopilotLLM(model=request.model)

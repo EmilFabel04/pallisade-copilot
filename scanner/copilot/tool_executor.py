@@ -52,45 +52,84 @@ class ToolExecutor:
         # Import adapters lazily to avoid circular imports
         integration_type = integration.type.upper()
         
-        if integration_type == "SNOWFLAKE":
-            from ..adapters.snowflake import SnowflakeAdapter
-            return SnowflakeAdapter(integration.config)
-        
-        elif integration_type == "BIGQUERY":
-            from ..adapters.bigquery import BigQueryAdapter
-            return BigQueryAdapter(integration.config)
-        
-        elif integration_type == "POSTGRES":
-            from ..adapters.postgres import PostgresAdapter
-            return PostgresAdapter(integration.config)
-        
-        elif integration_type in ("DBT_CLOUD", "DBT_CORE"):
-            from ..integrations.dbt import DbtIntegration
-            return DbtIntegration(integration.config)
-        
-        elif integration_type == "AIRFLOW":
-            from ..integrations.airflow import AirflowIntegration
-            return AirflowIntegration(integration.config)
-        
-        elif integration_type == "DAGSTER":
-            from ..integrations.dagster import DagsterIntegration
-            return DagsterIntegration(integration.config)
-        
-        elif integration_type == "PREFECT":
-            from ..integrations.prefect import PrefectIntegration
-            return PrefectIntegration(integration.config)
-        
-        elif integration_type == "FIVETRAN":
-            from ..integrations.fivetran import FivetranIntegration
-            return FivetranIntegration(integration.config)
-        
-        elif integration_type == "AIRBYTE":
-            from ..integrations.airbyte import AirbyteClient
-            return AirbyteClient(integration.config)
-        
-        elif integration_type == "LOOKER":
-            from ..integrations.looker import LookerClient
-            return LookerClient(integration.config)
+        # Try absolute imports first (for when running from parent dir)
+        # Fall back to relative imports (for when running from scanner dir)
+        try:
+            if integration_type == "SNOWFLAKE":
+                try:
+                    from adapters.snowflake import SnowflakeAdapter
+                except ImportError:
+                    from scanner.adapters.snowflake import SnowflakeAdapter
+                return SnowflakeAdapter(integration.config)
+            
+            elif integration_type == "BIGQUERY":
+                try:
+                    from adapters.bigquery import BigQueryAdapter
+                except ImportError:
+                    from scanner.adapters.bigquery import BigQueryAdapter
+                logger.info(f"Creating BigQuery adapter with config keys: {list(integration.config.keys())}")
+                adapter = BigQueryAdapter(integration.config)
+                logger.info(f"BigQuery adapter created - project: {adapter.project}, dataset: {adapter.dataset}")
+                return adapter
+            
+            elif integration_type == "POSTGRES":
+                try:
+                    from adapters.postgres import PostgresAdapter
+                except ImportError:
+                    from scanner.adapters.postgres import PostgresAdapter
+                return PostgresAdapter(integration.config)
+            
+            elif integration_type in ("DBT_CLOUD", "DBT_CORE"):
+                try:
+                    from integrations.dbt import DbtIntegration
+                except ImportError:
+                    from scanner.integrations.dbt import DbtIntegration
+                return DbtIntegration(integration.config)
+            
+            elif integration_type == "AIRFLOW":
+                try:
+                    from integrations.airflow import AirflowIntegration
+                except ImportError:
+                    from scanner.integrations.airflow import AirflowIntegration
+                return AirflowIntegration(integration.config)
+            
+            elif integration_type == "DAGSTER":
+                try:
+                    from integrations.dagster import DagsterIntegration
+                except ImportError:
+                    from scanner.integrations.dagster import DagsterIntegration
+                return DagsterIntegration(integration.config)
+            
+            elif integration_type == "PREFECT":
+                try:
+                    from integrations.prefect import PrefectIntegration
+                except ImportError:
+                    from scanner.integrations.prefect import PrefectIntegration
+                return PrefectIntegration(integration.config)
+            
+            elif integration_type == "FIVETRAN":
+                try:
+                    from integrations.fivetran import FivetranIntegration
+                except ImportError:
+                    from scanner.integrations.fivetran import FivetranIntegration
+                return FivetranIntegration(integration.config)
+            
+            elif integration_type == "AIRBYTE":
+                try:
+                    from integrations.airbyte import AirbyteClient
+                except ImportError:
+                    from scanner.integrations.airbyte import AirbyteClient
+                return AirbyteClient(integration.config)
+            
+            elif integration_type == "LOOKER":
+                try:
+                    from integrations.looker import LookerClient
+                except ImportError:
+                    from scanner.integrations.looker import LookerClient
+                return LookerClient(integration.config)
+        except Exception as e:
+            logger.error(f"Import error for {integration_type}: {e}")
+            raise
         
         return None
     
@@ -283,6 +322,8 @@ class ToolExecutor:
     
     async def _execute_query_warehouse(self, args: Dict[str, Any]) -> ToolResult:
         """Execute a read-only SQL query."""
+        import asyncio
+        
         sql = args["sql"].strip()
         limit = args.get("limit", 100)
         
@@ -296,20 +337,35 @@ class ToolExecutor:
         # Find warehouse adapter
         warehouse_types = ["SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT"]
         adapter = None
+        adapter_type = None
         for wh_type in warehouse_types:
             if wh_type in self._adapters:
                 adapter = self._adapters[wh_type]
+                adapter_type = wh_type
                 break
         
         if not adapter:
-            return ToolResult(success=False, error="No warehouse connected")
+            logger.warning(f"No warehouse adapter found. Available adapters: {list(self._adapters.keys())}")
+            return ToolResult(success=False, error="No warehouse connected. Please ensure your data warehouse is configured in the Pipeline Builder.")
         
         try:
+            # Connect if not already connected
+            if not adapter.is_connected:
+                logger.info(f"Connecting to {adapter_type}...")
+                connected = adapter.connect()
+                if not connected:
+                    return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
+            
             # Add LIMIT if not present
             if "LIMIT" not in sql.upper():
                 sql = f"{sql} LIMIT {limit}"
             
-            results = await adapter.execute_query(sql)
+            logger.info(f"Executing query on {adapter_type}: {sql[:100]}...")
+            
+            # Execute synchronous adapter method in thread pool
+            results = await asyncio.to_thread(adapter.execute_query, sql)
+            
+            logger.info(f"Query returned {len(results)} rows")
             
             return ToolResult(
                 success=True,
@@ -320,6 +376,7 @@ class ToolExecutor:
                 }
             )
         except Exception as e:
+            logger.error(f"Query execution failed: {e}")
             return ToolResult(success=False, error=str(e))
     
     async def _execute_get_table_stats(self, args: Dict[str, Any]) -> ToolResult:

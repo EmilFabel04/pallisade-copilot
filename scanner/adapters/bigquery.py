@@ -60,11 +60,16 @@ class BigQueryAdapter(DatabaseAdapter):
             supports_table_last_modified=True,
         )
         
-        # Parse config
-        self.project = config.get('project')
+        # Parse config - handle both naming conventions
+        self.project = config.get('project') or config.get('project_id')
         self.dataset = config.get('dataset')
+        # Handle datasets array from pipeline config
+        datasets = config.get('datasets', [])
+        if datasets and not self.dataset:
+            self.dataset = datasets[0] if isinstance(datasets, list) else datasets
         self.location = config.get('location', 'US')
-        self.credentials_json = config.get('credentials_json')  # Service account JSON
+        # Handle both credentials and credentials_json
+        self.credentials_json = config.get('credentials_json') or config.get('credentials')
         
         self._client = None
     
@@ -75,14 +80,23 @@ class BigQueryAdapter(DatabaseAdapter):
     def connect(self) -> bool:
         """Establish connection to BigQuery."""
         try:
+            import json
             from google.cloud import bigquery
             from google.oauth2 import service_account
             
+            logger.info(f"Connecting to BigQuery project: {self.project}, location: {self.location}")
+            
             if self.credentials_json:
+                # Parse credentials if it's a string
+                creds = self.credentials_json
+                if isinstance(creds, str):
+                    try:
+                        creds = json.loads(creds)
+                    except json.JSONDecodeError:
+                        logger.warning("Could not parse credentials as JSON, using as-is")
+                
                 # Use service account
-                credentials = service_account.Credentials.from_service_account_info(
-                    self.credentials_json
-                )
+                credentials = service_account.Credentials.from_service_account_info(creds)
                 self._client = bigquery.Client(
                     project=self.project,
                     credentials=credentials,
@@ -90,6 +104,7 @@ class BigQueryAdapter(DatabaseAdapter):
                 )
             else:
                 # Use default credentials (e.g., from environment)
+                logger.info("No credentials provided, using default credentials")
                 self._client = bigquery.Client(
                     project=self.project,
                     location=self.location,

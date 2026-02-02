@@ -4,9 +4,9 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
-// GET /api/pipeline/[stackId]/nodes/[nodeId]/tables - Get tables from a warehouse node
+// GET /api/pipeline/[stackId]/nodes/[nodeId]/tables - Get data from any pipeline node
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ stackId: string; nodeId: string }> }
@@ -46,22 +46,6 @@ export async function GET(
       return NextResponse.json({ error: 'Node not found' }, { status: 404 });
     }
 
-    // Only warehouse nodes have tables
-    if (node.layer !== 'WAREHOUSE') {
-      return NextResponse.json({ 
-        error: 'Table discovery is only available for warehouse nodes',
-        layer: node.layer,
-      }, { status: 400 });
-    }
-
-    // Check connection status
-    if (node.status !== 'CONNECTED' && node.status !== 'HEALTHY') {
-      return NextResponse.json({ 
-        error: 'Node is not connected',
-        status: node.status,
-      }, { status: 400 });
-    }
-
     // Decrypt credentials from node config
     let credentials: Record<string, any> = {};
     if (node.config) {
@@ -71,98 +55,341 @@ export async function GET(
           const decrypted = decrypt(configJson.encrypted);
           credentials = JSON.parse(decrypted);
         } else {
-          // Config might not be encrypted (for testing)
           credentials = configJson;
         }
       } catch (e) {
-        console.error('[TABLES] Credentials decryption failed:', e);
-        return NextResponse.json({ error: 'Failed to decrypt credentials' }, { status: 500 });
+        console.error('[NODE DATA] Credentials decryption failed:', e);
       }
     }
 
-    if (Object.keys(credentials).length === 0) {
-      return NextResponse.json({ error: 'No credentials configured' }, { status: 400 });
+    // Handle different node types
+    switch (node.layer) {
+      case 'WAREHOUSE':
+        return await getWarehouseData(node, credentials);
+      case 'TRANSFORMATION':
+        return await getTransformationData(node, credentials);
+      case 'INGESTION':
+        return await getIngestionData(node, credentials);
+      case 'REPORTING':
+        return await getReportingData(node, credentials);
+      default:
+        return NextResponse.json({ tables: [], models: [], connectors: [] });
     }
-
-    // Map tool type to connection type
-    const connectionTypeMap: Record<string, string> = {
-      'snowflake': 'snowflake',
-      'bigquery': 'bigquery',
-      'redshift': 'redshift',
-      'postgres': 'postgres',
-      'sqlserver': 'sqlserver',
-      'azure_sql': 'sqlserver',
-    };
-
-    const connectionType = connectionTypeMap[node.toolType] || node.toolType;
-
-    // Try to fetch tables from scanner backend
-    console.log('[TABLES] Calling scanner at:', `${SCANNER_API_URL}/api/v1/tables`);
-    console.log('[TABLES] Connection type:', connectionType);
-    console.log('[TABLES] Credentials keys:', Object.keys(credentials));
-    
-    try {
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/tables`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          connection_type: connectionType,
-          connection_config: credentials,
-        }),
-        signal: AbortSignal.timeout(15000),
-      });
-
-      console.log('[TABLES] Scanner response status:', response.status);
-      
-      const data = await response.json();
-      console.log('[TABLES] Scanner response:', data.success, 'tables:', data.tables?.length || 0);
-      
-      if (data.success && data.tables) {
-        return NextResponse.json({
-          tables: data.tables || [],
-          schemas: data.schemas || [],
-          source: 'scanner',
-        });
-      } else {
-        console.log('[TABLES] Scanner returned error:', data.error);
-      }
-    } catch (err) {
-      console.log('[TABLES] Scanner backend not available:', err);
-    }
-
-    // Fallback: Return demo tables based on tool type
-    const demoTables = generateDemoTables(node.toolType, credentials);
-    
-    return NextResponse.json({
-      tables: demoTables,
-      schemas: ['analytics', 'public', 'staging'],
-      source: 'demo',
-      demo: true,
-    });
   } catch (error: any) {
-    console.error('Error fetching tables:', error);
+    console.error('Error fetching node data:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
 
-function generateDemoTables(toolType: string, credentials: Record<string, any>): string[] {
-  const schema = credentials.schema || 'analytics';
-  const database = credentials.database || 'demo_db';
+// Get tables from warehouse nodes (Snowflake, BigQuery, Postgres, etc.)
+async function getWarehouseData(node: any, credentials: Record<string, any>) {
+  // Check connection status
+  if (node.status !== 'CONNECTED' && node.status !== 'ACTIVE' && node.status !== 'HEALTHY') {
+    // Return empty data for disconnected nodes instead of error
+    return NextResponse.json({ 
+      tables: [],
+      status: node.status,
+      connected: false,
+    });
+  }
 
-  // Generate realistic table names based on common data warehouse patterns
-  const tables = [
-    `${database}.${schema}.customers`,
-    `${database}.${schema}.orders`,
-    `${database}.${schema}.products`,
-    `${database}.${schema}.order_items`,
-    `${database}.${schema}.payments`,
-    `${database}.${schema}.users`,
-    `${database}.${schema}.events`,
-    `${database}.${schema}.sessions`,
-    `${database}.staging.raw_customers`,
-    `${database}.staging.raw_orders`,
-    `${database}.staging.raw_products`,
+  const connectionTypeMap: Record<string, string> = {
+    'snowflake': 'snowflake',
+    'bigquery': 'bigquery',
+    'redshift': 'redshift',
+    'postgres': 'postgres',
+    'sqlserver': 'sqlserver',
+    'azure_sql': 'sqlserver',
+  };
+
+  const connectionType = connectionTypeMap[node.toolType] || node.toolType;
+
+  // Try to fetch tables from scanner backend
+  try {
+    console.log(`[WAREHOUSE] Fetching tables from scanner: ${SCANNER_API_URL}/api/v1/tables`);
+    console.log(`[WAREHOUSE] Connection type: ${connectionType}, project_id: ${credentials.project_id}, datasets: ${credentials.datasets}`);
+    
+    const response = await fetch(`${SCANNER_API_URL}/api/v1/tables`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection_type: connectionType,
+        connection_config: credentials,
+      }),
+      signal: AbortSignal.timeout(30000), // Increased timeout for BigQuery
+    });
+    
+    const data = await response.json();
+    console.log(`[WAREHOUSE] Scanner response: success=${data.success}, tables=${data.tables?.length || 0}`);
+    
+    if (data.success && data.tables) {
+      // Scanner already returns properly formatted TableInfo objects
+      return NextResponse.json({
+        tables: data.tables,
+        schemas: data.schemas || [],
+        datasets: data.datasets || credentials.datasets || [],
+        source: 'live',
+        connected: true,
+      });
+    } else if (data.error) {
+      console.log(`[WAREHOUSE] Scanner returned error: ${data.error}`);
+    }
+  } catch (err: any) {
+    console.log(`[WAREHOUSE] Scanner not available: ${err.message}`);
+  }
+
+  // Generate demo tables based on tool type
+  if (node.toolType === 'bigquery') {
+    return generateBigQueryDemoData(credentials);
+  }
+  
+  return generateGenericWarehouseDemoData(credentials);
+}
+
+// Generate BigQuery-specific demo data using configured datasets
+function generateBigQueryDemoData(credentials: Record<string, any>) {
+  const projectId = credentials.project_id || 'my-project';
+  const configuredDatasets = credentials.datasets || ['analytics', 'staging'];
+  
+  const tablesByDataset: Record<string, string[]> = {
+    'analytics': ['customers', 'orders', 'products', 'order_items', 'users', 'events', 'sessions'],
+    'staging': ['stg_customers', 'stg_orders', 'stg_products', 'stg_payments'],
+    'marts': ['dim_customers', 'dim_products', 'dim_dates', 'fct_orders', 'fct_revenue'],
+    'raw': ['raw_stripe_payments', 'raw_shopify_orders', 'raw_salesforce_contacts'],
+  };
+
+  const tables: any[] = [];
+  
+  for (const dataset of configuredDatasets) {
+    const datasetTables = tablesByDataset[dataset] || tablesByDataset['analytics'];
+    for (const tableName of datasetTables) {
+      tables.push({
+        name: tableName,
+        dataset: dataset,
+        schema: dataset,
+        database: projectId,
+        columns: Math.floor(Math.random() * 20) + 5,
+        rowCount: Math.floor(Math.random() * 100000) + 1000,
+      });
+    }
+  }
+
+  return NextResponse.json({
+    tables,
+    datasets: configuredDatasets,
+    source: 'demo',
+    connected: true,
+  });
+}
+
+// Generate generic warehouse demo data
+function generateGenericWarehouseDemoData(credentials: Record<string, any>) {
+  const database = credentials.database || 'analytics';
+  const schemas = credentials.schemas || ['analytics', 'staging', 'marts'];
+  
+  const tablesBySchema: Record<string, string[]> = {
+    'analytics': ['customers', 'orders', 'products', 'order_items', 'users'],
+    'staging': ['stg_customers', 'stg_orders', 'stg_products'],
+    'marts': ['dim_customers', 'dim_products', 'fct_orders'],
+    'public': ['customers', 'orders', 'products'],
+  };
+
+  const tables: any[] = [];
+  
+  for (const schema of schemas) {
+    const schemaTables = tablesBySchema[schema] || tablesBySchema['public'];
+    for (const tableName of schemaTables) {
+      tables.push({
+        name: tableName,
+        schema: schema,
+        database: database,
+        columns: Math.floor(Math.random() * 20) + 5,
+        rowCount: Math.floor(Math.random() * 100000) + 1000,
+      });
+    }
+  }
+
+  return NextResponse.json({
+    tables,
+    schemas,
+    source: 'demo',
+    connected: true,
+  });
+}
+
+// Get dbt models from transformation nodes
+async function getTransformationData(node: any, credentials: Record<string, any>) {
+  if (node.toolType === 'dbt_cloud' || node.toolType === 'dbt_core') {
+    // Try to fetch from scanner/dbt integration
+    try {
+      const response = await fetch(`${SCANNER_API_URL}/api/v1/dbt/models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: credentials.api_key,
+          account_id: credentials.account_id,
+          project_id: credentials.project_id,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      
+      const data = await response.json();
+      if (data.models) {
+        return NextResponse.json({
+          models: data.models,
+          tables: [],
+          source: 'live',
+          connected: true,
+        });
+      }
+    } catch (err) {
+      console.log('[DBT] Scanner not available, using demo data');
+    }
+
+    // Demo dbt models
+    const demoModels = [
+      { name: 'stg_customers', schema: 'staging', materialization: 'view', description: 'Staged customer data from source', testCount: 3 },
+      { name: 'stg_orders', schema: 'staging', materialization: 'view', description: 'Staged order data', testCount: 4 },
+      { name: 'stg_products', schema: 'staging', materialization: 'view', description: 'Staged product catalog', testCount: 2 },
+      { name: 'int_orders_pivoted', schema: 'intermediate', materialization: 'table', description: 'Orders pivoted by status', testCount: 1 },
+      { name: 'dim_customers', schema: 'marts', materialization: 'table', description: 'Customer dimension table', testCount: 5 },
+      { name: 'dim_products', schema: 'marts', materialization: 'table', description: 'Product dimension table', testCount: 3 },
+      { name: 'fct_orders', schema: 'marts', materialization: 'incremental', description: 'Order facts with daily partitions', testCount: 8 },
+      { name: 'fct_daily_revenue', schema: 'marts', materialization: 'incremental', description: 'Daily revenue aggregations', testCount: 4 },
+    ];
+
+    return NextResponse.json({
+      models: demoModels,
+      tables: [],
+      source: 'demo',
+      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    });
+  }
+
+  // Airflow/Dagster
+  if (node.toolType === 'airflow') {
+    return NextResponse.json({
+      tables: [],
+      models: [],
+      dags: [
+        { name: 'daily_etl', status: 'success', lastRun: '2 hours ago' },
+        { name: 'hourly_sync', status: 'running', lastRun: '5 min ago' },
+        { name: 'weekly_reports', status: 'success', lastRun: '3 days ago' },
+      ],
+      source: 'demo',
+      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    });
+  }
+
+  if (node.toolType === 'dagster') {
+    return NextResponse.json({
+      tables: [],
+      models: [],
+      assets: [
+        { name: 'raw_data', status: 'materialized', lastRun: '1 hour ago' },
+        { name: 'cleaned_data', status: 'materialized', lastRun: '1 hour ago' },
+        { name: 'analytics', status: 'pending', lastRun: '1 day ago' },
+      ],
+      source: 'demo',
+      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    });
+  }
+
+  return NextResponse.json({ tables: [], models: [] });
+}
+
+// Get connectors from ingestion nodes (Fivetran, Airbyte)
+async function getIngestionData(node: any, credentials: Record<string, any>) {
+  if (node.toolType === 'fivetran') {
+    // Try to fetch from Fivetran API
+    try {
+      const response = await fetch(`${SCANNER_API_URL}/api/v1/fivetran/connectors`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          api_key: credentials.api_key,
+          api_secret: credentials.api_secret,
+          group_id: credentials.group_id,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      
+      const data = await response.json();
+      if (data.connectors) {
+        return NextResponse.json({
+          connectors: data.connectors,
+          tables: [],
+          source: 'live',
+          connected: true,
+        });
+      }
+    } catch (err) {
+      console.log('[FIVETRAN] Scanner not available, using demo data');
+    }
+
+    // Demo Fivetran connectors
+    const demoConnectors = [
+      { name: 'Stripe', status: 'active', lastSync: '5 min ago' },
+      { name: 'Salesforce', status: 'active', lastSync: '1 hour ago' },
+      { name: 'HubSpot', status: 'active', lastSync: '30 min ago' },
+      { name: 'Google Analytics', status: 'paused', lastSync: '2 days ago' },
+      { name: 'PostgreSQL Production', status: 'active', lastSync: '15 min ago' },
+    ];
+
+    return NextResponse.json({
+      connectors: demoConnectors,
+      tables: [],
+      source: 'demo',
+      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    });
+  }
+
+  if (node.toolType === 'airbyte') {
+    const demoConnectors = [
+      { name: 'MySQL Source', status: 'active', lastSync: '10 min ago' },
+      { name: 'Shopify', status: 'active', lastSync: '2 hours ago' },
+      { name: 'Zendesk', status: 'failed', lastSync: '1 day ago' },
+    ];
+
+    return NextResponse.json({
+      connectors: demoConnectors,
+      tables: [],
+      source: 'demo',
+      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    });
+  }
+
+  if (node.toolType === 'stitch') {
+    const demoConnectors = [
+      { name: 'MongoDB', status: 'active', lastSync: '20 min ago' },
+      { name: 'Intercom', status: 'active', lastSync: '1 hour ago' },
+    ];
+
+    return NextResponse.json({
+      connectors: demoConnectors,
+      tables: [],
+      source: 'demo',
+      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    });
+  }
+
+  return NextResponse.json({ connectors: [], tables: [] });
+}
+
+// Get reporting tool data (Looker, Tableau, etc.)
+async function getReportingData(node: any, credentials: Record<string, any>) {
+  const dashboards = [
+    { name: 'Executive Summary', views: 1245, lastViewed: '2 hours ago' },
+    { name: 'Sales Dashboard', views: 892, lastViewed: '30 min ago' },
+    { name: 'Marketing Analytics', views: 567, lastViewed: '1 day ago' },
   ];
 
-  return tables;
+  return NextResponse.json({
+    tables: [],
+    models: [],
+    connectors: [],
+    dashboards,
+    source: 'demo',
+    connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+  });
 }

@@ -95,25 +95,30 @@ class CopilotLLM:
 ## Your Capabilities
 
 You have access to tools that let you:
+- **Query the warehouse directly** using `query_warehouse` - execute SELECT queries to get actual data, counts, timestamps, etc.
+- **Get table statistics** using `get_table_stats` - row counts, size, last updated time
 - Explore data lineage (upstream and downstream dependencies)
-- Query warehouse tables and get statistics
-- Check pipeline status (dbt, Airflow, Dagster, Prefect, Fivetran, etc.)
 - Search for specific tables, models, or assets
 - Analyze column-level lineage
 
 ## Important Guidelines
 
-1. **Use tools proactively**: When a user asks about their data, use the available tools to get real information rather than guessing.
+1. **ALWAYS use warehouse tools first**: When a user asks about their data (row counts, freshness, staleness, data values, comparisons), use `query_warehouse` or `get_table_stats` to get ACTUAL data from the warehouse. DO NOT guess or ask the user for information you can query yourself.
 
-2. **Be specific**: When discussing tables or models, use their full names (database.schema.table).
+2. **Use tools proactively**: Before responding, use available tools to get real information. For example:
+   - To check if data is stale: `query_warehouse` with `SELECT MAX(updated_at) FROM table`
+   - To get row counts: `query_warehouse` with `SELECT COUNT(*) FROM table`
+   - To compare tables: Query both and compare the results
 
-3. **Explain your reasoning**: When debugging issues, explain the steps you're taking and why.
+3. **Be specific**: When discussing tables or models, use their full names (database.schema.table).
 
-4. **Consider the full pipeline**: Issues often cascade from upstream. Always check upstream dependencies when debugging.
+4. **Explain your reasoning**: When debugging issues, explain the steps you're taking and why.
 
-5. **Be concise**: Provide clear, actionable answers without unnecessary verbosity.
+5. **Consider the full pipeline**: Issues often cascade from upstream. Check upstream dependencies when debugging.
 
-6. **Acknowledge limitations**: If you don't have access to certain information (e.g., a tool isn't available because the integration isn't connected), say so clearly.
+6. **Be concise**: Provide clear, actionable answers without unnecessary verbosity.
+
+7. **Acknowledge limitations**: If a tool isn't available or fails, say so clearly.
 
 """
         
@@ -134,7 +139,7 @@ You have access to tools that let you:
         self,
         messages: List[Message],
         context: CopilotContext,
-        max_tool_iterations: int = 5,
+        max_tool_iterations: int = 15,
     ) -> CopilotResponse:
         """
         Send a message and get a response.
@@ -267,9 +272,29 @@ You have access to tools that let you:
                     model=self.model,
                 )
         
-        # Max iterations reached
+        # Max iterations reached - summarize what we found
+        logger.warning(f"Max tool iterations ({max_tool_iterations}) reached")
+        
+        # Try to summarize the results
+        summary_parts = ["Here's what I found from the tool calls:\n"]
+        for tc in all_tool_calls:
+            result = tc.get("result", {})
+            if result.get("success") and result.get("data"):
+                data = result["data"]
+                if tc["tool"] == "query_warehouse" and "rows" in data:
+                    row_count = data.get("row_count", len(data.get("rows", [])))
+                    if row_count == 1 and data["rows"]:
+                        # Single row result (like COUNT)
+                        summary_parts.append(f"- Query `{data.get('sql', 'SQL')[:50]}...`: {data['rows'][0]}")
+                    else:
+                        summary_parts.append(f"- Query returned {row_count} rows")
+                elif tc["tool"] == "get_table_stats" and data:
+                    summary_parts.append(f"- Table stats: {data}")
+        
+        summary = "\n".join(summary_parts) if len(summary_parts) > 1 else "I gathered some information but ran out of iterations. Please try asking a more specific question."
+        
         return CopilotResponse(
-            content="I've been working on this for a while. Here's what I found so far based on the tool calls I made.",
+            content=summary,
             tool_calls=all_tool_calls,
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
