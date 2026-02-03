@@ -77,6 +77,36 @@ class Tool:
             }
         }
     
+    def to_openai_tool(self) -> Dict[str, Any]:
+        """Convert to OpenAI tool format."""
+        properties = {}
+        required = []
+        
+        for param in self.parameters:
+            prop = {
+                "type": param.type,
+                "description": param.description,
+            }
+            if param.enum:
+                prop["enum"] = param.enum
+            properties[param.name] = prop
+            
+            if param.required:
+                required.append(param.name)
+        
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                }
+            }
+        }
+    
     def is_available(self, user_integrations: Set[str]) -> bool:
         """Check if this tool is available for the user's integrations."""
         # Check required integrations (all must be present)
@@ -487,6 +517,15 @@ class ToolRegistry:
         """
         available = self.get_available_tools(user_integrations)
         return [tool.to_anthropic_tool() for tool in available]
+    
+    def to_openai_tools(self, user_integrations: Set[str]) -> List[Dict[str, Any]]:
+        """
+        Convert available tools to OpenAI format.
+        
+        Only includes tools that are available for the user's integrations.
+        """
+        available = self.get_available_tools(user_integrations)
+        return [tool.to_openai_tool() for tool in available]
 
 
 # Global registry instance

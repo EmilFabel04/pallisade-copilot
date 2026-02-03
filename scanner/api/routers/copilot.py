@@ -45,7 +45,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Existing session ID")
     pipeline_stack_id: Optional[str] = Field(None, description="Pipeline stack to focus on")
     node_ids: Optional[List[str]] = Field(None, description="Specific nodes to focus on")
-    model: str = Field("claude-sonnet", description="Model to use (claude-sonnet or claude-opus)")
+    model: str = Field("gpt-4o", description="Model to use: gpt-4o, gpt-4o-mini, gpt-4-turbo, o3-mini, claude-sonnet, claude-opus")
     integrations: Optional[List[IntegrationData]] = Field(None, description="User's pipeline integrations")
 
 
@@ -130,8 +130,10 @@ async def chat(
         logger.info(f"Built context with integration_types: {context.integration_types}")
         logger.info(f"Available tools: {context.available_tools}")
         
-        # Initialize LLM
+        # Initialize LLM with selected model
+        logger.info(f"Using model: {request.model}")
         llm = CopilotLLM(model=request.model)
+        logger.info(f"LLM initialized with provider: {llm.provider}, model: {llm.model}")
         
         # Build messages from conversation history or single message
         if request.messages and len(request.messages) > 0:

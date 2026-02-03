@@ -300,9 +300,9 @@ class ToolExecutor:
             )
         
         # No in-memory graph - try to search warehouse metadata directly
-        if self.adapters:
+        if self._adapters:
             # Use the first available warehouse adapter
-            adapter = next(iter(self.adapters.values()), None)
+            adapter = next(iter(self._adapters.values()), None)
             if adapter:
                 try:
                     # Build warehouse-specific lineage query

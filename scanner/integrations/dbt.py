@@ -16,7 +16,7 @@ Supports:
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Set
 from dataclasses import dataclass, field
@@ -859,11 +859,32 @@ class DbtCloudClient:
     """
     dbt Cloud API client for enterprise monitoring.
     
-    Monitors:
+    Uses the dbt Cloud Administrative API v2 for:
     - Job run history and failures
     - Environment health
     - Model execution times
-    - Run metadata
+    - Run metadata and artifacts
+    
+    ## Service Token Requirements
+    
+    This client requires a dbt Cloud Service Token with appropriate permissions.
+    
+    **Minimum Required Permissions:**
+    - "Account Viewer" or "Job Viewer" permission set
+    
+    **Why "Metadata Only" is NOT sufficient:**
+    - The "Metadata Only" permission set does NOT include artifact access
+    - We need artifacts (manifest.json, run_results.json) for lineage and test results
+    - Use "Job Viewer" for read-only access WITH artifact access
+    
+    **Creating a Service Token:**
+    1. Go to Account Settings > Service Tokens
+    2. Create new token with "Job Viewer" permission set
+    3. Copy the token value (starts with "dbtc_")
+    
+    **Alternative: Discovery API (Metadata API)**
+    For metadata-only use cases, consider using the Discovery API instead.
+    See `DbtCloudDiscoveryClient` for GraphQL-based metadata access.
     """
     
     API_URL = "https://cloud.getdbt.com/api/v2"
@@ -873,7 +894,8 @@ class DbtCloudClient:
         Initialize dbt Cloud client.
         
         Args:
-            api_key: dbt Cloud service token or user API key
+            api_key: dbt Cloud service token (requires "Job Viewer" or higher)
+                     Token should start with "dbtc_" for service tokens
             account_id: dbt Cloud account ID
         """
         self.api_key = api_key
@@ -1240,6 +1262,458 @@ class DbtCloudClient:
             'total_failures': len(failures),
             'job_id': job_id,
             'failures': failures,
+        }
+
+
+# =============================================================================
+# DBT CLOUD DISCOVERY API CLIENT (Metadata API)
+# =============================================================================
+
+class DbtCloudDiscoveryClient:
+    """
+    dbt Cloud Discovery API client for metadata-only access.
+    
+    Uses the GraphQL-based Discovery API (also called Metadata API) for:
+    - Model definitions and lineage
+    - Source definitions
+    - Test definitions
+    - Exposure definitions
+    - Column-level metadata
+    
+    ## Service Token Requirements
+    
+    This client can use a "Metadata Only" service token since it only
+    reads metadata through the Discovery API, not run artifacts.
+    
+    **Minimum Required Permissions:**
+    - "Metadata Only" permission set is SUFFICIENT for this client
+    
+    **Creating a Metadata-Only Service Token:**
+    1. Go to Account Settings > Service Tokens
+    2. Create new token with "Metadata Only" permission set
+    3. Select the environments you want to access
+    4. Copy the token value
+    
+    **API Endpoint:**
+    https://metadata.cloud.getdbt.com/graphql
+    
+    **Use Cases:**
+    - Lineage extraction (no run history needed)
+    - Model/source catalog
+    - Documentation completeness checks
+    - Column-level lineage
+    
+    **Limitations:**
+    - Cannot access run results or execution history
+    - Cannot access run artifacts (use DbtCloudClient for that)
+    - Only sees production/deployed state, not run-by-run history
+    """
+    
+    DISCOVERY_API_URL = "https://metadata.cloud.getdbt.com/graphql"
+    
+    def __init__(self, service_token: str, environment_id: int):
+        """
+        Initialize Discovery API client.
+        
+        Args:
+            service_token: dbt Cloud service token with "Metadata Only" or higher
+            environment_id: dbt Cloud environment ID to query
+        """
+        self.service_token = service_token
+        self.environment_id = environment_id
+        self._client = None
+    
+    def _get_client(self):
+        """Get HTTP client for GraphQL requests."""
+        if self._client is None:
+            import httpx
+            self._client = httpx.Client(
+                timeout=60.0,
+                headers={
+                    "Authorization": f"Bearer {self.service_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+        return self._client
+    
+    def _query(self, query: str, variables: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Execute GraphQL query against Discovery API."""
+        client = self._get_client()
+        
+        payload = {"query": query}
+        if variables:
+            payload["variables"] = variables
+        
+        response = client.post(self.DISCOVERY_API_URL, json=payload)
+        
+        if response.status_code >= 400:
+            raise Exception(f"Discovery API error: {response.status_code} - {response.text}")
+        
+        result = response.json()
+        
+        if "errors" in result:
+            errors = result["errors"]
+            raise Exception(f"GraphQL errors: {errors}")
+        
+        return result.get("data", {})
+    
+    def test_connection(self) -> tuple:
+        """Test connection to Discovery API."""
+        try:
+            query = """
+            query TestConnection($environmentId: BigInt!) {
+                environment(id: $environmentId) {
+                    dbtProjectName
+                    name
+                }
+            }
+            """
+            data = self._query(query, {"environmentId": self.environment_id})
+            env = data.get("environment", {})
+            project_name = env.get("dbtProjectName", "Unknown")
+            env_name = env.get("name", "Unknown")
+            return True, f"Connected to {project_name} ({env_name})"
+        except Exception as e:
+            return False, str(e)
+    
+    def get_models(self, limit: int = 500) -> List[Dict]:
+        """
+        Get all models from the environment.
+        
+        Returns model metadata including lineage information.
+        """
+        query = """
+        query GetModels($environmentId: BigInt!, $first: Int!) {
+            environment(id: $environmentId) {
+                definition {
+                    models(first: $first) {
+                        edges {
+                            node {
+                                uniqueId
+                                name
+                                database
+                                schema
+                                alias
+                                description
+                                materializedType
+                                tags
+                                meta
+                                columns {
+                                    name
+                                    description
+                                    type
+                                    meta
+                                }
+                                dependsOn
+                                parentsSources {
+                                    uniqueId
+                                    name
+                                    sourceName
+                                }
+                                parentsModels {
+                                    uniqueId
+                                    name
+                                }
+                                childrenL1 {
+                                    uniqueId
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {
+            "environmentId": self.environment_id,
+            "first": limit
+        })
+        
+        models = data.get("environment", {}).get("definition", {}).get("models", {}).get("edges", [])
+        return [edge["node"] for edge in models]
+    
+    def get_sources(self, limit: int = 500) -> List[Dict]:
+        """Get all sources from the environment."""
+        query = """
+        query GetSources($environmentId: BigInt!, $first: Int!) {
+            environment(id: $environmentId) {
+                definition {
+                    sources(first: $first) {
+                        edges {
+                            node {
+                                uniqueId
+                                name
+                                sourceName
+                                database
+                                schema
+                                description
+                                loader
+                                freshness {
+                                    warnAfter {
+                                        count
+                                        period
+                                    }
+                                    errorAfter {
+                                        count
+                                        period
+                                    }
+                                }
+                                columns {
+                                    name
+                                    description
+                                    type
+                                }
+                                childrenL1 {
+                                    uniqueId
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {
+            "environmentId": self.environment_id,
+            "first": limit
+        })
+        
+        sources = data.get("environment", {}).get("definition", {}).get("sources", {}).get("edges", [])
+        return [edge["node"] for edge in sources]
+    
+    def get_tests(self, limit: int = 500) -> List[Dict]:
+        """Get all tests from the environment."""
+        query = """
+        query GetTests($environmentId: BigInt!, $first: Int!) {
+            environment(id: $environmentId) {
+                definition {
+                    tests(first: $first) {
+                        edges {
+                            node {
+                                uniqueId
+                                name
+                                columnName
+                                tags
+                                meta
+                                dependsOn
+                                attachedNode
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {
+            "environmentId": self.environment_id,
+            "first": limit
+        })
+        
+        tests = data.get("environment", {}).get("definition", {}).get("tests", {}).get("edges", [])
+        return [edge["node"] for edge in tests]
+    
+    def get_exposures(self, limit: int = 100) -> List[Dict]:
+        """Get all exposures from the environment."""
+        query = """
+        query GetExposures($environmentId: BigInt!, $first: Int!) {
+            environment(id: $environmentId) {
+                definition {
+                    exposures(first: $first) {
+                        edges {
+                            node {
+                                uniqueId
+                                name
+                                type
+                                description
+                                url
+                                owner {
+                                    name
+                                    email
+                                }
+                                dependsOn
+                                parentsModels {
+                                    uniqueId
+                                    name
+                                }
+                                parentsSources {
+                                    uniqueId
+                                    name
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {
+            "environmentId": self.environment_id,
+            "first": limit
+        })
+        
+        exposures = data.get("environment", {}).get("definition", {}).get("exposures", {}).get("edges", [])
+        return [edge["node"] for edge in exposures]
+    
+    def get_model_lineage(self, model_unique_id: str) -> Dict[str, Any]:
+        """
+        Get detailed lineage for a specific model.
+        
+        Args:
+            model_unique_id: The model's unique ID (e.g., "model.project.model_name")
+            
+        Returns:
+            Dict with upstream and downstream dependencies
+        """
+        query = """
+        query GetModelLineage($environmentId: BigInt!, $uniqueId: String!) {
+            environment(id: $environmentId) {
+                definition {
+                    model(uniqueId: $uniqueId) {
+                        uniqueId
+                        name
+                        database
+                        schema
+                        description
+                        materializedType
+                        parentsModels {
+                            uniqueId
+                            name
+                            database
+                            schema
+                        }
+                        parentsSources {
+                            uniqueId
+                            name
+                            sourceName
+                            database
+                            schema
+                        }
+                        childrenL1 {
+                            uniqueId
+                            name
+                            resourceType
+                        }
+                        columns {
+                            name
+                            description
+                            type
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {
+            "environmentId": self.environment_id,
+            "uniqueId": model_unique_id
+        })
+        
+        model = data.get("environment", {}).get("definition", {}).get("model", {})
+        
+        if not model:
+            raise ValueError(f"Model not found: {model_unique_id}")
+        
+        return {
+            "model": model.get("name"),
+            "unique_id": model.get("uniqueId"),
+            "full_name": f"{model.get('database')}.{model.get('schema')}.{model.get('name')}",
+            "materialization": model.get("materializedType"),
+            "description": model.get("description"),
+            "upstream_models": [
+                {
+                    "unique_id": m.get("uniqueId"),
+                    "name": m.get("name"),
+                    "full_name": f"{m.get('database')}.{m.get('schema')}.{m.get('name')}"
+                }
+                for m in model.get("parentsModels", [])
+            ],
+            "upstream_sources": [
+                {
+                    "unique_id": s.get("uniqueId"),
+                    "name": s.get("name"),
+                    "source_name": s.get("sourceName"),
+                    "full_name": f"{s.get('database')}.{s.get('schema')}.{s.get('name')}"
+                }
+                for s in model.get("parentsSources", [])
+            ],
+            "downstream": [
+                {
+                    "unique_id": c.get("uniqueId"),
+                    "name": c.get("name"),
+                    "type": c.get("resourceType")
+                }
+                for c in model.get("childrenL1", [])
+            ],
+            "columns": model.get("columns", []),
+        }
+    
+    def build_lineage_graph(self) -> Dict[str, Any]:
+        """
+        Build a complete lineage graph from the environment.
+        
+        Returns a graph structure with all models, sources, and their relationships.
+        Suitable for visualization.
+        """
+        models = self.get_models()
+        sources = self.get_sources()
+        
+        nodes = []
+        edges = []
+        
+        # Add source nodes
+        for source in sources:
+            nodes.append({
+                "id": source.get("uniqueId"),
+                "name": source.get("name"),
+                "type": "source",
+                "source_name": source.get("sourceName"),
+                "database": source.get("database"),
+                "schema": source.get("schema"),
+                "description": source.get("description"),
+            })
+        
+        # Add model nodes and edges
+        for model in models:
+            model_id = model.get("uniqueId")
+            
+            nodes.append({
+                "id": model_id,
+                "name": model.get("name"),
+                "type": "model",
+                "database": model.get("database"),
+                "schema": model.get("schema"),
+                "alias": model.get("alias"),
+                "description": model.get("description"),
+                "materialization": model.get("materializedType"),
+                "tags": model.get("tags", []),
+            })
+            
+            # Add edges from parent sources
+            for parent in model.get("parentsSources", []):
+                edges.append({
+                    "source": parent.get("uniqueId"),
+                    "target": model_id,
+                    "type": "depends_on",
+                })
+            
+            # Add edges from parent models
+            for parent in model.get("parentsModels", []):
+                edges.append({
+                    "source": parent.get("uniqueId"),
+                    "target": model_id,
+                    "type": "depends_on",
+                })
+        
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "stats": {
+                "total_models": len(models),
+                "total_sources": len(sources),
+                "total_edges": len(edges),
+            }
         }
 
 

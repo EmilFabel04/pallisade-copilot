@@ -113,12 +113,146 @@ export async function POST(request: NextRequest) {
 
       // Transformation tools
       case 'dbt_cloud':
-        testEndpoint = `${SCANNER_API_URL}/api/test/dbt_cloud`;
-        testBody = {
-          api_key: config.api_key,
-          account_id: parseInt(config.account_id),
-        };
-        break;
+        // Handle both Admin API and Discovery API modes
+        const apiMode = config.api_mode || 'admin';
+        
+        if (apiMode === 'discovery') {
+          // Discovery API (Metadata Only) - uses GraphQL
+          if (!config.environment_id) {
+            return NextResponse.json({ success: false, message: 'Environment ID is required for Discovery API mode' });
+          }
+          
+          try {
+            const discoveryResponse = await fetch('https://metadata.cloud.getdbt.com/graphql', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${config.api_token}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                query: `
+                  query TestConnection($environmentId: BigInt!) {
+                    environment(id: $environmentId) {
+                      dbtProjectName
+                      name
+                      type
+                    }
+                  }
+                `,
+                variables: { environmentId: parseInt(config.environment_id) },
+              }),
+            });
+
+            if (discoveryResponse.ok) {
+              const result = await discoveryResponse.json();
+              
+              if (result.errors) {
+                return NextResponse.json({ 
+                  success: false, 
+                  message: result.errors[0]?.message || 'Discovery API error - check token permissions'
+                });
+              }
+
+              const env = result.data?.environment;
+              if (env) {
+                return NextResponse.json({
+                  success: true,
+                  message: `Connected to Discovery API! Project: ${env.dbtProjectName}, Environment: ${env.name}`,
+                  metadata: {
+                    apiMode: 'discovery',
+                    projectName: env.dbtProjectName,
+                    environmentName: env.name,
+                    capabilities: ['lineage', 'models', 'sources', 'tests'],
+                  }
+                });
+              }
+            }
+
+            return NextResponse.json({ success: false, message: 'Could not connect to Discovery API - verify environment ID and token' });
+          } catch (e) {
+            return NextResponse.json({ success: false, message: 'Failed to connect to dbt Cloud Discovery API' });
+          }
+        }
+        
+        // Admin API mode (default) - use scanner API or direct call
+        if (!config.account_id) {
+          return NextResponse.json({ success: false, message: 'Account ID is required for Admin API mode' });
+        }
+        
+        try {
+          // Test Admin API directly
+          const adminResponse = await fetch(`https://cloud.getdbt.com/api/v2/accounts/${config.account_id}/`, {
+            headers: {
+              'Authorization': `Token ${config.api_token}`,
+              'Accept': 'application/json',
+            },
+          });
+
+          if (adminResponse.ok) {
+            const data = await adminResponse.json();
+            
+            // Also test artifact access
+            const runsResponse = await fetch(
+              `https://cloud.getdbt.com/api/v2/accounts/${config.account_id}/runs/?limit=1&status=10`,
+              {
+                headers: {
+                  'Authorization': `Token ${config.api_token}`,
+                  'Accept': 'application/json',
+                },
+              }
+            );
+            
+            let hasArtifactAccess = false;
+            let artifactMessage = '';
+            
+            if (runsResponse.ok) {
+              const runsData = await runsResponse.json();
+              const runs = runsData.data || [];
+              
+              if (runs.length > 0) {
+                const runId = runs[0].id;
+                const artifactResponse = await fetch(
+                  `https://cloud.getdbt.com/api/v2/accounts/${config.account_id}/runs/${runId}/artifacts/manifest.json`,
+                  {
+                    headers: {
+                      'Authorization': `Token ${config.api_token}`,
+                      'Accept': 'application/json',
+                    },
+                  }
+                );
+                
+                hasArtifactAccess = artifactResponse.ok;
+                if (!hasArtifactAccess) {
+                  artifactMessage = ' (Limited permissions - no artifact access)';
+                }
+              }
+            }
+
+            return NextResponse.json({
+              success: true,
+              message: `Connected to dbt Cloud: ${data.data?.name}${artifactMessage}`,
+              metadata: {
+                apiMode: 'admin',
+                accountName: data.data?.name,
+                hasArtifactAccess,
+                capabilities: hasArtifactAccess 
+                  ? ['jobs', 'runs', 'artifacts', 'lineage', 'test_results']
+                  : ['jobs', 'runs', 'metadata'],
+              }
+            });
+          }
+
+          if (adminResponse.status === 403) {
+            return NextResponse.json({ 
+              success: false, 
+              message: 'Token lacks required permissions. Use "Job Viewer" permission set or try Discovery API mode.' 
+            });
+          }
+          
+          return NextResponse.json({ success: false, message: 'Invalid Account ID or API Token' });
+        } catch (e) {
+          return NextResponse.json({ success: false, message: 'Failed to connect to dbt Cloud Admin API' });
+        }
 
       case 'dbt_core':
         // Validate dbt manifest

@@ -1,7 +1,7 @@
 """
 Co-Pilot LLM Integration
 
-Integrates with Anthropic Claude for AI-powered assistance.
+Integrates with Anthropic Claude and OpenAI GPT for AI-powered assistance.
 Supports tool calling for executing actions against integrations.
 """
 
@@ -16,6 +16,12 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
+
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 from .context_builder import CopilotContext
 from .tools import get_tool_registry, ToolResult
@@ -48,17 +54,23 @@ class CopilotLLM:
     """
     LLM integration for the co-pilot.
     
-    Uses Anthropic Claude with tool calling to provide
+    Uses Anthropic Claude or OpenAI GPT with tool calling to provide
     intelligent assistance for data pipeline questions.
     """
     
-    # Available models
+    # Available models by provider
     MODELS = {
-        "claude-sonnet": "claude-sonnet-4-20250514",
-        "claude-opus": "claude-opus-4-20250514",
+        # Anthropic
+        "claude-sonnet": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
+        "claude-opus": {"provider": "anthropic", "model": "claude-opus-4-20250514"},
+        # OpenAI
+        "gpt-4o": {"provider": "openai", "model": "gpt-4o"},
+        "gpt-4o-mini": {"provider": "openai", "model": "gpt-4o-mini"},
+        "gpt-4-turbo": {"provider": "openai", "model": "gpt-4-turbo"},
+        "o3-mini": {"provider": "openai", "model": "o3-mini"},
     }
     
-    DEFAULT_MODEL = "claude-sonnet"
+    DEFAULT_MODEL = "gpt-4o"  # OpenAI as default to avoid rate limits
     
     def __init__(
         self,
@@ -69,19 +81,31 @@ class CopilotLLM:
         Initialize the LLM.
         
         Args:
-            model: Model to use (claude-sonnet or claude-opus)
-            api_key: Anthropic API key (defaults to ANTHROPIC_API_KEY env var)
+            model: Model to use (claude-sonnet, claude-opus, gpt-4o, gpt-4o-mini, etc.)
+            api_key: API key (defaults to ANTHROPIC_API_KEY or OPENAI_API_KEY env var)
         """
         self.model_name = model
-        self.model = self.MODELS.get(model, self.MODELS[self.DEFAULT_MODEL])
+        model_config = self.MODELS.get(model, self.MODELS[self.DEFAULT_MODEL])
+        self.provider = model_config["provider"]
+        self.model = model_config["model"]
         
-        if ANTHROPIC_AVAILABLE:
-            self.client = anthropic.Anthropic(
-                api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
-            )
-        else:
-            self.client = None
-            logger.warning("Anthropic SDK not available")
+        self.anthropic_client = None
+        self.openai_client = None
+        
+        if self.provider == "anthropic":
+            if ANTHROPIC_AVAILABLE:
+                self.anthropic_client = anthropic.Anthropic(
+                    api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
+                )
+            else:
+                logger.warning("Anthropic SDK not available")
+        elif self.provider == "openai":
+            if OPENAI_AVAILABLE:
+                self.openai_client = openai.OpenAI(
+                    api_key=api_key or os.environ.get("OPENAI_API_KEY")
+                )
+            else:
+                logger.warning("OpenAI SDK not available")
     
     def build_system_prompt(self, context: CopilotContext) -> str:
         """
@@ -110,26 +134,27 @@ You have access to the full conversation history. Use this to:
 
 ## Smart Analysis Guidelines
 
-1. **ANALYZE SCHEMA BEFORE WRITING QUERIES**: When asked to write or suggest SQL queries:
-   - First query `INFORMATION_SCHEMA.COLUMNS` to understand the table structure
-   - Identify column names, data types, and nullable fields
-   - Then write accurate queries using the actual column names
-   - Example: `SELECT column_name, data_type FROM \`project.dataset.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name = 'table_name'`
+1. **ALWAYS GET SCHEMA FIRST**: Before writing ANY query that references columns:
+   - FIRST run: SELECT column_name, data_type FROM `project.dataset.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = 'tablename'
+   - THEN use the actual column names from the result
+   - NEVER guess column names like "product_id" - always verify first!
 
-2. **USE THE CONNECTED DATASETS**: The user has connected specific datasets (shown below in "User's Data Stack"). When they refer to "raw dataset", "analytics dataset", etc., they mean the datasets listed in their integrations. Use the project and dataset names from their configuration.
+2. **BigQuery INFORMATION_SCHEMA syntax** (CRITICAL):
+   - Tables in a dataset: SELECT table_name FROM `project.dataset.INFORMATION_SCHEMA.TABLES`
+   - Columns in a table: SELECT column_name, data_type FROM `project.dataset.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = 'tablename'
+   - List all datasets: SELECT schema_name FROM `project.INFORMATION_SCHEMA.SCHEMATA`
+   - NOTE: The backticks are required! The dataset name goes BEFORE INFORMATION_SCHEMA.
 
-3. **ALWAYS use warehouse tools first**: When a user asks about their data, use `query_warehouse` to get ACTUAL data. DO NOT ask the user for information you can query yourself.
+3. **USE THE CONNECTED DATASETS**: The user has connected specific datasets (shown below in "User's Data Stack"). When they refer to "raw dataset", "analytics dataset", etc., they mean the datasets listed in their integrations.
 
-4. **Discover tables automatically**: If you need to find tables:
-   - BigQuery: `SELECT table_name FROM \`project.dataset.INFORMATION_SCHEMA.TABLES\``
-   - Snowflake: `SELECT table_name FROM information_schema.tables WHERE table_schema = 'SCHEMA'`
+4. **ALWAYS use warehouse tools first**: When a user asks about their data, use `query_warehouse` to get ACTUAL data. DO NOT ask the user for information you can query yourself.
 
-5. **Use tools proactively**: Before responding, gather real information:
-   - Schema discovery → then accurate queries
-   - To check freshness: `SELECT MAX(updated_at) FROM dataset.table`
-   - To compare: Query both sources and analyze
+5. **Workflow for answering data questions**:
+   a. First, discover what tables exist: query INFORMATION_SCHEMA.TABLES
+   b. Then, get the schema: query INFORMATION_SCHEMA.COLUMNS for the relevant table
+   c. Finally, write your query using the ACTUAL column names from step b
 
-6. **Be specific**: Use fully qualified table names (project.dataset.table).
+6. **Be specific**: Use fully qualified table names with backticks: `project.dataset.table`
 
 7. **Be concise**: Provide clear, actionable answers.
 
@@ -168,9 +193,26 @@ You have access to the full conversation history. Use this to:
         Returns:
             CopilotResponse with the final answer
         """
-        if not self.client:
+        if self.provider == "anthropic":
+            return await self._chat_anthropic(messages, context, max_tool_iterations)
+        elif self.provider == "openai":
+            return await self._chat_openai(messages, context, max_tool_iterations)
+        else:
             return CopilotResponse(
-                content="LLM not available. Please configure ANTHROPIC_API_KEY.",
+                content=f"Unknown provider: {self.provider}",
+                model=self.model,
+            )
+    
+    async def _chat_anthropic(
+        self,
+        messages: List[Message],
+        context: CopilotContext,
+        max_tool_iterations: int,
+    ) -> CopilotResponse:
+        """Handle chat with Anthropic Claude."""
+        if not self.anthropic_client:
+            return CopilotResponse(
+                content="Anthropic not available. Please configure ANTHROPIC_API_KEY or switch to OpenAI.",
                 model=self.model,
             )
         
@@ -196,7 +238,7 @@ You have access to the full conversation history. Use this to:
         for iteration in range(max_tool_iterations):
             try:
                 # Call Claude
-                response = self.client.messages.create(
+                response = self.anthropic_client.messages.create(
                     model=self.model,
                     system=system,
                     messages=anthropic_messages,
@@ -279,14 +321,161 @@ You have access to the full conversation history. Use this to:
                 )
                 
             except Exception as e:
-                logger.exception("Error in LLM chat")
+                logger.exception("Error in Anthropic chat")
                 return CopilotResponse(
                     content=f"Error communicating with AI: {str(e)}",
                     model=self.model,
                 )
         
-        # Max iterations reached - summarize what we found
-        logger.warning(f"Max tool iterations ({max_tool_iterations}) reached")
+        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens)
+    
+    async def _chat_openai(
+        self,
+        messages: List[Message],
+        context: CopilotContext,
+        max_tool_iterations: int,
+    ) -> CopilotResponse:
+        """Handle chat with OpenAI GPT."""
+        if not self.openai_client:
+            return CopilotResponse(
+                content="OpenAI not available. Please configure OPENAI_API_KEY or switch to Anthropic.",
+                model=self.model,
+            )
+        
+        # Build system prompt
+        system = self.build_system_prompt(context)
+        
+        # Get available tools in OpenAI format
+        registry = get_tool_registry()
+        tools = registry.to_openai_tools(context.integration_types)
+        
+        # Create tool executor
+        executor = ToolExecutor(context)
+        
+        # Convert messages to OpenAI format
+        openai_messages = self._convert_messages_openai(messages, system)
+        
+        # Track total tokens
+        total_input_tokens = 0
+        total_output_tokens = 0
+        all_tool_calls = []
+        
+        # Check if this is a reasoning model (o1, o3) that uses different params
+        is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
+        
+        # Iterate until we get a final response
+        for iteration in range(max_tool_iterations):
+            try:
+                # Build API call params - reasoning models use max_completion_tokens
+                api_params = {
+                    "model": self.model,
+                    "messages": openai_messages,
+                }
+                
+                if is_reasoning_model:
+                    api_params["max_completion_tokens"] = 4096
+                    # Reasoning models don't support tools yet
+                else:
+                    api_params["max_tokens"] = 4096
+                    if tools:
+                        api_params["tools"] = tools
+                
+                # Call OpenAI
+                response = self.openai_client.chat.completions.create(**api_params)
+                
+                # Track tokens
+                if response.usage:
+                    total_input_tokens += response.usage.prompt_tokens
+                    total_output_tokens += response.usage.completion_tokens
+                
+                message = response.choices[0].message
+                finish_reason = response.choices[0].finish_reason
+                
+                # Check if we're done
+                if finish_reason == "stop":
+                    return CopilotResponse(
+                        content=message.content or "",
+                        tool_calls=all_tool_calls,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        model=self.model,
+                        stop_reason=finish_reason,
+                    )
+                
+                # Handle tool calls
+                if finish_reason == "tool_calls" and message.tool_calls:
+                    # Add assistant message with tool calls
+                    openai_messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                }
+                            }
+                            for tc in message.tool_calls
+                        ]
+                    })
+                    
+                    # Execute each tool
+                    for tool_call in message.tool_calls:
+                        tool_name = tool_call.function.name
+                        try:
+                            tool_input = json.loads(tool_call.function.arguments)
+                        except json.JSONDecodeError:
+                            tool_input = {}
+                        
+                        logger.info(f"Executing tool: {tool_name}")
+                        
+                        # Execute the tool
+                        result = await executor.execute(tool_name, tool_input)
+                        
+                        # Track tool call
+                        all_tool_calls.append({
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "result": result.to_dict(),
+                        })
+                        
+                        # Add tool result
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(result.data if result.success else {"error": result.error}),
+                        })
+                    
+                    # Continue loop
+                    continue
+                
+                # Unexpected finish reason
+                logger.warning(f"Unexpected finish reason: {finish_reason}")
+                return CopilotResponse(
+                    content=message.content or "Unexpected response from AI.",
+                    model=self.model,
+                    stop_reason=finish_reason or "unknown",
+                )
+                
+            except Exception as e:
+                logger.exception("Error in OpenAI chat")
+                return CopilotResponse(
+                    content=f"Error communicating with AI: {str(e)}",
+                    model=self.model,
+                )
+        
+        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens)
+    
+    def _build_max_iterations_response(
+        self, 
+        all_tool_calls: List[Dict], 
+        total_input_tokens: int, 
+        total_output_tokens: int
+    ) -> CopilotResponse:
+        """Build response when max iterations reached."""
+        logger.warning(f"Max tool iterations reached")
         
         # Try to summarize the results
         summary_parts = ["Here's what I found from the tool calls:\n"]
@@ -297,7 +486,6 @@ You have access to the full conversation history. Use this to:
                 if tc["tool"] == "query_warehouse" and "rows" in data:
                     row_count = data.get("row_count", len(data.get("rows", [])))
                     if row_count == 1 and data["rows"]:
-                        # Single row result (like COUNT)
                         summary_parts.append(f"- Query `{data.get('sql', 'SQL')[:50]}...`: {data['rows'][0]}")
                     else:
                         summary_parts.append(f"- Query returned {row_count} rows")
@@ -332,6 +520,21 @@ You have access to the full conversation history. Use this to:
             anthropic_messages.append(anthropic_msg)
         
         return anthropic_messages
+    
+    def _convert_messages_openai(self, messages: List[Message], system: str) -> List[Dict[str, Any]]:
+        """Convert our Message format to OpenAI format."""
+        openai_messages = [{"role": "system", "content": system}]
+        
+        for msg in messages:
+            if msg.role == "system":
+                continue
+            
+            openai_messages.append({
+                "role": msg.role,
+                "content": msg.content,
+            })
+        
+        return openai_messages
     
     async def quick_answer(
         self,

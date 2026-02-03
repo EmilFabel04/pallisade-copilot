@@ -38,8 +38,9 @@ pyod>=1.1.0                 # Multivariate anomaly detection (ECOD, IForest, COP
 alibi-detect>=0.11.0        # Distribution drift detection (KSDrift, TabularDrift)
 ydata-profiling>=4.6.0      # Auto-profiling for baseline building
 
-# LLM for semantic column classification
-openai>=1.0.0               # GPT-4o-mini for column classification
+# LLM for Co-Pilot and semantic column classification
+openai>=1.0.0               # GPT-4o for co-pilot, GPT-4o-mini for column classification
+anthropic>=0.39.0           # Claude for co-pilot (alternative)
 
 # SQL parsing for universal lineage
 sqlglot==20.11.0

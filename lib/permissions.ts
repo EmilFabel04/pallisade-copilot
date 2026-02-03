@@ -22,6 +22,13 @@ export type Permission =
   | 'integrations:edit'
   | 'integrations:delete'
   | 'integrations:test'
+  // Pipelines
+  | 'pipelines:view'
+  | 'pipelines:create'
+  | 'pipelines:edit'
+  | 'pipelines:delete'
+  | 'pipelines:manage_access'
+  | 'pipelines:manage_tokens'
   // Scans
   | 'scans:view'
   | 'scans:run'
@@ -63,6 +70,7 @@ const ROLE_PERMISSIONS: Record<TeamRole, Permission[]> = {
     'org:view', 'org:edit', 'org:delete', 'org:transfer',
     'team:view', 'team:invite', 'team:remove', 'team:edit_roles',
     'integrations:view', 'integrations:create', 'integrations:edit', 'integrations:delete', 'integrations:test',
+    'pipelines:view', 'pipelines:create', 'pipelines:edit', 'pipelines:delete', 'pipelines:manage_access', 'pipelines:manage_tokens',
     'scans:view', 'scans:run', 'scans:schedule', 'scans:configure',
     'reports:view', 'reports:create', 'reports:export',
     'findings:view', 'findings:respond', 'findings:configure_rules',
@@ -78,6 +86,7 @@ const ROLE_PERMISSIONS: Record<TeamRole, Permission[]> = {
     'org:view', 'org:edit',
     'team:view', 'team:invite', 'team:remove', 'team:edit_roles',
     'integrations:view', 'integrations:create', 'integrations:edit', 'integrations:delete', 'integrations:test',
+    'pipelines:view', 'pipelines:create', 'pipelines:edit', 'pipelines:delete', 'pipelines:manage_access', 'pipelines:manage_tokens',
     'scans:view', 'scans:run', 'scans:schedule', 'scans:configure',
     'reports:view', 'reports:create', 'reports:export',
     'findings:view', 'findings:respond', 'findings:configure_rules',
@@ -93,6 +102,7 @@ const ROLE_PERMISSIONS: Record<TeamRole, Permission[]> = {
     'org:view',
     'team:view',
     'integrations:view', 'integrations:test',
+    'pipelines:view', 'pipelines:create', 'pipelines:edit',
     'scans:view', 'scans:run', 'scans:schedule', 'scans:configure',
     'reports:view', 'reports:create', 'reports:export',
     'findings:view', 'findings:respond', 'findings:configure_rules',
@@ -107,6 +117,7 @@ const ROLE_PERMISSIONS: Record<TeamRole, Permission[]> = {
     'org:view',
     'team:view',
     'integrations:view', 'integrations:test',
+    'pipelines:view', 'pipelines:create', 'pipelines:edit',
     'scans:view', 'scans:run',
     'reports:view', 'reports:export',
     'findings:view', 'findings:respond',
@@ -120,6 +131,7 @@ const ROLE_PERMISSIONS: Record<TeamRole, Permission[]> = {
     'org:view',
     'team:view',
     'integrations:view',
+    'pipelines:view',
     'scans:view',
     'reports:view',
     'findings:view',
@@ -196,6 +208,7 @@ export const PERMISSION_CATEGORIES = {
   organization: ['org:view', 'org:edit', 'org:delete', 'org:transfer'],
   team: ['team:view', 'team:invite', 'team:remove', 'team:edit_roles'],
   integrations: ['integrations:view', 'integrations:create', 'integrations:edit', 'integrations:delete', 'integrations:test'],
+  pipelines: ['pipelines:view', 'pipelines:create', 'pipelines:edit', 'pipelines:delete', 'pipelines:manage_access', 'pipelines:manage_tokens'],
   scans: ['scans:view', 'scans:run', 'scans:schedule', 'scans:configure'],
   reports: ['reports:view', 'reports:create', 'reports:export'],
   findings: ['findings:view', 'findings:respond', 'findings:configure_rules'],

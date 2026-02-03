@@ -13,6 +13,7 @@ const pageTitles: Record<string, string> = {
   '/dashboard/lineage': 'Lineage',
   '/dashboard/sources': 'Data Sources',
   '/dashboard/pipeline': 'Pipeline',
+  '/dashboard/pipeline/settings': 'Pipeline Settings',
   '/dashboard/integrations': 'Integrations',
   '/dashboard/team': 'Team',
   '/dashboard/settings': 'Settings',

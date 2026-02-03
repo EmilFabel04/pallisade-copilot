@@ -107,9 +107,14 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       description: 'dbt Cloud (hosted)', 
       layer: 'TRANSFORMATION',
       configFields: [
-        { name: 'api_key', label: 'Service Token', type: 'password', required: true, placeholder: 'Your dbt Cloud service token' },
-        { name: 'account_id', label: 'Account ID', type: 'text', required: true, placeholder: 'dbt Cloud account ID' },
-        { name: 'project_id', label: 'Project ID', type: 'text', required: false, placeholder: 'Optional: specific project ID' },
+        { name: 'api_mode', label: 'API Mode', type: 'select', required: true, options: [
+          { value: 'admin', label: 'Admin API (Full Access) - Requires "Job Viewer" token' },
+          { value: 'discovery', label: 'Discovery API (Metadata Only) - Works with "Metadata Only" token' },
+        ], helperText: 'Discovery API is read-only but works with minimal permissions. Admin API provides full run history and artifacts.' },
+        { name: 'api_token', label: 'Service Token', type: 'password', required: true, placeholder: 'Your dbt Cloud service token (dbtc_...)' },
+        { name: 'account_id', label: 'Account ID', type: 'text', required: true, placeholder: 'dbt Cloud account ID', helperText: 'Required for Admin API' },
+        { name: 'environment_id', label: 'Environment ID', type: 'text', required: false, placeholder: 'dbt Cloud environment ID', helperText: 'Required for Discovery API mode' },
+        { name: 'project_id', label: 'Project ID', type: 'text', required: false, placeholder: 'Optional: filter to specific project' },
       ],
     },
     { 
@@ -178,7 +183,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       configFields: [
         { name: 'project_id', label: 'Project ID', type: 'text', required: true, placeholder: 'your-gcp-project-id' },
         { name: 'credentials', label: 'Service Account Key', type: 'file', required: true, helperText: 'Upload your service account JSON key file' },
-        { name: 'datasets', label: 'Datasets to Scan', type: 'multi-select', required: true, placeholder: 'Select datasets...', dynamicOptions: true, optionsEndpoint: 'datasets', helperText: 'Select one or more datasets to include in scans' },
+        { name: 'datasets', label: 'Datasets to Scan', type: 'multi-select', required: false, placeholder: 'Select datasets...', dynamicOptions: true, optionsEndpoint: 'datasets', helperText: 'Leave empty to scan all datasets, or select specific ones' },
         { name: 'location', label: 'Data Location', type: 'select', required: false, options: [
           { value: 'US', label: 'US (Multi-region)' },
           { value: 'EU', label: 'EU (Multi-region)' },

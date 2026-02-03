@@ -18,6 +18,14 @@ type ChatSession = {
   lastMessage?: string;
 };
 
+const AVAILABLE_MODELS = [
+  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI', description: 'Most capable' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', description: 'Fast & efficient' },
+  { id: 'o3-mini', name: 'o3-mini', provider: 'OpenAI', description: 'Reasoning model' },
+  { id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'Anthropic', description: 'Balanced' },
+  { id: 'claude-opus', name: 'Claude Opus', provider: 'Anthropic', description: 'Most capable' },
+];
+
 export default function AssistantPage() {
   const { data: session } = useSession();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -27,9 +35,28 @@ export default function AssistantPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
+  const [selectedModel, setSelectedModel] = useState('gpt-4o');
+  const [showModelPicker, setShowModelPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const initialLoadDone = useRef(false);
+  const modelLoadedRef = useRef(false);
+
+  // Load model from localStorage on client
+  useEffect(() => {
+    if (!modelLoadedRef.current) {
+      const saved = localStorage.getItem('pallisade-copilot-model');
+      if (saved) setSelectedModel(saved);
+      modelLoadedRef.current = true;
+    }
+  }, []);
+
+  // Persist model selection
+  useEffect(() => {
+    if (modelLoadedRef.current) {
+      localStorage.setItem('pallisade-copilot-model', selectedModel);
+    }
+  }, [selectedModel]);
 
   // Fetch sessions on mount
   useEffect(() => {
@@ -144,6 +171,7 @@ export default function AssistantPage() {
         body: JSON.stringify({
           message: messageText,
           sessionId,
+          model: selectedModel,
         }),
       });
 
@@ -288,6 +316,61 @@ export default function AssistantPage() {
               <h1 className="text-xl font-semibold">AI Assistant</h1>
               <p className="text-xs text-[var(--muted)]">Ask about your data pipeline</p>
             </div>
+          </div>
+          
+          {/* Model Selector */}
+          <div className="relative">
+            <button
+              onClick={() => setShowModelPicker(!showModelPicker)}
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] border border-[rgba(255,255,255,0.08)] rounded-lg transition-all"
+            >
+              <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 15.5m14.8-.2l-4.3.008m-5.5.492V18a1 1 0 001 1h4a1 1 0 001-1v-2.7" />
+              </svg>
+              <span className="text-[var(--text)]">{AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name || selectedModel}</span>
+              <svg className={`w-4 h-4 text-[var(--muted)] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            
+            {showModelPicker && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowModelPicker(false)} />
+                <div className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-xl z-20 overflow-hidden">
+                  <div className="p-3 border-b border-[rgba(255,255,255,0.06)]">
+                    <h4 className="text-sm font-medium">Select Model</h4>
+                    <p className="text-xs text-[var(--muted)] mt-0.5">Choose the AI model for this chat</p>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {AVAILABLE_MODELS.map((model) => (
+                      <button
+                        key={model.id}
+                        onClick={() => {
+                          setSelectedModel(model.id);
+                          setShowModelPicker(false);
+                        }}
+                        className={`w-full p-3 text-left hover:bg-[rgba(255,255,255,0.04)] transition-colors flex items-center justify-between gap-2 ${
+                          selectedModel === model.id ? 'bg-[rgba(255,255,255,0.06)]' : ''
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">{model.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(255,255,255,0.08)] text-[var(--muted)]">{model.provider}</span>
+                          </div>
+                          <p className="text-xs text-[var(--muted)] mt-0.5">{model.description}</p>
+                        </div>
+                        {selectedModel === model.id && (
+                          <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
 

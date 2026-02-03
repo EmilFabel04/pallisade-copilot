@@ -213,18 +213,74 @@ async function testGitHub(credentials: any): Promise<{ success: boolean; error?:
   }
 }
 
-async function testDbtCloud(credentials: any): Promise<{ success: boolean; error?: string; metadata?: any }> {
+async function testDbtCloud(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   const accountId = credentials?.account_id;
   const token = credentials?.api_token;
+  const environmentId = credentials?.environment_id;
+  const useDiscoveryApi = credentials?.use_discovery_api || false;
 
-  if (!accountId) {
-    return { success: false, error: 'Missing dbt Cloud Account ID' };
+  if (!accountId && !environmentId) {
+    return { success: false, error: 'Missing dbt Cloud Account ID or Environment ID' };
   }
   if (!token) {
     return { success: false, error: 'Missing dbt Cloud API Token' };
   }
 
   try {
+    // If using Discovery API (Metadata API) - requires environment_id
+    if (useDiscoveryApi && environmentId) {
+      const discoveryResponse = await fetch('https://metadata.cloud.getdbt.com/graphql', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: `
+            query TestConnection($environmentId: BigInt!) {
+              environment(id: $environmentId) {
+                dbtProjectName
+                name
+                type
+              }
+            }
+          `,
+          variables: { environmentId: parseInt(environmentId) },
+        }),
+      });
+
+      if (discoveryResponse.ok) {
+        const result = await discoveryResponse.json();
+        
+        if (result.errors) {
+          return { 
+            success: false, 
+            error: result.errors[0]?.message || 'Discovery API error - check token permissions' 
+          };
+        }
+
+        const env = result.data?.environment;
+        if (env) {
+          return {
+            success: true,
+            message: 'Connected via Discovery API (Metadata Only)',
+            metadata: {
+              apiMode: 'discovery',
+              projectName: env.dbtProjectName,
+              environmentName: env.name,
+              environmentType: env.type,
+              environmentId,
+              capabilities: ['lineage', 'models', 'sources', 'tests', 'exposures'],
+              limitations: ['No run history', 'No artifacts', 'No job management'],
+            }
+          };
+        }
+      }
+
+      return { success: false, error: 'Could not connect to Discovery API - verify environment ID and token permissions' };
+    }
+
+    // Use Admin API v2 (requires "Job Viewer" or higher permissions)
     const response = await fetch(`https://cloud.getdbt.com/api/v2/accounts/${accountId}/`, {
       headers: {
         'Authorization': `Token ${token}`,
@@ -249,18 +305,72 @@ async function testDbtCloud(credentials: any): Promise<{ success: boolean; error
         projects = projectsData.data || [];
       }
 
+      // Test artifact access (to verify full permissions)
+      let hasArtifactAccess = false;
+      let artifactWarning = '';
+      
+      // Try to get a recent run to test artifact permissions
+      const runsResponse = await fetch(
+        `https://cloud.getdbt.com/api/v2/accounts/${accountId}/runs/?limit=1&status=10`,
+        {
+          headers: {
+            'Authorization': `Token ${token}`,
+            'Accept': 'application/json',
+          },
+        }
+      );
+      
+      if (runsResponse.ok) {
+        const runsData = await runsResponse.json();
+        const runs = runsData.data || [];
+        
+        if (runs.length > 0) {
+          const runId = runs[0].id;
+          const artifactResponse = await fetch(
+            `https://cloud.getdbt.com/api/v2/accounts/${accountId}/runs/${runId}/artifacts/manifest.json`,
+            {
+              headers: {
+                'Authorization': `Token ${token}`,
+                'Accept': 'application/json',
+              },
+            }
+          );
+          
+          hasArtifactAccess = artifactResponse.ok;
+          if (!hasArtifactAccess) {
+            artifactWarning = 'Token lacks artifact access - consider using "Job Viewer" permission set for full functionality';
+          }
+        }
+      }
+
       return { 
-        success: true, 
+        success: true,
+        message: hasArtifactAccess 
+          ? 'Connected via Admin API with full access'
+          : 'Connected via Admin API (limited permissions)',
         metadata: { 
+          apiMode: 'admin',
           accountName: data.data?.name,
           accountId,
           projects: projects.map((p: any) => ({ id: p.id, name: p.name })),
           projectCount: projects.length,
+          hasArtifactAccess,
+          warning: artifactWarning || undefined,
+          capabilities: hasArtifactAccess 
+            ? ['jobs', 'runs', 'artifacts', 'lineage', 'test_results']
+            : ['jobs', 'runs', 'metadata'],
         } 
       };
     }
 
-    const errorData = await response.text();
+    // Check if it's a 403 (permission denied) vs 401 (invalid token)
+    if (response.status === 403) {
+      return { 
+        success: false, 
+        error: 'Token lacks required permissions. Use a service token with "Job Viewer" or "Account Viewer" permission set.' 
+      };
+    }
+    
     return { success: false, error: 'Invalid Account ID or API Token' };
   } catch (error: any) {
     return { success: false, error: error.message };
