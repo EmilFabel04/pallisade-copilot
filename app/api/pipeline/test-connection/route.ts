@@ -25,61 +25,76 @@ export async function POST(request: NextRequest) {
     let testBody: any;
 
     switch (toolType) {
-      // Warehouse connections - use scanner API
+      // Warehouse connections - use scanner's /api/v1/test-connection endpoint
       case 'snowflake':
-        testEndpoint = `${SCANNER_API_URL}/api/test/snowflake`;
+        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
         testBody = {
-          account: config.account,
-          warehouse: config.warehouse,
-          database: config.database,
-          schema: config.schema || 'PUBLIC',
-          user: config.username,  // Map from form field name
-          password: config.password,
+          connection_type: 'snowflake',
+          connection_config: {
+            account: config.account,
+            warehouse: config.warehouse,
+            database: config.database,
+            schema: config.schema || 'PUBLIC',
+            user: config.username,
+            password: config.password,
+          },
         };
         break;
-      
+
       case 'bigquery':
-        testEndpoint = `${SCANNER_API_URL}/api/test/bigquery`;
+        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
         testBody = {
-          project: config.project_id,  // Map from form field name
-          dataset: config.dataset,
-          credentials: config.credentials,  // This is the uploaded JSON content
+          connection_type: 'bigquery',
+          connection_config: {
+            project_id: config.project_id,
+            dataset: config.dataset,
+            credentials: config.credentials,
+          },
         };
         break;
-      
+
       case 'postgres':
-        testEndpoint = `${SCANNER_API_URL}/api/test/postgres`;
+        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
         testBody = {
-          host: config.host,
-          port: parseInt(config.port) || 5432,
-          database: config.database,
-          user: config.username,  // Map from form field name
-          password: config.password,
-          sslmode: config.ssl || 'prefer',
+          connection_type: 'postgres',
+          connection_config: {
+            host: config.host,
+            port: parseInt(config.port) || 5432,
+            database: config.database,
+            user: config.username,
+            password: config.password,
+            sslmode: config.ssl || 'prefer',
+          },
         };
         break;
-      
+
       case 'sqlserver':
       case 'azure_sql':
-        testEndpoint = `${SCANNER_API_URL}/api/test/sqlserver`;
+        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
         testBody = {
-          host: config.server,
-          port: parseInt(config.port) || 1433,
-          database: config.database,
-          user: config.username,  // Map from form field name
-          password: config.password,
+          connection_type: 'sqlserver',
+          connection_config: {
+            host: config.server,
+            port: parseInt(config.port) || 1433,
+            database: config.database,
+            user: config.username,
+            password: config.password,
+          },
         };
         break;
-      
+
       case 'redshift':
-        testEndpoint = `${SCANNER_API_URL}/api/test/postgres`;  // Redshift uses postgres protocol
+        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
         testBody = {
-          host: config.host,
-          port: parseInt(config.port) || 5439,
-          database: config.database,
-          user: config.username,  // Map from form field name
-          password: config.password,
-          sslmode: 'require',  // Redshift requires SSL
+          connection_type: 'redshift',
+          connection_config: {
+            host: config.host,
+            port: parseInt(config.port) || 5439,
+            database: config.database,
+            user: config.username,
+            password: config.password,
+            sslmode: 'require',
+          },
         };
         break;
 

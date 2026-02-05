@@ -78,25 +78,25 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
 
   // Try to actually connect via the Python backend
   const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
+
   try {
     // First check if scanner backend is available
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
       // Backend not available - do basic validation only
       console.log('[TEST] Scanner backend not available, using basic validation');
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: 'Credentials validated (backend offline - full test skipped)',
-        metadata: { 
+        metadata: {
           account: credentials.account,
           database: credentials.database,
           warehouse: credentials.warehouse,
-        } 
+        }
       };
     }
 
@@ -118,42 +118,42 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
 
     if (testResponse.ok) {
       const result = await testResponse.json();
-      return { 
+      return {
         success: true,
         message: result.message || 'Successfully connected to Snowflake!',
-        metadata: { 
+        metadata: {
           account: credentials.account,
           database: credentials.database,
           warehouse: credentials.warehouse,
           tables: result.tables,
-        } 
+        }
       };
     } else {
       const errorData = await testResponse.json().catch(() => ({}));
-      return { 
-        success: false, 
-        error: errorData.detail || errorData.error || 'Failed to connect to Snowflake' 
+      return {
+        success: false,
+        error: errorData.detail || errorData.error || 'Failed to connect to Snowflake'
       };
     }
   } catch (error: any) {
     // If backend call fails, check if it's a timeout or network error
     if (error.name === 'TimeoutError' || error.name === 'AbortError') {
-      return { 
-        success: false, 
-        error: 'Connection test timed out. Check your account identifier and network.' 
+      return {
+        success: false,
+        error: 'Connection test timed out. Check your account identifier and network.'
       };
     }
-    
+
     // Backend might not have the test endpoint - fall back to basic validation
     console.log('[TEST] Backend test failed, using basic validation:', error.message);
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: 'Credentials look valid (could not verify connection)',
-      metadata: { 
+      metadata: {
         account: credentials.account,
         database: credentials.database,
         warehouse: credentials.warehouse,
-      } 
+      }
     };
   }
 }

@@ -22,11 +22,11 @@ class ConnectionConfig(BaseModel):
 
 def get_adapter(connection_type: str, config: Dict[str, Any]):
     """Get the appropriate database adapter."""
-    from scanner.adapters.bigquery import BigQueryAdapter
-    from scanner.adapters.snowflake import SnowflakeAdapter
-    from scanner.adapters.postgres import PostgresAdapter
-    from scanner.adapters.redshift import RedshiftAdapter
-    from scanner.adapters.sqlserver import SQLServerAdapter
+    from adapters.bigquery import BigQueryAdapter
+    from adapters.snowflake import SnowflakeAdapter
+    from adapters.postgres import PostgresAdapter
+    from adapters.redshift import RedshiftAdapter
+    from adapters.sqlserver import SQLServerAdapter
     
     adapters = {
         'bigquery': BigQueryAdapter,
@@ -294,7 +294,60 @@ async def test_connection(config: ConnectionConfig) -> Dict[str, Any]:
         adapter.disconnect()
         
         return {"success": success, "message": message}
-        
+
     except Exception as e:
         logger.error(f"Connection test failed: {e}")
         return {"success": False, "message": str(e)}
+
+
+@router.post("/schemas")
+async def list_schemas(config: ConnectionConfig) -> Dict[str, Any]:
+    """List available schemas/datasets for a database connection."""
+    try:
+        connection_type = config.connection_type.lower()
+        conn_config = config.connection_config
+
+        if connection_type == 'bigquery':
+            from google.cloud import bigquery
+            from google.oauth2 import service_account
+
+            project_id = conn_config.get('project_id')
+            credentials_json = conn_config.get('credentials') or conn_config.get('credentials_json')
+
+            if isinstance(credentials_json, str):
+                credentials_json = json.loads(credentials_json)
+
+            if credentials_json and isinstance(credentials_json, dict):
+                credentials = service_account.Credentials.from_service_account_info(credentials_json)
+                client = bigquery.Client(project=project_id, credentials=credentials)
+            else:
+                client = bigquery.Client(project=project_id)
+
+            datasets = [d.dataset_id for d in client.list_datasets()]
+            client.close()
+            return {"success": True, "datasets": datasets, "count": len(datasets)}
+
+        # For SQL-based warehouses, query INFORMATION_SCHEMA
+        adapter = get_adapter(connection_type, conn_config)
+        if not adapter.connect():
+            return {"success": False, "datasets": [], "error": "Failed to connect"}
+
+        try:
+            if connection_type == 'snowflake':
+                rows = adapter.execute_query("SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA ORDER BY SCHEMA_NAME")
+                schemas = [r.get('SCHEMA_NAME') or r.get('schema_name') for r in rows]
+            else:
+                rows = adapter.execute_query("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
+                schemas = [r.get('schema_name') or r.get('SCHEMA_NAME') for r in rows]
+
+            # Filter out internal schemas
+            internal = {'INFORMATION_SCHEMA', 'information_schema', 'pg_catalog', 'pg_toast'}
+            schemas = [s for s in schemas if s and s not in internal]
+
+            return {"success": True, "datasets": schemas, "count": len(schemas)}
+        finally:
+            adapter.disconnect()
+
+    except Exception as e:
+        logger.error(f"Schema listing failed: {e}")
+        return {"success": False, "datasets": [], "error": str(e)}

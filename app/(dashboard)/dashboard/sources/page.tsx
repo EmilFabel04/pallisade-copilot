@@ -154,6 +154,13 @@ export default function SourcesPage() {
     }
   }, [nodeData, nodes]);
 
+  // Get the best default tab for a given node
+  const getDefaultTab = (node: PipelineNode): 'tables' | 'models' | 'connectors' => {
+    if (node.toolType === 'dbt_cloud' || node.toolType === 'dbt_core') return 'models';
+    if (node.toolType === 'fivetran' || node.toolType === 'airbyte' || node.toolType === 'stitch') return 'connectors';
+    return 'tables';
+  };
+
   // Initialize from cache or fetch fresh data
   useEffect(() => {
     if (initializedRef.current) return;
@@ -162,19 +169,20 @@ export default function SourcesPage() {
     const initialize = async () => {
       // Try to load from cache first
       const cached = loadCache();
-      
+
       if (cached) {
         setNodes(cached.nodes);
         setCurrentStackId(cached.stackId);
         setNodeData(cached.data);
-        
+
         // Auto-select first node
-        const firstConnected = cached.nodes.find((n: PipelineNode) => 
+        const firstConnected = cached.nodes.find((n: PipelineNode) =>
           n.status === 'ACTIVE' || n.status === 'CONNECTED'
         ) || cached.nodes[0];
-        
+
         if (firstConnected) {
           setSelectedNode(firstConnected.id);
+          setActiveTab(getDefaultTab(firstConnected));
         }
         setLoading(false);
         return;
@@ -189,13 +197,14 @@ export default function SourcesPage() {
             setCurrentStackId(data.stack.id);
             if (data.stack.nodes && data.stack.nodes.length > 0) {
               setNodes(data.stack.nodes);
-              
-              const firstConnected = data.stack.nodes.find((n: PipelineNode) => 
+
+              const firstConnected = data.stack.nodes.find((n: PipelineNode) =>
                 n.status === 'ACTIVE' || n.status === 'CONNECTED'
               ) || data.stack.nodes[0];
-              
+
               if (firstConnected) {
                 setSelectedNode(firstConnected.id);
+                setActiveTab(getDefaultTab(firstConnected));
               }
             }
           }
@@ -220,6 +229,7 @@ export default function SourcesPage() {
   const handleSelectNode = (node: PipelineNode) => {
     setSelectedNode(node.id);
     setSearchQuery('');
+    setActiveTab(getDefaultTab(node));
   };
 
   const handleRefresh = () => {
@@ -488,12 +498,12 @@ export default function SourcesPage() {
                   </div>
                   <p className="text-[13px] text-white/40">
                     {getToolName(selectedNodeObj.toolType)}
-                    {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).project_id && (
-                      <span> · {(selectedNodeObj.config as Record<string, unknown>).project_id as string}</span>
-                    )}
-                    {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).database && (
-                      <span> · {(selectedNodeObj.config as Record<string, unknown>).database as string}</span>
-                    )}
+                    {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).project_id ? (
+                      <span> · {String((selectedNodeObj.config as Record<string, unknown>).project_id)}</span>
+                    ) : null}
+                    {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).database ? (
+                      <span> · {String((selectedNodeObj.config as Record<string, unknown>).database)}</span>
+                    ) : null}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -686,46 +696,7 @@ export default function SourcesPage() {
                   {activeTab === 'models' && (
                     <div className="p-6">
                       {filteredModels.length > 0 ? (
-                        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Model</th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Schema</th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Materialization</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Tests</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/[0.04]">
-                              {filteredModels.map((model, i) => (
-                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                  <td className="px-4 py-3">
-                                    <code className="text-[13px] text-white">{model.name}</code>
-                                    {model.description && (
-                                      <p className="text-[11px] text-white/40 mt-0.5 max-w-md truncate">{model.description}</p>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <code className="text-[13px] text-white/50">{model.schema}</code>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-medium ${
-                                      model.materialization === 'table' ? 'bg-blue-500/10 text-blue-400' :
-                                      model.materialization === 'view' ? 'bg-purple-500/10 text-purple-400' :
-                                      model.materialization === 'incremental' ? 'bg-emerald-500/10 text-emerald-400' :
-                                      'bg-white/10 text-white/60'
-                                    }`}>
-                                      {model.materialization}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">{model.testCount ?? 0}</span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                        <DbtModelsVisual models={filteredModels} />
                       ) : (
                         <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
                           <p className="text-[13px] text-white/40">No dbt models found</p>
@@ -798,6 +769,163 @@ export default function SourcesPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ==========================================
+// dbt Models Visual Display
+// ==========================================
+
+const MATERIALIZATION_CONFIG: Record<string, { color: string; bg: string; icon: string }> = {
+  table: { color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20', icon: 'M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125' },
+  view: { color: 'text-purple-400', bg: 'bg-purple-500/10 border-purple-500/20', icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178zM15 12a3 3 0 11-6 0 3 3 0 016 0z' },
+  incremental: { color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', icon: 'M3 4.5h14.25M3 9h9.75M3 13.5h9.75m4.5-4.5v12m0 0l-3.75-3.75M17.25 21L21 17.25' },
+  ephemeral: { color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20', icon: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z' },
+};
+
+function DbtModelsVisual({ models }: { models: DbtModel[] }) {
+  const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
+
+  // Group by schema
+  const grouped: Record<string, DbtModel[]> = {};
+  models.forEach((m) => {
+    if (!grouped[m.schema]) grouped[m.schema] = [];
+    grouped[m.schema].push(m);
+  });
+  const schemaNames = Object.keys(grouped).sort();
+
+  // Stats
+  const matCounts: Record<string, number> = {};
+  models.forEach((m) => {
+    matCounts[m.materialization] = (matCounts[m.materialization] || 0) + 1;
+  });
+  const totalTests = models.reduce((sum, m) => sum + (m.testCount ?? 0), 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Summary row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Models</div>
+          <div className="text-2xl font-semibold text-white">{models.length}</div>
+        </div>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Schemas</div>
+          <div className="text-2xl font-semibold text-white">{schemaNames.length}</div>
+        </div>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Tests</div>
+          <div className="text-2xl font-semibold text-white">{totalTests}</div>
+        </div>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Materialization</div>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {Object.entries(matCounts).map(([mat, count]) => {
+              const cfg = MATERIALIZATION_CONFIG[mat] || MATERIALIZATION_CONFIG.table;
+              return (
+                <span key={mat} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border ${cfg.bg} ${cfg.color}`}>
+                  {count} {mat}
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Schema groups */}
+      {schemaNames.map((schema) => {
+        const schemaModels = grouped[schema];
+        const isExpanded = expandedSchema === null || expandedSchema === schema;
+
+        return (
+          <div key={schema} className="rounded-lg border border-white/[0.06] overflow-hidden">
+            {/* Schema header */}
+            <button
+              onClick={() => setExpandedSchema(expandedSchema === schema ? null : schema)}
+              className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center">
+                  <span className="text-[10px] font-bold text-orange-400">dbt</span>
+                </div>
+                <div className="text-left">
+                  <div className="text-[13px] font-medium text-white">{schema}</div>
+                  <div className="text-[11px] text-white/40">{schemaModels.length} model{schemaModels.length !== 1 ? 's' : ''}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {/* Mini materialization summary */}
+                <div className="flex gap-1.5">
+                  {Object.entries(
+                    schemaModels.reduce<Record<string, number>>((acc, m) => {
+                      acc[m.materialization] = (acc[m.materialization] || 0) + 1;
+                      return acc;
+                    }, {})
+                  ).map(([mat, count]) => {
+                    const cfg = MATERIALIZATION_CONFIG[mat] || MATERIALIZATION_CONFIG.table;
+                    return (
+                      <span key={mat} className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-medium ${cfg.bg} ${cfg.color}`} title={`${count} ${mat}`}>
+                        {count}
+                      </span>
+                    );
+                  })}
+                </div>
+                <svg className={`w-4 h-4 text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </button>
+
+            {/* Model cards */}
+            {isExpanded && (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
+                {schemaModels.map((model) => {
+                  const cfg = MATERIALIZATION_CONFIG[model.materialization] || MATERIALIZATION_CONFIG.table;
+                  return (
+                    <div
+                      key={model.name}
+                      className={`rounded-lg border p-4 hover:bg-white/[0.02] transition-colors ${cfg.bg}`}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <svg className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={cfg.icon} />
+                          </svg>
+                          <code className="text-[13px] font-medium text-white truncate">{model.name}</code>
+                        </div>
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${cfg.color} bg-black/20`}>
+                          {model.materialization}
+                        </span>
+                      </div>
+                      {model.description && (
+                        <p className="text-[11px] text-white/40 mb-2 line-clamp-2">{model.description}</p>
+                      )}
+                      <div className="flex items-center gap-3 mt-auto">
+                        {model.tags && model.tags.length > 0 && (
+                          <div className="flex gap-1 flex-wrap">
+                            {model.tags.slice(0, 3).map((tag) => (
+                              <span key={tag} className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] text-white/50">{tag}</span>
+                            ))}
+                          </div>
+                        )}
+                        {(model.testCount ?? 0) > 0 && (
+                          <div className="flex items-center gap-1 ml-auto">
+                            <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span className="text-[10px] text-emerald-400">{model.testCount} tests</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

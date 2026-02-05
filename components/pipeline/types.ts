@@ -161,10 +161,10 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
     },
   ],
   WAREHOUSE: [
-    { 
-      id: 'snowflake', 
-      name: 'Snowflake', 
-      description: 'Snowflake Data Cloud', 
+    {
+      id: 'snowflake',
+      name: 'Snowflake',
+      description: 'Snowflake Data Cloud',
       layer: 'WAREHOUSE',
       configFields: [
         { name: 'account', label: 'Account Identifier', type: 'text', required: true, placeholder: 'xy12345.us-east-1' },

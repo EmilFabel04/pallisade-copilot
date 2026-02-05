@@ -112,14 +112,23 @@ export async function POST(request: Request) {
 
     // Convert pipeline nodes to integration format for the scanner
     // Note: type must be uppercase to match the scanner's tool registry
-    const integrations = pipelineStack?.nodes.map(node => ({
-      id: node.id,
-      name: node.name,
-      type: node.toolType.toUpperCase(), // Scanner expects BIGQUERY, SNOWFLAKE, etc.
-      layer: node.layer.toLowerCase(),
-      status: node.status === 'CONNECTED' ? 'ACTIVE' : node.status,
-      config: node.config || {},
-    })) || [];
+    const integrations = pipelineStack?.nodes.map(node => {
+      // Map frontend field names to adapter field names
+      const rawConfig = (node.config || {}) as Record<string, any>;
+      const config = { ...rawConfig };
+      if (config.username && !config.user) {
+        config.user = config.username;
+        delete config.username;
+      }
+      return {
+        id: node.id,
+        name: node.name,
+        type: node.toolType.toUpperCase(),
+        layer: node.layer.toLowerCase(),
+        status: node.status === 'CONNECTED' ? 'ACTIVE' : node.status,
+        config,
+      };
+    }) || [];
     
     console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({ name: i.name, type: i.type, status: i.status })));
 

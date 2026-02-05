@@ -6,15 +6,86 @@ The context adapts based on what tools are connected.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Tuple
 from enum import Enum
-import json
+import re
 import logging
 
 from lineage.graph import LineageGraph, LineageNode
 from lineage.builder import LineageBuilder
 
 logger = logging.getLogger(__name__)
+
+
+# ==========================================
+# Query-relevance scoring helpers
+# ==========================================
+
+# Common English words that don't help identify tables/columns
+_STOP_WORDS = frozenset({
+    "what", "which", "how", "many", "much", "show", "me", "my", "the",
+    "a", "an", "is", "are", "was", "were", "do", "does", "did", "can",
+    "get", "find", "list", "all", "from", "for", "in", "of", "to",
+    "and", "or", "by", "with", "that", "this", "on", "at", "have",
+    "has", "had", "be", "been", "being", "i", "we", "you", "they",
+    "it", "its", "most", "least", "top", "bottom", "give", "tell",
+    "about", "any", "some", "each", "every", "per", "total", "count",
+    "number", "average", "sum", "min", "max", "between",
+})
+
+
+def _tokenize_query(text: str) -> List[str]:
+    """Split query into meaningful tokens, removing stop words."""
+    tokens = re.findall(r'[a-z][a-z0-9_]*', text.lower())
+    return [t for t in tokens if t not in _STOP_WORDS and len(t) > 1]
+
+
+def _score_table_relevance(
+    table: 'TableSchema',
+    dataset: str,
+    query_lower: str,
+    query_tokens: Set[str],
+) -> int:
+    """
+    Score how relevant a table is to the user's query.
+
+    Scoring:
+      - Exact table name mentioned in query: +10
+      - Table name partially matches a query token: +5
+      - A query token appears in a column name: +3
+      - Dataset name mentioned in query: +2
+      - A query token is a substring of the table name: +1
+    """
+    score = 0
+    table_lower = table.name.lower()
+    dataset_lower = dataset.lower()
+
+    # Exact table name in query
+    if table_lower in query_lower:
+        score += 10
+
+    # Dataset name in query
+    if dataset_lower in query_lower:
+        score += 2
+
+    # Tokenized table name parts (e.g. "fct_orders" -> ["fct", "orders"])
+    table_parts = set(re.findall(r'[a-z][a-z0-9]*', table_lower))
+
+    for token in query_tokens:
+        # Token matches a table name part
+        if token in table_parts:
+            score += 5
+        # Token is substring of table name
+        elif token in table_lower:
+            score += 1
+        # Token matches a column name
+        for col in table.columns:
+            col_lower = col.get('name', '').lower()
+            if token == col_lower or token in set(re.findall(r'[a-z][a-z0-9]*', col_lower)):
+                score += 3
+                break  # Only count once per token
+
+    return score
 
 
 class IntegrationLayer(Enum):
@@ -42,6 +113,22 @@ class IntegrationInfo:
 
 
 @dataclass
+class TableSchema:
+    """Schema information for a table."""
+    name: str
+    dataset: str
+    columns: List[Dict[str, str]] = field(default_factory=list)  # [{name, type, description}]
+    row_count: Optional[int] = None
+    
+    def to_prompt_string(self) -> str:
+        """Format table schema for LLM prompt."""
+        cols = ", ".join([f"{c['name']} ({c['type']})" for c in self.columns[:20]])
+        if len(self.columns) > 20:
+            cols += f", ... (+{len(self.columns) - 20} more)"
+        return f"  - `{self.dataset}.{self.name}`: {cols}"
+
+
+@dataclass
 class CopilotContext:
     """
     Context for the AI co-pilot.
@@ -51,7 +138,10 @@ class CopilotContext:
     """
     # Organization info
     org_id: str
-    
+
+    # The user's current query (used for relevance filtering)
+    query: str = ""
+
     # Connected integrations
     integrations: List[IntegrationInfo] = field(default_factory=list)
     integration_types: Set[str] = field(default_factory=set)
@@ -68,6 +158,9 @@ class CopilotContext:
     # Pipeline context (if discussing specific pipeline)
     pipeline_stack_id: Optional[str] = None
     focused_node_ids: List[str] = field(default_factory=list)
+    
+    # Pre-fetched warehouse schema (tables and columns)
+    warehouse_schema: Dict[str, List[TableSchema]] = field(default_factory=dict)  # dataset -> tables
     
     def has_integration(self, integration_type: str) -> bool:
         """Check if a specific integration type is connected."""
@@ -96,20 +189,23 @@ class CopilotContext:
         """Get all integrations for a specific layer."""
         return [i for i in self.integrations if i.layer == layer and i.is_active]
     
-    def to_system_prompt_context(self) -> str:
+    def to_system_prompt_context(self, query: str = "") -> str:
         """
         Generate context string for the LLM system prompt.
         Only includes information about what the user has connected.
+
+        When a query is provided, prioritizes relevant tables in the schema
+        to keep the prompt focused and within token limits.
         """
         lines = []
-        
+
         # Describe connected stack
         lines.append("## User's Data Stack\n")
-        
+
         if not self.integrations:
             lines.append("No integrations connected yet.")
             return "\n".join(lines)
-        
+
         # Group by layer
         for layer in IntegrationLayer:
             layer_integrations = self.get_integrations_by_layer(layer)
@@ -134,26 +230,106 @@ class CopilotContext:
                         if config.get('schema'):
                             lines.append(f"  - Schema: `{config.get('schema')}`")
                 lines.append("")
-        
+
         # Add lineage summary if available
         if self.graph and self.graph.nodes:
             lines.append(f"### Lineage Graph")
             lines.append(f"- {len(self.graph.nodes)} nodes tracked")
             lines.append(f"- {len(self.graph.edges)} edges (dependencies)")
-            
+
             roots = self.graph.get_roots()
             leaves = self.graph.get_leaves()
             lines.append(f"- {len(roots)} source nodes (roots)")
             lines.append(f"- {len(leaves)} output nodes (leaves)")
             lines.append("")
-        
+
+        # Add warehouse schema with relevance filtering
+        if self.warehouse_schema:
+            lines.append("### Database Schema (EXACT column names - USE THESE!)")
+            lines.append("**IMPORTANT**: Use ONLY these column names when writing queries. Do NOT guess or assume other column names exist.\n")
+
+            if query:
+                # Partition tables into relevant and other
+                relevant, other = self._partition_schema_by_relevance(query)
+
+                if relevant:
+                    lines.append("**Most Relevant Tables for Your Question:**")
+                    for _ds, table in relevant:
+                        lines.append(table.to_prompt_string())
+                    lines.append("")
+
+                if other:
+                    lines.append("**Other Available Tables:**")
+                    for _ds, table in other:
+                        lines.append(table.to_prompt_string())
+                    lines.append("")
+            else:
+                for schema_key, tables in self.warehouse_schema.items():
+                    wh_type, dataset_name = self._parse_schema_key(schema_key)
+                    if wh_type:
+                        lines.append(f"**[{wh_type}] Dataset: `{dataset_name}`**")
+                    else:
+                        lines.append(f"**Dataset: `{dataset_name}`**")
+                    for table in tables:
+                        lines.append(table.to_prompt_string())
+                    lines.append("")
+
         # Add focused context if any
         if self.focused_node_ids:
             lines.append(f"### Current Focus")
             lines.append(f"User is looking at: {', '.join(self.focused_node_ids)}")
             lines.append("")
-        
+
         return "\n".join(lines)
+
+    @staticmethod
+    def _parse_schema_key(key: str) -> tuple:
+        """
+        Parse a compound schema key like 'BIGQUERY:raw' into (warehouse_type, dataset_name).
+        Returns (None, key) if not a compound key.
+        """
+        if ':' in key:
+            wh_type, dataset_name = key.split(':', 1)
+            return wh_type, dataset_name
+        return None, key
+
+    def _partition_schema_by_relevance(
+        self,
+        query: str,
+    ) -> tuple:
+        """
+        Partition schema tables into (relevant, other) based on query.
+
+        Relevant tables are shown with full column detail.
+        Other tables are listed compactly so the LLM knows they exist
+        without consuming excessive tokens.
+
+        Returns:
+            Tuple of (relevant_list, other_list) where each item is (dataset, TableSchema).
+        """
+        query_lower = query.lower()
+        query_tokens = set(_tokenize_query(query_lower))
+
+        scored: list = []
+        for schema_key, tables in self.warehouse_schema.items():
+            _wh_type, dataset_name = self._parse_schema_key(schema_key)
+            for table in tables:
+                score = _score_table_relevance(table, dataset_name, query_lower, query_tokens)
+                scored.append((score, dataset_name, table))
+
+        # Sort by score descending
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Top tables with any relevance signal get full detail (up to 15)
+        relevant = [(ds, t) for score, ds, t in scored if score > 0][:15]
+        other = [(ds, t) for score, ds, t in scored if score == 0]
+
+        # If nothing matched, show all tables (fallback)
+        if not relevant:
+            relevant = [(ds, t) for _, ds, t in scored]
+            other = []
+
+        return relevant, other
 
 
 class CopilotContextBuilder:
@@ -248,6 +424,7 @@ class CopilotContextBuilder:
         # 5. Build context
         context = CopilotContext(
             org_id=org_id,
+            query=query,
             integrations=integrations,
             integration_types=integration_types,
             graph=graph,
@@ -366,21 +543,50 @@ class CopilotContextBuilder:
     ) -> List[LineageNode]:
         """
         Find nodes relevant to the user's query.
-        
-        Uses simple keyword matching for now.
-        Could be enhanced with semantic search.
+
+        Uses tokenized fuzzy matching: splits both the query and node names
+        into parts and scores overlap, so "orders" matches "fct_orders",
+        "stg_orders", "raw.orders", etc.
         """
-        relevant = []
         query_lower = query.lower()
-        
+        query_tokens = set(_tokenize_query(query_lower))
+
+        if not query_tokens:
+            return []
+
+        scored: List[Tuple[int, LineageNode]] = []
         for node in graph.nodes.values():
-            # Check if query mentions this node
-            if (node.name.lower() in query_lower or
-                query_lower in node.name.lower() or
-                (node.description and query_lower in node.description.lower())):
-                relevant.append(node)
-        
-        return relevant[:10]  # Limit to top 10
+            score = 0
+            node_lower = node.name.lower()
+            # Break node name into parts (e.g. "project.analytics.fct_orders" -> ["project","analytics","fct","orders"])
+            node_parts = set(re.findall(r'[a-z][a-z0-9]*', node_lower))
+
+            # Exact name in query
+            if node_lower in query_lower:
+                score += 10
+
+            # Token overlap between query and node name parts
+            overlap = query_tokens & node_parts
+            score += len(overlap) * 5
+
+            # Substring match (query token is part of node name)
+            for token in query_tokens:
+                if token in node_lower and token not in node_parts:
+                    score += 1
+
+            # Description match
+            if node.description:
+                desc_lower = node.description.lower()
+                for token in query_tokens:
+                    if token in desc_lower:
+                        score += 2
+
+            if score > 0:
+                scored.append((score, node))
+
+        # Sort by score descending, return top 10
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [node for _, node in scored[:10]]
     
     def _get_available_tools(self, integration_types: Set[str]) -> List[str]:
         """
@@ -389,7 +595,10 @@ class CopilotContextBuilder:
         Tools are only available if the required integration is connected.
         """
         tools = []
-        
+
+        # Always available (no integration required)
+        tools.append("search_knowledge_base")
+
         # Always available (if any integration)
         if integration_types:
             tools.extend([

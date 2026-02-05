@@ -507,8 +507,8 @@ export default function IntegrationsPage() {
                               </>
                             ) : (
                               <>
-                              <button 
-                                onClick={() => handleConnect(int.type, 'oauth' in int && int.oauth)}
+                              <button
+                                onClick={() => handleConnect(int.type, 'oauth' in int && Boolean(int.oauth))}
                                   className="flex-1 py-2 text-xs font-medium rounded-lg bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] transition-colors"
                               >
                                 {'oauth' in int && int.oauth ? 'Connect with OAuth' : 'Connect'}

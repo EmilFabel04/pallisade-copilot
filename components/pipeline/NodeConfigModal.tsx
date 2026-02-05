@@ -17,19 +17,21 @@ interface NodeConfigModalProps {
 }
 
 // Multi-select field component for selecting multiple datasets/schemas
-function MultiSelectField({ 
-  field, 
-  value = [], 
-  onChange, 
+function MultiSelectField({
+  field,
+  value = [],
+  onChange,
   stackId,
   nodeId,
+  toolType,
   config,
-}: { 
-  field: ConfigField; 
-  value: string[]; 
+}: {
+  field: ConfigField;
+  value: string[];
   onChange: (value: string[]) => void;
   stackId?: string;
   nodeId?: string;
+  toolType?: string;
   config: Record<string, any>;
 }) {
   const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
@@ -52,7 +54,7 @@ function MultiSelectField({
       const res = await fetch(`/api/pipeline/${stackId}/nodes/${nodeId}/${field.optionsEndpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ config }),
+        body: JSON.stringify({ config, toolType }),
       });
 
       if (res.ok) {
@@ -368,6 +370,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   onChange={(value) => handleFieldChange(field.name, value)}
                   stackId={stackId}
                   nodeId={node.id}
+                  toolType={node.toolType}
                   config={config}
                 />
               ) : field.type === 'select' ? (

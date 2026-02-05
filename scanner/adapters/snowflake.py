@@ -69,16 +69,16 @@ class SnowflakeAdapter(DatabaseAdapter):
         self.database = config.get('database')
         self.schema = config.get('schema', 'PUBLIC')
         self.role = config.get('role', 'PUBLIC')
-        
+
     # =========================================================================
     # CONNECTION MANAGEMENT
     # =========================================================================
-    
+
     def connect(self) -> bool:
         """Establish connection to Snowflake."""
         try:
             import snowflake.connector
-            
+
             self._connection = snowflake.connector.connect(
                 user=self.user,
                 password=self.password,
@@ -92,13 +92,14 @@ class SnowflakeAdapter(DatabaseAdapter):
                 login_timeout=30,
                 network_timeout=60,
             )
-            
+
             logger.info(f"Connected to Snowflake: {self.account}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to connect to Snowflake: {e}")
             self._connection = None
+            self._last_connect_error = str(e)
             return False
     
     def disconnect(self) -> None:
@@ -116,13 +117,15 @@ class SnowflakeAdapter(DatabaseAdapter):
         """Test Snowflake connection."""
         try:
             if not self.is_connected:
-                self.connect()
-            
+                if not self.connect():
+                    err = getattr(self, '_last_connect_error', '')
+                    return False, f"Failed to connect to Snowflake: {err}" if err else f"Failed to connect to Snowflake account '{self.account}'. Check your account identifier, username, and password."
+
             result = self.execute_query("SELECT CURRENT_VERSION() as version")
             version = result[0]['VERSION'] if result else 'unknown'
-            
-            return True, f"Snowflake {version}"
-            
+
+            return True, f"Connected to Snowflake {version}"
+
         except Exception as e:
             return False, str(e)
     

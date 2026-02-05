@@ -29,7 +29,7 @@ export async function POST(
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
-    // Get the pipeline node
+    // Get the pipeline node (may not exist yet for unsaved nodes)
     const node = await prisma.pipelineNode.findFirst({
       where: {
         id: nodeId,
@@ -43,24 +43,13 @@ export async function POST(
       },
     });
 
-    if (!node) {
-      return NextResponse.json({ error: 'Node not found' }, { status: 404 });
-    }
-
-    // Only warehouse nodes have schemas
-    if (node.layer !== 'WAREHOUSE') {
-      return NextResponse.json({ 
-        error: 'Schema discovery is only available for warehouse nodes',
-        layer: node.layer,
-      }, { status: 400 });
-    }
-
-    // Use config from request body (for unsaved changes) or from node
+    // Use config from request body (for unsaved/new nodes) or from saved node
     let credentials: Record<string, any> = {};
-    
+    let toolType = body.toolType || node?.toolType;
+
     if (body.config && Object.keys(body.config).length > 0) {
       credentials = body.config;
-    } else if (node.config) {
+    } else if (node?.config) {
       try {
         const configJson = node.config as { encrypted?: string; [key: string]: any };
         if (configJson.encrypted) {
@@ -73,6 +62,10 @@ export async function POST(
         console.error('[SCHEMAS] Credentials decryption failed:', e);
         return NextResponse.json({ error: 'Failed to decrypt credentials' }, { status: 500 });
       }
+    }
+
+    if (!toolType) {
+      return NextResponse.json({ error: 'Could not determine tool type' }, { status: 400 });
     }
 
     if (Object.keys(credentials).length === 0) {
@@ -89,19 +82,26 @@ export async function POST(
       'azure_sql': 'sqlserver',
     };
 
-    const connectionType = connectionTypeMap[node.toolType] || node.toolType;
+    const connectionType = connectionTypeMap[toolType] || toolType;
 
-    // Fetch schemas from scanner backend (uses same datasets endpoint)
-    console.log('[SCHEMAS] Calling scanner at:', `${SCANNER_API_URL}/api/datasets`);
+    // Map frontend field names to adapter field names
+    const connConfig = { ...credentials };
+    if (connConfig.username && !connConfig.user) {
+      connConfig.user = connConfig.username;
+      delete connConfig.username;
+    }
+
+    // Fetch schemas from scanner backend
+    console.log('[SCHEMAS] Calling scanner at:', `${SCANNER_API_URL}/api/v1/schemas`);
     console.log('[SCHEMAS] Connection type:', connectionType);
-    
+
     try {
-      const response = await fetch(`${SCANNER_API_URL}/api/datasets`, {
+      const response = await fetch(`${SCANNER_API_URL}/api/v1/schemas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           connection_type: connectionType,
-          connection_config: credentials,
+          connection_config: connConfig,
         }),
         signal: AbortSignal.timeout(30000),
       });

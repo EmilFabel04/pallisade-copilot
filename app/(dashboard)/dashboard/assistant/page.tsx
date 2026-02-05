@@ -20,6 +20,21 @@ type ChatSession = {
   pipelineStackId?: string;
 };
 
+type SourceNode = {
+  id: string;
+  name: string;
+  toolType: string;
+  layer: string;
+  status: string;
+};
+
+type SourceData = {
+  nodes: SourceNode[];
+  tables: Array<{ name: string; schema: string; dataset?: string; database?: string }>;
+  models: Array<{ name: string; schema: string; materialization: string; description?: string }>;
+  connectors: Array<{ name: string; status: string; lastSync?: string }>;
+};
+
 const AVAILABLE_MODELS = [
   { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI', description: 'Most capable' },
   { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', description: 'Fast & efficient' },
@@ -40,6 +55,9 @@ export default function AssistantPage() {
   const [showHistory, setShowHistory] = useState(true);
   const [selectedModel, setSelectedModel] = useState('gpt-4o');
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showSources, setShowSources] = useState(false);
+  const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
+  const [loadingSources, setLoadingSources] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastPipelineId = useRef<string | null>(null);
@@ -61,12 +79,61 @@ export default function AssistantPage() {
     }
   }, [selectedModel]);
 
+  // Fetch sources when pipeline changes
+  useEffect(() => {
+    if (selectedPipelineId) fetchSources(selectedPipelineId);
+  }, [selectedPipelineId]);
+
+  const fetchSources = async (pipelineId: string) => {
+    setLoadingSources(true);
+    try {
+      const res = await fetch(`/api/pipeline?id=${pipelineId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const stack = data.stack;
+      if (!stack?.nodes) return;
+
+      const connectedNodes = stack.nodes.filter((n: any) => n.status === 'CONNECTED' || n.status === 'ACTIVE');
+      const allTables: SourceData['tables'] = [];
+      const allModels: SourceData['models'] = [];
+      const allConnectors: SourceData['connectors'] = [];
+
+      await Promise.all(connectedNodes.map(async (node: any) => {
+        try {
+          const nodeRes = await fetch(`/api/pipeline/${pipelineId}/nodes/${node.id}/tables`);
+          if (!nodeRes.ok) return;
+          const nodeData = await nodeRes.json();
+          if (nodeData.tables) allTables.push(...nodeData.tables);
+          if (nodeData.models) allModels.push(...nodeData.models);
+          if (nodeData.connectors) allConnectors.push(...nodeData.connectors);
+        } catch { /* skip failed nodes */ }
+      }));
+
+      setSourceData({
+        nodes: connectedNodes.map((n: any) => ({
+          id: n.id,
+          name: n.name,
+          toolType: n.toolType,
+          layer: n.layer,
+          status: n.status,
+        })),
+        tables: allTables,
+        models: allModels,
+        connectors: allConnectors,
+      });
+    } catch (error) {
+      console.error('Failed to fetch sources:', error);
+    } finally {
+      setLoadingSources(false);
+    }
+  };
+
   // Fetch sessions when pipeline changes
   useEffect(() => {
     // Skip if pipeline hasn't changed
     if (lastPipelineId.current === selectedPipelineId) return;
     lastPipelineId.current = selectedPipelineId;
-    
+
     fetchSessions();
   }, [selectedPipelineId]);
 
@@ -330,7 +397,27 @@ export default function AssistantPage() {
             </div>
           </div>
           
-          {/* Model Selector */}
+          {/* Sources + Model Selector */}
+          <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowSources(!showSources)}
+            className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-all ${
+              showSources
+                ? 'bg-[rgba(255,255,255,0.08)] border-[rgba(255,255,255,0.15)] text-white'
+                : 'bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] border-[rgba(255,255,255,0.08)] text-[var(--muted)]'
+            }`}
+            title={showSources ? 'Hide sources' : 'Show sources'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+            <span>Sources</span>
+            {sourceData.nodes.length > 0 && (
+              <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-emerald-500/20 text-emerald-400">
+                {sourceData.nodes.length}
+              </span>
+            )}
+          </button>
           <div className="relative">
             <button
               onClick={() => setShowModelPicker(!showModelPicker)}
@@ -383,6 +470,7 @@ export default function AssistantPage() {
                 </div>
               </>
             )}
+          </div>
           </div>
         </div>
 
@@ -490,6 +578,188 @@ export default function AssistantPage() {
           </form>
         </div>
       </div>
+
+      {/* Sources Panel */}
+      <div className={`${showSources ? 'w-80' : 'w-0'} flex-shrink-0 transition-all duration-200 overflow-hidden`}>
+        <div className="h-full flex flex-col border-l border-[rgba(255,255,255,0.06)] pl-4 pr-2">
+          <div className="flex items-center justify-between py-3 mb-2">
+            <h3 className="text-sm font-semibold">Sources</h3>
+            <button onClick={() => setShowSources(false)} className="p-1 hover:bg-[rgba(255,255,255,0.05)] rounded transition-all">
+              <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-4 pb-4">
+            {loadingSources ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+              </div>
+            ) : sourceData.nodes.length === 0 ? (
+              <div className="text-center py-8">
+                <svg className="w-8 h-8 text-[var(--muted)] mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                </svg>
+                <p className="text-xs text-[var(--muted)]">No connected sources</p>
+                <p className="text-[10px] text-[var(--muted)] mt-1 opacity-60">Connect integrations in Pipeline Builder</p>
+              </div>
+            ) : (
+              <>
+                {/* Connected Stack */}
+                <div>
+                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connected Stack</h4>
+                  <div className="space-y-1.5">
+                    {sourceData.nodes.map((node) => (
+                      <div key={node.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)]">
+                        <SourceIcon toolType={node.toolType} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium truncate">{node.name}</div>
+                          <div className="text-[10px] text-[var(--muted)] capitalize">{node.layer.toLowerCase()}</div>
+                        </div>
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" title="Connected" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* dbt Models */}
+                {sourceData.models.length > 0 && (
+                  <SourceSection
+                    title="dbt Models"
+                    count={sourceData.models.length}
+                    items={sourceData.models}
+                    renderItem={(model) => (
+                      <div key={model.name} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-[rgba(255,255,255,0.03)] transition-colors">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                            model.materialization === 'incremental' ? 'bg-blue-400' :
+                            model.materialization === 'table' ? 'bg-emerald-400' :
+                            model.materialization === 'view' ? 'bg-amber-400' : 'bg-[var(--muted)]'
+                          }`} />
+                          <span className="text-xs truncate">{model.name}</span>
+                        </div>
+                        <span className="text-[10px] text-[var(--muted)] flex-shrink-0">{model.materialization}</span>
+                      </div>
+                    )}
+                    groupBy={(model) => model.schema}
+                  />
+                )}
+
+                {/* Warehouse Tables */}
+                {sourceData.tables.length > 0 && (
+                  <SourceSection
+                    title="Tables"
+                    count={sourceData.tables.length}
+                    items={sourceData.tables}
+                    renderItem={(table) => (
+                      <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-[rgba(255,255,255,0.03)] transition-colors">
+                        <svg className="w-3 h-3 text-[var(--muted)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        <span className="text-xs truncate">{table.name}</span>
+                      </div>
+                    )}
+                    groupBy={(table) => table.dataset || table.schema}
+                  />
+                )}
+
+                {/* Connectors */}
+                {sourceData.connectors.length > 0 && (
+                  <div>
+                    <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connectors</h4>
+                    <div className="space-y-1">
+                      {sourceData.connectors.map((c) => (
+                        <div key={c.name} className="flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-[rgba(255,255,255,0.03)] transition-colors">
+                          <span className="text-xs">{c.name}</span>
+                          <span className={`text-[10px] ${c.status === 'active' ? 'text-emerald-400' : c.status === 'failed' ? 'text-red-400' : 'text-[var(--muted)]'}`}>{c.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SourceIcon({ toolType }: { toolType: string }) {
+  const icons: Record<string, string> = {
+    bigquery: 'BQ', snowflake: 'SF', postgres: 'PG', redshift: 'RS',
+    dbt_cloud: 'dbt', dbt_core: 'dbt',
+    fivetran: 'FT', airbyte: 'AB', stitch: 'ST',
+    looker: 'LK', tableau: 'TB', metabase: 'MB',
+    airflow: 'AF', dagster: 'DG', prefect: 'PF',
+  };
+  const colors: Record<string, string> = {
+    bigquery: 'from-blue-500 to-blue-600',
+    snowflake: 'from-cyan-400 to-cyan-500',
+    postgres: 'from-indigo-500 to-indigo-600',
+    dbt_cloud: 'from-orange-500 to-orange-600',
+    dbt_core: 'from-orange-500 to-orange-600',
+    fivetran: 'from-pink-500 to-pink-600',
+    airbyte: 'from-violet-500 to-violet-600',
+  };
+  return (
+    <div className={`w-7 h-7 rounded-md bg-gradient-to-br ${colors[toolType] || 'from-gray-500 to-gray-600'} flex items-center justify-center flex-shrink-0`}>
+      <span className="text-[9px] font-bold text-white">{icons[toolType] || toolType.slice(0, 2).toUpperCase()}</span>
+    </div>
+  );
+}
+
+function SourceSection<T>({
+  title,
+  count,
+  items,
+  renderItem,
+  groupBy,
+}: {
+  title: string;
+  count: number;
+  items: T[];
+  renderItem: (item: T) => React.ReactNode;
+  groupBy: (item: T) => string;
+}) {
+  const [expanded, setExpanded] = useState(true);
+
+  // Group items
+  const groups: Record<string, T[]> = {};
+  items.forEach((item) => {
+    const key = groupBy(item);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  });
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center justify-between w-full mb-2 group"
+      >
+        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]">
+          {title}
+          <span className="ml-1.5 text-[var(--muted)] opacity-60">{count}</span>
+        </h4>
+        <svg className={`w-3.5 h-3.5 text-[var(--muted)] transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="space-y-3">
+          {Object.entries(groups).map(([groupName, groupItems]) => (
+            <div key={groupName}>
+              <div className="text-[10px] text-[var(--muted)] font-medium px-2.5 mb-1 opacity-70">{groupName}</div>
+              <div className="space-y-0.5">
+                {groupItems.map(renderItem)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -502,14 +772,14 @@ function MessageContent({ content }: { content: string }) {
   const segments = parseContentSegments(displayContent);
   
   return (
-    <div className="text-sm space-y-3">
+    <div className="text-sm font-mono tracking-tight space-y-3">
       {segments.map((segment, i) => {
         if (segment.type === 'code') {
           return (
-            <CodeBlock 
-              key={i} 
-              code={segment.content} 
-              language={segment.language || 'text'} 
+            <CodeBlock
+              key={i}
+              code={segment.content}
+              language={segment.language || 'text'}
             />
           );
         }

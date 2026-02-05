@@ -490,14 +490,14 @@ function MessageContent({ content }: { content: string }) {
   const segments = parseContentSegments(displayContent);
   
   return (
-    <div className="text-sm space-y-3">
+    <div className="text-sm font-mono tracking-tight space-y-3">
       {segments.map((segment, i) => {
         if (segment.type === 'code') {
           return (
-            <CodeBlock 
-              key={i} 
-              code={segment.content} 
-              language={segment.language || 'text'} 
+            <CodeBlock
+              key={i}
+              code={segment.content}
+              language={segment.language || 'text'}
             />
           );
         }

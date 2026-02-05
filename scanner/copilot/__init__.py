@@ -9,6 +9,7 @@ from .context_builder import CopilotContextBuilder, CopilotContext
 from .tools import ToolRegistry, Tool, ToolResult
 from .tool_executor import ToolExecutor
 from .llm import CopilotLLM
+from .knowledge import KnowledgeBase, get_knowledge_base
 
 __all__ = [
     'CopilotContextBuilder',
@@ -18,4 +19,6 @@ __all__ = [
     'ToolResult',
     'ToolExecutor',
     'CopilotLLM',
+    'KnowledgeBase',
+    'get_knowledge_base',
 ]

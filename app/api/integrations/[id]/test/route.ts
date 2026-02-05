@@ -102,58 +102,60 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
   }
 
   try {
-    // In production, use snowflake-sdk
-    // For now, simulate a connection test
-    const response = await fetch(`https://${credentials.account}.snowflakecomputing.com/api/v2/statements`, {
+    const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/snowflake`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${Buffer.from(`${credentials.user}:${credentials.password}`).toString('base64')}`,
-        'X-Snowflake-Authorization-Token-Type': 'KEYPAIR_JWT',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        statement: 'SELECT CURRENT_VERSION()',
-        timeout: 10,
-        database: credentials.database,
+        account: credentials.account,
+        user: credentials.user,
+        password: credentials.password,
         warehouse: credentials.warehouse,
+        database: credentials.database,
+        schema: credentials.schema || 'PUBLIC',
+        role: credentials.role || 'PUBLIC',
       }),
+      signal: AbortSignal.timeout(15000),
     });
 
-    if (response.ok) {
-      return { 
-        success: true, 
-        metadata: { 
+    if (testResponse.ok) {
+      const result = await testResponse.json();
+      return {
+        success: true,
+        metadata: {
           account: credentials.account,
           database: credentials.database,
           warehouse: credentials.warehouse,
-        } 
-      };
-    }
-    
-    // For development, assume success if we have credentials
-    if (process.env.NODE_ENV === 'development') {
-      return { 
-        success: true, 
-        metadata: { 
-          account: credentials.account,
-          database: credentials.database,
-          warehouse: credentials.warehouse,
-          tables: ['orders', 'customers', 'products'], // Mock tables
-        } 
+          tables: result.tables,
+        }
       };
     }
 
-    return { success: false, error: 'Connection failed' };
+    // For development, assume success if we have credentials
+    if (process.env.NODE_ENV === 'development') {
+      return {
+        success: true,
+        metadata: {
+          account: credentials.account,
+          database: credentials.database,
+          warehouse: credentials.warehouse,
+          tables: ['orders', 'customers', 'products'],
+        }
+      };
+    }
+
+    const errorData = await testResponse.json().catch(() => ({}));
+    return { success: false, error: errorData.detail || errorData.error || 'Connection failed' };
   } catch (error: any) {
     // For development, simulate success
     if (process.env.NODE_ENV === 'development') {
-      return { 
-        success: true, 
-        metadata: { 
+      return {
+        success: true,
+        metadata: {
           account: credentials.account,
           database: credentials.database,
           warehouse: credentials.warehouse,
-        } 
+        }
       };
     }
     return { success: false, error: error.message };

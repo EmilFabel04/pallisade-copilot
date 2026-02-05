@@ -19,6 +19,7 @@ class ToolCategory(Enum):
     ORCHESTRATION = "orchestration"
     INGESTION = "ingestion"
     REPORTING = "reporting"
+    KNOWLEDGE = "knowledge"
 
 
 @dataclass
@@ -216,10 +217,12 @@ class ToolRegistry:
         
         self._register(Tool(
             name="query_warehouse",
-            description="Execute a read-only SQL query against the warehouse. Only SELECT statements are allowed.",
+            description="Execute a read-only SQL query against the warehouse. Only SELECT statements are allowed. When multiple warehouses are connected, use the 'warehouse' parameter to specify which one to query.",
             category=ToolCategory.WAREHOUSE,
             parameters=[
                 ToolParameter("sql", "string", "The SQL query to execute (SELECT only)"),
+                ToolParameter("warehouse", "string", "Which warehouse to query (e.g. 'bigquery', 'snowflake'). Required when multiple warehouses are connected.", required=False,
+                             enum=["bigquery", "snowflake", "postgres", "redshift"]),
                 ToolParameter("limit", "integer", "Maximum rows to return", required=False, default=100),
             ],
             alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "SQLSERVER", "AZURE_SQL"},
@@ -476,6 +479,40 @@ class ToolRegistry:
                 ToolParameter("model_name", "string", "The LookML model name"),
             ],
             required_integrations={"LOOKER"},
+        ))
+
+        # ==========================================
+        # KNOWLEDGE BASE TOOLS (always available)
+        # ==========================================
+
+        self._register(Tool(
+            name="search_knowledge_base",
+            description=(
+                "Search the Pallisade knowledge base for expert guidance on data pipeline tools, "
+                "troubleshooting, best practices, and comparisons. Use this when the user asks "
+                "about how tools work, how to debug or fix errors, best practices, tool differences, "
+                "or migration advice. Returns curated articles with step-by-step guidance. "
+                "Examples: 'how to fix a dbt test failure', 'snowflake vs bigquery', 'airflow DAG best practices'."
+            ),
+            category=ToolCategory.KNOWLEDGE,
+            parameters=[
+                ToolParameter(
+                    "query", "string",
+                    "Search query describing what the user wants to know about",
+                ),
+                ToolParameter(
+                    "category", "string",
+                    "Optional category filter to narrow results",
+                    required=False,
+                    enum=["troubleshooting", "best_practices", "comparison", "how_to", "architecture", "migration"],
+                ),
+                ToolParameter(
+                    "tool_filter", "string",
+                    "Optional comma-separated tool filter (e.g., 'dbt,snowflake')",
+                    required=False,
+                ),
+            ],
+            # No required_integrations — always available
         ))
     
     def _register(self, tool: Tool) -> None:

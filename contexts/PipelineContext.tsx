@@ -49,15 +49,24 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
     try {
       setError(null);
       const res = await fetch('/api/pipeline');
-      
+
       if (!res.ok) {
-        throw new Error('Failed to fetch pipelines');
+        // Handle specific error codes gracefully without throwing
+        if (res.status === 401) {
+          setError('Please sign in to view pipelines');
+          setPipelines([]);
+          return [];
+        }
+        const errorData = await res.json().catch(() => ({}));
+        setError(errorData.error || 'Failed to load pipelines');
+        setPipelines([]);
+        return [];
       }
-      
+
       const data = await res.json();
       const stackList = data.stacks || [];
       setPipelines(stackList);
-      
+
       // If current selection is invalid, select the first available
       if (stackList.length > 0) {
         const currentStillValid = selectedPipelineId && stackList.some((s: PipelineStack) => s.id === selectedPipelineId);
@@ -65,7 +74,7 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
           // Check localStorage for saved selection
           const saved = localStorage.getItem(STORAGE_KEY);
           const savedValid = saved && stackList.some((s: PipelineStack) => s.id === saved);
-          
+
           if (savedValid) {
             setSelectedPipelineId(saved);
           } else {
@@ -77,11 +86,12 @@ export function PipelineProvider({ children }: { children: ReactNode }) {
       } else {
         setSelectedPipelineId(null);
       }
-      
+
       return stackList;
     } catch (err) {
       console.error('Failed to fetch pipelines:', err);
-      setError('Failed to load pipelines');
+      setError('Failed to load pipelines. Check your connection and try again.');
+      setPipelines([]);
       return [];
     }
   }, [selectedPipelineId]);

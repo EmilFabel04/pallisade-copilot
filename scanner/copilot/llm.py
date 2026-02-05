@@ -95,14 +95,16 @@ class CopilotLLM:
         if self.provider == "anthropic":
             if ANTHROPIC_AVAILABLE:
                 self.anthropic_client = anthropic.Anthropic(
-                    api_key=api_key or os.environ.get("ANTHROPIC_API_KEY")
+                    api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
+                    max_retries=3,
                 )
             else:
                 logger.warning("Anthropic SDK not available")
         elif self.provider == "openai":
             if OPENAI_AVAILABLE:
                 self.openai_client = openai.OpenAI(
-                    api_key=api_key or os.environ.get("OPENAI_API_KEY")
+                    api_key=api_key or os.environ.get("OPENAI_API_KEY"),
+                    max_retries=3,
                 )
             else:
                 logger.warning("OpenAI SDK not available")
@@ -110,59 +112,119 @@ class CopilotLLM:
     def build_system_prompt(self, context: CopilotContext) -> str:
         """
         Build the system prompt with context about the user's stack.
-        
+
         The prompt only includes information about what the user
-        has actually connected.
+        has actually connected. Syntax guidance is warehouse-specific.
         """
-        prompt = """You are an expert data pipeline assistant for Pallisade, a data reliability platform. You help data engineers understand, debug, and optimize their data pipelines.
+        prompt = """You are an expert data pipeline assistant for Pallisade, a data reliability platform.
 
-## Your Capabilities
+## CRITICAL RULES - FOLLOW THESE EXACTLY
 
-You have access to tools that let you:
-- **Query the warehouse directly** using `query_warehouse` - execute SELECT queries to get actual data, counts, timestamps, etc.
-- **Get table statistics** using `get_table_stats` - row counts, size, last updated time
-- Explore data lineage (upstream and downstream dependencies)
-- Search for specific tables, models, or assets
-- Analyze column-level lineage
+1. **NEVER ASK FOR PERMISSION** - Just run queries and give answers. Don't say "Do you want me to run this?" or "Should I execute this?" - JUST DO IT.
 
-## Conversation Context
+2. **ALWAYS RUN THE QUERY** - When you know what query to run, execute it immediately using `query_warehouse`. Don't show the SQL and ask if they want you to run it.
 
-You have access to the full conversation history. Use this to:
-- **Remember what was discussed** - Reference previous queries, tables, or findings without asking the user to repeat themselves
-- **Build on previous analysis** - If you already queried a schema or table, use that information in subsequent responses
-- **Maintain context** - When the user says "that table" or "those results", they mean data from your previous responses
+3. **GIVE DIRECT ANSWERS** - After running a query, state the answer clearly:
+   - GOOD: "The most sold product is StockCode 85123A with 97,894 units sold (from test.transactions)"
+   - BAD: "Here's the query you could run..." or "Do you want me to execute this?"
 
-## Smart Analysis Guidelines
+4. **USE THE SCHEMA PROVIDED** - The exact column names for all tables are listed below. Use ONLY these column names - never guess or assume column names.
 
-1. **ALWAYS GET SCHEMA FIRST**: Before writing ANY query that references columns:
-   - FIRST run: SELECT column_name, data_type FROM `project.dataset.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = 'tablename'
-   - THEN use the actual column names from the result
-   - NEVER guess column names like "product_id" - always verify first!
+5. **NEVER HALLUCINATE COLUMNS** - If you're unsure whether a column exists, check the schema section. If it's not listed, do NOT use it.
 
-2. **BigQuery INFORMATION_SCHEMA syntax** (CRITICAL):
-   - Tables in a dataset: SELECT table_name FROM `project.dataset.INFORMATION_SCHEMA.TABLES`
-   - Columns in a table: SELECT column_name, data_type FROM `project.dataset.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = 'tablename'
-   - List all datasets: SELECT schema_name FROM `project.INFORMATION_SCHEMA.SCHEMATA`
-   - NOTE: The backticks are required! The dataset name goes BEFORE INFORMATION_SCHEMA.
+6. **DO NOT QUERY INFORMATION_SCHEMA** - When the "Database Schema" section below lists tables and columns, that IS your schema. Go straight to writing your data query. Do NOT waste a tool call querying INFORMATION_SCHEMA.
 
-3. **USE THE CONNECTED DATASETS**: The user has connected specific datasets (shown below in "User's Data Stack"). When they refer to "raw dataset", "analytics dataset", etc., they mean the datasets listed in their integrations.
+7. **MATCH DEPTH TO QUESTION COMPLEXITY**:
+   - **Simple data questions** ("how many orders?", "top product?"): ONE tool call with `query_warehouse`, return the answer.
+   - **Investigation / debugging / comparison questions** ("why did this fail?", "are tables the same?", "what's wrong with my data?"): Use AS MANY tool calls as needed. Run multiple queries, check metadata, compare across warehouses, drill into anomalies. Do NOT stop at a surface-level answer.
 
-4. **ALWAYS use warehouse tools first**: When a user asks about their data, use `query_warehouse` to get ACTUAL data. DO NOT ask the user for information you can query yourself.
+8. **USE REAL NAMES, NEVER PLACEHOLDERS** - You have the user's actual integration config, project names, dataset names, model names, and lineage below. ALWAYS use their real names in your answers. NEVER use placeholders like `your_project`, `<project_name>`, `your_dataset`, etc. If the user's BigQuery project is `acme-484520`, write `acme-484520`. If their dbt project is `jaffle_shop`, write `jaffle_shop`. If you need a name you don't have, call the appropriate tool to get it first.
 
-5. **Workflow for answering data questions**:
-   a. First, discover what tables exist: query INFORMATION_SCHEMA.TABLES
-   b. Then, get the schema: query INFORMATION_SCHEMA.COLUMNS for the relevant table
-   c. Finally, write your query using the ACTUAL column names from step b
+9. **ANSWERS MUST BE PIPELINE-SPECIFIC** - When giving code suggestions, config changes, or architecture advice, base it on the user's ACTUAL connected integrations and current configuration. Call `get_dbt_model` or other tools to get the real state before suggesting changes. Your answer should be copy-paste ready with the user's real project names, file paths, table names, and schema names — not generic examples.
 
-6. **Be specific**: Use fully qualified table names with backticks: `project.dataset.table`
+## How to Answer Simple Data Questions
 
-7. **Be concise**: Provide clear, actionable answers.
+1. Look at the schema below to find the right table and columns
+2. Write and EXECUTE the query immediately — ONE tool call, not multiple
+3. Read the results and give a clear, direct answer
+4. Include WHERE the data came from (which table)
+
+## How to Investigate (Debugging, Comparisons, Root Cause Analysis)
+
+When the user asks "why?", "what's wrong?", "compare", "are they the same?", "what happened?", or any question that requires investigation — DO NOT give a shallow answer. Follow this deep-dive workflow:
+
+1. **Gather evidence first**: Run discovery queries to understand the current state. List tables, check row counts, check freshness timestamps, look at recent data.
+2. **Check every warehouse**: If multiple warehouses are connected, query ALL of them. Don't stop at one. Compare tables, schemas, row counts, and data across all connected warehouses.
+3. **Drill into specifics**: After an overview query, run follow-up queries to drill into anomalies. If counts don't match, check which rows differ. If a table is missing, check if it exists under a different name or schema.
+4. **Check metadata**: Query INFORMATION_SCHEMA for table lists, column details, and table creation/modification times when the pre-loaded schema doesn't answer the question.
+5. **Read logs**: Use orchestration tools (`get_airflow_task_logs`, `get_airflow_dag_status`) and ingestion tools (`get_fivetran_sync_logs`, `get_airbyte_sync_history`) to read actual failure logs.
+6. **Chain queries**: Use the results of one query to inform the next. If you find a suspicious table, query its contents. If you find a failed job, get its logs.
+7. **Synthesize findings**: After gathering all evidence, provide a comprehensive answer with: what happened, why it happened, the root cause, and what to do about it.
+
+**You have up to 15 tool calls per conversation. USE THEM for investigations. A thorough answer with 5-8 queries is far better than a shallow answer with 1.**
 
 """
-        
+        # Add warehouse-specific SQL syntax guidance
+        prompt += self._build_warehouse_syntax_section(context)
+
+        prompt += """
+## Tool Selection Guide
+
+- **Simple data questions** ("how many orders?", "top customers"): ONE `query_warehouse` call. Schema is below — go straight to the query.
+- **Investigation / comparison / debugging** ("are my tables the same?", "why did this fail?", "what's wrong with my data?"): MULTIPLE queries across all relevant warehouses. Check table lists, row counts, column schemas, data samples, freshness, logs. Do NOT stop at a surface answer — keep digging until you have the full picture.
+- **Cross-warehouse comparison** ("same tables in Snowflake and BigQuery?"): Query BOTH warehouses — list tables from each, compare names, row counts, and column schemas side by side. Always use the `warehouse` parameter.
+- **Lineage questions** ("what feeds into X?", "what depends on Y?"): Use `get_upstream` or `get_downstream`.
+- **Finding tables** ("do I have a users table?"): Check the schema section below first. Only use `search_lineage` or INFORMATION_SCHEMA if the table isn't listed.
+- **Table health** ("is my data fresh?", "how big is X?"): Use `get_table_stats`.
+- **Impact analysis** ("what breaks if I change X?"): Use `get_downstream` to find all dependents.
+- **dbt questions** ("show me the model SQL", "did my run pass?"): Use `get_dbt_model`, `get_dbt_run_history`, or `get_dbt_test_results`.
+- **Pipeline failures** ("why did my DAG fail?", "what happened last night?"): Use orchestration tools to get the DAG status, then get task logs for the failing task. Read the actual error message. If it's a data issue, run follow-up SQL queries to investigate.
+- **Ingestion status** ("is Fivetran syncing?", "last sync time?"): Use `get_fivetran_connector_status` or `get_airbyte_connection_status`. For failures, also get sync logs.
+- **Code/config suggestions**: FIRST call `get_dbt_model` for relevant models to get their current SQL, schema, database, path, and dependencies. Then give copy-paste ready code using REAL names.
+- **Knowledge/advice questions** ("how does Snowflake differ from BigQuery?", "Kafka best practices"): Use `search_knowledge_base` for curated expert guidance.
+
+## Error Recovery
+
+If a query fails:
+1. **Wrong column name**: Re-read the schema section below. Use ONLY the exact column names listed. Re-run with corrected columns.
+2. **Wrong table name**: Check the schema section for the correct fully qualified table name. Re-run with the corrected name.
+3. **Syntax error**: Check the SQL syntax reminders for this warehouse type. Fix and re-run.
+4. **No results**: Try broadening the query (remove filters, check for NULL values).
+5. **Tool not connected / adapter error**: If a tool returns "not connected" or "not implemented", use `search_knowledge_base` to find expert guidance on the topic. Do NOT tell the user about "technical limitations" — instead provide helpful advice from the knowledge base.
+Do NOT give up after one failed query - fix the issue and retry.
+
+## Response Format
+
+- **Data answers**: "**[Direct answer with numbers]** (from `dataset.table`)"
+- **Lineage answers**: List the nodes with their types and relationships clearly.
+- **Status answers**: State the current status, last run time, and any issues.
+- **Debugging answers**: Identify the root cause and suggest the fix.
+- **Code/config answers**: Provide copy-paste ready code using the user's REAL project names, file paths, dataset names, and current config. Call tools first to get current state.
+
+Keep responses concise. Don't over-explain. Just answer the question.
+NEVER use placeholders like `your_project`, `<your_dataset>`, `your_table`. Use the actual names from the user's integrations and tool results.
+
+"""
+        # Add few-shot examples
+        prompt += self._build_few_shot_examples(context)
+
         # Add context about user's stack
-        prompt += context.to_system_prompt_context()
-        
+        prompt += context.to_system_prompt_context(query=context.query)
+
+        # If warehouse is connected but schema is empty, add discovery instructions
+        if context.has_warehouse() and not context.warehouse_schema:
+            prompt += self._build_schema_discovery_fallback(context)
+
+        # Add knowledge base hints if query matches known topics
+        try:
+            from .knowledge import get_knowledge_base
+            kb = get_knowledge_base()
+            kb_hint = kb.get_context_hints(context.query, context.integration_types)
+            if kb_hint:
+                prompt += kb_hint
+        except Exception:
+            pass  # Knowledge base is optional, don't fail if unavailable
+
         # Add available tools info
         available_tools = context.available_tools
         if available_tools:
@@ -170,9 +232,249 @@ You have access to the full conversation history. Use this to:
             prompt += f"You have access to these tools based on the user's connected integrations: {', '.join(available_tools)}\n"
         else:
             prompt += "\n## Note\n\nNo integrations are currently connected. Guide the user to connect their data tools first.\n"
-        
+
         return prompt
-    
+
+    def _build_warehouse_syntax_section(self, context: CopilotContext) -> str:
+        """Build warehouse-specific SQL syntax guidance for ALL connected warehouses."""
+        sections = []
+
+        if context.has_integration("BIGQUERY"):
+            sections.append("""## SQL Syntax (BigQuery)
+- Use backticks for table names: `project.dataset.table`
+- Use fully qualified names: `project.dataset.table`
+- String comparisons are case-sensitive by default
+- Use FORMAT_TIMESTAMP for date formatting
+- Use SAFE_DIVIDE to avoid division by zero
+- LIMIT goes at the end of the query
+- When using query_warehouse, pass `warehouse: "bigquery"`
+""")
+
+        if context.has_integration("SNOWFLAKE"):
+            sections.append("""## SQL Syntax (Snowflake)
+- Use double quotes for case-sensitive identifiers: "database"."schema"."table"
+- Or use unquoted uppercase: DATABASE.SCHEMA.TABLE
+- String comparisons are case-insensitive by default
+- Use TO_CHAR / TO_TIMESTAMP for date formatting
+- Use TRY_TO_NUMBER, TRY_TO_DATE for safe casts
+- LIMIT goes at the end of the query
+- When using query_warehouse, pass `warehouse: "snowflake"`
+""")
+
+        if context.has_integration("POSTGRES") or context.has_integration("REDSHIFT"):
+            wh_name = "Redshift" if context.has_integration("REDSHIFT") else "PostgreSQL"
+            wh_param = "redshift" if context.has_integration("REDSHIFT") else "postgres"
+            sections.append(f"""## SQL Syntax ({wh_name})
+- Use double quotes for case-sensitive identifiers: "schema"."table"
+- Or use unquoted lowercase: schema.table
+- String comparisons are case-sensitive by default
+- Use TO_CHAR for date formatting
+- Use COALESCE for null handling
+- LIMIT goes at the end of the query
+- When using query_warehouse, pass `warehouse: "{wh_param}"`
+""")
+
+        if context.has_integration("SQLSERVER") or context.has_integration("AZURE_SQL"):
+            sections.append("""## SQL Syntax (SQL Server)
+- Use square brackets for identifiers: [schema].[table]
+- Or use unquoted names: schema.table
+- Use TOP N instead of LIMIT (e.g., SELECT TOP 10 ...)
+- Use CONVERT or FORMAT for date formatting
+- Use ISNULL for null handling
+""")
+
+        if len(sections) > 1:
+            # Multiple warehouses: add a note about targeting
+            header = """## IMPORTANT: Multiple Warehouses Connected
+You have multiple data warehouses connected. When calling `query_warehouse`, you MUST specify the `warehouse` parameter to target the correct one. Use the correct SQL syntax for each warehouse.
+
+"""
+            return header + "\n".join(sections)
+        elif sections:
+            return sections[0] + "\n"
+
+        return ""
+
+    def _build_few_shot_examples(self, context: CopilotContext) -> str:
+        """Build few-shot examples relevant to the user's connected integrations."""
+        examples = "## Examples of Good Interactions\n\n"
+
+        # Extract real names from integrations for examples
+        bq_project = ""
+        bq_dataset = ""
+        sf_db = ""
+        sf_schema = ""
+        for integration in context.integrations:
+            cfg = integration.config
+            if integration.type.upper() == "BIGQUERY":
+                bq_project = cfg.get('project_id') or cfg.get('project', '')
+                ds = cfg.get('datasets', cfg.get('dataset', ''))
+                bq_dataset = ds[0] if isinstance(ds, list) and ds else (ds if isinstance(ds, str) else '')
+            elif integration.type.upper() == "SNOWFLAKE":
+                sf_db = cfg.get('database', '')
+                sf_schema = cfg.get('schema', '') or 'PUBLIC'
+
+        has_bq = context.has_integration("BIGQUERY")
+        has_sf = context.has_integration("SNOWFLAKE")
+        multi_warehouse = has_bq and has_sf
+
+        # Always include a data query example if warehouse is connected
+        if context.has_warehouse():
+            if multi_warehouse:
+                bq_p = bq_project or "my-project"
+                bq_d = bq_dataset or "analytics"
+                sf_d = sf_db or "MY_DB"
+                sf_s = sf_schema or "PUBLIC"
+                examples += f"""### Example 1: Data Question with Multiple Warehouses
+User: "Are the same tables in my Snowflake and BigQuery?"
+Assistant thinking: I have schemas for both warehouses listed below. I should query BOTH to compare tables.
+Action 1: Call `query_warehouse` with `warehouse: "bigquery"` and BigQuery SQL using backticks like `{bq_p}.{bq_d}.<table>`
+Action 2: Call `query_warehouse` with `warehouse: "snowflake"` and Snowflake SQL like {sf_d}.{sf_s}.<TABLE>
+CRITICAL: Always specify the `warehouse` parameter when multiple warehouses are connected.
+
+"""
+            elif has_bq:
+                bq_p = bq_project or "my-project"
+                bq_d = bq_dataset or "analytics"
+                examples += f"""### Example 1: Data Question (ONE tool call only)
+User: "What are my top 5 customers by revenue?"
+Assistant thinking: Schema section below shows the tables and columns in `{bq_d}`. I already have the schema — go straight to query using the EXACT column names listed.
+Action: Call `query_warehouse` with a query using fully qualified names like `{bq_p}.{bq_d}.<table>` and ONLY columns from the schema section.
+WRONG approach: Calling search_lineage or querying INFORMATION_SCHEMA first — that wastes tool calls when schema is already provided.
+Response: Use the REAL table and column names from the schema, never placeholders.
+
+"""
+            elif has_sf:
+                sf_d = sf_db or "MY_DB"
+                sf_s = sf_schema or "PUBLIC"
+                examples += f"""### Example 1: Data Question (ONE tool call only)
+User: "What are my top 5 customers by revenue?"
+Assistant thinking: Schema section below shows tables in {sf_d}.{sf_s}. I already have the schema — go straight to query using EXACT column names.
+Action: Call `query_warehouse` using fully qualified names like {sf_d}.{sf_s}.<TABLE> and ONLY columns from the schema section.
+WRONG approach: Calling search_lineage or querying INFORMATION_SCHEMA first.
+
+"""
+            else:
+                examples += """### Example 1: Data Question (ONE tool call only)
+User: "What are my top 5 customers by revenue?"
+Assistant thinking: Schema section below shows the available tables and columns. Go straight to query.
+Action: Call `query_warehouse` with the appropriate SQL using ONLY exact column names from the schema section.
+WRONG approach: Calling search_lineage or querying INFORMATION_SCHEMA first.
+
+"""
+
+        # Lineage example
+        examples += """### Example 2: Lineage Question
+User: "What tables feed into my fct_orders model?"
+Action: Call `get_upstream` with node_id for fct_orders.
+Response: "**fct_orders has 3 upstream dependencies:**
+- `raw.orders` (source table) - the raw order events
+- `raw.customers` (source table) - customer dimension data
+- `stg_orders` (dbt model) - staging transformation"
+
+"""
+
+        # Investigation / deep-dive example
+        examples += """### Example 3: Investigation / Deep-Dive (MULTIPLE tool calls expected)
+User: "Are my Snowflake tables the same as my BigQuery tables?"
+This requires a thorough investigation. DO NOT just list schema names. Drill into the actual tables.
+Step 1: Query BigQuery for table list — `query_warehouse(sql="SELECT table_name FROM ...", warehouse="bigquery")`
+Step 2: Query Snowflake for table list — `query_warehouse(sql="SELECT TABLE_NAME FROM ...", warehouse="snowflake")`
+Step 3: Compare the results. For each matching table, check row counts in BOTH warehouses.
+Step 4: If counts differ, sample rows to identify the difference.
+Response: "**Yes, both warehouses have the same 8 tables**: customers, orders, transactions, ... BigQuery `raw` has 15,432 rows in `transactions`, Snowflake `PUBLIC` has 15,432 rows — they match exactly."
+WRONG approach: Only querying one warehouse, or only listing schema names like "INFORMATION_SCHEMA and PUBLIC" without looking inside them.
+
+"""
+
+        # Debugging example if orchestrator is connected
+        if context.has_orchestrator():
+            examples += """### Example 4: Debugging a Pipeline Failure (read logs, check data, find root cause)
+User: "Why did my pipeline fail last night?"
+This requires a full investigation. DO NOT give a surface-level answer.
+Step 1: `get_airflow_dag_status(dag_id="daily_etl")` — find which run failed and when
+Step 2: `get_airflow_task_logs(dag_id="daily_etl", task_id="<failing_task>")` — read the actual error message
+Step 3: If the error mentions data issues, run SQL queries to investigate (e.g., check for NULLs, duplicates, missing rows)
+Step 4: If the error mentions upstream issues, check ingestion status with `get_fivetran_connector_status` or `get_airbyte_connection_status`
+Step 5: Synthesize all findings into a root cause analysis.
+Response: "**Your daily_etl DAG failed at 2:15 AM on the `load_orders` task.** The error was: `Duplicate key violation on orders.order_id`. Investigation shows 847 duplicate order_ids were inserted by Fivetran sync at 1:30 AM (connector `orders_source` ran twice due to a retry). **Root cause**: Fivetran double-synced, and the load task doesn't handle duplicates. **Fix**: Add a MERGE/upsert strategy to the load task, or deduplicate in staging."
+
+"""
+
+        # dbt config suggestion example
+        if context.has_integration("DBT_CLOUD") or context.has_integration("DBT_CORE"):
+            examples += """### Example 5: dbt Code/Config Suggestion (ALWAYS use real names)
+User: "How do I change my staging models to write to the analytics dataset instead of dbt_dev_staging?"
+Step 1: Call `get_dbt_model` for a staging model (e.g., `stg_orders`) to get its ACTUAL current config.
+Step 2: Use the REAL values from the tool result — real project name, real schema, real file path, real SQL.
+WRONG: "In your `dbt_project.yml`, under `your_project`..." — NEVER use `your_project` as a placeholder.
+RIGHT: "In your `dbt_project.yml`, under `jaffle_shop`..." — use the ACTUAL project name from the model data.
+The response must include copy-paste ready code with the user's real project name, real paths, and real current SQL.
+
+"""
+
+        # Error recovery example
+        examples += """### Example 6: Recovering From a Query Error
+User: "How many active users do I have?"
+First attempt: query_warehouse with SELECT COUNT(*) FROM users WHERE status = 'active'
+Error: "Column 'status' not found"
+Recovery: Re-check schema - the column is actually called `is_active` (BOOLEAN). Re-run: SELECT COUNT(*) FROM users WHERE is_active = true
+Response: "**You have 12,847 active users** (from `analytics.users`)"
+
+"""
+        return examples
+
+    def _build_schema_discovery_fallback(self, context: CopilotContext) -> str:
+        """
+        When schema pre-fetch fails, instruct the LLM to discover
+        tables and columns via INFORMATION_SCHEMA before querying data.
+        """
+        fallback = """
+## IMPORTANT: Schema Not Pre-loaded
+
+The database schema could not be pre-loaded. You MUST discover table and column names before writing queries.
+
+**Before answering ANY data question, ALWAYS do these two steps first:**
+
+"""
+        if context.has_integration("BIGQUERY"):
+            # Find project from integrations
+            project = ""
+            dataset_hint = ""
+            for integration in context.integrations:
+                if integration.type.upper() == "BIGQUERY":
+                    project = integration.config.get('project') or integration.config.get('project_id', '')
+                    ds = integration.config.get('datasets', [])
+                    if ds:
+                        dataset_hint = ds[0] if isinstance(ds, list) else ds
+                    elif integration.config.get('dataset'):
+                        dataset_hint = integration.config['dataset']
+                    break
+
+            if dataset_hint:
+                fallback += f"""1. **Discover tables**: `SELECT table_name, table_type FROM \\`{project}.{dataset_hint}.INFORMATION_SCHEMA.TABLES\\` WHERE table_type IN ('BASE TABLE', 'VIEW')`
+2. **Discover columns for the relevant table**: `SELECT column_name, data_type FROM \\`{project}.{dataset_hint}.INFORMATION_SCHEMA.COLUMNS\\` WHERE table_name = '<table_name>' ORDER BY ordinal_position`
+"""
+            else:
+                fallback += f"""1. **Discover datasets**: `SELECT schema_name FROM \\`{project}.INFORMATION_SCHEMA.SCHEMATA\\` WHERE schema_name NOT LIKE '%INFORMATION_SCHEMA%'`
+2. **Then discover tables**: `SELECT table_name FROM \\`{project}.<dataset>.INFORMATION_SCHEMA.TABLES\\``
+3. **Then discover columns**: `SELECT column_name, data_type FROM \\`{project}.<dataset>.INFORMATION_SCHEMA.COLUMNS\\` WHERE table_name = '<table>'`
+"""
+        elif context.has_integration("SNOWFLAKE"):
+            fallback += """1. **Discover tables**: `SELECT TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA') LIMIT 50`
+2. **Discover columns for the relevant table**: `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '<TABLE_NAME>' ORDER BY ORDINAL_POSITION`
+"""
+        else:
+            fallback += """1. **Discover tables**: `SELECT table_name, table_type FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema') LIMIT 50`
+2. **Discover columns for the relevant table**: `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '<table_name>' ORDER BY ordinal_position`
+"""
+
+        fallback += """
+**NEVER guess table or column names.** Always run the discovery queries first, read the results, then write your actual data query using only the exact names returned.
+
+"""
+        return fallback
+
     async def chat(
         self,
         messages: List[Message],
@@ -216,19 +518,32 @@ You have access to the full conversation history. Use this to:
                 model=self.model,
             )
         
-        # Build system prompt
+        # Create tool executor first (needs adapters for schema fetch)
+        executor = ToolExecutor(context)
+
+        # Pre-fetch warehouse schema if not already populated
+        if not context.warehouse_schema and context.has_warehouse():
+            try:
+                logger.info("[Anthropic] Pre-fetching warehouse schema...")
+                context.warehouse_schema = await executor.fetch_warehouse_schema()
+                if context.warehouse_schema:
+                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
+                    logger.info(f"[Anthropic] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
+                else:
+                    logger.warning("[Anthropic] Schema pre-fetch returned empty — LLM will have no column info")
+            except Exception as e:
+                logger.error(f"[Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
+
+        # Build system prompt (now includes schema info)
         system = self.build_system_prompt(context)
-        
+
         # Get available tools
         registry = get_tool_registry()
         tools = registry.to_anthropic_tools(context.integration_types)
-        
-        # Create tool executor
-        executor = ToolExecutor(context)
-        
+
         # Convert messages to Anthropic format
         anthropic_messages = self._convert_messages(messages)
-        
+
         # Track total tokens
         total_input_tokens = 0
         total_output_tokens = 0
@@ -342,15 +657,28 @@ You have access to the full conversation history. Use this to:
                 model=self.model,
             )
         
-        # Build system prompt
+        # Create tool executor first (needs adapters for schema fetch)
+        executor = ToolExecutor(context)
+
+        # Pre-fetch warehouse schema if not already populated
+        if not context.warehouse_schema and context.has_warehouse():
+            try:
+                logger.info("[OpenAI] Pre-fetching warehouse schema...")
+                context.warehouse_schema = await executor.fetch_warehouse_schema()
+                if context.warehouse_schema:
+                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
+                    logger.info(f"[OpenAI] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
+                else:
+                    logger.warning("[OpenAI] Schema pre-fetch returned empty — LLM will have no column info")
+            except Exception as e:
+                logger.error(f"[OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
+
+        # Build system prompt (now includes schema info)
         system = self.build_system_prompt(context)
-        
+
         # Get available tools in OpenAI format
         registry = get_tool_registry()
         tools = registry.to_openai_tools(context.integration_types)
-        
-        # Create tool executor
-        executor = ToolExecutor(context)
         
         # Convert messages to OpenAI format
         openai_messages = self._convert_messages_openai(messages, system)
@@ -477,7 +805,7 @@ You have access to the full conversation history. Use this to:
         """Build response when max iterations reached."""
         logger.warning(f"Max tool iterations reached")
         
-        # Try to summarize the results
+        # Try to summarize the results with actual data
         summary_parts = ["Here's what I found from the tool calls:\n"]
         for tc in all_tool_calls:
             result = tc.get("result", {})
@@ -485,12 +813,31 @@ You have access to the full conversation history. Use this to:
                 data = result["data"]
                 if tc["tool"] == "query_warehouse" and "rows" in data:
                     row_count = data.get("row_count", len(data.get("rows", [])))
-                    if row_count == 1 and data["rows"]:
-                        summary_parts.append(f"- Query `{data.get('sql', 'SQL')[:50]}...`: {data['rows'][0]}")
+                    sql_preview = data.get('sql', 'SQL')[:80]
+                    summary_parts.append(f"\n**Query**: `{sql_preview}...`")
+                    summary_parts.append(f"**Results** ({row_count} rows):\n")
+                    
+                    # Include actual row data (up to 10 rows for readability)
+                    rows = data.get("rows", [])
+                    if rows:
+                        # Format as a readable table or list
+                        for i, row in enumerate(rows[:10]):
+                            if isinstance(row, dict):
+                                row_str = ", ".join(f"{k}: {v}" for k, v in row.items())
+                                summary_parts.append(f"  {i+1}. {row_str}")
+                            else:
+                                summary_parts.append(f"  {i+1}. {row}")
+                        if row_count > 10:
+                            summary_parts.append(f"  ... and {row_count - 10} more rows")
                     else:
-                        summary_parts.append(f"- Query returned {row_count} rows")
+                        summary_parts.append("  (no rows returned)")
                 elif tc["tool"] == "get_table_stats" and data:
                     summary_parts.append(f"- Table stats: {data}")
+                elif tc["tool"] == "search_lineage" and data:
+                    nodes = data.get("nodes", [])
+                    summary_parts.append(f"- Found {len(nodes)} matching nodes in lineage")
+                    for node in nodes[:5]:
+                        summary_parts.append(f"  - {node.get('name', 'Unknown')} ({node.get('type', 'unknown')})")
         
         summary = "\n".join(summary_parts) if len(summary_parts) > 1 else "I gathered some information but ran out of iterations. Please try asking a more specific question."
         

@@ -6,7 +6,7 @@ import prisma from '@/lib/db';
 // GET /api/lineage/nodes/[nodeId] - Get specific node with upstream/downstream
 export async function GET(
   request: NextRequest,
-  { params }: { params: { nodeId: string } }
+  { params }: { params: Promise<{ nodeId: string }> }
 ) {
   try {
     const session = await getServerSession(authOptions);
@@ -19,7 +19,7 @@ export async function GET(
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
-    const { nodeId } = params;
+    const { nodeId } = await params;
     const searchParams = request.nextUrl.searchParams;
     const depth = parseInt(searchParams.get('depth') || '2', 10);
 
