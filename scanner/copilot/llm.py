@@ -164,6 +164,10 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 **You have up to 15 tool calls per conversation. USE THEM for investigations. A thorough answer with 5-8 queries is far better than a shallow answer with 1.**
 
 """
+        # Add mode-specific prompt section
+        if context.mode_config and context.mode != "ask":
+            prompt += f"\n{context.mode_config.system_prompt_section}\n"
+
         # Add warehouse-specific SQL syntax guidance
         prompt += self._build_warehouse_syntax_section(context)
 

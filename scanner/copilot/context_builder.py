@@ -161,7 +161,11 @@ class CopilotContext:
     
     # Pre-fetched warehouse schema (tables and columns)
     warehouse_schema: Dict[str, List[TableSchema]] = field(default_factory=dict)  # dataset -> tables
-    
+
+    # Interaction mode
+    mode: str = "ask"
+    mode_config: Optional[Any] = None  # ModeConfig from modes.py
+
     def has_integration(self, integration_type: str) -> bool:
         """Check if a specific integration type is connected."""
         return integration_type.upper() in self.integration_types
@@ -378,18 +382,22 @@ class CopilotContextBuilder:
         query: str = "",
         pipeline_stack_id: Optional[str] = None,
         node_ids: Optional[List[str]] = None,
-        integrations_data: Optional[List[Dict[str, Any]]] = None
+        integrations_data: Optional[List[Dict[str, Any]]] = None,
+        mode: str = "ask",
+        mode_config: Optional[Any] = None,
     ) -> CopilotContext:
         """
         Build the AI context for a given organization.
-        
+
         Args:
             org_id: Organization ID
             query: User's query (used to find relevant nodes)
             pipeline_stack_id: Optional specific pipeline to focus on
             node_ids: Optional specific nodes to focus on
             integrations_data: Optional pre-fetched integrations from frontend
-            
+            mode: Interaction mode (ask, debug, plan, create, etc.)
+            mode_config: Mode configuration from modes.py
+
         Returns:
             CopilotContext with all relevant information
         """
@@ -432,8 +440,10 @@ class CopilotContextBuilder:
             available_tools=available_tools,
             pipeline_stack_id=pipeline_stack_id,
             focused_node_ids=node_ids or [],
+            mode=mode,
+            mode_config=mode_config,
         )
-        
+
         return context
     
     async def _get_integrations(self, org_id: str) -> List[IntegrationInfo]:

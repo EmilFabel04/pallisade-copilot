@@ -14,6 +14,7 @@ from copilot.context_builder import CopilotContextBuilder, CopilotContext
 from copilot.tools import get_tool_registry
 from copilot.llm import CopilotLLM, Message, CopilotResponse
 from copilot.openlineage_consumer import OpenLineageConsumer
+from copilot.modes import get_mode_config, detect_mode, parse_slash_command, get_available_modes
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class ChatRequest(BaseModel):
     pipeline_stack_id: Optional[str] = Field(None, description="Pipeline stack to focus on")
     node_ids: Optional[List[str]] = Field(None, description="Specific nodes to focus on")
     model: str = Field("gpt-4o", description="Model to use: gpt-4o, gpt-4o-mini, gpt-4-turbo, o3-mini, claude-sonnet, claude-opus")
+    mode: str = Field("ask", description="Interaction mode: ask, debug, plan, create, bundle, explain, suggest")
     integrations: Optional[List[IntegrationData]] = Field(None, description="User's pipeline integrations")
 
 
@@ -53,6 +55,7 @@ class ChatResponse(BaseModel):
     """Response from chat endpoint."""
     session_id: str
     message: str
+    mode: str = "ask"
     tool_calls: List[Dict[str, Any]] = []
     input_tokens: int = 0
     output_tokens: int = 0
@@ -98,6 +101,27 @@ async def chat(
     based on what integrations the user has connected.
     """
     try:
+        # Parse slash command from message (e.g., "/debug why did this fail")
+        message = request.message
+        mode = request.mode
+
+        slash_mode, remaining_message = parse_slash_command(message)
+        if slash_mode:
+            mode = slash_mode.value
+            message = remaining_message
+            logger.info(f"Parsed slash command: mode={mode}")
+
+        # Auto-detect mode if still using default 'ask'
+        if mode == "ask":
+            detected = detect_mode(message)
+            if detected:
+                mode = detected.value
+                logger.info(f"Auto-detected mode: {mode}")
+
+        # Get mode configuration
+        mode_config = get_mode_config(mode)
+        logger.info(f"Using mode: {mode} ({mode_config.display_name})")
+
         # Convert integrations from request to IntegrationInfo objects
         integration_data = None
         if request.integrations:
@@ -115,15 +139,17 @@ async def chat(
             logger.info(f"Received integrations: {[{'type': i['type'], 'status': i['status']} for i in integration_data]}")
         else:
             logger.warning("No integrations received in chat request")
-        
-        # Build context
+
+        # Build context with mode
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
             org_id=x_organization_id,
-            query=request.message,
+            query=message,
             pipeline_stack_id=request.pipeline_stack_id,
             node_ids=request.node_ids,
             integrations_data=integration_data,
+            mode=mode,
+            mode_config=mode_config,
         )
         
         # Log the context
@@ -154,6 +180,7 @@ async def chat(
         return ChatResponse(
             session_id=session_id,
             message=response.content,
+            mode=mode,
             tool_calls=response.tool_calls,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
@@ -258,6 +285,16 @@ async def get_available_tools(
     except Exception as e:
         logger.exception("Error getting tools")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/modes")
+async def get_modes():
+    """
+    Get available interaction modes.
+
+    Returns the list of modes with their display info.
+    """
+    return {"modes": get_available_modes()}
 
 
 @router.post("/openlineage/events")

@@ -23,13 +23,14 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { 
-      message, 
-      sessionId, 
-      pipeline_stack_id, 
+    const {
+      message,
+      sessionId,
+      pipeline_stack_id,
       pipelineStackId, // Support both formats
-      node_ids, 
-      model = 'claude-sonnet' 
+      node_ids,
+      model = 'claude-sonnet',
+      mode = 'ask',
     } = body;
     
     const effectivePipelineStackId = pipelineStackId || pipeline_stack_id;
@@ -146,6 +147,7 @@ export async function POST(request: Request) {
         pipeline_stack_id: pipeline_stack_id || pipelineStack?.id,
         node_ids,
         model,
+        mode, // Interaction mode (ask, debug, plan, create, etc.)
         integrations, // Pass integrations from pipeline nodes
       }),
     });
@@ -154,6 +156,7 @@ export async function POST(request: Request) {
     let toolCalls: any[] = [];
     let inputTokens = 0;
     let outputTokens = 0;
+    let responseMode = mode;
 
     if (!response.ok) {
       // If scanner API is not available, return a helpful message
@@ -166,6 +169,7 @@ export async function POST(request: Request) {
       toolCalls = data.tool_calls || [];
       inputTokens = data.input_tokens || 0;
       outputTokens = data.output_tokens || 0;
+      responseMode = data.mode || mode;
     }
 
     // Save AI response to database
@@ -211,6 +215,7 @@ export async function POST(request: Request) {
       sessionId: chatSession.id,
       message: aiContent,
       messageId: aiMessage.id,
+      mode: responseMode,
       tool_calls: toolCalls,
       input_tokens: inputTokens,
       output_tokens: outputTokens,
