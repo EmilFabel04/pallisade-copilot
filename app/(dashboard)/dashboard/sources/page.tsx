@@ -42,6 +42,7 @@ interface SourceData {
   source?: string;
   connected?: boolean;
   error?: string;
+  message?: string; // Helpful message explaining the status
   fetchedAt?: number;
 }
 
@@ -115,6 +116,7 @@ export default function SourcesPage() {
           datasets: data.datasets || [],
           source: data.source,
           connected: data.connected,
+          message: data.message,
           fetchedAt: Date.now(),
         };
         setNodeData((prev) => {
@@ -486,13 +488,33 @@ export default function SourcesPage() {
                     <h2 className="text-lg font-medium text-white">{selectedNodeObj.name}</h2>
                     {getStatusIndicator(selectedNodeObj.status)}
                     {currentData?.source === 'demo' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400" title="Scanner service unavailable - showing sample data">
                         Demo Data
                       </span>
                     )}
                     {currentData?.source === 'live' && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400">
                         Live
+                      </span>
+                    )}
+                    {currentData?.source === 'unconfigured' && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400">
+                        Not Configured
+                      </span>
+                    )}
+                    {currentData?.source === 'disconnected' && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-gray-500/10 text-gray-400">
+                        Disconnected
+                      </span>
+                    )}
+                    {currentData?.source === 'misconfigured' && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400">
+                        Configuration Error
+                      </span>
+                    )}
+                    {currentData?.source === 'error' && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400">
+                        Connection Error
                       </span>
                     )}
                   </div>
@@ -539,6 +561,26 @@ export default function SourcesPage() {
                       {ds}
                     </span>
                   ))}
+                </div>
+              )}
+
+              {/* Status message banner */}
+              {currentData?.message && currentData.source !== 'live' && (
+                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-3 text-[12px] ${
+                  currentData.source === 'demo' ? 'bg-amber-500/10 text-amber-300' :
+                  currentData.source === 'unconfigured' ? 'bg-blue-500/10 text-blue-300' :
+                  currentData.source === 'disconnected' ? 'bg-gray-500/10 text-gray-300' :
+                  'bg-red-500/10 text-red-300'
+                }`}>
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>{currentData.message}</span>
+                  {currentData.source === 'unconfigured' && (
+                    <Link href="/dashboard/pipeline" className="ml-auto underline hover:no-underline">
+                      Configure
+                    </Link>
+                  )}
                 </div>
               )}
 

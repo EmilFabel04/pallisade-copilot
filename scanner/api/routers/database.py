@@ -60,45 +60,85 @@ async def get_tables(config: ConnectionConfig) -> Dict[str, Any]:
         if connection_type == 'bigquery':
             return await get_bigquery_tables(conn_config)
         
-        # Handle other databases
+        # Handle other databases (Snowflake, Postgres, Redshift, SQL Server)
         adapter = get_adapter(connection_type, conn_config)
-        
+
         if not adapter.connect():
             return {"success": False, "tables": [], "error": "Failed to connect to database"}
-        
+
         try:
-            # Get schemas/databases
+            # Get schemas to scan
             schemas = conn_config.get('schemas', [])
-            if not schemas:
-                schemas = ['public']  # Default for Postgres-like DBs
-            
-            all_tables = []
             database = conn_config.get('database', '')
-            
-            for schema in schemas:
-                tables = adapter.get_tables(schema=schema)
-                for table in tables:
-                    # Parse table name
-                    parts = table.split('.') if isinstance(table, str) else [table.get('name', '')]
-                    table_name = parts[-1] if parts else table
-                    
-                    # Get metadata if possible
+
+            # If no schemas specified, discover or use defaults
+            if not schemas:
+                if connection_type == 'snowflake':
+                    # Snowflake: discover schemas or default to PUBLIC (uppercase!)
                     try:
-                        metadata = adapter.get_table_metadata(table)
-                        all_tables.append({
-                            "name": table_name,
-                            "schema": schema,
-                            "database": database,
-                            "columns": len(metadata.columns) if metadata.columns else None,
-                            "rowCount": metadata.row_count,
-                        })
-                    except Exception:
-                        all_tables.append({
-                            "name": table_name,
-                            "schema": schema,
-                            "database": database,
-                        })
-            
+                        result = adapter.execute_query(
+                            f"SELECT SCHEMA_NAME FROM {database}.INFORMATION_SCHEMA.SCHEMATA "
+                            "WHERE SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA') "
+                            "ORDER BY SCHEMA_NAME"
+                        )
+                        schemas = [r.get('SCHEMA_NAME') for r in result if r.get('SCHEMA_NAME')]
+                        if not schemas:
+                            schemas = ['PUBLIC']
+                        logger.info(f"Discovered Snowflake schemas: {schemas}")
+                    except Exception as e:
+                        logger.warning(f"Could not discover schemas, using PUBLIC: {e}")
+                        schemas = ['PUBLIC']
+                else:
+                    # Default for Postgres-like DBs
+                    schemas = ['public']
+
+            all_tables = []
+
+            for schema in schemas:
+                try:
+                    tables = adapter.get_tables(schema=schema)
+                    logger.info(f"Found {len(tables)} tables in schema {schema}")
+
+                    for table in tables:
+                        # Parse fully qualified table name (db.schema.table)
+                        if isinstance(table, str):
+                            parts = table.split('.')
+                            if len(parts) >= 3:
+                                table_name = parts[-1]
+                                table_schema = parts[-2]
+                            elif len(parts) == 2:
+                                table_name = parts[-1]
+                                table_schema = parts[0]
+                            else:
+                                table_name = parts[0]
+                                table_schema = schema
+                        else:
+                            table_name = table.get('name', str(table))
+                            table_schema = schema
+
+                        # Get metadata if possible
+                        try:
+                            metadata = adapter.get_table_metadata(table)
+                            all_tables.append({
+                                "name": table_name,
+                                "schema": table_schema,
+                                "database": database,
+                                "columns": len(metadata.columns) if metadata.columns else None,
+                                "rowCount": metadata.row_count,
+                                "type": getattr(metadata, 'table_type', 'TABLE'),
+                            })
+                        except Exception as meta_err:
+                            logger.warning(f"Could not get metadata for {table}: {meta_err}")
+                            all_tables.append({
+                                "name": table_name,
+                                "schema": table_schema,
+                                "database": database,
+                            })
+                except Exception as schema_err:
+                    logger.error(f"Error scanning schema {schema}: {schema_err}")
+
+            logger.info(f"Total tables found: {len(all_tables)}")
+
             return {
                 "success": True,
                 "tables": all_tables,

@@ -46,20 +46,35 @@ export async function GET(
       return NextResponse.json({ error: 'Node not found' }, { status: 404 });
     }
 
-    // Decrypt credentials from node config
+    // Get credentials from node config
     let credentials: Record<string, any> = {};
     if (node.config) {
       try {
         const configJson = node.config as { encrypted?: string; [key: string]: any };
         if (configJson.encrypted) {
+          // Decrypt if credentials are encrypted
           const decrypted = decrypt(configJson.encrypted);
           credentials = JSON.parse(decrypted);
         } else {
+          // Config is stored directly (not encrypted)
           credentials = configJson;
         }
       } catch (e) {
-        console.error('[NODE DATA] Credentials decryption failed:', e);
+        console.error('[NODE DATA] Credentials parsing failed:', e);
       }
+    }
+
+    // Check if node has been configured
+    if (!node.config || Object.keys(credentials).length === 0) {
+      console.log(`[NODE DATA] Node ${nodeId} (${node.toolType}) has no configuration`);
+      return NextResponse.json({
+        tables: [],
+        models: [],
+        connectors: [],
+        source: 'unconfigured',
+        connected: false,
+        message: 'Node not configured. Please add credentials in the pipeline editor.',
+      });
     }
 
     // Handle different node types
@@ -85,11 +100,13 @@ export async function GET(
 async function getWarehouseData(node: any, credentials: Record<string, any>) {
   // Check connection status
   if (node.status !== 'CONNECTED' && node.status !== 'ACTIVE' && node.status !== 'HEALTHY') {
-    // Return empty data for disconnected nodes instead of error
-    return NextResponse.json({ 
+    console.log(`[WAREHOUSE] Node ${node.id} not connected. Status: ${node.status}`);
+    return NextResponse.json({
       tables: [],
       status: node.status,
       connected: false,
+      source: 'disconnected',
+      message: `Node status is ${node.status}. Test the connection first.`,
     });
   }
 
@@ -104,24 +121,63 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
 
   const connectionType = connectionTypeMap[node.toolType] || node.toolType;
 
+  // Validate required credentials for each warehouse type
+  if (connectionType === 'bigquery' && !credentials.project_id) {
+    console.log('[WAREHOUSE] BigQuery missing project_id');
+    return NextResponse.json({
+      tables: [],
+      connected: false,
+      source: 'misconfigured',
+      message: 'BigQuery requires project_id to be configured.',
+    });
+  }
+
+  if (connectionType === 'snowflake' && (!credentials.account || !credentials.database)) {
+    console.log('[WAREHOUSE] Snowflake missing account or database');
+    return NextResponse.json({
+      tables: [],
+      connected: false,
+      source: 'misconfigured',
+      message: 'Snowflake requires account and database to be configured.',
+    });
+  }
+
+  // Map frontend field names to scanner expected names
+  const scannerCredentials = { ...credentials };
+
+  // Snowflake: frontend uses 'username', scanner expects 'user'
+  if (connectionType === 'snowflake' && credentials.username && !credentials.user) {
+    scannerCredentials.user = credentials.username;
+  }
+
+  // Postgres/Redshift: frontend uses 'username', scanner expects 'user'
+  if ((connectionType === 'postgres' || connectionType === 'redshift') && credentials.username && !credentials.user) {
+    scannerCredentials.user = credentials.username;
+  }
+
+  // SQL Server: frontend uses 'server', scanner expects 'host'
+  if (connectionType === 'sqlserver' && credentials.server && !credentials.host) {
+    scannerCredentials.host = credentials.server;
+  }
+
   // Try to fetch tables from scanner backend
   try {
     console.log(`[WAREHOUSE] Fetching tables from scanner: ${SCANNER_API_URL}/api/v1/tables`);
-    console.log(`[WAREHOUSE] Connection type: ${connectionType}, project_id: ${credentials.project_id}, datasets: ${credentials.datasets}`);
-    
+    console.log(`[WAREHOUSE] Connection type: ${connectionType}, project_id: ${scannerCredentials.project_id}, datasets: ${scannerCredentials.datasets}`);
+
     const response = await fetch(`${SCANNER_API_URL}/api/v1/tables`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         connection_type: connectionType,
-        connection_config: credentials,
+        connection_config: scannerCredentials,
       }),
       signal: AbortSignal.timeout(30000), // Increased timeout for BigQuery
     });
-    
+
     const data = await response.json();
     console.log(`[WAREHOUSE] Scanner response: success=${data.success}, tables=${data.tables?.length || 0}`);
-    
+
     if (data.success && data.tables) {
       // Scanner already returns properly formatted TableInfo objects
       return NextResponse.json({
@@ -133,16 +189,27 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
       });
     } else if (data.error) {
       console.log(`[WAREHOUSE] Scanner returned error: ${data.error}`);
+      // Return the error but still show something
+      return NextResponse.json({
+        tables: [],
+        error: data.error,
+        source: 'error',
+        connected: false,
+        message: `Failed to fetch tables: ${data.error}`,
+      });
     }
   } catch (err: any) {
     console.log(`[WAREHOUSE] Scanner not available: ${err.message}`);
+    // Fall through to demo data
   }
+
+  console.log(`[WAREHOUSE] Falling back to demo data for ${node.toolType}`);
 
   // Generate demo tables based on tool type
   if (node.toolType === 'bigquery') {
     return generateBigQueryDemoData(credentials);
   }
-  
+
   return generateGenericWarehouseDemoData(credentials);
 }
 

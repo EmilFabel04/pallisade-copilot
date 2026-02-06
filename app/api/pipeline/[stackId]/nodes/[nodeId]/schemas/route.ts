@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 // POST /api/pipeline/[stackId]/nodes/[nodeId]/schemas - Get available schemas (Snowflake, Postgres)
 export async function POST(

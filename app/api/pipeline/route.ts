@@ -1,6 +1,6 @@
 /**
  * Pipeline API
- * 
+ *
  * GET - Fetch user's pipeline stack
  * POST - Save pipeline stack
  */
@@ -9,6 +9,38 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { encrypt, decrypt } from '@/lib/crypto';
+
+// Helper to encrypt node config for secure storage
+function encryptNodeConfig(config: Record<string, any> | null | undefined): Record<string, any> | undefined {
+  if (!config || Object.keys(config).length === 0) {
+    return undefined;
+  }
+  try {
+    const encrypted = encrypt(JSON.stringify(config));
+    return { encrypted };
+  } catch (e) {
+    console.error('[PIPELINE] Failed to encrypt config:', e);
+    // Fall back to storing unencrypted (not ideal but prevents data loss)
+    return config;
+  }
+}
+
+// Helper to decrypt node config when returning to frontend
+function decryptNodeConfig(config: any): Record<string, any> | null {
+  if (!config) return null;
+  try {
+    if (config.encrypted) {
+      const decrypted = decrypt(config.encrypted);
+      return JSON.parse(decrypted);
+    }
+    // Config is not encrypted (legacy data), return as-is
+    return config as Record<string, any>;
+  } catch (e) {
+    console.error('[PIPELINE] Failed to decrypt config:', e);
+    return null;
+  }
+}
 
 // GET - Fetch the user's pipeline stack(s)
 export async function GET(request: NextRequest) {
@@ -124,7 +156,7 @@ export async function GET(request: NextRequest) {
           name: node.name,
           layer: node.layer,
           toolType: node.toolType,
-          config: node.config,
+          config: decryptNodeConfig(node.config),
           positionX: node.positionX,
           positionY: node.positionY,
           status: node.status,
@@ -193,7 +225,7 @@ export async function POST(request: NextRequest) {
                 name: node.name,
                 layer: node.layer,
                 toolType: node.toolType,
-                config: node.config,
+                config: encryptNodeConfig(node.config),
                 positionX: node.positionX,
                 positionY: node.positionY,
                 status: node.status,
@@ -271,7 +303,7 @@ export async function POST(request: NextRequest) {
               name: node.name,
               layer: node.layer,
               toolType: node.toolType,
-              config: node.config,
+              config: encryptNodeConfig(node.config),
               positionX: node.positionX,
               positionY: node.positionY,
               status: node.status,
@@ -285,7 +317,7 @@ export async function POST(request: NextRequest) {
               name: node.name,
               layer: node.layer,
               toolType: node.toolType,
-              config: node.config,
+              config: encryptNodeConfig(node.config),
               positionX: node.positionX,
               positionY: node.positionY,
               status: node.status,
