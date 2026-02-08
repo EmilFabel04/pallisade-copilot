@@ -94,6 +94,7 @@ class IntegrationLayer(Enum):
     TRANSFORMATION = "transformation"
     WAREHOUSE = "warehouse"
     REPORTING = "reporting"
+    OBSERVABILITY = "observability"
 
 
 @dataclass
@@ -188,6 +189,11 @@ class CopilotContext:
         """Check if any ingestion tool is connected."""
         ingestion_types = {"FIVETRAN", "AIRBYTE", "STITCH"}
         return bool(self.integration_types & ingestion_types)
+
+    def has_observability(self) -> bool:
+        """Check if any data observability tool is connected."""
+        observability_types = {"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"}
+        return bool(self.integration_types & observability_types)
     
     def get_integrations_by_layer(self, layer: IntegrationLayer) -> List[IntegrationInfo]:
         """Get all integrations for a specific layer."""
@@ -370,6 +376,11 @@ class CopilotContextBuilder:
         "LOOKER": IntegrationLayer.REPORTING,
         "POWERBI": IntegrationLayer.REPORTING,
         "METABASE": IntegrationLayer.REPORTING,
+        # Observability
+        "MONTE_CARLO": IntegrationLayer.OBSERVABILITY,
+        "BIGEYE": IntegrationLayer.OBSERVABILITY,
+        "SODA": IntegrationLayer.OBSERVABILITY,
+        "ELEMENTARY": IntegrationLayer.OBSERVABILITY,
     }
     
     def __init__(self, db_session=None):
@@ -683,5 +694,16 @@ class CopilotContextBuilder:
                 "get_looker_dashboard_status",
                 "get_looker_model_info",
             ])
-        
+
+        # Observability tools (Monte Carlo, Bigeye, Soda, Elementary)
+        observability_types = {"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"}
+        if integration_types & observability_types:
+            tools.extend([
+                "get_active_incidents",
+                "get_asset_quality",
+                "trace_incident_root_cause",
+                "get_quality_checks",
+                "get_incident_details",
+            ])
+
         return tools

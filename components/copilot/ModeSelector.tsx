@@ -18,6 +18,7 @@ export const MODES: Mode[] = [
   { id: 'bundle', name: 'Bundle', description: 'Package deliverables', icon: 'package', color: 'orange' },
   { id: 'explain', name: 'Explain', description: 'Deep understanding', icon: 'book-open', color: 'cyan' },
   { id: 'suggest', name: 'Suggest', description: 'Improvements', icon: 'lightbulb', color: 'yellow' },
+  { id: 'fix', name: 'Fix', description: 'Apply validated fixes', icon: 'wrench', color: 'emerald' },
 ];
 
 // Using CSS variables and rgba for colors to avoid Tailwind purge issues
@@ -29,6 +30,7 @@ const MODE_COLORS: Record<string, { bg: string; text: string; border: string }> 
   orange: { bg: 'rgba(249, 115, 22, 0.2)', text: '#fb923c', border: 'rgba(249, 115, 22, 0.3)' },
   cyan: { bg: 'rgba(6, 182, 212, 0.2)', text: '#22d3ee', border: 'rgba(6, 182, 212, 0.3)' },
   yellow: { bg: 'rgba(234, 179, 8, 0.2)', text: '#fbbf24', border: 'rgba(234, 179, 8, 0.3)' },
+  emerald: { bg: 'rgba(16, 185, 129, 0.2)', text: '#34d399', border: 'rgba(16, 185, 129, 0.3)' },
 };
 
 const MODE_ICONS: Record<string, React.ReactNode> = {
@@ -65,6 +67,11 @@ const MODE_ICONS: Record<string, React.ReactNode> = {
   lightbulb: (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
+    </svg>
+  ),
+  wrench: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z" />
     </svg>
   ),
 };
@@ -170,6 +177,7 @@ export function getModeFromSlashCommand(message: string): { mode: string; messag
     '/bundle': 'bundle',
     '/explain': 'explain',
     '/suggest': 'suggest',
+    '/fix': 'fix',
   };
 
   for (const [cmd, mode] of Object.entries(commands)) {

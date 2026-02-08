@@ -92,7 +92,10 @@ export default function SettingsPage() {
                   <p className="text-[12px] text-white/40">Choose the default model for new chats</p>
                 </div>
                 <select className="px-4 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-white/[0.15]">
-                  <option value="claude-sonnet">Claude Sonnet (Fast)</option>
+                  <option value="gpt-5.2">GPT-5.2 (Recommended)</option>
+                  <option value="gpt-5.2-mini">GPT-5.2 Mini (Fast)</option>
+                  <option value="claude-sonnet">Claude Sonnet</option>
+                  <option value="claude-haiku">Claude Haiku (Fast)</option>
                   <option value="claude-opus">Claude Opus (Powerful)</option>
                 </select>
               </div>

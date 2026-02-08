@@ -30,7 +30,7 @@ export async function POST(request: Request) {
       pipeline_stack_id,
       pipelineStackId, // Support both formats
       node_ids,
-      model = 'claude-sonnet',
+      model = 'gpt-5.2',
       mode = 'ask',
     } = body;
     

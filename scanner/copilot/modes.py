@@ -20,6 +20,7 @@ class InteractionMode(Enum):
     BUNDLE = "bundle"
     EXPLAIN = "explain"
     SUGGEST = "suggest"
+    FIX = "fix"
 
 
 @dataclass
@@ -243,6 +244,63 @@ What to monitor for pipeline health.
 **Important:** Base suggestions on actual evidence from their pipeline, not generic advice.
 """
 
+FIX_PROMPT = """
+## FIX MODE ACTIVE
+
+You are generating a structured fix for a data pipeline issue. Your goal is to create a ChangePlan that can be validated and applied via GitHub PR.
+
+**Fix Generation Process:**
+1. Analyze the root cause (from DEBUG mode or user description)
+2. Identify affected files and required changes
+3. Generate complete, production-ready patches
+4. Assess impact and risk
+5. Submit via create_change_plan tool
+
+**Required Output Structure:**
+
+### 1. Root Cause Summary
+One paragraph explaining the underlying issue based on your investigation.
+
+### 2. Proposed Changes
+For each file that needs modification:
+- **File:** `path/to/file.sql` (or .yml, .py)
+- **Change Type:** SQL_MODEL | YAML_CONFIG | PYTHON_SCRIPT | ORCHESTRATION
+- **Rationale:** Why this change fixes the issue
+
+**Before** (relevant section only):
+```sql
+-- original code
+```
+
+**After**:
+```sql
+-- fixed code
+```
+
+### 3. Impact Analysis
+- **Affected Tables:** List tables that will be modified
+- **Downstream:** What depends on these tables
+- **Risk Level:** LOW / MEDIUM / HIGH
+- **Expected Data Changes:** Brief description
+
+### 4. Validation Plan
+What validations should be run:
+- [ ] Static: Syntax and lint checks
+- [ ] CI: dbt compile, run affected tests
+- [ ] Sandbox: Shadow run comparison (optional)
+
+### 5. Rollback Steps
+Numbered list of steps to undo if issues arise after deployment.
+
+**After drafting your plan, call the `create_change_plan` tool to submit it for validation.**
+
+**Important Rules:**
+- Changes must be complete and production-ready - no TODOs or placeholders
+- Follow existing code patterns and naming conventions
+- Include rollback steps for every change
+- Prefer minimal, targeted fixes over broad refactoring
+"""
+
 
 # Mode configurations
 MODES: Dict[InteractionMode, ModeConfig] = {
@@ -415,6 +473,38 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             r"optimize",
         ],
     ),
+
+    InteractionMode.FIX: ModeConfig(
+        mode=InteractionMode.FIX,
+        display_name="Fix",
+        description="Generate validated fixes for pipeline issues",
+        icon="wrench",
+        color="emerald",
+        system_prompt_section=FIX_PROMPT,
+        preferred_tools=[
+            "query_warehouse",
+            "get_dbt_model",
+            "get_upstream",
+            "get_downstream",
+            "get_active_incidents",
+            "create_change_plan",
+            "validate_change_plan",
+        ],
+        exclusive_tools=[
+            "create_change_plan",
+            "validate_change_plan",
+            "apply_change_plan",
+        ],
+        auto_detect_patterns=[
+            r"fix (?:the|this|my)",
+            r"apply (?:a|the) fix",
+            r"create a fix",
+            r"generate (?:a|the) fix",
+            r"patch (?:the|this)",
+            r"repair (?:the|this)",
+            r"correct (?:the|this)",
+        ],
+    ),
 }
 
 
@@ -460,6 +550,7 @@ def parse_slash_command(message: str) -> tuple[Optional[InteractionMode], str]:
         "/bundle": InteractionMode.BUNDLE,
         "/explain": InteractionMode.EXPLAIN,
         "/suggest": InteractionMode.SUGGEST,
+        "/fix": InteractionMode.FIX,
     }
 
     for cmd, mode in slash_commands.items():

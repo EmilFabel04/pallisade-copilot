@@ -20,6 +20,8 @@ class ToolCategory(Enum):
     INGESTION = "ingestion"
     REPORTING = "reporting"
     KNOWLEDGE = "knowledge"
+    OBSERVABILITY = "observability"
+    CHANGE_PLAN = "change_plan"
 
 
 @dataclass
@@ -31,6 +33,7 @@ class ToolParameter:
     required: bool = True
     default: Any = None
     enum: Optional[List[str]] = None
+    items: Optional[Dict[str, Any]] = None  # For array types: schema of array items
 
 
 @dataclass
@@ -55,7 +58,7 @@ class Tool:
         """Convert to Anthropic tool format."""
         properties = {}
         required = []
-        
+
         for param in self.parameters:
             prop = {
                 "type": param.type,
@@ -63,11 +66,13 @@ class Tool:
             }
             if param.enum:
                 prop["enum"] = param.enum
+            if param.type == "array" and param.items:
+                prop["items"] = param.items
             properties[param.name] = prop
-            
+
             if param.required:
                 required.append(param.name)
-        
+
         return {
             "name": self.name,
             "description": self.description,
@@ -77,12 +82,12 @@ class Tool:
                 "required": required,
             }
         }
-    
+
     def to_openai_tool(self) -> Dict[str, Any]:
         """Convert to OpenAI tool format."""
         properties = {}
         required = []
-        
+
         for param in self.parameters:
             prop = {
                 "type": param.type,
@@ -90,11 +95,13 @@ class Tool:
             }
             if param.enum:
                 prop["enum"] = param.enum
+            if param.type == "array" and param.items:
+                prop["items"] = param.items
             properties[param.name] = prop
-            
+
             if param.required:
                 required.append(param.name)
-        
+
         return {
             "type": "function",
             "function": {
@@ -513,6 +520,243 @@ class ToolRegistry:
                 ),
             ],
             # No required_integrations — always available
+        ))
+
+        # ==========================================
+        # OBSERVABILITY TOOLS (Monte Carlo, Bigeye, Soda, Elementary)
+        # ==========================================
+
+        self._register(Tool(
+            name="get_active_incidents",
+            description=(
+                "Get active data quality incidents from connected observability tools. "
+                "Returns freshness violations, volume anomalies, schema changes, and quality issues. "
+                "Use this as a first step when debugging data quality problems."
+            ),
+            category=ToolCategory.OBSERVABILITY,
+            parameters=[
+                ToolParameter(
+                    "severity", "string",
+                    "Filter by severity level",
+                    required=False,
+                    enum=["critical", "high", "medium", "low", "info"],
+                ),
+                ToolParameter(
+                    "asset", "string",
+                    "Filter by asset name pattern (e.g., 'mydb.myschema.%')",
+                    required=False,
+                ),
+                ToolParameter(
+                    "limit", "integer",
+                    "Maximum incidents to return",
+                    required=False,
+                    default=20,
+                ),
+            ],
+            alternative_integrations={"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"},
+        ))
+
+        self._register(Tool(
+            name="get_asset_quality",
+            description=(
+                "Get data quality health status for a specific table or model. "
+                "Returns health score, active incidents, check pass rate, freshness, and volume status. "
+                "Use this to understand the overall quality state of an asset."
+            ),
+            category=ToolCategory.OBSERVABILITY,
+            parameters=[
+                ToolParameter(
+                    "asset_name", "string",
+                    "The fully qualified name of the asset (e.g., 'database.schema.table')",
+                ),
+            ],
+            alternative_integrations={"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"},
+        ))
+
+        self._register(Tool(
+            name="trace_incident_root_cause",
+            description=(
+                "Trace a data quality incident upstream through lineage to find the root cause. "
+                "Checks upstream tables for related incidents that might have caused the downstream issue. "
+                "Useful when a table is stale or has quality issues due to upstream problems."
+            ),
+            category=ToolCategory.OBSERVABILITY,
+            parameters=[
+                ToolParameter(
+                    "incident_id", "string",
+                    "The ID of the incident to trace (from get_active_incidents)",
+                    required=False,
+                ),
+                ToolParameter(
+                    "asset_name", "string",
+                    "The asset to check for upstream issues (alternative to incident_id)",
+                    required=False,
+                ),
+                ToolParameter(
+                    "depth", "integer",
+                    "How many levels upstream to search",
+                    required=False,
+                    default=3,
+                ),
+            ],
+            alternative_integrations={"MONTE_CARLO", "BIGEYE", "ELEMENTARY"},
+        ))
+
+        self._register(Tool(
+            name="get_quality_checks",
+            description=(
+                "Get data quality checks/monitors configured for an asset. "
+                "Shows what monitoring is in place, thresholds, and current status. "
+                "Useful to understand what quality gates exist for a table."
+            ),
+            category=ToolCategory.OBSERVABILITY,
+            parameters=[
+                ToolParameter(
+                    "asset_name", "string",
+                    "The fully qualified name of the asset",
+                ),
+            ],
+            alternative_integrations={"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"},
+        ))
+
+        self._register(Tool(
+            name="get_incident_details",
+            description=(
+                "Get detailed information about a specific data quality incident. "
+                "Returns full context including expected/actual values, affected assets, and timeline."
+            ),
+            category=ToolCategory.OBSERVABILITY,
+            parameters=[
+                ToolParameter(
+                    "incident_id", "string",
+                    "The ID of the incident to get details for",
+                ),
+            ],
+            alternative_integrations={"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"},
+        ))
+
+        # ==========================================
+        # CHANGE PLAN TOOLS (Fix Mode)
+        # ==========================================
+
+        self._register(Tool(
+            name="create_change_plan",
+            description=(
+                "Create a structured change plan with patches for fixing data pipeline issues. "
+                "The plan includes file patches, rationale, impact analysis, and rollback steps. "
+                "After creation, the plan can be validated and applied via GitHub PR."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[
+                ToolParameter(
+                    "title", "string",
+                    "Short title for the fix (e.g., 'Fix null values in customer_id')",
+                ),
+                ToolParameter(
+                    "root_cause", "string",
+                    "Root cause analysis explaining why the issue occurred",
+                ),
+                ToolParameter(
+                    "patches", "array",
+                    "List of file patches to apply",
+                    items={
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string", "description": "Path to the file to modify"},
+                            "patch_type": {"type": "string", "enum": ["sql_model", "yaml_config", "python_script", "orchestration"], "description": "Type of file being patched"},
+                            "new_content": {"type": "string", "description": "The new content for the file"},
+                            "rationale": {"type": "string", "description": "Why this change fixes the issue"},
+                            "original_content": {"type": "string", "description": "Original file content (optional)"},
+                            "rollback_steps": {"type": "array", "items": {"type": "string"}, "description": "Steps to undo this change"},
+                        },
+                        "required": ["file_path", "patch_type", "new_content", "rationale"],
+                    },
+                ),
+                ToolParameter(
+                    "impact_analysis", "object",
+                    "Impact analysis: {affected_tables?, downstream_dependencies?, risk_level?, expected_data_changes?}",
+                    required=False,
+                ),
+                ToolParameter(
+                    "description", "string",
+                    "Detailed description of the fix",
+                    required=False,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="validate_change_plan",
+            description=(
+                "Run validation checks on a change plan. Validates syntax, compiles dbt models, "
+                "and optionally runs sandbox tests. Call this after create_change_plan."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[
+                ToolParameter(
+                    "plan_id", "string",
+                    "The ID of the change plan to validate",
+                ),
+                ToolParameter(
+                    "level", "string",
+                    "Validation level: 'static' (syntax/lint), 'ci' (compile/tests), 'sandbox' (shadow run)",
+                    enum=["static", "ci", "sandbox"],
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_change_plan",
+            description=(
+                "Retrieve a change plan by ID. Returns the plan with patches, validation status, and current state."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[
+                ToolParameter(
+                    "plan_id", "string",
+                    "The ID of the change plan to retrieve",
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="apply_change_plan",
+            description=(
+                "Apply a validated change plan by creating a GitHub Pull Request. "
+                "The plan must have passed at least static validation. "
+                "Returns the PR URL on success."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[
+                ToolParameter(
+                    "plan_id", "string",
+                    "The ID of the validated change plan to apply",
+                ),
+                ToolParameter(
+                    "repo_owner", "string",
+                    "GitHub repository owner (username or organization)",
+                ),
+                ToolParameter(
+                    "repo_name", "string",
+                    "GitHub repository name",
+                ),
+                ToolParameter(
+                    "base_branch", "string",
+                    "Branch to base the PR on",
+                    required=False,
+                    default="main",
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="list_change_plans",
+            description=(
+                "List all change plans in the current session. "
+                "Shows plan IDs, titles, status, and validation state."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[],
         ))
     
     def _register(self, tool: Tool) -> None:

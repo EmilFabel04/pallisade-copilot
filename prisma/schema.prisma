@@ -32,7 +32,7 @@ model User {
 
   // Team membership
   teamMemberships TeamMember[]
-  sentInvites     TeamInvite[]  @relation("InviteSender")
+  sentInvites     TeamInvite[] @relation("InviteSender")
 
   // App data
   reports          Report[]
@@ -120,31 +120,31 @@ model Organization {
   appliedFixes     AppliedFix[]
 
   // Team Management
-  teamMembers      TeamMember[]
-  teamInvites      TeamInvite[]
+  teamMembers TeamMember[]
+  teamInvites TeamInvite[]
 
   // Risk Intelligence
   scanSnapshots ScanSnapshot[]
   riskProfile   OrganizationRiskProfile?
-  
+
   // Finding Response System
-  findings      Finding[]
-  findingRules  FindingRule[]
-  drrScores     DRRScore[]
-  
+  findings     Finding[]
+  findingRules FindingRule[]
+  drrScores    DRRScore[]
+
   // Pipeline Stacks (Visual Pipeline Mapping)
   pipelineStacks PipelineStack[]
-  
+
   // Scanner Pattern Rules (Intelligent Context)
   scannerPatternRules ScannerPatternRule[]
-  
+
   // User feedback on ML suppressions
   suppressionOverrides SuppressionOverride[]
-  
+
   // Copilot platform
-  copilotSessions  CopilotSession[]
-  lineageEvents    LineageEvent[]
-  debugSessions    DebugSession[]
+  copilotSessions CopilotSession[]
+  lineageEvents   LineageEvent[]
+  debugSessions   DebugSession[]
 
   @@index([domain])
 }
@@ -167,7 +167,7 @@ model TeamMember {
 
   // Role and permissions
   role        TeamRole @default(ENGINEER)
-  permissions Json?    // Override permissions (optional)
+  permissions Json? // Override permissions (optional)
 
   // Status
   status    MemberStatus @default(ACTIVE)
@@ -195,32 +195,32 @@ model TeamInvite {
   id String @id @default(cuid())
 
   // Invite details
-  email         String
-  token         String   @unique @default(cuid())
-  role          TeamRole @default(ENGINEER)
-  
+  email String
+  token String   @unique @default(cuid())
+  role  TeamRole @default(ENGINEER)
+
   // Personalization
-  personalNote  String?  @db.Text
-  title         String?  // Suggested job title
-  department    String?  // Suggested department
+  personalNote String? @db.Text
+  title        String? // Suggested job title
+  department   String? // Suggested department
 
   // Status
-  status        InviteStatus @default(PENDING)
-  expiresAt     DateTime     // Invites expire after X days
+  status    InviteStatus @default(PENDING)
+  expiresAt DateTime // Invites expire after X days
 
   // Who sent it
-  invitedBy     User?    @relation("InviteSender", fields: [invitedById], references: [id])
-  invitedById   String?
-  inviterName   String?  // Denormalized for display
+  invitedBy   User?   @relation("InviteSender", fields: [invitedById], references: [id])
+  invitedById String?
+  inviterName String? // Denormalized for display
 
   // Organization
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
 
   // Tracking
-  emailSentAt   DateTime?
-  viewedAt      DateTime?
-  respondedAt   DateTime?
+  emailSentAt DateTime?
+  viewedAt    DateTime?
+  respondedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -233,25 +233,25 @@ model TeamInvite {
 }
 
 enum TeamRole {
-  OWNER      // Full control, can delete org, transfer ownership
-  ADMIN      // Manage team, integrations, settings (can't delete org)
-  MANAGER    // Run scans, view all data, manage contracts (can't manage team)
-  ENGINEER   // Run scans, use sandbox lab, view findings
-  VIEWER     // Read-only access to reports and dashboards
+  OWNER // Full control, can delete org, transfer ownership
+  ADMIN // Manage team, integrations, settings (can't delete org)
+  MANAGER // Run scans, view all data, manage contracts (can't manage team)
+  ENGINEER // Run scans, use sandbox lab, view findings
+  VIEWER // Read-only access to reports and dashboards
 }
 
 enum MemberStatus {
   ACTIVE
-  INACTIVE   // Temporarily disabled
-  SUSPENDED  // Admin suspended
+  INACTIVE // Temporarily disabled
+  SUSPENDED // Admin suspended
 }
 
 enum InviteStatus {
-  PENDING    // Waiting for response
-  ACCEPTED   // User joined
-  DECLINED   // User declined
-  EXPIRED    // Past expiration date
-  REVOKED    // Admin cancelled
+  PENDING // Waiting for response
+  ACCEPTED // User joined
+  DECLINED // User declined
+  EXPIRED // Past expiration date
+  REVOKED // Admin cancelled
 }
 
 // ============================================
@@ -260,130 +260,130 @@ enum InviteStatus {
 
 // The user's complete data pipeline stack
 model PipelineStack {
-  id             String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Stack identity
-  name           String
-  description    String?  @db.Text
-  
+  name        String
+  description String? @db.Text
+
   // Status
-  status         PipelineStackStatus @default(DRAFT)
-  
+  status PipelineStackStatus @default(DRAFT)
+
   // Health metrics (calculated from scans)
-  healthScore    Float?   // 0-100 overall health
-  lastScanAt     DateTime?
-  
+  healthScore Float? // 0-100 overall health
+  lastScanAt  DateTime?
+
   // Token usage limits and tracking
-  tokenLimitMonthly   Int?     // Monthly token limit (null = unlimited)
+  tokenLimitMonthly   Int? // Monthly token limit (null = unlimited)
   tokensUsedThisMonth Int      @default(0)
   tokenResetDate      DateTime @default(now())
-  
+
   // Created by
-  createdById    String?
-  
+  createdById String?
+
   // Timestamps
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Relations
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
-  
+
   // Pipeline components
-  nodes          PipelineNode[]
-  edges          PipelineEdge[]
-  scans          PipelineScan[]
-  
+  nodes PipelineNode[]
+  edges PipelineEdge[]
+  scans PipelineScan[]
+
   // Access control
-  accessList     PipelineAccess[]
-  
+  accessList PipelineAccess[]
+
   @@index([organizationId])
   @@index([status])
 }
 
 // User access to a specific pipeline
 model PipelineAccess {
-  id             String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // User with access
-  userId         String
-  
+  userId String
+
   // Pipeline
-  pipeline       PipelineStack @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
-  pipelineId     String
-  
+  pipeline   PipelineStack @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  pipelineId String
+
   // Access level
-  accessLevel    PipelineAccessLevel @default(VIEWER)
-  
+  accessLevel PipelineAccessLevel @default(VIEWER)
+
   // Granted by
-  grantedBy      String?
-  grantedAt      DateTime @default(now())
-  
+  grantedBy String?
+  grantedAt DateTime @default(now())
+
   // Token usage tracking for this user on this pipeline
-  tokensUsed     Int      @default(0)
-  
+  tokensUsed Int @default(0)
+
   @@unique([userId, pipelineId])
   @@index([pipelineId])
   @@index([userId])
 }
 
 enum PipelineAccessLevel {
-  OWNER      // Full control, can delete and manage access
-  EDITOR     // Can modify pipeline configuration
-  VIEWER     // Read-only access
+  OWNER // Full control, can delete and manage access
+  EDITOR // Can modify pipeline configuration
+  VIEWER // Read-only access
 }
 
 // A node in the pipeline (Fivetran, dbt, Snowflake, Tableau, etc.)
 model PipelineNode {
-  id             String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Node identity
-  name           String   // User-friendly name
-  
+  name String // User-friendly name
+
   // Node type and tool
-  layer          PipelineLayer    // INGESTION, TRANSFORMATION, WAREHOUSE, REPORTING
-  toolType       String           // fivetran, airbyte, dbt_cloud, dbt_core, snowflake, bigquery, tableau, looker
-  
+  layer    PipelineLayer // INGESTION, TRANSFORMATION, WAREHOUSE, REPORTING
+  toolType String // fivetran, airbyte, dbt_cloud, dbt_core, snowflake, bigquery, tableau, looker
+
   // Configuration (encrypted credentials)
-  config         Json?    // Connection credentials/settings
-  
+  config Json? // Connection credentials/settings
+
   // Canvas position (for UI)
-  positionX      Float    @default(0)
-  positionY      Float    @default(0)
-  
+  positionX Float @default(0)
+  positionY Float @default(0)
+
   // Connection status
-  status         PipelineNodeStatus @default(PENDING)
-  lastTestedAt   DateTime?
-  lastError      String?
-  
+  status       PipelineNodeStatus @default(PENDING)
+  lastTestedAt DateTime?
+  lastError    String?
+
   // Health metrics
-  healthScore    Float?   // 0-100 based on recent scans
-  lastScanAt     DateTime?
-  
+  healthScore Float? // 0-100 based on recent scans
+  lastScanAt  DateTime?
+
   // Scan results summary (cached)
-  findingsCount  Int      @default(0)
-  criticalCount  Int      @default(0)
-  highCount      Int      @default(0)
-  
+  findingsCount Int @default(0)
+  criticalCount Int @default(0)
+  highCount     Int @default(0)
+
   // Timestamps
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Relations
-  stack          PipelineStack @relation(fields: [stackId], references: [id], onDelete: Cascade)
-  stackId        String
-  
+  stack   PipelineStack @relation(fields: [stackId], references: [id], onDelete: Cascade)
+  stackId String
+
   // Link to existing Integration (optional, for backwards compatibility)
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-  
+  integration   Integration? @relation(fields: [integrationId], references: [id])
+  integrationId String?
+
   // Edges
-  sourceEdges    PipelineEdge[] @relation("SourceNode")
-  targetEdges    PipelineEdge[] @relation("TargetNode")
-  
+  sourceEdges PipelineEdge[] @relation("SourceNode")
+  targetEdges PipelineEdge[] @relation("TargetNode")
+
   // Findings from this node
-  findings       PipelineNodeFinding[]
-  
+  findings PipelineNodeFinding[]
+
   @@index([stackId])
   @@index([layer])
   @@index([toolType])
@@ -392,25 +392,25 @@ model PipelineNode {
 
 // Connection between nodes (data flow)
 model PipelineEdge {
-  id             String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Source -> Target (source is upstream of target)
-  sourceId       String
-  targetId       String
-  source         PipelineNode @relation("SourceNode", fields: [sourceId], references: [id], onDelete: Cascade)
-  target         PipelineNode @relation("TargetNode", fields: [targetId], references: [id], onDelete: Cascade)
-  
+  sourceId String
+  targetId String
+  source   PipelineNode @relation("SourceNode", fields: [sourceId], references: [id], onDelete: Cascade)
+  target   PipelineNode @relation("TargetNode", fields: [targetId], references: [id], onDelete: Cascade)
+
   // Edge metadata
-  label          String?  // Optional label (e.g., "raw_events")
-  dataFlow       String?  // Description of what data flows
-  
+  label    String? // Optional label (e.g., "raw_events")
+  dataFlow String? // Description of what data flows
+
   // Timestamps
-  createdAt      DateTime @default(now())
-  
+  createdAt DateTime @default(now())
+
   // Relations
-  stack          PipelineStack @relation(fields: [stackId], references: [id], onDelete: Cascade)
-  stackId        String
-  
+  stack   PipelineStack @relation(fields: [stackId], references: [id], onDelete: Cascade)
+  stackId String
+
   @@unique([sourceId, targetId])
   @@index([sourceId])
   @@index([targetId])
@@ -419,43 +419,43 @@ model PipelineEdge {
 
 // A scan of the entire pipeline
 model PipelineScan {
-  id             String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Scan status
-  status         PipelineScanStatus @default(PENDING)
-  
+  status PipelineScanStatus @default(PENDING)
+
   // Timing
-  startedAt      DateTime @default(now())
-  completedAt    DateTime?
-  durationMs     Int?
-  
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  durationMs  Int?
+
   // Results summary
-  totalFindings  Int      @default(0)
-  criticalCount  Int      @default(0)
-  highCount      Int      @default(0)
-  mediumCount    Int      @default(0)
-  lowCount       Int      @default(0)
-  
+  totalFindings Int @default(0)
+  criticalCount Int @default(0)
+  highCount     Int @default(0)
+  mediumCount   Int @default(0)
+  lowCount      Int @default(0)
+
   // Health score calculated
-  healthScore    Float?   // 0-100
-  
+  healthScore Float? // 0-100
+
   // Which layers were scanned
-  layersScanned  String[] // ['ingestion', 'transformation', 'warehouse', 'reporting']
-  nodesScanned   Int      @default(0)
-  
+  layersScanned String[] // ['ingestion', 'transformation', 'warehouse', 'reporting']
+  nodesScanned  Int      @default(0)
+
   // Error tracking
-  errorMessage   String?
-  
+  errorMessage String?
+
   // Timestamps
-  createdAt      DateTime @default(now())
-  
+  createdAt DateTime @default(now())
+
   // Relations
-  stack          PipelineStack @relation(fields: [stackId], references: [id], onDelete: Cascade)
-  stackId        String
-  
+  stack   PipelineStack @relation(fields: [stackId], references: [id], onDelete: Cascade)
+  stackId String
+
   // Findings from this scan
-  findings       PipelineNodeFinding[]
-  
+  findings PipelineNodeFinding[]
+
   @@index([stackId])
   @@index([status])
   @@index([createdAt])
@@ -463,31 +463,31 @@ model PipelineScan {
 
 // Finding from a pipeline node scan
 model PipelineNodeFinding {
-  id             String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Finding details
-  type           String   // sync_failure, test_failed, stale_data, query_error, etc.
-  severity       FindingSeverity
-  title          String
-  description    String   @db.Text
-  
+  type        String // sync_failure, test_failed, stale_data, query_error, etc.
+  severity    FindingSeverity
+  title       String
+  description String          @db.Text
+
   // Fix information
-  suggestedFix   Json?    // { type: 'manual'|'sql'|'dbt'|'api', action: '', code: '' }
-  
+  suggestedFix Json? // { type: 'manual'|'sql'|'dbt'|'api', action: '', code: '' }
+
   // Root cause tracing
   rootCauseNodeId String? // If traced to upstream issue
   rootCauseType   String? // Type of root cause
-  
+
   // Relations
-  node           PipelineNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-  nodeId         String
-  
-  scan           PipelineScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
-  scanId         String
-  
+  node   PipelineNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  nodeId String
+
+  scan   PipelineScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
+  scanId String
+
   // Timestamps
-  createdAt      DateTime @default(now())
-  
+  createdAt DateTime @default(now())
+
   @@index([nodeId])
   @@index([scanId])
   @@index([severity])
@@ -495,27 +495,27 @@ model PipelineNodeFinding {
 }
 
 enum PipelineStackStatus {
-  DRAFT      // Not yet configured
+  DRAFT // Not yet configured
   CONFIGURING // Adding nodes
-  READY      // Ready for scanning
-  SCANNING   // Currently scanning
-  ERROR      // Configuration error
+  READY // Ready for scanning
+  SCANNING // Currently scanning
+  ERROR // Configuration error
 }
 
 enum PipelineLayer {
-  INGESTION      // Fivetran, Airbyte, Stitch
+  INGESTION // Fivetran, Airbyte, Stitch
   TRANSFORMATION // dbt, Airflow, Dagster
-  WAREHOUSE      // Snowflake, BigQuery, PostgreSQL, Redshift, Azure SQL
-  REPORTING      // Tableau, Looker, Power BI, Metabase
+  WAREHOUSE // Snowflake, BigQuery, PostgreSQL, Redshift, Azure SQL
+  REPORTING // Tableau, Looker, Power BI, Metabase
 }
 
 enum PipelineNodeStatus {
-  PENDING    // Not yet configured
-  TESTING    // Testing connection
-  CONNECTED  // Successfully connected
-  HEALTHY    // Connected and healthy
-  WARNING    // Connected but has issues
-  ERROR      // Connection failed
+  PENDING // Not yet configured
+  TESTING // Testing connection
+  CONNECTED // Successfully connected
+  HEALTHY // Connected and healthy
+  WARNING // Connected but has issues
+  ERROR // Connection failed
 }
 
 enum PipelineScanStatus {
@@ -542,10 +542,10 @@ model DataContract {
 
   // === IDENTITY ===
   database  String
-  schema    String  @default("public")
+  schema    String @default("public")
   tableName String
   fullName  String // database.schema.table for easy lookup
-  version   Int     @default(1) // Contract version for evolution
+  version   Int    @default(1) // Contract version for evolution
 
   // === STATUS & GOVERNANCE ===
   status      ContractStatus @default(DRAFT)
@@ -553,10 +553,10 @@ model DataContract {
   description String?        @db.Text
 
   // === OWNERSHIP ===
-  owner        String? // Primary owner (team or person)
-  ownerEmail   String? // Owner email for notifications
-  steward      String? // Secondary owner / data steward
-  tags         String[] // For filtering/grouping
+  owner      String? // Primary owner (team or person)
+  ownerEmail String? // Owner email for notifications
+  steward    String? // Secondary owner / data steward
+  tags       String[] // For filtering/grouping
 
   // === BUSINESS CONTEXT ===
   businessDomain String? // e.g., "Finance", "Marketing", "Operations"
@@ -577,11 +577,11 @@ model DataContract {
   sloTier               SLOTier @default(STANDARD)
 
   // === QUALITY SLA ===
-  qualityEnabled     Boolean @default(true)
-  maxNullRate        Float? // Max acceptable null rate (0.0-1.0)
-  maxDuplicateRate   Float? // Max acceptable duplicate rate
-  requiredColumns    String[] // Columns that must exist
-  columnNullRules    Json? // Per-column null rate rules
+  qualityEnabled   Boolean  @default(true)
+  maxNullRate      Float? // Max acceptable null rate (0.0-1.0)
+  maxDuplicateRate Float? // Max acceptable duplicate rate
+  requiredColumns  String[] // Columns that must exist
+  columnNullRules  Json? // Per-column null rate rules
 
   // === SCHEMA SLA ===
   schemaEnabled        Boolean @default(false)
@@ -589,25 +589,25 @@ model DataContract {
   allowSchemaEvolution Boolean @default(true) // Allow additive changes
 
   // === VOLUME SLA ===
-  volumeEnabled       Boolean @default(false)
-  minRowCount         Int? // Minimum expected rows
-  maxRowCount         Int? // Maximum expected rows
-  expectedGrowthRate  Float? // Expected daily growth %
+  volumeEnabled      Boolean @default(false)
+  minRowCount        Int? // Minimum expected rows
+  maxRowCount        Int? // Maximum expected rows
+  expectedGrowthRate Float? // Expected daily growth %
 
   // === ALERTING ===
-  slackChannel       String? // Slack channel for alerts
-  pagerDutyService   String? // PagerDuty service ID
-  emailRecipients    String[] // Additional email recipients
-  alertOnWarning     Boolean  @default(true)
-  alertOnViolation   Boolean  @default(true)
-  alertCooldownMins  Int      @default(60) // Min time between alerts
+  slackChannel      String? // Slack channel for alerts
+  pagerDutyService  String? // PagerDuty service ID
+  emailRecipients   String[] // Additional email recipients
+  alertOnWarning    Boolean  @default(true)
+  alertOnViolation  Boolean  @default(true)
+  alertCooldownMins Int      @default(60) // Min time between alerts
 
   // === COMPLIANCE TRACKING ===
-  complianceScore    Float? // Current score (0-100)
-  violationCount     Int      @default(0) // Total violations
-  lastViolationAt    DateTime?
-  lastCheckAt        DateTime?
-  consecutivePasses  Int      @default(0) // For auto-recovery
+  complianceScore   Float? // Current score (0-100)
+  violationCount    Int       @default(0) // Total violations
+  lastViolationAt   DateTime?
+  lastCheckAt       DateTime?
+  consecutivePasses Int       @default(0) // For auto-recovery
 
   // === DOWNSTREAM IMPACT (cached) ===
   downstreamCount    Int? // Tables that depend on this
@@ -617,9 +617,9 @@ model DataContract {
   lastImpactUpdate   DateTime?
 
   // === ML/ANOMALY DETECTION ===
-  anomalyEnabled     Boolean @default(false)
+  anomalyEnabled     Boolean   @default(false)
   historicalPatterns Json? // Learned patterns
-  anomalyThreshold   Float?  @default(0.95)
+  anomalyThreshold   Float?    @default(0.95)
   lastMLUpdate       DateTime?
 
   // === TIMESTAMPS ===
@@ -658,7 +658,7 @@ model ContractViolation {
   // Resolution
   resolvedAt DateTime?
   resolvedBy String?
-  resolution String? @db.Text
+  resolution String?   @db.Text
 
   createdAt DateTime @default(now())
 
@@ -898,7 +898,7 @@ model Report {
   organization    Organization?    @relation(fields: [organizationId], references: [id])
   organizationId  String?
   remediationPlan RemediationPlan?
-  
+
   // Finding Response System
   findingsTracked Finding[]
   drrScores       DRRScore[]
@@ -1139,38 +1139,39 @@ enum MessageRole {
 // ============================================
 
 model CopilotSession {
-  id              String   @id @default(cuid())
-  title           String   @default("New Chat")
-  
+  id    String @id @default(cuid())
+  title String @default("New Chat")
+
   // Context - what is this chat about?
   contextType     CopilotContextType @default(GENERAL)
   pipelineStackId String?
   nodeIds         String[] // Array of node IDs being discussed
-  
+
   // Debug session tracking
-  isDebugSession  Boolean  @default(false)
-  debugIssueId    String?
-  
+  isDebugSession Boolean @default(false)
+  debugIssueId   String?
+
   // LLM configuration
-  model           String   @default("claude-sonnet")
-  
+  model String @default("claude-sonnet")
+
   // Conversation summary for long chats
-  memorySummary   String?  @db.Text
-  
+  memorySummary String? @db.Text
+
   // Token tracking
-  totalInputTokens  Int    @default(0)
-  totalOutputTokens Int    @default(0)
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  
+  totalInputTokens  Int @default(0)
+  totalOutputTokens Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Relations
-  user            User     @relation(fields: [userId], references: [id])
-  userId          String
-  organization    Organization @relation(fields: [organizationId], references: [id])
-  organizationId  String
-  messages        CopilotMessage[]
-  debugSession    DebugSession?
+  user           User             @relation(fields: [userId], references: [id])
+  userId         String
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  organizationId String
+  messages       CopilotMessage[]
+  debugSession   DebugSession?
+  changePlans    ChangePlan[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1178,36 +1179,36 @@ model CopilotSession {
 }
 
 model CopilotMessage {
-  id            String      @id @default(cuid())
-  role          MessageRole
-  content       String      @db.Text
-  
+  id      String      @id @default(cuid())
+  role    MessageRole
+  content String      @db.Text
+
   // Tool calls made by AI
-  toolCalls     Json?
-  
+  toolCalls Json?
+
   // Tool results returned
-  toolResults   Json?
-  
+  toolResults Json?
+
   // Context retrieved for this message
-  contextUsed   Json?
-  
+  contextUsed Json?
+
   // Token tracking
-  inputTokens   Int?
-  outputTokens  Int?
-  
-  createdAt     DateTime    @default(now())
-  
-  session       CopilotSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId     String
+  inputTokens  Int?
+  outputTokens Int?
+
+  createdAt DateTime @default(now())
+
+  session   CopilotSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sessionId String
 
   @@index([sessionId])
 }
 
 enum CopilotContextType {
-  GENERAL       // General Q&A about the data stack
-  PIPELINE      // Focused on a specific pipeline
-  DEBUGGING     // Active debugging session
-  BUILDING      // Building/configuring pipeline
+  GENERAL // General Q&A about the data stack
+  PIPELINE // Focused on a specific pipeline
+  DEBUGGING // Active debugging session
+  BUILDING // Building/configuring pipeline
 }
 
 // ============================================
@@ -1215,36 +1216,36 @@ enum CopilotContextType {
 // ============================================
 
 model LineageEvent {
-  id              String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Event metadata
-  eventType       String   // START, RUNNING, COMPLETE, FAIL, ABORT
-  eventTime       DateTime
-  
+  eventType String // START, RUNNING, COMPLETE, FAIL, ABORT
+  eventTime DateTime
+
   // Job identification
-  jobNamespace    String
-  jobName         String
-  
+  jobNamespace String
+  jobName      String
+
   // Run identification
-  runId           String
-  parentRunId     String?
-  
+  runId       String
+  parentRunId String?
+
   // Input/output datasets (JSON arrays)
-  inputs          Json     // Array of input datasets
-  outputs         Json     // Array of output datasets
-  
+  inputs  Json // Array of input datasets
+  outputs Json // Array of output datasets
+
   // Facets (additional metadata)
-  jobFacets       Json?
-  runFacets       Json?
-  
+  jobFacets Json?
+  runFacets Json?
+
   // Processing status
-  processed       Boolean  @default(false)
-  processedAt     DateTime?
-  
-  createdAt       DateTime @default(now())
-  
-  organization    Organization @relation(fields: [organizationId], references: [id])
-  organizationId  String
+  processed   Boolean   @default(false)
+  processedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId String
 
   @@index([organizationId])
   @@index([jobNamespace, jobName])
@@ -1258,42 +1259,42 @@ model LineageEvent {
 // ============================================
 
 model DebugSession {
-  id              String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   // Issue identification
-  issueType       String   // sync_failure, test_failed, stale_data, query_error, etc.
-  title           String
-  description     String?  @db.Text
-  
+  issueType   String // sync_failure, test_failed, stale_data, query_error, etc.
+  title       String
+  description String? @db.Text
+
   // Symptom tracking (where the issue was first observed)
-  symptomNodeId   String?
-  symptomDetails  Json?
-  
+  symptomNodeId  String?
+  symptomDetails Json?
+
   // Root cause analysis
-  rootCauseNodeId String?
-  rootCauseType   String?
+  rootCauseNodeId  String?
+  rootCauseType    String?
   rootCauseDetails Json?
-  
+
   // Status and resolution
-  status          DebugStatus @default(INVESTIGATING)
-  resolution      String?     @db.Text
-  resolvedAt      DateTime?
-  
+  status     DebugStatus @default(INVESTIGATING)
+  resolution String?     @db.Text
+  resolvedAt DateTime?
+
   // Timing
-  startedAt       DateTime @default(now())
-  mttr            Int?     // Mean time to resolution in minutes
-  
+  startedAt DateTime @default(now())
+  mttr      Int? // Mean time to resolution in minutes
+
   // Investigation steps taken
   investigationSteps Json? // Array of steps/findings during investigation
-  
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Relations
-  organization    Organization @relation(fields: [organizationId], references: [id])
-  organizationId  String
-  copilotSession  CopilotSession? @relation(fields: [copilotSessionId], references: [id])
-  copilotSessionId String? @unique
+  organization     Organization    @relation(fields: [organizationId], references: [id])
+  organizationId   String
+  copilotSession   CopilotSession? @relation(fields: [copilotSessionId], references: [id])
+  copilotSessionId String?         @unique
 
   @@index([organizationId])
   @@index([status])
@@ -1301,11 +1302,11 @@ model DebugSession {
 }
 
 enum DebugStatus {
-  INVESTIGATING    // Still looking into the issue
+  INVESTIGATING // Still looking into the issue
   ROOT_CAUSE_FOUND // Identified the root cause
-  FIXING           // Working on a fix
-  RESOLVED         // Issue resolved
-  WONT_FIX         // Decided not to fix
+  FIXING // Working on a fix
+  RESOLVED // Issue resolved
+  WONT_FIX // Decided not to fix
 }
 
 // ============================================
@@ -1426,7 +1427,7 @@ model AppliedFix {
   metricSnapshot Json? // { "null_rate": 0.35, "freshness_hours": 48 }
 
   // Fix generation context
-  confidenceScore Float? // AI confidence when generating fix
+  confidenceScore  Float? // AI confidence when generating fix
   generationMethod String? // 'template', 'rag', 'learned'
 
   // Status tracking
@@ -1446,6 +1447,9 @@ model AppliedFix {
   // Outcome tracking (one-to-one)
   outcome FixOutcome?
 
+  // Link from ChangePlan (one-to-one)
+  changePlan ChangePlan?
+
   @@index([organizationId])
   @@index([userId])
   @@index([reportId])
@@ -1460,6 +1464,61 @@ enum AppliedFixStatus {
   MERGED // PR merged successfully
   CLOSED // PR closed without merge
   FAILED // Failed to create PR
+}
+
+// ============================================
+// CHANGE PLANS (Structured Fix Proposals)
+// ============================================
+
+// A structured change plan generated by Scout with patches and validation
+model ChangePlan {
+  id          String  @id @default(cuid())
+  version     Int     @default(1)
+  title       String
+  description String? @db.Text
+  rootCause   String? @db.Text
+
+  // Patches and validation state (stored as JSON)
+  patches        Json // Array of FilePatch objects
+  validations    Json? // Dict of ValidationLevel -> ValidationResult
+  impactAnalysis Json? // Impact analysis details
+
+  // Status tracking
+  status ChangePlanStatus @default(DRAFT)
+
+  // GitHub PR details (if applied)
+  prUrl      String?
+  prNumber   Int?
+  branchName String?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Who created it
+  createdBy String? // User ID or "scout"
+
+  // Relations
+  copilotSession CopilotSession? @relation(fields: [sessionId], references: [id])
+  sessionId      String?
+
+  // Link to applied fix if applied
+  appliedFix   AppliedFix? @relation(fields: [appliedFixId], references: [id])
+  appliedFixId String?     @unique
+
+  @@index([status])
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
+enum ChangePlanStatus {
+  DRAFT // Initial state, not yet validated
+  VALIDATING // Validation in progress
+  VALIDATED // Passed required validations
+  APPLYING // Creating GitHub PR
+  APPLIED // PR created successfully
+  FAILED // Validation or apply failed
+  REJECTED // User rejected the plan
 }
 
 // ============================================
@@ -1494,7 +1553,7 @@ model FixOutcome {
 
   // === USER FEEDBACK ===
   userRating      Int? // 1-5 stars
-  userFeedback    String? @db.Text
+  userFeedback    String?   @db.Text
   feedbackGivenAt DateTime?
   feedbackUserId  String?
 
@@ -1557,14 +1616,14 @@ model IssueFingerprint {
   // e.g., SLO is 4h, actual is 48h → 12.0
 
   // Contextual clues
-  dayOfWeek     Int? // 0=Sunday, 6=Saturday
-  hourOfDay     Int? // 0-23
-  isWeekend     Boolean?
-  isMonthEnd    Boolean?
-  isQuarterEnd  Boolean?
+  dayOfWeek    Int? // 0=Sunday, 6=Saturday
+  hourOfDay    Int? // 0-23
+  isWeekend    Boolean?
+  isMonthEnd   Boolean?
+  isQuarterEnd Boolean?
 
   // === EMBEDDING (for ML similarity) ===
-  embedding     Bytes? // Vector embedding for similarity search
+  embedding      Bytes? // Vector embedding for similarity search
   embeddingModel String? // Model used to generate embedding
 
   // === STATISTICS ===
@@ -1573,8 +1632,8 @@ model IssueFingerprint {
   firstSeenAt     DateTime @default(now())
 
   // === RELATIONS ===
-  outcomes       FixOutcome[]
-  fixPatterns    FixPatternMatch[]
+  outcomes    FixOutcome[]
+  fixPatterns FixPatternMatch[]
 
   // Organization
   organizationId String?
@@ -1582,11 +1641,11 @@ model IssueFingerprint {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([organizationId, issueType, tablePattern, columnPattern, warehouseType])
   @@index([issueType])
   @@index([issueCategory])
   @@index([organizationId])
   @@index([warehouseType])
-  @@unique([organizationId, issueType, tablePattern, columnPattern, warehouseType])
 }
 
 // Learned patterns: which fixes work for which issue types
@@ -1602,14 +1661,14 @@ model FixPattern {
   issueCategory String // 'data_quality', 'pipeline'
 
   // Stack requirements
-  requiredStack     Json? // { "dbt": true, "warehouse": "snowflake" }
-  requiredContext   Json? // { "has_timestamp_column": true }
+  requiredStack   Json? // { "dbt": true, "warehouse": "snowflake" }
+  requiredContext Json? // { "has_timestamp_column": true }
 
   // === FIX TEMPLATE ===
-  fixType       String // 'dbt_freshness', 'sql_update', 'airflow_dag'
-  fixTemplate   String @db.Text // Template with placeholders
-  fixLanguage   String // 'yaml', 'sql', 'python'
-  fixFilePath   String? // Default file path
+  fixType     String // 'dbt_freshness', 'sql_update', 'airflow_dag'
+  fixTemplate String  @db.Text // Template with placeholders
+  fixLanguage String // 'yaml', 'sql', 'python'
+  fixFilePath String? // Default file path
 
   // Placeholders this template uses
   placeholders Json? // ["{{table}}", "{{column}}", "{{threshold}}"]
@@ -1619,7 +1678,7 @@ model FixPattern {
   failureCount Int   @default(0)
   successRate  Float @default(0) // Calculated: success / (success + failure)
 
-  totalApplications Int @default(0)
+  totalApplications Int  @default(0)
   avgTimeToResolve  Int? // Average minutes to resolution
 
   // Confidence based on data
@@ -1658,8 +1717,8 @@ model FixPatternMatch {
   matchScore Float @default(1.0) // How well this pattern fits (0.0 - 1.0)
 
   // Usage stats for this specific match
-  usageCount    Int   @default(0)
-  successCount  Int   @default(0)
+  usageCount       Int   @default(0)
+  successCount     Int   @default(0)
   localSuccessRate Float @default(0)
 
   createdAt DateTime @default(now())
@@ -1718,10 +1777,10 @@ model Integration {
   metricBaselines  MetricBaseline[]
   scanSchedules    ScanSchedule[]
   findings         Finding[]
-  
+
   // Pipeline nodes that use this integration
-  pipelineNodes    PipelineNode[]
-  
+  pipelineNodes PipelineNode[]
+
   // User feedback on ML suppressions for this integration
   suppressionOverrides SuppressionOverride[]
 
@@ -1735,58 +1794,58 @@ enum IntegrationType {
   // ===========================================
   // WAREHOUSE (Layer: WAREHOUSE)
   // ===========================================
-  SNOWFLAKE         // Primary cloud data warehouse
-  BIGQUERY          // Google Cloud data warehouse
-  POSTGRES          // PostgreSQL (also covers Supabase, RDS, etc.)
-  REDSHIFT          // AWS data warehouse
-  SQLSERVER         // On-premise SQL Server
-  AZURE_SQL         // Azure SQL Database
-  AZURE_SYNAPSE     // Azure Synapse Analytics
-  
+  SNOWFLAKE // Primary cloud data warehouse
+  BIGQUERY // Google Cloud data warehouse
+  POSTGRES // PostgreSQL (also covers Supabase, RDS, etc.)
+  REDSHIFT // AWS data warehouse
+  SQLSERVER // On-premise SQL Server
+  AZURE_SQL // Azure SQL Database
+  AZURE_SYNAPSE // Azure Synapse Analytics
+
   // ===========================================
   // INGESTION (Layer: INGESTION)
   // ===========================================
-  FIVETRAN          // Managed ETL/ELT
-  AIRBYTE           // Open-source ELT
-  STITCH            // Singer-based ETL
-  
+  FIVETRAN // Managed ETL/ELT
+  AIRBYTE // Open-source ELT
+  STITCH // Singer-based ETL
+
   // ===========================================
   // TRANSFORMATION (Layer: TRANSFORMATION)
   // ===========================================
-  DBT_CLOUD         // dbt Cloud (hosted)
-  DBT_CORE          // dbt Core (self-hosted/manifest upload)
-  AIRFLOW           // Apache Airflow orchestration
-  DAGSTER           // Dagster orchestration
-  PREFECT           // Prefect orchestration
-  
+  DBT_CLOUD // dbt Cloud (hosted)
+  DBT_CORE // dbt Core (self-hosted/manifest upload)
+  AIRFLOW // Apache Airflow orchestration
+  DAGSTER // Dagster orchestration
+  PREFECT // Prefect orchestration
+
   // ===========================================
   // REPORTING (Layer: REPORTING)
   // ===========================================
-  TABLEAU           // Tableau dashboards
-  LOOKER            // Looker / Looker Studio
-  POWERBI           // Microsoft Power BI
-  METABASE          // Open-source BI
-  
+  TABLEAU // Tableau dashboards
+  LOOKER // Looker / Looker Studio
+  POWERBI // Microsoft Power BI
+  METABASE // Open-source BI
+
   // ===========================================
   // CODE & VERSION CONTROL
   // ===========================================
-  GITHUB            // For fix PRs
+  GITHUB // For fix PRs
   GITLAB
   BITBUCKET
-  
+
   // ===========================================
   // NOTIFICATIONS
   // ===========================================
   SLACK
   PAGERDUTY
   OPSGENIE
-  TEAMS             // Microsoft Teams
-  
+  TEAMS // Microsoft Teams
+
   // ===========================================
   // OTHER
   // ===========================================
-  JIRA              // Issue tracking
-  CUSTOM_WEBHOOK    // Generic webhook
+  JIRA // Issue tracking
+  CUSTOM_WEBHOOK // Generic webhook
 }
 
 enum IntegrationStatus {
@@ -2217,33 +2276,33 @@ model Finding {
 
   // Finding identification (unique per scan context)
   fingerprint String // Hash of table+column+type+description for deduplication
-  
+
   // Finding details
   table       String
   column      String?
   scanType    String // freshness, quality, volume, schema, anomaly, distribution, integrity
   findingType String // null_rate, negative_value, duplicate, orphan, stale, etc.
   severity    FindingSeverity
-  
+
   // Finding content
   title       String
   description String @db.Text
-  details     Json?  // Additional context (sample values, counts, etc.)
-  
+  details     Json? // Additional context (sample values, counts, etc.)
+
   // Fix information
-  suggestedFix     String? @db.Text
-  fixType          String? // sql, dbt_test, pipeline_config, manual
-  fixConfidence    Float?  // 0-1 confidence in the suggested fix
-  
+  suggestedFix  String? @db.Text
+  fixType       String? // sql, dbt_test, pipeline_config, manual
+  fixConfidence Float? // 0-1 confidence in the suggested fix
+
   // State
   status      FindingStatus @default(OPEN)
   firstSeenAt DateTime      @default(now())
   lastSeenAt  DateTime      @default(now())
   resolvedAt  DateTime?
-  
+
   // Scan context
-  scanCount   Int @default(1) // How many times this was detected
-  
+  scanCount Int @default(1) // How many times this was detected
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2255,10 +2314,10 @@ model Finding {
   integrationId  String?
   report         Report?      @relation(fields: [reportId], references: [id])
   reportId       String?
-  
+
   // Response tracking
   responses FindingResponse[]
-  
+
   // Rule that might apply
   matchedRule   FindingRule? @relation(fields: [matchedRuleId], references: [id])
   matchedRuleId String?
@@ -2278,23 +2337,23 @@ model FindingResponse {
 
   // Response type
   responseType ResponseType
-  
+
   // Justification (required for some response types)
-  reason       String?  @db.Text
+  reason        String? @db.Text
   justification String? @db.Text // Detailed explanation
-  
+
   // For ACCEPTED_RISK: who approved it
-  approvedBy   String?
-  approvedAt   DateTime?
-  
+  approvedBy String?
+  approvedAt DateTime?
+
   // Expiration (for temporary suppressions)
-  expiresAt    DateTime?
-  
+  expiresAt DateTime?
+
   // Was this reviewed/verified?
-  verified     Boolean @default(false)
-  verifiedBy   String?
-  verifiedAt   DateTime?
-  
+  verified   Boolean   @default(false)
+  verifiedBy String?
+  verifiedAt DateTime?
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2302,10 +2361,10 @@ model FindingResponse {
   // Relations
   finding   Finding @relation(fields: [findingId], references: [id], onDelete: Cascade)
   findingId String
-  
+
   // Who responded
-  userId    String?
-  userName  String? // Denormalized for audit
+  userId   String?
+  userName String? // Denormalized for audit
 
   @@index([findingId])
   @@index([responseType])
@@ -2319,35 +2378,35 @@ model FindingRule {
   // Rule identification
   name        String
   description String? @db.Text
-  
+
   // Rule conditions (all must match)
-  conditions  Json // { table: "pattern", column: "pattern", findingType: "x", ... }
-  
+  conditions Json // { table: "pattern", column: "pattern", findingType: "x", ... }
+
   // What happens when matched
-  action      RuleAction @default(REDUCE_SEVERITY)
-  
+  action RuleAction @default(REDUCE_SEVERITY)
+
   // For REDUCE_SEVERITY
   targetSeverity FindingSeverity?
-  
+
   // For SUPPRESS
   suppressReason String?
-  
+
   // Rule metadata
-  isActive    Boolean @default(true)
-  priority    Int     @default(0) // Higher = checked first
-  
+  isActive Boolean @default(true)
+  priority Int     @default(0) // Higher = checked first
+
   // Audit
-  createdBy   String?
-  approvedBy  String?
-  approvedAt  DateTime?
-  
+  createdBy  String?
+  approvedBy String?
+  approvedAt DateTime?
+
   // Expiration
-  expiresAt   DateTime?
-  
+  expiresAt DateTime?
+
   // Stats
-  matchCount  Int @default(0)
+  matchCount  Int       @default(0)
   lastMatchAt DateTime?
-  
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2355,7 +2414,7 @@ model FindingRule {
   // Relations
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
-  
+
   // Findings matched by this rule
   matchedFindings Finding[]
 
@@ -2369,33 +2428,33 @@ model SuppressionOverride {
   id String @id @default(cuid())
 
   // What is being overridden
-  table         String        // Table name (e.g., "analytics.daily_revenue")
-  column        String?       // Column name (optional, for table-wide overrides)
-  findingType   String?       // Type of finding (e.g., "outlier", "duplicate")
-  
+  table       String // Table name (e.g., "analytics.daily_revenue")
+  column      String? // Column name (optional, for table-wide overrides)
+  findingType String? // Type of finding (e.g., "outlier", "duplicate")
+
   // The suppression source being overridden
-  suppressionSource String    // semantic_classification, correlation, baseline
-  
+  suppressionSource String // semantic_classification, correlation, baseline
+
   // User's decision
-  decision      OverrideDecision
-  reason        String?       @db.Text // User's explanation
-  
+  decision OverrideDecision
+  reason   String?          @db.Text // User's explanation
+
   // Original classification info (for context)
   originalClassification Json? // The original LLM/baseline classification
-  
+
   // Audit trail
-  createdBy     String?       // User ID
-  createdByName String?       // User name (denormalized)
-  approvedBy    String?       // For requiring approval on denials
+  createdBy     String? // User ID
+  createdByName String? // User name (denormalized)
+  approvedBy    String? // For requiring approval on denials
   approvedAt    DateTime?
-  
+
   // Expiration (optional - allow temporary overrides)
-  expiresAt     DateTime?
-  
+  expiresAt DateTime?
+
   // Stats
-  appliedCount  Int @default(0) // How many times this override was applied
+  appliedCount  Int       @default(0) // How many times this override was applied
   lastAppliedAt DateTime?
-  
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2413,8 +2472,8 @@ model SuppressionOverride {
 }
 
 enum OverrideDecision {
-  APPROVE   // User confirms suppression is correct
-  DENY      // User says this should be an alert
+  APPROVE // User confirms suppression is correct
+  DENY // User says this should be an alert
 }
 
 // DRR Score tracking over time
@@ -2428,23 +2487,23 @@ model DRRScore {
   falsePositives    Int // Verified false positives (excluded from calculation)
   acceptedRisks     Int // Stakeholder-approved risks (tracked separately)
   suppressedCount   Int // Suppressed by rules (tracked separately)
-  
+
   // The actual DRR score (resolved / (total - falsePositives))
-  drrScore          Float
-  
+  drrScore Float
+
   // Breakdown by severity
-  criticalTotal     Int @default(0)
-  criticalResolved  Int @default(0)
-  highTotal         Int @default(0)
-  highResolved      Int @default(0)
-  mediumTotal       Int @default(0)
-  mediumResolved    Int @default(0)
-  lowTotal          Int @default(0)
-  lowResolved       Int @default(0)
-  
+  criticalTotal    Int @default(0)
+  criticalResolved Int @default(0)
+  highTotal        Int @default(0)
+  highResolved     Int @default(0)
+  mediumTotal      Int @default(0)
+  mediumResolved   Int @default(0)
+  lowTotal         Int @default(0)
+  lowResolved      Int @default(0)
+
   // Context
-  scanType          String? // null = overall, or specific scan type
-  
+  scanType String? // null = overall, or specific scan type
+
   // Timestamp
   recordedAt DateTime @default(now())
 
@@ -2468,30 +2527,30 @@ enum FindingSeverity {
 }
 
 enum FindingStatus {
-  OPEN          // New/unaddressed
-  IN_PROGRESS   // Being worked on
-  RESOLVED      // Fixed and verified
-  WONT_FIX      // Acknowledged, won't be fixed
+  OPEN // New/unaddressed
+  IN_PROGRESS // Being worked on
+  RESOLVED // Fixed and verified
+  WONT_FIX // Acknowledged, won't be fixed
   FALSE_POSITIVE // Not a real issue
-  ACCEPTED_RISK  // Known risk, stakeholder approved
-  SUPPRESSED    // Matched a rule, hidden from view
+  ACCEPTED_RISK // Known risk, stakeholder approved
+  SUPPRESSED // Matched a rule, hidden from view
 }
 
 enum ResponseType {
-  FIXED             // User claims they fixed it
-  ACKNOWLEDGED      // User saw it, hasn't fixed
-  FALSE_POSITIVE    // Scanner got it wrong
-  ACCEPTED_RISK     // Known issue, accepted by stakeholder
-  WONT_FIX          // Low priority, not worth fixing
+  FIXED // User claims they fixed it
+  ACKNOWLEDGED // User saw it, hasn't fixed
+  FALSE_POSITIVE // Scanner got it wrong
+  ACCEPTED_RISK // Known issue, accepted by stakeholder
+  WONT_FIX // Low priority, not worth fixing
   EXPECTED_BEHAVIOR // This is by design
-  NEEDS_REVIEW      // Escalate for review
+  NEEDS_REVIEW // Escalate for review
 }
 
 enum RuleAction {
-  SUPPRESS         // Hide from normal view
-  REDUCE_SEVERITY  // Downgrade severity
+  SUPPRESS // Hide from normal view
+  REDUCE_SEVERITY // Downgrade severity
   AUTO_ACKNOWLEDGE // Auto-mark as acknowledged
-  FLAG_FOR_REVIEW  // Mark for human review
+  FLAG_FOR_REVIEW // Mark for human review
 }
 
 // ============================================
@@ -2505,35 +2564,35 @@ model ScannerPatternRule {
   // Rule identification
   name        String
   description String? @db.Text
-  
+
   // What this rule applies to
-  tablePattern   String  // 'raw.customers', 'raw.*', '*' for wildcards
-  columnPattern  String  // '_batch_id', '*_id', '*'
-  findingType    String  // 'duplicate', 'null_rate', 'outlier', etc.
-  
+  tablePattern  String // 'raw.customers', 'raw.*', '*' for wildcards
+  columnPattern String // '_batch_id', '*_id', '*'
+  findingType   String // 'duplicate', 'null_rate', 'outlier', etc.
+
   // The detected pattern
-  patternType    PatternType
-  
+  patternType PatternType
+
   // Pattern context (explains WHY this is expected)
-  context        Json    // { "correlates_with": "batch_id", "group_size": 8, "explanation": "..." }
-  
+  context Json // { "correlates_with": "batch_id", "group_size": 8, "explanation": "..." }
+
   // User confirmation status
   status         PatternRuleStatus @default(PENDING)
   confirmedBy    String?
   confirmedAt    DateTime?
   rejectedReason String?
-  
+
   // Auto-detection metadata
-  detectionConfidence Float    @default(0.5)  // 0-1 confidence
-  timesSeen           Int      @default(1)    // How many times this pattern was detected
+  detectionConfidence Float    @default(0.5) // 0-1 confidence
+  timesSeen           Int      @default(1) // How many times this pattern was detected
   lastSeenAt          DateTime @default(now())
   firstSeenAt         DateTime @default(now())
-  
+
   // Rule behavior
-  isActive    Boolean @default(true)
-  priority    Int     @default(0)  // Higher = checked first
-  expiresAt   DateTime?            // Optional expiration
-  
+  isActive  Boolean   @default(true)
+  priority  Int       @default(0) // Higher = checked first
+  expiresAt DateTime? // Optional expiration
+
   // Timestamps
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2541,7 +2600,7 @@ model ScannerPatternRule {
   // Relations
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
-  
+
   // Applications of this rule
   applications PatternRuleApplication[]
 
@@ -2564,13 +2623,13 @@ model PatternRuleApplication {
   scanId     String
   tableName  String
   columnName String?
-  
+
   // What action was taken
-  action     PatternRuleAction
-  
+  action PatternRuleAction
+
   // Details
-  details    Json?   // Additional context about the application
-  
+  details Json? // Additional context about the application
+
   // Timestamp
   appliedAt DateTime @default(now())
 
@@ -2580,26 +2639,26 @@ model PatternRuleApplication {
 }
 
 enum PatternType {
-  COLUMN_CORRELATION    // Duplicates correlate with another column (e.g., batch_id)
-  TIME_SNAPSHOT         // Daily/weekly snapshots causing duplicates
-  SCD_VERSIONING        // Slowly changing dimension versioning
-  FOREIGN_KEY           // Column is a foreign key (expected duplicates)
-  GROUPING_KEY          // Column is a grouping/partition key
-  EXPECTED_NULL         // Nulls are expected in this column
-  EXPECTED_OUTLIER      // Outliers are expected (e.g., large orders)
-  SEASONAL_PATTERN      // Seasonal variations are normal
-  CUSTOM                // Custom user-defined pattern
+  COLUMN_CORRELATION // Duplicates correlate with another column (e.g., batch_id)
+  TIME_SNAPSHOT // Daily/weekly snapshots causing duplicates
+  SCD_VERSIONING // Slowly changing dimension versioning
+  FOREIGN_KEY // Column is a foreign key (expected duplicates)
+  GROUPING_KEY // Column is a grouping/partition key
+  EXPECTED_NULL // Nulls are expected in this column
+  EXPECTED_OUTLIER // Outliers are expected (e.g., large orders)
+  SEASONAL_PATTERN // Seasonal variations are normal
+  CUSTOM // Custom user-defined pattern
 }
 
 enum PatternRuleStatus {
-  PENDING    // Detected, awaiting user confirmation
-  CONFIRMED  // User confirmed this is expected
-  REJECTED   // User said this is NOT expected (flag as issue)
+  PENDING // Detected, awaiting user confirmation
+  CONFIRMED // User confirmed this is expected
+  REJECTED // User said this is NOT expected (flag as issue)
   AUTO_CONFIRMED // Confirmed automatically (high confidence + seen multiple times)
 }
 
 enum PatternRuleAction {
-  SUPPRESSED           // Finding was suppressed due to rule
-  NEEDS_CONFIRMATION   // Pattern detected, shown to user for confirmation
-  FLAGGED              // No rule matched, flagged as issue
+  SUPPRESSED // Finding was suppressed due to rule
+  NEEDS_CONFIRMATION // Pattern detected, shown to user for confirmation
+  FLAGGED // No rule matched, flagged as issue
 }

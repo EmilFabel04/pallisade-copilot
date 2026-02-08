@@ -1706,3 +1706,694 @@ class ToolExecutor:
                 "articles": results,
             },
         )
+
+    # ==========================================
+    # OBSERVABILITY TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    def _get_observability_clients(self) -> List[Any]:
+        """Get all connected observability clients."""
+        try:
+            from ..integrations.observability import create_observability_client, OBSERVABILITY_TYPES
+        except ImportError:
+            from scanner.integrations.observability import create_observability_client, OBSERVABILITY_TYPES
+
+        clients = []
+        for integration in self.context.integrations:
+            if integration.type.upper() in OBSERVABILITY_TYPES:
+                try:
+                    client = create_observability_client(integration.type, integration.config)
+                    if client and client.connect():
+                        clients.append(client)
+                except Exception as e:
+                    logger.warning(f"Failed to create observability client for {integration.type}: {e}")
+
+        return clients
+
+    async def _execute_get_active_incidents(self, args: Dict[str, Any]) -> ToolResult:
+        """Get active data quality incidents from observability tools."""
+        try:
+            from ..integrations.observability import IncidentSeverity
+        except ImportError:
+            from scanner.integrations.observability import IncidentSeverity
+
+        severity_str = args.get("severity")
+        asset_filter = args.get("asset")
+        limit = args.get("limit", 20)
+
+        clients = self._get_observability_clients()
+        if not clients:
+            return ToolResult(
+                success=False,
+                error="No observability tools connected. Connect Monte Carlo, Bigeye, Soda, or Elementary to use this feature."
+            )
+
+        # Parse severity filter
+        severity_filter = None
+        if severity_str:
+            try:
+                severity_filter = [IncidentSeverity(severity_str.lower())]
+            except ValueError:
+                pass
+
+        all_incidents = []
+        tools_queried = []
+
+        for client in clients:
+            try:
+                incidents = client.get_active_incidents(
+                    severity_filter=severity_filter,
+                    asset_filter=asset_filter,
+                    limit=limit,
+                )
+                all_incidents.extend(incidents)
+                tools_queried.append(client.TOOL_NAME)
+            except Exception as e:
+                logger.error(f"Error fetching incidents from {client.TOOL_NAME}: {e}")
+
+        # Sort by severity (critical first) and time
+        severity_order = {
+            IncidentSeverity.CRITICAL: 0,
+            IncidentSeverity.HIGH: 1,
+            IncidentSeverity.MEDIUM: 2,
+            IncidentSeverity.LOW: 3,
+            IncidentSeverity.INFO: 4,
+        }
+        all_incidents.sort(key=lambda i: (severity_order.get(i.severity, 5), -i.age_hours))
+
+        # Format for response
+        incidents_data = []
+        for incident in all_incidents[:limit]:
+            asset_name = incident.primary_asset.display_name if incident.primary_asset else "Unknown"
+            incidents_data.append({
+                "id": incident.id,
+                "source": incident.source,
+                "severity": incident.severity.value,
+                "status": incident.status.value,
+                "type": incident.incident_type.value,
+                "title": incident.title,
+                "description": incident.description[:200] if incident.description else "",
+                "asset": asset_name,
+                "detected_at": incident.detected_at.isoformat(),
+                "age_hours": round(incident.age_hours, 1),
+                "expected_value": incident.expected_value,
+                "actual_value": incident.actual_value,
+                "deviation_pct": incident.deviation_percentage,
+                "url": incident.external_url,
+            })
+
+        return ToolResult(
+            success=True,
+            data={
+                "tools_queried": tools_queried,
+                "total_count": len(all_incidents),
+                "returned_count": len(incidents_data),
+                "incidents": incidents_data,
+            }
+        )
+
+    async def _execute_get_asset_quality(self, args: Dict[str, Any]) -> ToolResult:
+        """Get data quality metrics for a specific asset."""
+        asset_name = args["asset_name"]
+
+        clients = self._get_observability_clients()
+        if not clients:
+            return ToolResult(
+                success=False,
+                error="No observability tools connected. Connect Monte Carlo, Bigeye, Soda, or Elementary to use this feature."
+            )
+
+        # Try each client until we get metrics
+        for client in clients:
+            try:
+                metrics = client.get_asset_quality_metrics(asset_name)
+                if metrics:
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "source": client.TOOL_NAME,
+                            "asset": asset_name,
+                            "health_score": metrics.health_score,
+                            "health_status": metrics.health_status,
+                            "active_incidents": metrics.active_incidents,
+                            "total_checks": metrics.total_checks,
+                            "passing_checks": metrics.passing_checks,
+                            "check_pass_rate": metrics.check_pass_rate,
+                            "freshness_status": metrics.freshness_status,
+                            "hours_since_update": metrics.hours_since_update,
+                            "expected_freshness_hours": metrics.expected_freshness_hours,
+                            "volume_status": metrics.volume_status,
+                            "volume_deviation_pct": metrics.volume_deviation_pct,
+                            "current_row_count": metrics.current_row_count,
+                            "expected_row_count": metrics.expected_row_count,
+                            "schema_changes_7d": metrics.schema_changes_7d,
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to get metrics from {client.TOOL_NAME}: {e}")
+                continue
+
+        return ToolResult(
+            success=False,
+            error=f"Asset '{asset_name}' not found in any connected observability tool. Verify the asset name format (e.g., 'database.schema.table')."
+        )
+
+    async def _execute_trace_incident_root_cause(self, args: Dict[str, Any]) -> ToolResult:
+        """Trace an incident upstream through lineage to find root cause."""
+        incident_id = args.get("incident_id")
+        asset_name = args.get("asset_name")
+        depth = args.get("depth", 3)
+
+        if not incident_id and not asset_name:
+            return ToolResult(
+                success=False,
+                error="Either incident_id or asset_name must be provided."
+            )
+
+        clients = self._get_observability_clients()
+        if not clients:
+            return ToolResult(
+                success=False,
+                error="No observability tools connected."
+            )
+
+        primary_incident = None
+        affected_asset = asset_name
+
+        # If incident_id provided, get the incident details first
+        if incident_id:
+            for client in clients:
+                try:
+                    incident = client.get_incident_details(incident_id)
+                    if incident:
+                        primary_incident = incident
+                        if incident.primary_asset:
+                            affected_asset = incident.primary_asset.fqn
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to get incident {incident_id} from {client.TOOL_NAME}: {e}")
+
+        if not affected_asset:
+            return ToolResult(
+                success=False,
+                error="Could not determine affected asset. Please provide asset_name."
+            )
+
+        # Get upstream incidents from observability tools
+        upstream_incidents = []
+        for client in clients:
+            try:
+                upstream = client.get_upstream_incidents(affected_asset, depth=depth)
+                upstream_incidents.extend(upstream)
+            except Exception as e:
+                logger.debug(f"No upstream incidents from {client.TOOL_NAME}: {e}")
+
+        # Also check Pallisade lineage if available
+        lineage_upstream = []
+        if self.context.graph:
+            try:
+                upstream_nodes = self.context.graph.get_upstream(affected_asset, depth=depth)
+                for node in upstream_nodes:
+                    # Check each upstream node for incidents
+                    for client in clients:
+                        try:
+                            node_incidents = client.get_incidents_for_asset(
+                                node.id,
+                                hours_back=168,  # 7 days
+                                include_resolved=False,
+                            )
+                            for inc in node_incidents:
+                                if inc.is_active:
+                                    upstream_incidents.append(inc)
+                                    lineage_upstream.append({
+                                        "node": node.id,
+                                        "node_type": node.node_type.value,
+                                        "incident_id": inc.id,
+                                        "incident_type": inc.incident_type.value,
+                                    })
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"Lineage lookup failed: {e}")
+
+        # Format response
+        root_causes = []
+        for incident in upstream_incidents:
+            asset = incident.primary_asset.display_name if incident.primary_asset else "Unknown"
+            root_causes.append({
+                "incident_id": incident.id,
+                "source": incident.source,
+                "severity": incident.severity.value,
+                "type": incident.incident_type.value,
+                "title": incident.title,
+                "asset": asset,
+                "detected_at": incident.detected_at.isoformat(),
+                "url": incident.external_url,
+            })
+
+        return ToolResult(
+            success=True,
+            data={
+                "target_asset": affected_asset,
+                "primary_incident": {
+                    "id": primary_incident.id,
+                    "type": primary_incident.incident_type.value,
+                    "title": primary_incident.title,
+                } if primary_incident else None,
+                "upstream_issues_found": len(root_causes),
+                "root_causes": root_causes,
+                "lineage_path": lineage_upstream,
+                "recommendation": self._generate_root_cause_recommendation(primary_incident, root_causes),
+            }
+        )
+
+    def _generate_root_cause_recommendation(
+        self,
+        primary_incident,
+        root_causes: List[Dict],
+    ) -> str:
+        """Generate a recommendation based on root cause analysis."""
+        if not root_causes:
+            if primary_incident:
+                incident_type = primary_incident.incident_type.value
+                if incident_type == "freshness":
+                    return "No upstream issues detected. Check the orchestrator (Airflow, dbt Cloud, etc.) for failed or delayed jobs that update this table."
+                elif incident_type == "volume":
+                    return "No upstream issues detected. Check the source system for changes in data volume or filtering logic."
+                elif incident_type == "schema":
+                    return "No upstream issues detected. This appears to be a direct schema change on this table."
+            return "No upstream issues detected. Investigate the table directly."
+
+        # Summarize root causes
+        issue_types = set(rc["type"] for rc in root_causes)
+        assets = set(rc["asset"] for rc in root_causes)
+
+        if "freshness" in issue_types:
+            return f"Root cause appears to be freshness issues in upstream tables: {', '.join(assets)}. Fix the upstream data pipeline first, then this table should resolve automatically."
+        elif "schema" in issue_types:
+            return f"Schema changes detected in upstream tables: {', '.join(assets)}. Review the schema changes and update downstream transformations accordingly."
+        elif "volume" in issue_types:
+            return f"Volume anomalies detected in upstream tables: {', '.join(assets)}. Investigate the source data before proceeding."
+        else:
+            return f"Issues found in upstream tables: {', '.join(assets)}. Fix these first before addressing the downstream problem."
+
+    async def _execute_get_quality_checks(self, args: Dict[str, Any]) -> ToolResult:
+        """Get data quality checks configured for an asset."""
+        asset_name = args["asset_name"]
+
+        clients = self._get_observability_clients()
+        if not clients:
+            return ToolResult(
+                success=False,
+                error="No observability tools connected."
+            )
+
+        all_checks = []
+        tools_queried = []
+
+        for client in clients:
+            try:
+                checks = client.get_checks_for_asset(asset_name)
+                all_checks.extend(checks)
+                tools_queried.append(client.TOOL_NAME)
+            except Exception as e:
+                logger.warning(f"Failed to get checks from {client.TOOL_NAME}: {e}")
+
+        if not all_checks:
+            return ToolResult(
+                success=True,
+                data={
+                    "asset": asset_name,
+                    "tools_queried": tools_queried,
+                    "total_checks": 0,
+                    "checks": [],
+                    "message": f"No data quality checks found for '{asset_name}'."
+                }
+            )
+
+        # Format checks
+        checks_data = []
+        for check in all_checks:
+            checks_data.append({
+                "id": check.id,
+                "source": check.source,
+                "name": check.name,
+                "type": check.check_type.value,
+                "is_passing": check.is_passing,
+                "consecutive_failures": check.consecutive_failures,
+                "threshold": check.threshold,
+                "schedule": check.schedule,
+                "last_run_at": check.last_run_at.isoformat() if check.last_run_at else None,
+                "url": check.external_url,
+            })
+
+        passing = sum(1 for c in all_checks if c.is_passing)
+        failing = len(all_checks) - passing
+
+        return ToolResult(
+            success=True,
+            data={
+                "asset": asset_name,
+                "tools_queried": tools_queried,
+                "total_checks": len(all_checks),
+                "passing": passing,
+                "failing": failing,
+                "checks": checks_data,
+            }
+        )
+
+    async def _execute_get_incident_details(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed information about a specific incident."""
+        incident_id = args["incident_id"]
+
+        clients = self._get_observability_clients()
+        if not clients:
+            return ToolResult(
+                success=False,
+                error="No observability tools connected."
+            )
+
+        for client in clients:
+            try:
+                incident = client.get_incident_details(incident_id)
+                if incident:
+                    # Format affected assets
+                    assets = []
+                    for asset in incident.affected_assets:
+                        assets.append({
+                            "id": asset.id,
+                            "name": asset.name,
+                            "fqn": asset.fqn,
+                            "type": asset.asset_type,
+                            "column": asset.column_name,
+                        })
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "id": incident.id,
+                            "source": incident.source,
+                            "severity": incident.severity.value,
+                            "status": incident.status.value,
+                            "type": incident.incident_type.value,
+                            "title": incident.title,
+                            "description": incident.description,
+                            "affected_assets": assets,
+                            "detected_at": incident.detected_at.isoformat(),
+                            "started_at": incident.started_at.isoformat() if incident.started_at else None,
+                            "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
+                            "expected_value": incident.expected_value,
+                            "actual_value": incident.actual_value,
+                            "deviation_pct": incident.deviation_percentage,
+                            "threshold": incident.threshold,
+                            "url": incident.external_url,
+                            "tags": incident.tags,
+                        }
+                    )
+            except Exception as e:
+                logger.debug(f"Incident {incident_id} not found in {client.TOOL_NAME}: {e}")
+
+        return ToolResult(
+            success=False,
+            error=f"Incident '{incident_id}' not found in any connected observability tool."
+        )
+
+    # ==========================================
+    # CHANGE PLAN TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_create_change_plan(self, args: Dict[str, Any]) -> ToolResult:
+        """Create a structured change plan with patches."""
+        try:
+            from .change_plan import (
+                ChangePlan,
+                FilePatch,
+                PatchType,
+                ImpactAnalysis,
+                get_change_plan_store,
+            )
+        except ImportError:
+            from scanner.copilot.change_plan import (
+                ChangePlan,
+                FilePatch,
+                PatchType,
+                ImpactAnalysis,
+                get_change_plan_store,
+            )
+
+        title = args.get("title", "Untitled Fix")
+        root_cause = args.get("root_cause", "")
+        description = args.get("description", "")
+        patches_data = args.get("patches", [])
+        impact_data = args.get("impact_analysis", {})
+
+        # Parse patches
+        patches = []
+        for p in patches_data:
+            try:
+                patch_type = PatchType(p.get("patch_type", "sql_model"))
+            except ValueError:
+                patch_type = PatchType.SQL_MODEL
+
+            patch = FilePatch(
+                file_path=p.get("file_path", "unknown.sql"),
+                patch_type=patch_type,
+                new_content=p.get("new_content", ""),
+                rationale=p.get("rationale", ""),
+                original_content=p.get("original_content"),
+                rollback_steps=p.get("rollback_steps", []),
+            )
+            patches.append(patch)
+
+        # Parse impact analysis
+        impact = None
+        if impact_data:
+            impact = ImpactAnalysis(
+                affected_tables=impact_data.get("affected_tables", []),
+                downstream_dependencies=impact_data.get("downstream_dependencies", []),
+                stakeholders=impact_data.get("stakeholders", []),
+                risk_level=impact_data.get("risk_level", "LOW"),
+                expected_data_changes=impact_data.get("expected_data_changes", ""),
+            )
+
+        # Create the plan
+        plan = ChangePlan.create(
+            title=title,
+            description=description,
+            root_cause=root_cause,
+            patches=patches,
+            impact_analysis=impact,
+            session_id=getattr(self.context, 'session_id', None),
+        )
+
+        # Store the plan
+        store = get_change_plan_store()
+        store.save(plan)
+
+        return ToolResult(
+            success=True,
+            data={
+                "plan_id": plan.id,
+                "title": plan.title,
+                "status": plan.status.value,
+                "patches_count": len(plan.patches),
+                "message": f"Change plan '{plan.id}' created with {len(plan.patches)} patch(es). Use validate_change_plan to run validation checks.",
+                "plan": plan.to_dict(),
+            }
+        )
+
+    async def _execute_validate_change_plan(self, args: Dict[str, Any]) -> ToolResult:
+        """Run validation checks on a change plan."""
+        try:
+            from .change_plan import (
+                ValidationLevel,
+                get_validator,
+                get_change_plan_store,
+            )
+        except ImportError:
+            from scanner.copilot.change_plan import (
+                ValidationLevel,
+                get_validator,
+                get_change_plan_store,
+            )
+
+        plan_id = args.get("plan_id")
+        level_str = args.get("level", "static")
+
+        # Get the plan
+        store = get_change_plan_store()
+        plan = store.get(plan_id)
+
+        if not plan:
+            return ToolResult(
+                success=False,
+                error=f"Change plan '{plan_id}' not found. Use create_change_plan first."
+            )
+
+        # Parse validation level
+        try:
+            level = ValidationLevel(level_str)
+        except ValueError:
+            return ToolResult(
+                success=False,
+                error=f"Invalid validation level: {level_str}. Use 'static', 'ci', or 'sandbox'."
+            )
+
+        # Get validator and run validation
+        validator = get_validator(level, self.context)
+        result = await validator.validate(plan)
+
+        # Update plan with validation result
+        plan.set_validation(result)
+        store.save(plan)
+
+        return ToolResult(
+            success=result.status.value == "passed",
+            data={
+                "plan_id": plan.id,
+                "level": result.level.value,
+                "status": result.status.value,
+                "duration_seconds": result.duration_seconds,
+                "errors": result.errors,
+                "warnings": result.warnings,
+                "details": result.details,
+                "plan_status": plan.status.value,
+                "is_validated": plan.is_validated(),
+            }
+        )
+
+    async def _execute_get_change_plan(self, args: Dict[str, Any]) -> ToolResult:
+        """Retrieve a change plan by ID."""
+        try:
+            from .change_plan import get_change_plan_store
+        except ImportError:
+            from scanner.copilot.change_plan import get_change_plan_store
+
+        plan_id = args.get("plan_id")
+
+        store = get_change_plan_store()
+        plan = store.get(plan_id)
+
+        if not plan:
+            return ToolResult(
+                success=False,
+                error=f"Change plan '{plan_id}' not found."
+            )
+
+        return ToolResult(
+            success=True,
+            data=plan.to_dict()
+        )
+
+    async def _execute_list_change_plans(self, args: Dict[str, Any]) -> ToolResult:
+        """List all change plans in the current session."""
+        try:
+            from .change_plan import get_change_plan_store
+        except ImportError:
+            from scanner.copilot.change_plan import get_change_plan_store
+
+        store = get_change_plan_store()
+        plans = store.list()
+
+        plans_data = []
+        for plan in plans:
+            validation_summary = {}
+            for level, result in plan.validations.items():
+                validation_summary[level.value] = result.status.value
+
+            plans_data.append({
+                "id": plan.id,
+                "title": plan.title,
+                "status": plan.status.value,
+                "patches_count": len(plan.patches),
+                "validations": validation_summary,
+                "is_validated": plan.is_validated(),
+                "created_at": plan.created_at.isoformat(),
+                "pr_url": plan.pr_url,
+            })
+
+        return ToolResult(
+            success=True,
+            data={
+                "count": len(plans_data),
+                "plans": plans_data,
+            }
+        )
+
+    async def _execute_apply_change_plan(self, args: Dict[str, Any]) -> ToolResult:
+        """Apply a validated change plan by creating a GitHub PR."""
+        try:
+            from .change_plan import (
+                ChangePlanApplier,
+                get_change_plan_store,
+            )
+        except ImportError:
+            from scanner.copilot.change_plan import (
+                ChangePlanApplier,
+                get_change_plan_store,
+            )
+
+        plan_id = args.get("plan_id")
+        repo_owner = args.get("repo_owner")
+        repo_name = args.get("repo_name")
+        base_branch = args.get("base_branch", "main")
+
+        # Get the plan
+        store = get_change_plan_store()
+        plan = store.get(plan_id)
+
+        if not plan:
+            return ToolResult(
+                success=False,
+                error=f"Change plan '{plan_id}' not found."
+            )
+
+        # Check if validated
+        if not plan.is_validated():
+            return ToolResult(
+                success=False,
+                error="Plan has not passed required validations. Run validate_change_plan with level='static' first."
+            )
+
+        # Get GitHub token from context
+        github_token = self._get_github_token()
+        if not github_token:
+            return ToolResult(
+                success=False,
+                error="GitHub is not connected. Please connect GitHub in your integrations to apply changes."
+            )
+
+        # Apply the plan
+        applier = ChangePlanApplier(github_token)
+        try:
+            result = await applier.apply(plan, repo_owner, repo_name, base_branch)
+
+            if result.success:
+                # Update stored plan
+                store.save(plan)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "plan_id": plan.id,
+                        "pr_url": result.pr_url,
+                        "pr_number": result.pr_number,
+                        "branch": result.branch_name,
+                        "files_changed": result.files_changed,
+                        "message": f"Pull Request created: {result.pr_url}",
+                    }
+                )
+            else:
+                return ToolResult(
+                    success=False,
+                    error=result.error or "Failed to create Pull Request"
+                )
+        finally:
+            await applier.close()
+
+    def _get_github_token(self) -> Optional[str]:
+        """Get GitHub token from context integrations."""
+        for integration in self.context.integrations:
+            if integration.type.upper() == "GITHUB":
+                return integration.config.get("access_token") or integration.config.get("token")
+        return None

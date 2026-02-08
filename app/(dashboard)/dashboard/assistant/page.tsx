@@ -10,12 +10,21 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { ChangePlanToolResult, isChangePlanTool } from '@/components/copilot/change-plan';
+
+type ToolCall = {
+  id?: string;
+  name: string;
+  arguments?: Record<string, unknown>;
+  result?: unknown;
+};
 
 type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  toolCalls?: ToolCall[];
 };
 
 type ChatSession = {
@@ -111,6 +120,7 @@ export default function AssistantPage() {
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
   const [selectedMode, setSelectedMode] = useState('ask');
+  const [selectedModel, setSelectedModel] = useState('gpt-5.2');
   const [thinkingStep, setThinkingStep] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
@@ -121,11 +131,13 @@ export default function AssistantPage() {
   const modelLoadedRef = useRef(false);
   const initialLoadDone = useRef(false);
 
-  // Load mode from localStorage on client
+  // Load mode and model from localStorage on client
   useEffect(() => {
     if (!modelLoadedRef.current) {
       const savedMode = localStorage.getItem('pallisade-copilot-mode');
+      const savedModel = localStorage.getItem('pallisade-copilot-model');
       if (savedMode) setSelectedMode(savedMode);
+      if (savedModel) setSelectedModel(savedModel);
       modelLoadedRef.current = true;
     }
   }, []);
@@ -136,6 +148,13 @@ export default function AssistantPage() {
       localStorage.setItem('pallisade-copilot-mode', selectedMode);
     }
   }, [selectedMode]);
+
+  // Persist model selection to localStorage
+  useEffect(() => {
+    if (modelLoadedRef.current) {
+      localStorage.setItem('pallisade-copilot-model', selectedModel);
+    }
+  }, [selectedModel]);
 
   // Fetch sources when pipeline changes (uses cached data)
   useEffect(() => {
@@ -352,7 +371,7 @@ export default function AssistantPage() {
           message: messageText,
           sessionId,
           pipelineStackId: selectedPipelineId,
-          model: 'claude-sonnet',
+          model: selectedModel,
           mode: modeToUse,
         }),
       });
@@ -370,11 +389,19 @@ export default function AssistantPage() {
         }
       }
 
+      // Map backend tool_calls format to frontend format
+      const mappedToolCalls: ToolCall[] = (data.tool_calls || []).map((tc: { tool?: string; name?: string; input?: Record<string, unknown>; arguments?: Record<string, unknown>; result?: unknown }) => ({
+        name: tc.tool || tc.name || '',
+        arguments: tc.input || tc.arguments,
+        result: tc.result,
+      }));
+
       const aiMessage: Message = {
         id: data.messageId || (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.message || 'Sorry, I encountered an error.',
         timestamp: new Date(),
+        toolCalls: mappedToolCalls,
       };
 
       setMessages(prev => [...prev, aiMessage]);
@@ -439,11 +466,14 @@ export default function AssistantPage() {
                   </div>
                 ) : (
                   sessions.map((s) => (
-                    <button
+                    <div
                       key={s.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => loadSession(s.id)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') loadSession(s.id); }}
                       className={cn(
-                        'w-full text-left px-3 py-2.5 rounded-xl transition-all group',
+                        'w-full text-left px-3 py-2.5 rounded-xl transition-all group cursor-pointer',
                         sessionId === s.id
                           ? 'bg-white/[0.08] text-white'
                           : 'hover:bg-white/[0.04] text-[var(--muted)] hover:text-white'
@@ -466,7 +496,7 @@ export default function AssistantPage() {
                           <TooltipContent>Delete chat</TooltipContent>
                         </Tooltip>
                       </div>
-                    </button>
+                    </div>
                   ))
                 )}
               </div>
@@ -562,12 +592,41 @@ export default function AssistantPage() {
                       </Avatar>
                     )}
                     <div className={cn(
-                      'max-w-[85%] px-3 py-2',
-                      message.role === 'user'
-                        ? 'bg-[var(--accent)] text-white rounded-xl rounded-tr-sm'
-                        : 'bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm'
+                      'max-w-[85%]',
+                      message.role === 'user' ? '' : 'space-y-2'
                     )}>
-                      <MessageContent content={message.content} />
+                      <div className={cn(
+                        'px-3 py-2',
+                        message.role === 'user'
+                          ? 'bg-[var(--accent)] text-white rounded-xl rounded-tr-sm'
+                          : 'bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm'
+                      )}>
+                        <MessageContent content={message.content} />
+                      </div>
+                      {/* Render change plan tool results */}
+                      {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (
+                        <div className="space-y-2 mt-2">
+                          {message.toolCalls.filter(tc => isChangePlanTool(tc.name)).map((toolCall, idx) => (
+                            <ChangePlanToolResult
+                              key={toolCall.id || idx}
+                              toolName={toolCall.name}
+                              result={toolCall.result as any}
+                              onValidate={(planId, level) => {
+                                handleSubmit(
+                                  { preventDefault: () => {} } as React.FormEvent,
+                                  `Validate change plan ${planId} at ${level} level`
+                                );
+                              }}
+                              onApply={(planId) => {
+                                handleSubmit(
+                                  { preventDefault: () => {} } as React.FormEvent,
+                                  `Apply change plan ${planId} to create a GitHub PR`
+                                );
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                     {message.role === 'user' && (
                       <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
@@ -620,10 +679,20 @@ export default function AssistantPage() {
                     rows={2}
                   />
 
-                  {/* Bottom bar with mode selector and send button */}
+                  {/* Bottom bar with mode selector, model selector, and send button */}
                   <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[#1a1a24] border-t border-white/[0.06] rounded-b-xl">
                     <div className="flex items-center gap-2">
                       <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
+                      <select
+                        value={selectedModel}
+                        onChange={(e) => setSelectedModel(e.target.value)}
+                        className="px-2 py-1 text-[11px] rounded-lg bg-white/[0.04] border border-white/[0.08] text-white/70 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+                      >
+                        <option value="gpt-5.2">GPT-5.2</option>
+                        <option value="gpt-5.2-mini">GPT-5.2 Mini</option>
+                        <option value="claude-sonnet">Claude Sonnet</option>
+                        <option value="claude-haiku">Claude Haiku</option>
+                      </select>
                       <span className="text-[10px] text-white/30 hidden sm:inline">Enter to send</span>
                     </div>
                     <Button

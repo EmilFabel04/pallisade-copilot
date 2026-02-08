@@ -60,17 +60,17 @@ class CopilotLLM:
     
     # Available models by provider
     MODELS = {
+        # OpenAI (higher rate limits)
+        "gpt-5.2": {"provider": "openai", "model": "gpt-5.2"},
+        "gpt-5.2-mini": {"provider": "openai", "model": "gpt-5.2-mini"},
+        "o3-mini": {"provider": "openai", "model": "o3-mini"},
         # Anthropic
         "claude-sonnet": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
         "claude-opus": {"provider": "anthropic", "model": "claude-opus-4-20250514"},
-        # OpenAI
-        "gpt-4o": {"provider": "openai", "model": "gpt-4o"},
-        "gpt-4o-mini": {"provider": "openai", "model": "gpt-4o-mini"},
-        "gpt-4-turbo": {"provider": "openai", "model": "gpt-4-turbo"},
-        "o3-mini": {"provider": "openai", "model": "o3-mini"},
+        "claude-haiku": {"provider": "anthropic", "model": "claude-haiku-4-20250514"},
     }
-    
-    DEFAULT_MODEL = "gpt-4o"  # OpenAI as default to avoid rate limits
+
+    DEFAULT_MODEL = "gpt-5.2"  # OpenAI as default for higher rate limits
     
     def __init__(
         self,
@@ -161,7 +161,7 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 6. **Chain queries**: Use the results of one query to inform the next. If you find a suspicious table, query its contents. If you find a failed job, get its logs.
 7. **Synthesize findings**: After gathering all evidence, provide a comprehensive answer with: what happened, why it happened, the root cause, and what to do about it.
 
-**You have up to 15 tool calls per conversation. USE THEM for investigations. A thorough answer with 5-8 queries is far better than a shallow answer with 1.**
+**EFFICIENCY IS KEY: Combine multiple questions into single queries using UNION ALL, multiple aggregations, or JOINs. Aim for 1-3 well-designed queries max. The schema is pre-loaded below — use it to write precise queries without exploration.**
 
 """
         # Add mode-specific prompt section
@@ -172,11 +172,12 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
         prompt += self._build_warehouse_syntax_section(context)
 
         prompt += """
-## Tool Selection Guide
+## Tool Selection Guide (Be Efficient!)
 
 - **Simple data questions** ("how many orders?", "top customers"): ONE `query_warehouse` call. Schema is below — go straight to the query.
-- **Investigation / comparison / debugging** ("are my tables the same?", "why did this fail?", "what's wrong with my data?"): MULTIPLE queries across all relevant warehouses. Check table lists, row counts, column schemas, data samples, freshness, logs. Do NOT stop at a surface answer — keep digging until you have the full picture.
-- **Cross-warehouse comparison** ("same tables in Snowflake and BigQuery?"): Query BOTH warehouses — list tables from each, compare names, row counts, and column schemas side by side. Always use the `warehouse` parameter.
+- **Multi-table questions**: Combine into ONE query using UNION ALL or subqueries. Example: To check null counts across 4 tables, use UNION ALL to get all results in one call.
+- **Investigation / debugging**: Start with ONE comprehensive diagnostic query that checks multiple things (row counts, null counts, recent timestamps) together. Only make follow-up queries if the first reveals something that needs deeper investigation.
+- **Cross-warehouse comparison**: If comparing two warehouses, that's 2 queries max (one per warehouse). Combine all checks for each warehouse into a single query.
 - **Lineage questions** ("what feeds into X?", "what depends on Y?"): Use `get_upstream` or `get_downstream`.
 - **Finding tables** ("do I have a users table?"): Check the schema section below first. Only use `search_lineage` or INFORMATION_SCHEMA if the table isn't listed.
 - **Table health** ("is my data fresh?", "how big is X?"): Use `get_table_stats`.
@@ -704,13 +705,16 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     "messages": openai_messages,
                 }
                 
-                if is_reasoning_model:
+                # GPT-5.x and reasoning models use max_completion_tokens
+                is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
+                if is_new_model:
                     api_params["max_completion_tokens"] = 4096
-                    # Reasoning models don't support tools yet
                 else:
                     api_params["max_tokens"] = 4096
-                    if tools:
-                        api_params["tools"] = tools
+
+                # Add tools (reasoning models don't support tools yet)
+                if tools and not is_reasoning_model:
+                    api_params["tools"] = tools
                 
                 # Call OpenAI
                 response = self.openai_client.chat.completions.create(**api_params)
