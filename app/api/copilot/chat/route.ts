@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { decrypt } from '@/lib/crypto';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -94,11 +95,14 @@ export async function POST(request: Request) {
     ];
 
     // Fetch pipeline nodes (integrations) from the database
+    // Include CONNECTED, HEALTHY, and WARNING nodes (exclude PENDING, TESTING, ERROR)
     const pipelineStack = await prisma.pipelineStack.findFirst({
       where: { organizationId: user.organizationId },
       include: {
         nodes: {
-          where: { status: 'CONNECTED' },
+          where: {
+            status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+          },
           select: {
             id: true,
             name: true,
@@ -113,25 +117,60 @@ export async function POST(request: Request) {
 
     // Convert pipeline nodes to integration format for the scanner
     // Note: type must be uppercase to match the scanner's tool registry
+    const validActiveStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
     const integrations = pipelineStack?.nodes.map(node => {
+      // Decrypt credentials if encrypted (same pattern as tables/route.ts)
+      let credentials: Record<string, any> = {};
+      if (node.config) {
+        try {
+          const configJson = node.config as { encrypted?: string; _cached?: any; [key: string]: any };
+
+          if (configJson.encrypted) {
+            // Decrypt if credentials are encrypted
+            const decrypted = decrypt(configJson.encrypted);
+            credentials = JSON.parse(decrypted);
+          } else {
+            // Config is stored directly (not encrypted)
+            const { _cached, ...creds } = configJson;
+            credentials = creds;
+          }
+        } catch (e) {
+          console.error(`[COPILOT] Failed to decrypt credentials for ${node.name}:`, e);
+          credentials = {};
+        }
+      }
+
       // Map frontend field names to adapter field names
-      const rawConfig = (node.config || {}) as Record<string, any>;
-      const config = { ...rawConfig };
+      const config = { ...credentials };
+
+      // username -> user (Snowflake, Postgres, Redshift)
       if (config.username && !config.user) {
         config.user = config.username;
         delete config.username;
       }
+
+      // server -> host (SQL Server)
+      if (config.server && !config.host) {
+        config.host = config.server;
+        delete config.server;
+      }
+
       return {
         id: node.id,
         name: node.name,
         type: node.toolType.toUpperCase(),
         layer: node.layer.toLowerCase(),
-        status: node.status === 'CONNECTED' ? 'ACTIVE' : node.status,
+        status: validActiveStatuses.includes(node.status) ? 'ACTIVE' : node.status,
         config,
       };
     }) || [];
-    
-    console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({ name: i.name, type: i.type, status: i.status })));
+
+    console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({
+      name: i.name,
+      type: i.type,
+      status: i.status,
+      configKeys: Object.keys(i.config).filter(k => !k.startsWith('_'))
+    })));
 
     // Call the scanner copilot API with full conversation history
     const response = await fetch(`${SCANNER_API_URL}/api/v1/copilot/chat`, {

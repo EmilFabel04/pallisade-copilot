@@ -111,12 +111,12 @@ export function ModeSelector({ selected, onSelect, compact = false }: ModeSelect
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 top-full mt-2 w-64 bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-xl z-50 overflow-hidden">
+        <div className="absolute left-0 bottom-full mb-2 w-64 bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-xl z-50 overflow-hidden">
           <div className="p-3 border-b border-[rgba(255,255,255,0.06)]">
             <h4 className="text-sm font-medium">Select Mode</h4>
             <p className="text-xs text-[var(--muted)] mt-0.5">Choose how Scout should respond</p>
           </div>
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-64 overflow-y-auto">
             {MODES.map((mode) => (
               <button
                 key={mode.id}

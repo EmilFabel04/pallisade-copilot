@@ -68,18 +68,22 @@ def create_app() -> FastAPI:
     # Register Routers
     from .routers import health_router, database_router, lineage_router
     from .routers.copilot import router as copilot_router
-    
+    from .routers.dbt import router as dbt_router
+
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
-    
+
     # Co-Pilot API
     app.include_router(copilot_router, prefix="/api/v1", tags=["Co-Pilot"])
-    
+
     # Database discovery API
     app.include_router(database_router, prefix="/api/v1", tags=["Database"])
-    
+
     # Lineage extraction API
     app.include_router(lineage_router, prefix="/api/v1", tags=["Lineage"])
+
+    # dbt discovery API
+    app.include_router(dbt_router, prefix="/api/v1", tags=["dbt"])
     
     logger.info("app_started", version=settings.version, environment=settings.environment)
     

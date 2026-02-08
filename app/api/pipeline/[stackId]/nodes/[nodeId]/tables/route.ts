@@ -7,6 +7,7 @@ import { decrypt } from '@/lib/crypto';
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 // GET /api/pipeline/[stackId]/nodes/[nodeId]/tables - Get data from any pipeline node
+// Use ?refresh=true to force fresh discovery from warehouse
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ stackId: string; nodeId: string }> }
@@ -18,6 +19,8 @@ export async function GET(
     }
 
     const { stackId, nodeId } = await params;
+    const { searchParams } = new URL(request.url);
+    const forceRefresh = searchParams.get('refresh') === 'true';
 
     const user = await prisma.user.findUnique({
       where: { email: session.user.email! },
@@ -46,18 +49,24 @@ export async function GET(
       return NextResponse.json({ error: 'Node not found' }, { status: 404 });
     }
 
-    // Get credentials from node config
+    // Get credentials and cached data from node config
     let credentials: Record<string, any> = {};
+    let cachedData: Record<string, any> | null = null;
     if (node.config) {
       try {
-        const configJson = node.config as { encrypted?: string; [key: string]: any };
+        const configJson = node.config as { encrypted?: string; _cached?: any; [key: string]: any };
+
+        // Always extract cached data if present (works for both encrypted and unencrypted)
+        cachedData = configJson._cached || null;
+
         if (configJson.encrypted) {
           // Decrypt if credentials are encrypted
           const decrypted = decrypt(configJson.encrypted);
           credentials = JSON.parse(decrypted);
         } else {
           // Config is stored directly (not encrypted)
-          credentials = configJson;
+          const { _cached, ...creds } = configJson;
+          credentials = creds;
         }
       } catch (e) {
         console.error('[NODE DATA] Credentials parsing failed:', e);
@@ -77,19 +86,65 @@ export async function GET(
       });
     }
 
-    // Handle different node types
+    // Return cached data if available and not forcing refresh
+    if (!forceRefresh && cachedData && cachedData.data) {
+      console.log(`[NODE DATA] Returning cached data for ${nodeId}, lastSync: ${cachedData.lastSync}`);
+      return NextResponse.json({
+        ...cachedData.data,
+        source: 'cached',
+        lastSync: cachedData.lastSync,
+        connected: true,
+      });
+    }
+
+    // Handle different node types (fetch fresh data)
+    console.log(`[NODE DATA] Fetching fresh data for node: ${node.name} (${node.toolType}), layer=${node.layer}, status=${node.status}, forceRefresh=${forceRefresh}`);
+    console.log(`[NODE DATA] Credentials keys: ${Object.keys(credentials).filter(k => !k.startsWith('_')).join(', ')}`);
+    let result: Response;
     switch (node.layer) {
       case 'WAREHOUSE':
-        return await getWarehouseData(node, credentials);
+        result = await getWarehouseData(node, credentials);
+        break;
       case 'TRANSFORMATION':
-        return await getTransformationData(node, credentials);
+        result = await getTransformationData(node, credentials);
+        break;
       case 'INGESTION':
-        return await getIngestionData(node, credentials);
+        result = await getIngestionData(node, credentials);
+        break;
       case 'REPORTING':
-        return await getReportingData(node, credentials);
+        result = await getReportingData(node, credentials);
+        break;
       default:
         return NextResponse.json({ tables: [], models: [], connectors: [] });
     }
+
+    // Cache the result if it was successful
+    const responseData = await result.json();
+    if (responseData.connected !== false && responseData.source !== 'error') {
+      const lastSync = new Date().toISOString();
+      try {
+        // Store cached data in node config
+        const currentConfig = node.config as Record<string, any> || {};
+        await prisma.pipelineNode.update({
+          where: { id: nodeId },
+          data: {
+            config: {
+              ...currentConfig,
+              _cached: {
+                data: responseData,
+                lastSync,
+              },
+            },
+          },
+        });
+        console.log(`[NODE DATA] Cached data for ${nodeId}`);
+        responseData.lastSync = lastSync;
+      } catch (cacheErr) {
+        console.error('[NODE DATA] Failed to cache data:', cacheErr);
+      }
+    }
+
+    return NextResponse.json(responseData);
   } catch (error: any) {
     console.error('Error fetching node data:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -98,8 +153,9 @@ export async function GET(
 
 // Get tables from warehouse nodes (Snowflake, BigQuery, Postgres, etc.)
 async function getWarehouseData(node: any, credentials: Record<string, any>) {
-  // Check connection status
-  if (node.status !== 'CONNECTED' && node.status !== 'ACTIVE' && node.status !== 'HEALTHY') {
+  // Check connection status - allow CONNECTED, HEALTHY, WARNING (exclude PENDING, TESTING, ERROR)
+  const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
+  if (!validStatuses.includes(node.status)) {
     console.log(`[WAREHOUSE] Node ${node.id} not connected. Status: ${node.status}`);
     return NextResponse.json({
       tables: [],
@@ -199,137 +255,176 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
       });
     }
   } catch (err: any) {
-    console.log(`[WAREHOUSE] Scanner not available: ${err.message}`);
-    // Fall through to demo data
+    console.error(`[WAREHOUSE] Scanner error for ${node.toolType}: ${err.message}`);
+    // Return error instead of demo data so user knows there's a problem
+    return NextResponse.json({
+      tables: [],
+      source: 'error',
+      connected: false,
+      error: `Scanner unavailable: ${err.message}`,
+      message: `Could not fetch tables from ${node.toolType}. Make sure the scanner is running and credentials are correct.`,
+    });
   }
 
-  console.log(`[WAREHOUSE] Falling back to demo data for ${node.toolType}`);
-
-  // Generate demo tables based on tool type
-  if (node.toolType === 'bigquery') {
-    return generateBigQueryDemoData(credentials);
-  }
-
-  return generateGenericWarehouseDemoData(credentials);
-}
-
-// Generate BigQuery-specific demo data using configured datasets
-function generateBigQueryDemoData(credentials: Record<string, any>) {
-  const projectId = credentials.project_id || 'my-project';
-  const configuredDatasets = credentials.datasets || ['analytics', 'staging'];
-  
-  const tablesByDataset: Record<string, string[]> = {
-    'analytics': ['customers', 'orders', 'products', 'order_items', 'users', 'events', 'sessions'],
-    'staging': ['stg_customers', 'stg_orders', 'stg_products', 'stg_payments'],
-    'marts': ['dim_customers', 'dim_products', 'dim_dates', 'fct_orders', 'fct_revenue'],
-    'raw': ['raw_stripe_payments', 'raw_shopify_orders', 'raw_salesforce_contacts'],
-  };
-
-  const tables: any[] = [];
-  
-  for (const dataset of configuredDatasets) {
-    const datasetTables = tablesByDataset[dataset] || tablesByDataset['analytics'];
-    for (const tableName of datasetTables) {
-      tables.push({
-        name: tableName,
-        dataset: dataset,
-        schema: dataset,
-        database: projectId,
-        columns: Math.floor(Math.random() * 20) + 5,
-        rowCount: Math.floor(Math.random() * 100000) + 1000,
-      });
-    }
-  }
-
+  // If we get here, scanner returned empty/invalid data
+  console.log(`[WAREHOUSE] Scanner returned no data for ${node.toolType}`);
   return NextResponse.json({
-    tables,
-    datasets: configuredDatasets,
-    source: 'demo',
+    tables: [],
+    source: 'empty',
     connected: true,
-  });
-}
-
-// Generate generic warehouse demo data
-function generateGenericWarehouseDemoData(credentials: Record<string, any>) {
-  const database = credentials.database || 'analytics';
-  const schemas = credentials.schemas || ['analytics', 'staging', 'marts'];
-  
-  const tablesBySchema: Record<string, string[]> = {
-    'analytics': ['customers', 'orders', 'products', 'order_items', 'users'],
-    'staging': ['stg_customers', 'stg_orders', 'stg_products'],
-    'marts': ['dim_customers', 'dim_products', 'fct_orders'],
-    'public': ['customers', 'orders', 'products'],
-  };
-
-  const tables: any[] = [];
-  
-  for (const schema of schemas) {
-    const schemaTables = tablesBySchema[schema] || tablesBySchema['public'];
-    for (const tableName of schemaTables) {
-      tables.push({
-        name: tableName,
-        schema: schema,
-        database: database,
-        columns: Math.floor(Math.random() * 20) + 5,
-        rowCount: Math.floor(Math.random() * 100000) + 1000,
-      });
-    }
-  }
-
-  return NextResponse.json({
-    tables,
-    schemas,
-    source: 'demo',
-    connected: true,
+    message: 'No tables found. Check your database/schema configuration.',
   });
 }
 
 // Get dbt models from transformation nodes
 async function getTransformationData(node: any, credentials: Record<string, any>) {
+  const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
+  const isConnected = validStatuses.includes(node.status);
+
   if (node.toolType === 'dbt_cloud' || node.toolType === 'dbt_core') {
-    // Try to fetch from scanner/dbt integration
+    // For dbt Core with uploaded manifest, parse it directly
+    if (node.toolType === 'dbt_core' && credentials.manifest) {
+      try {
+        console.log('[DBT CORE] Parsing uploaded manifest content');
+        const manifest = typeof credentials.manifest === 'string'
+          ? JSON.parse(credentials.manifest)
+          : credentials.manifest;
+
+        const models: any[] = [];
+        const tests: any[] = [];
+        const sources: any[] = [];
+
+        // Extract models and tests from nodes
+        for (const [nodeId, nodeData] of Object.entries(manifest.nodes || {})) {
+          const n = nodeData as any;
+          if (n.resource_type === 'model') {
+            models.push({
+              name: n.name,
+              schema: n.schema,
+              database: n.database,
+              materialization: n.config?.materialized || 'view',
+              description: n.description || '',
+              path: n.path,
+              unique_id: nodeId,
+              columns: Object.keys(n.columns || {}).length,
+            });
+          } else if (n.resource_type === 'test') {
+            tests.push({
+              name: n.name,
+              test_type: n.test_metadata?.name || 'generic',
+            });
+          }
+        }
+
+        // Extract sources
+        for (const [sourceId, sourceData] of Object.entries(manifest.sources || {})) {
+          const s = sourceData as any;
+          sources.push({
+            name: s.name,
+            source_name: s.source_name,
+            schema: s.schema,
+            database: s.database,
+          });
+        }
+
+        console.log(`[DBT CORE] Found ${models.length} models, ${tests.length} tests, ${sources.length} sources`);
+
+        return NextResponse.json({
+          models,
+          tests,
+          sources,
+          tables: [],
+          source: 'manifest',
+          connected: true,
+        });
+      } catch (err: any) {
+        console.error('[DBT CORE] Failed to parse manifest:', err.message);
+        return NextResponse.json({
+          models: [],
+          tables: [],
+          source: 'error',
+          connected: false,
+          error: `Failed to parse manifest: ${err.message}`,
+        });
+      }
+    }
+
+    // For dbt Cloud or dbt Core with paths, use scanner
     try {
+      const configType = node.toolType === 'dbt_cloud' ? 'cloud' : 'core';
+
+      let config: Record<string, any>;
+      if (configType === 'cloud') {
+        // Map api_token to api_key (frontend uses api_token)
+        config = {
+          api_key: credentials.api_token || credentials.api_key,
+          account_id: credentials.account_id,
+          project_id: credentials.project_id,
+          environment_id: credentials.environment_id,
+          api_mode: credentials.api_mode,
+        };
+      } else {
+        config = {
+          project_path: credentials.project_path || credentials.projectPath,
+          manifest_path: credentials.manifest_path || credentials.manifestPath,
+          profiles_dir: credentials.profiles_dir || credentials.profilesDir,
+        };
+      }
+
+      console.log(`[DBT] Fetching ${configType} models from scanner`);
       const response = await fetch(`${SCANNER_API_URL}/api/v1/dbt/models`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          api_key: credentials.api_key,
-          account_id: credentials.account_id,
-          project_id: credentials.project_id,
+          config_type: configType,
+          config,
         }),
         signal: AbortSignal.timeout(15000),
       });
-      
+
       const data = await response.json();
-      if (data.models) {
+      console.log(`[DBT] Scanner response: success=${data.success}, models=${data.models?.length || 0}`);
+
+      if (data.success && data.models && data.models.length > 0) {
         return NextResponse.json({
           models: data.models,
+          tests: data.tests || [],
+          sources: data.sources || [],
           tables: [],
-          source: 'live',
+          source: data.source || 'live',
           connected: true,
         });
+      } else if (data.error) {
+        console.log(`[DBT] Scanner error: ${data.error}`);
+        return NextResponse.json({
+          models: [],
+          tables: [],
+          source: 'error',
+          connected: false,
+          error: data.error,
+        });
       }
-    } catch (err) {
-      console.log('[DBT] Scanner not available, using demo data');
+    } catch (err: any) {
+      console.error(`[DBT] Scanner error: ${err.message}`);
+      return NextResponse.json({
+        models: [],
+        tables: [],
+        source: 'error',
+        connected: false,
+        error: `Scanner unavailable: ${err.message}`,
+        message: node.toolType === 'dbt_cloud'
+          ? 'Could not fetch dbt Cloud models. Check your API token and account ID.'
+          : 'Could not fetch dbt models. Make sure the scanner is running.',
+      });
     }
 
-    // Demo dbt models
-    const demoModels = [
-      { name: 'stg_customers', schema: 'staging', materialization: 'view', description: 'Staged customer data from source', testCount: 3 },
-      { name: 'stg_orders', schema: 'staging', materialization: 'view', description: 'Staged order data', testCount: 4 },
-      { name: 'stg_products', schema: 'staging', materialization: 'view', description: 'Staged product catalog', testCount: 2 },
-      { name: 'int_orders_pivoted', schema: 'intermediate', materialization: 'table', description: 'Orders pivoted by status', testCount: 1 },
-      { name: 'dim_customers', schema: 'marts', materialization: 'table', description: 'Customer dimension table', testCount: 5 },
-      { name: 'dim_products', schema: 'marts', materialization: 'table', description: 'Product dimension table', testCount: 3 },
-      { name: 'fct_orders', schema: 'marts', materialization: 'incremental', description: 'Order facts with daily partitions', testCount: 8 },
-      { name: 'fct_daily_revenue', schema: 'marts', materialization: 'incremental', description: 'Daily revenue aggregations', testCount: 4 },
-    ];
-
+    // Scanner returned empty/no data
     return NextResponse.json({
-      models: demoModels,
+      models: [],
       tables: [],
-      source: 'demo',
-      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+      source: 'empty',
+      connected: isConnected,
+      message: 'No dbt models found.',
     });
   }
 
@@ -344,7 +439,7 @@ async function getTransformationData(node: any, credentials: Record<string, any>
         { name: 'weekly_reports', status: 'success', lastRun: '3 days ago' },
       ],
       source: 'demo',
-      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+      connected: isConnected,
     });
   }
 
@@ -358,7 +453,7 @@ async function getTransformationData(node: any, credentials: Record<string, any>
         { name: 'analytics', status: 'pending', lastRun: '1 day ago' },
       ],
       source: 'demo',
-      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+      connected: isConnected,
     });
   }
 
@@ -367,6 +462,9 @@ async function getTransformationData(node: any, credentials: Record<string, any>
 
 // Get connectors from ingestion nodes (Fivetran, Airbyte)
 async function getIngestionData(node: any, credentials: Record<string, any>) {
+  const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
+  const isConnected = validStatuses.includes(node.status);
+
   if (node.toolType === 'fivetran') {
     // Try to fetch from Fivetran API
     try {
@@ -407,7 +505,7 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
       connectors: demoConnectors,
       tables: [],
       source: 'demo',
-      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+      connected: isConnected,
     });
   }
 
@@ -422,7 +520,7 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
       connectors: demoConnectors,
       tables: [],
       source: 'demo',
-      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+      connected: isConnected,
     });
   }
 
@@ -436,7 +534,7 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
       connectors: demoConnectors,
       tables: [],
       source: 'demo',
-      connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+      connected: isConnected,
     });
   }
 
@@ -445,6 +543,9 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
 
 // Get reporting tool data (Looker, Tableau, etc.)
 async function getReportingData(node: any, credentials: Record<string, any>) {
+  const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
+  const isConnected = validStatuses.includes(node.status);
+
   const dashboards = [
     { name: 'Executive Summary', views: 1245, lastViewed: '2 hours ago' },
     { name: 'Sales Dashboard', views: 892, lastViewed: '30 min ago' },
@@ -457,6 +558,6 @@ async function getReportingData(node: any, credentials: Record<string, any>) {
     connectors: [],
     dashboards,
     source: 'demo',
-    connected: node.status === 'ACTIVE' || node.status === 'CONNECTED',
+    connected: isConnected,
   });
 }

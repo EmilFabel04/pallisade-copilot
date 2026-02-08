@@ -50,96 +50,61 @@ class ToolExecutor:
     
     async def fetch_warehouse_schema(self) -> Dict[str, List[TableSchema]]:
         """
-        Fetch schema information from ALL connected warehouses.
+        Fetch schema information from warehouses relevant to the user's query.
+
+        Uses query-based filtering:
+        1. Detect which warehouse(s) the user is asking about from their query
+        2. Only fetch schema from those specific warehouses
+        3. If no warehouse detected or fetch fails, fall back to all connected warehouses
 
         Returns a dict of "WAREHOUSE_TYPE:dataset" -> list of TableSchema objects.
-        Uses compound keys so schemas from multiple warehouses don't collide.
-        This info is included in the system prompt so models don't need
-        to query INFORMATION_SCHEMA themselves.
         """
         schema_info: Dict[str, List[TableSchema]] = {}
 
-        warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
-        found_any = False
+        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
 
-        for wh_type in warehouse_types:
-            if wh_type not in self._adapters:
-                continue
+        # Step 1: Detect which warehouse(s) the user is asking about
+        target_warehouses = self._detect_warehouses_from_query()
 
-            found_any = True
-            adapter = self._adapters[wh_type]
+        if target_warehouses:
+            # Filter to only warehouses that are actually connected
+            target_warehouses = [wh for wh in target_warehouses if wh in self._adapters]
+            if target_warehouses:
+                logger.info(f"[Schema Fetch] Query mentions warehouse(s): {target_warehouses} - fetching only from these")
+            else:
+                logger.info(f"[Schema Fetch] Query mentions warehouses but none are connected, will try all")
+                target_warehouses = None
 
-            try:
-                # Connect if needed
-                if not adapter.is_connected:
-                    logger.info(f"[Schema Fetch] Connecting to {wh_type}...")
-                    connected = adapter.connect()
-                    if not connected:
-                        logger.error(f"[Schema Fetch] Failed to connect to {wh_type}")
-                        continue
-                    logger.info(f"[Schema Fetch] Connected to {wh_type}")
+        # If no specific warehouse detected, use all connected warehouses
+        if not target_warehouses:
+            target_warehouses = [wh for wh in all_warehouse_types if wh in self._adapters]
+            if len(target_warehouses) > 1:
+                logger.info(f"[Schema Fetch] No specific warehouse in query, checking all connected: {target_warehouses}")
 
-                # Resolve datasets — prioritize config, then query hint, then discover
-                datasets = self._resolve_datasets(adapter, wh_type)
-
-                # If no datasets configured, try to narrow from user query first
-                if not datasets:
-                    query_datasets = self._extract_datasets_from_query()
-                    if query_datasets:
-                        datasets = query_datasets
-                        logger.info(f"[Schema Fetch] Extracted dataset from user query for {wh_type}: {datasets}")
-
-                # Last resort: auto-discover from warehouse
-                if not datasets:
-                    discovered = await self._discover_datasets(adapter, wh_type)
-                    # If user query mentions a dataset name, filter to just that one
-                    if discovered and self.context.query:
-                        query_lower = self.context.query.lower()
-                        matched = [d for d in discovered if d.lower() in query_lower]
-                        if matched:
-                            datasets = matched
-                            logger.info(f"[Schema Fetch] Filtered discovered datasets by query for {wh_type}: {datasets}")
-                        else:
-                            # No match — use first discovered dataset only to avoid timeout
-                            datasets = discovered[:1]
-                            logger.info(f"[Schema Fetch] No query match for {wh_type}, using first discovered: {datasets}")
-                    elif discovered:
-                        datasets = discovered[:1]
-
-                if not datasets:
-                    logger.error(
-                        f"[Schema Fetch] No datasets found for {wh_type}. "
-                        f"Config keys tried: datasets, dataset, schema, default_dataset, datasetId. "
-                        f"Auto-discovery also returned empty."
-                    )
-                    continue
-
-                logger.info(f"[Schema Fetch] Fetching schema for {wh_type} datasets: {datasets}")
-
-                # Fetch schema for each dataset (limit to 3 per warehouse to avoid timeout)
-                for dataset in datasets[:3]:
-                    try:
-                        tables = await self._fetch_dataset_schema(adapter, wh_type, dataset)
-                        if tables:
-                            # Use compound key: "WAREHOUSE_TYPE:dataset"
-                            key = f"{wh_type}:{dataset}"
-                            schema_info[key] = tables
-                            total_cols = sum(len(t.columns) for t in tables)
-                            logger.info(f"[Schema Fetch] {wh_type}.{dataset}: {len(tables)} tables, {total_cols} columns")
-                        else:
-                            logger.warning(f"[Schema Fetch] {wh_type}.{dataset}: no tables found")
-                    except Exception as e:
-                        logger.error(f"[Schema Fetch] Failed to fetch schema for {wh_type}.{dataset}: {e}")
-
-            except Exception as e:
-                logger.error(f"[Schema Fetch] Unexpected error for {wh_type}: {e}", exc_info=True)
-
-        if not found_any:
+        if not target_warehouses:
             logger.warning(
                 f"[Schema Fetch] No warehouse adapter found. "
                 f"Available adapters: {list(self._adapters.keys())}. "
                 f"Integration types: {[i.type for i in self.context.integrations]}"
             )
+            return schema_info
+
+        # Step 2: Fetch schema from target warehouses
+        for wh_type in target_warehouses:
+            adapter = self._adapters[wh_type]
+            schema_info = await self._fetch_warehouse_schema_single(wh_type, adapter, schema_info)
+
+        # Step 3: If we got nothing and there are other warehouses, try them as fallback
+        if not schema_info:
+            fallback_warehouses = [wh for wh in all_warehouse_types
+                                   if wh in self._adapters and wh not in target_warehouses]
+            if fallback_warehouses:
+                logger.info(f"[Schema Fetch] No schema from primary sources, trying fallback: {fallback_warehouses}")
+                for wh_type in fallback_warehouses:
+                    adapter = self._adapters[wh_type]
+                    schema_info = await self._fetch_warehouse_schema_single(wh_type, adapter, schema_info)
+                    if schema_info:
+                        break  # Got data, stop trying
 
         if schema_info:
             total_tables = sum(len(tables) for tables in schema_info.values())
@@ -147,6 +112,109 @@ class ToolExecutor:
             logger.info(f"[Schema Fetch] SUCCESS - {len(schema_info)} datasets across {wh_names}, {total_tables} tables total")
         else:
             logger.error("[Schema Fetch] FAILED - no schema data fetched, LLM will not have column info")
+
+        return schema_info
+
+    def _detect_warehouses_from_query(self) -> List[str]:
+        """
+        Detect which warehouse(s) the user is asking about from their query.
+
+        Returns list of warehouse types mentioned (e.g., ["SNOWFLAKE"]) or empty list.
+        """
+        query = self.context.query
+        if not query:
+            return []
+
+        query_lower = query.lower()
+        detected = []
+
+        # Warehouse name patterns (name -> type)
+        warehouse_patterns = {
+            "SNOWFLAKE": ["snowflake", "snow flake"],
+            "BIGQUERY": ["bigquery", "big query", "bq", "google bigquery"],
+            "POSTGRES": ["postgres", "postgresql", "pg", "psql"],
+            "REDSHIFT": ["redshift", "red shift", "aws redshift"],
+        }
+
+        for wh_type, patterns in warehouse_patterns.items():
+            for pattern in patterns:
+                if pattern in query_lower:
+                    detected.append(wh_type)
+                    break  # Found this warehouse, move to next
+
+        return detected
+
+    async def _fetch_warehouse_schema_single(
+        self,
+        wh_type: str,
+        adapter,
+        schema_info: Dict[str, List[TableSchema]]
+    ) -> Dict[str, List[TableSchema]]:
+        """Fetch schema from a single warehouse adapter."""
+        try:
+            # Connect if needed
+            if not adapter.is_connected:
+                logger.info(f"[Schema Fetch] Connecting to {wh_type}...")
+                connected = adapter.connect()
+                if not connected:
+                    logger.error(f"[Schema Fetch] Failed to connect to {wh_type}")
+                    return schema_info
+                logger.info(f"[Schema Fetch] Connected to {wh_type}")
+
+            # Resolve datasets — prioritize config, then query hint, then discover
+            datasets = self._resolve_datasets(adapter, wh_type)
+
+            # If no datasets configured, try to narrow from user query first
+            if not datasets:
+                query_datasets = self._extract_datasets_from_query()
+                if query_datasets:
+                    datasets = query_datasets
+                    logger.info(f"[Schema Fetch] Extracted dataset from user query for {wh_type}: {datasets}")
+
+            # Last resort: auto-discover from warehouse
+            if not datasets:
+                discovered = await self._discover_datasets(adapter, wh_type)
+                # If user query mentions a dataset name, filter to just that one
+                if discovered and self.context.query:
+                    query_lower = self.context.query.lower()
+                    matched = [d for d in discovered if d.lower() in query_lower]
+                    if matched:
+                        datasets = matched
+                        logger.info(f"[Schema Fetch] Filtered discovered datasets by query for {wh_type}: {datasets}")
+                    else:
+                        # No match — use first discovered dataset only to avoid timeout
+                        datasets = discovered[:1]
+                        logger.info(f"[Schema Fetch] No query match for {wh_type}, using first discovered: {datasets}")
+                elif discovered:
+                    datasets = discovered[:1]
+
+            if not datasets:
+                logger.error(
+                    f"[Schema Fetch] No datasets found for {wh_type}. "
+                    f"Config keys tried: datasets, dataset, schema, default_dataset, datasetId. "
+                    f"Auto-discovery also returned empty."
+                )
+                return schema_info
+
+            logger.info(f"[Schema Fetch] Fetching schema for {wh_type} datasets: {datasets}")
+
+            # Fetch schema for each dataset (limit to 3 per warehouse to avoid timeout)
+            for dataset in datasets[:3]:
+                try:
+                    tables = await self._fetch_dataset_schema(adapter, wh_type, dataset)
+                    if tables:
+                        # Use compound key: "WAREHOUSE_TYPE:dataset"
+                        key = f"{wh_type}:{dataset}"
+                        schema_info[key] = tables
+                        total_cols = sum(len(t.columns) for t in tables)
+                        logger.info(f"[Schema Fetch] {wh_type}.{dataset}: {len(tables)} tables, {total_cols} columns")
+                    else:
+                        logger.warning(f"[Schema Fetch] {wh_type}.{dataset}: no tables found")
+                except Exception as e:
+                    logger.error(f"[Schema Fetch] Failed to fetch schema for {wh_type}.{dataset}: {e}")
+
+        except Exception as e:
+            logger.error(f"[Schema Fetch] Unexpected error for {wh_type}: {e}", exc_info=True)
 
         return schema_info
 
@@ -437,6 +505,14 @@ class ToolExecutor:
                     from adapters.snowflake import SnowflakeAdapter
                 except ImportError:
                     from scanner.adapters.snowflake import SnowflakeAdapter
+                config_keys = list(integration.config.keys()) if integration.config else []
+                logger.info(f"[Snowflake] Creating adapter with config keys: {config_keys}")
+                # Log presence of required fields (not values for security)
+                has_account = bool(integration.config.get('account'))
+                has_user = bool(integration.config.get('user'))
+                has_password = bool(integration.config.get('password'))
+                has_database = bool(integration.config.get('database'))
+                logger.info(f"[Snowflake] Credentials check - account: {has_account}, user: {has_user}, password: {has_password}, database: {has_database}")
                 return SnowflakeAdapter(integration.config)
             
             elif integration_type == "BIGQUERY":

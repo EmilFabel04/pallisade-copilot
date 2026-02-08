@@ -79,6 +79,25 @@ class SnowflakeAdapter(DatabaseAdapter):
         try:
             import snowflake.connector
 
+            # Validate required credentials before attempting connection
+            missing = []
+            if not self.account:
+                missing.append('account')
+            if not self.user:
+                missing.append('user')
+            if not self.password:
+                missing.append('password')
+            if not self.database:
+                missing.append('database')
+
+            if missing:
+                error_msg = f"Missing required Snowflake credentials: {', '.join(missing)}"
+                logger.error(f"[Snowflake] {error_msg}")
+                self._last_connect_error = error_msg
+                return False
+
+            logger.info(f"[Snowflake] Connecting to account: {self.account}, database: {self.database}, warehouse: {self.warehouse}")
+
             self._connection = snowflake.connector.connect(
                 user=self.user,
                 password=self.password,
@@ -93,11 +112,11 @@ class SnowflakeAdapter(DatabaseAdapter):
                 network_timeout=60,
             )
 
-            logger.info(f"Connected to Snowflake: {self.account}")
+            logger.info(f"[Snowflake] Successfully connected to: {self.account}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to connect to Snowflake: {e}")
+            logger.error(f"[Snowflake] Failed to connect: {e}")
             self._connection = None
             self._last_connect_error = str(e)
             return False

@@ -1,9 +1,15 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { ModeSelector, getModeFromSlashCommand } from '@/components/copilot/ModeSelector';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 type Message = {
   id: string;
@@ -34,15 +40,65 @@ type SourceData = {
   tables: Array<{ name: string; schema: string; dataset?: string; database?: string }>;
   models: Array<{ name: string; schema: string; materialization: string; description?: string }>;
   connectors: Array<{ name: string; status: string; lastSync?: string }>;
+  lastSync?: string;
 };
 
-const AVAILABLE_MODELS = [
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI', description: 'Most capable' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', description: 'Fast & efficient' },
-  { id: 'o3-mini', name: 'o3-mini', provider: 'OpenAI', description: 'Reasoning model' },
-  { id: 'claude-sonnet', name: 'Claude Sonnet', provider: 'Anthropic', description: 'Balanced' },
-  { id: 'claude-opus', name: 'Claude Opus', provider: 'Anthropic', description: 'Most capable' },
+// Thinking steps shown during AI processing
+const THINKING_STEPS = [
+  'Understanding your question...',
+  'Analyzing pipeline context...',
+  'Querying data sources...',
+  'Formulating response...',
 ];
+
+// Icons as components for cleaner code
+const Icons = {
+  plus: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+    </svg>
+  ),
+  menu: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
+    </svg>
+  ),
+  trash: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+    </svg>
+  ),
+  cube: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+    </svg>
+  ),
+  send: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+    </svg>
+  ),
+  refresh: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  ),
+  close: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  ),
+  table: (
+    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+  ),
+  copy: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+  ),
+};
 
 export default function AssistantPage() {
   const { data: session } = useSession();
@@ -54,9 +110,8 @@ export default function AssistantPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
-  const [selectedModel, setSelectedModel] = useState('gpt-4o');
-  const [showModelPicker, setShowModelPicker] = useState(false);
   const [selectedMode, setSelectedMode] = useState('ask');
+  const [thinkingStep, setThinkingStep] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
   const [loadingSources, setLoadingSources] = useState(false);
@@ -66,23 +121,14 @@ export default function AssistantPage() {
   const modelLoadedRef = useRef(false);
   const initialLoadDone = useRef(false);
 
-  // Load model and mode from localStorage on client
+  // Load mode from localStorage on client
   useEffect(() => {
     if (!modelLoadedRef.current) {
-      const savedModel = localStorage.getItem('pallisade-copilot-model');
       const savedMode = localStorage.getItem('pallisade-copilot-mode');
-      if (savedModel) setSelectedModel(savedModel);
       if (savedMode) setSelectedMode(savedMode);
       modelLoadedRef.current = true;
     }
   }, []);
-
-  // Persist model selection to localStorage
-  useEffect(() => {
-    if (modelLoadedRef.current) {
-      localStorage.setItem('pallisade-copilot-model', selectedModel);
-    }
-  }, [selectedModel]);
 
   // Persist mode selection to localStorage
   useEffect(() => {
@@ -91,12 +137,13 @@ export default function AssistantPage() {
     }
   }, [selectedMode]);
 
-  // Fetch sources when pipeline changes
+  // Fetch sources when pipeline changes (uses cached data)
   useEffect(() => {
-    if (selectedPipelineId) fetchSources(selectedPipelineId);
+    if (selectedPipelineId) fetchSources(selectedPipelineId, false);
   }, [selectedPipelineId]);
 
-  const fetchSources = async (pipelineId: string) => {
+  // Fetch sources - uses cached data by default, pass refresh=true for fresh discovery
+  const fetchSources = async (pipelineId: string, refresh: boolean = false) => {
     setLoadingSources(true);
     try {
       const res = await fetch(`/api/pipeline?id=${pipelineId}`);
@@ -105,19 +152,26 @@ export default function AssistantPage() {
       const stack = data.stack;
       if (!stack?.nodes) return;
 
-      const connectedNodes = stack.nodes.filter((n: any) => n.status === 'CONNECTED' || n.status === 'ACTIVE');
+      const connectedNodes = stack.nodes.filter((n: any) =>
+        n.status === 'CONNECTED' || n.status === 'HEALTHY' || n.status === 'WARNING'
+      );
       const allTables: SourceData['tables'] = [];
       const allModels: SourceData['models'] = [];
       const allConnectors: SourceData['connectors'] = [];
+      let latestSync: string | undefined;
 
       await Promise.all(connectedNodes.map(async (node: any) => {
         try {
-          const nodeRes = await fetch(`/api/pipeline/${pipelineId}/nodes/${node.id}/tables`);
+          const url = `/api/pipeline/${pipelineId}/nodes/${node.id}/tables${refresh ? '?refresh=true' : ''}`;
+          const nodeRes = await fetch(url);
           if (!nodeRes.ok) return;
           const nodeData = await nodeRes.json();
           if (nodeData.tables) allTables.push(...nodeData.tables);
           if (nodeData.models) allModels.push(...nodeData.models);
           if (nodeData.connectors) allConnectors.push(...nodeData.connectors);
+          if (nodeData.lastSync && (!latestSync || nodeData.lastSync > latestSync)) {
+            latestSync = nodeData.lastSync;
+          }
         } catch { /* skip failed nodes */ }
       }));
 
@@ -132,11 +186,18 @@ export default function AssistantPage() {
         tables: allTables,
         models: allModels,
         connectors: allConnectors,
+        lastSync: latestSync,
       });
     } catch (error) {
       console.error('Failed to fetch sources:', error);
     } finally {
       setLoadingSources(false);
+    }
+  };
+
+  const syncSources = () => {
+    if (selectedPipelineId) {
+      fetchSources(selectedPipelineId, true);
     }
   };
 
@@ -149,32 +210,31 @@ export default function AssistantPage() {
 
   // Fetch sessions when pipeline changes
   useEffect(() => {
-    // Skip initial render (handled above)
     if (!initialLoadDone.current) return;
-
-    // Skip if pipeline hasn't changed
     if (lastPipelineId.current === selectedPipelineId) return;
     lastPipelineId.current = selectedPipelineId;
-
     fetchSessions();
   }, [selectedPipelineId]);
 
   const fetchSessions = async () => {
     try {
       setLoadingSessions(true);
-      const url = selectedPipelineId 
-        ? `/api/copilot/sessions?limit=30&pipelineStackId=${selectedPipelineId}`
-        : '/api/copilot/sessions?limit=30';
-      const response = await fetch(url);
+      const response = await fetch('/api/copilot/sessions?limit=50');
       if (response.ok) {
         const data = await response.json();
         setSessions(data.sessions || []);
-        
-        // Auto-load most recent session if exists for this pipeline
+
         if (data.sessions && data.sessions.length > 0) {
-          loadSession(data.sessions[0].id);
+          const pipelineSession = selectedPipelineId
+            ? data.sessions.find((s: ChatSession) => s.pipelineStackId === selectedPipelineId)
+            : null;
+
+          if (pipelineSession) {
+            loadSession(pipelineSession.id);
+          } else {
+            loadSession(data.sessions[0].id);
+          }
         } else {
-          // No sessions for this pipeline - start fresh
           startNewChat();
         }
       }
@@ -217,7 +277,7 @@ export default function AssistantPage() {
   const deleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm('Delete this chat?')) return;
-    
+
     try {
       const response = await fetch(`/api/copilot/sessions/${id}`, {
         method: 'DELETE',
@@ -241,6 +301,18 @@ export default function AssistantPage() {
     scrollToBottom();
   }, [messages]);
 
+  // Cycle through thinking steps while loading
+  useEffect(() => {
+    if (!isLoading) {
+      setThinkingStep(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setThinkingStep(prev => prev + 1);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -253,19 +325,18 @@ export default function AssistantPage() {
     let messageText = customMessage || input.trim();
     if (!messageText || isLoading) return;
 
-    // Check for slash commands (e.g., /debug why did this fail)
     let modeToUse = selectedMode;
     const slashCmd = getModeFromSlashCommand(messageText);
     if (slashCmd) {
       modeToUse = slashCmd.mode;
       messageText = slashCmd.message;
-      setSelectedMode(slashCmd.mode); // Update UI to reflect mode change
+      setSelectedMode(slashCmd.mode);
     }
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: customMessage || input.trim(), // Show original message with slash command
+      content: customMessage || input.trim(),
       timestamp: new Date(),
     };
 
@@ -281,7 +352,7 @@ export default function AssistantPage() {
           message: messageText,
           sessionId,
           pipelineStackId: selectedPipelineId,
-          model: selectedModel,
+          model: 'claude-sonnet',
           mode: modeToUse,
         }),
       });
@@ -289,15 +360,10 @@ export default function AssistantPage() {
       if (!response.ok) throw new Error('Failed to get response');
 
       const data = await response.json();
-      
-      // Update session ID if new session was created
+
       if (data.sessionId && data.sessionId !== sessionId) {
         setSessionId(data.sessionId);
-        // Refresh sessions list to show new session
-        const url = selectedPipelineId 
-          ? `/api/copilot/sessions?limit=30&pipelineStackId=${selectedPipelineId}`
-          : '/api/copilot/sessions?limit=30';
-        const sessionsRes = await fetch(url);
+        const sessionsRes = await fetch('/api/copilot/sessions?limit=50');
         if (sessionsRes.ok) {
           const sessionsData = await sessionsRes.json();
           setSessions(sessionsData.sessions || []);
@@ -338,7 +404,7 @@ export default function AssistantPage() {
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    
+
     if (diffDays === 0) return 'Today';
     if (diffDays === 1) return 'Yesterday';
     if (diffDays < 7) return `${diffDays} days ago`;
@@ -346,361 +412,386 @@ export default function AssistantPage() {
   };
 
   return (
-    <div className="h-[calc(100vh-120px)] flex">
-      {/* Chat History Sidebar */}
-      <div className={`${showHistory ? 'w-72' : 'w-0'} flex-shrink-0 transition-all duration-200 overflow-hidden`}>
-        <div className="h-full flex flex-col border-r border-[rgba(255,255,255,0.06)] pr-4">
-          {/* New Chat Button */}
-          <button
-            onClick={startNewChat}
-            className="flex items-center gap-2 px-4 py-3 mb-4 bg-[var(--accent)] hover:bg-[var(--accent)]/80 text-white rounded-xl transition-all"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            <span className="font-medium">New Chat</span>
-          </button>
+    <TooltipProvider>
+      <div className="h-[calc(100vh-120px)] flex">
+        {/* Chat History Sidebar */}
+        <div className={cn(
+          'flex-shrink-0 transition-all duration-300 overflow-hidden',
+          showHistory ? 'w-72' : 'w-0'
+        )}>
+          <div className="h-full flex flex-col border-r border-white/[0.06] pr-4">
+            {/* New Chat Button */}
+            <Button onClick={startNewChat} className="mb-4 gap-2">
+              {Icons.plus}
+              <span>New Chat</span>
+            </Button>
 
-          {/* Sessions List */}
-          <div className="flex-1 overflow-y-auto space-y-1">
-            {loadingSessions ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : sessions.length === 0 ? (
-              <div className="text-center py-8 text-sm text-[var(--muted)]">
-                No chat history yet
-              </div>
-            ) : (
-              sessions.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => loadSession(s.id)}
-                  className={`w-full text-left px-3 py-2.5 rounded-lg transition-all group ${
-                    sessionId === s.id
-                      ? 'bg-[rgba(255,255,255,0.08)] text-white'
-                      : 'hover:bg-[rgba(255,255,255,0.04)] text-[var(--muted)] hover:text-white'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{s.title}</div>
-                      <div className="text-xs opacity-50 mt-0.5">{formatDate(s.updatedAt)}</div>
-                    </div>
+            {/* Sessions List */}
+            <ScrollArea className="flex-1">
+              <div className="space-y-1 pr-2">
+                {loadingSessions ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : sessions.length === 0 ? (
+                  <div className="text-center py-8 text-sm text-[var(--muted)]">
+                    No chat history yet
+                  </div>
+                ) : (
+                  sessions.map((s) => (
                     <button
-                      onClick={(e) => deleteSession(s.id, e)}
-                      className="p-1 opacity-0 group-hover:opacity-50 hover:!opacity-100 transition-opacity"
-                      title="Delete chat"
+                      key={s.id}
+                      onClick={() => loadSession(s.id)}
+                      className={cn(
+                        'w-full text-left px-3 py-2.5 rounded-xl transition-all group',
+                        sessionId === s.id
+                          ? 'bg-white/[0.08] text-white'
+                          : 'hover:bg-white/[0.04] text-[var(--muted)] hover:text-white'
+                      )}
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-[rgba(255,255,255,0.06)] mb-4 pl-4">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowHistory(!showHistory)}
-              className="p-2 hover:bg-[rgba(255,255,255,0.05)] rounded-lg transition-all"
-              title={showHistory ? 'Hide history' : 'Show history'}
-            >
-              <svg className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            </button>
-            <img src="/pallisade_scout.svg" alt="Scout" className="w-10 h-10" />
-            <div>
-              <h1 className="text-xl font-semibold">AI Assistant</h1>
-              <p className="text-xs text-[var(--muted)]">Ask about your data pipeline</p>
-            </div>
-          </div>
-          
-          {/* Mode + Sources + Model Selector */}
-          <div className="flex items-center gap-2">
-            <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
-            <button
-            onClick={() => setShowSources(!showSources)}
-            className={`flex items-center gap-2 px-3 py-2 text-sm border rounded-lg transition-all ${
-              showSources
-                ? 'bg-[rgba(255,255,255,0.08)] border-[rgba(255,255,255,0.15)] text-white'
-                : 'bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] border-[rgba(255,255,255,0.08)] text-[var(--muted)]'
-            }`}
-            title={showSources ? 'Hide sources' : 'Show sources'}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-            </svg>
-            <span>Sources</span>
-            {sourceData.nodes.length > 0 && (
-              <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-emerald-500/20 text-emerald-400">
-                {sourceData.nodes.length}
-              </span>
-            )}
-          </button>
-          <div className="relative">
-            <button
-              onClick={() => setShowModelPicker(!showModelPicker)}
-              className="flex items-center gap-2 px-3 py-2 text-sm bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.06)] border border-[rgba(255,255,255,0.08)] rounded-lg transition-all"
-            >
-              <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 15.5m14.8-.2l-4.3.008m-5.5.492V18a1 1 0 001 1h4a1 1 0 001-1v-2.7" />
-              </svg>
-              <span className="text-[var(--text)]">{AVAILABLE_MODELS.find(m => m.id === selectedModel)?.name || selectedModel}</span>
-              <svg className={`w-4 h-4 text-[var(--muted)] transition-transform ${showModelPicker ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            
-            {showModelPicker && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setShowModelPicker(false)} />
-                <div className="absolute right-0 top-full mt-2 w-64 bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-xl z-20 overflow-hidden">
-                  <div className="p-3 border-b border-[rgba(255,255,255,0.06)]">
-                    <h4 className="text-sm font-medium">Select Model</h4>
-                    <p className="text-xs text-[var(--muted)] mt-0.5">Choose the AI model for this chat</p>
-                  </div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {AVAILABLE_MODELS.map((model) => (
-                      <button
-                        key={model.id}
-                        onClick={() => {
-                          setSelectedModel(model.id);
-                          setShowModelPicker(false);
-                        }}
-                        className={`w-full p-3 text-left hover:bg-[rgba(255,255,255,0.04)] transition-colors flex items-center justify-between gap-2 ${
-                          selectedModel === model.id ? 'bg-[rgba(255,255,255,0.06)]' : ''
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium">{model.name}</span>
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(255,255,255,0.08)] text-[var(--muted)]">{model.provider}</span>
-                          </div>
-                          <p className="text-xs text-[var(--muted)] mt-0.5">{model.description}</p>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{s.title}</div>
+                          <div className="text-xs opacity-50 mt-0.5">{formatDate(s.updatedAt)}</div>
                         </div>
-                        {selectedModel === model.id && (
-                          <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => deleteSession(s.id, e)}
+                              className="p-1 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:text-red-400 transition-all rounded"
+                            >
+                              {Icons.trash}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Delete chat</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </ScrollArea>
           </div>
         </div>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto space-y-4 pr-2 pl-4">
-          {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center px-4">
-              <img src="/pallisade_scout.svg" alt="Scout" className="w-20 h-20 mb-4" />
-              <h2 className="text-lg font-semibold mb-2">How can I help?</h2>
-              <p className="text-sm text-[var(--muted)] max-w-sm mb-6">
-                I can query your data warehouse, explore lineage, and help debug pipeline issues.
-              </p>
-              
-              {/* Quick prompts */}
-              <div className="flex flex-wrap gap-2 justify-center max-w-lg">
-                {[
-                  "How many rows are in my tables?",
-                  "What's the freshness of my analytics data?",
-                  "Show me my pipeline dependencies",
-                ].map((prompt, i) => (
-                  <button
-                    key={i}
-                    onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent, prompt)}
-                    className="px-3 py-2 text-sm bg-[rgba(255,255,255,0.03)] hover:bg-[rgba(255,255,255,0.08)] border border-[rgba(255,255,255,0.08)] rounded-lg text-[var(--muted)] hover:text-[var(--text)] transition-all"
+        {/* Main Chat Area */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Compact Header */}
+          <div className="flex items-center justify-between py-2 px-4 border-b border-white/[0.06]">
+            <div className="flex items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowHistory(!showHistory)}
+                    className="p-1.5 h-8 w-8"
                   >
-                    {prompt}
-                  </button>
-                ))}
-              </div>
+                    {Icons.menu}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{showHistory ? 'Hide history' : 'Show history'}</TooltipContent>
+              </Tooltip>
+              <Avatar className="w-7 h-7">
+                <AvatarImage src="/pallisade_scout.svg" alt="Scout" />
+                <AvatarFallback className="text-xs">AI</AvatarFallback>
+              </Avatar>
+              <h1 className="text-sm font-semibold">Pallisade Scout</h1>
             </div>
-          ) : (
-            <>
-              {messages.map((message) => (
-                <div key={message.id} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>
-                  {message.role === 'assistant' && (
-                    <img src="/pallisade_scout.svg" alt="AI" className="w-8 h-8 flex-shrink-0" />
-                  )}
-                  <div className={`max-w-[80%] ${
-                    message.role === 'user' 
-                      ? 'bg-[var(--accent)] text-white rounded-2xl rounded-tr-md px-4 py-2.5' 
-                      : 'bg-[rgba(255,255,255,0.03)] rounded-2xl rounded-tl-md px-4 py-3'
-                  }`}>
-                    <MessageContent content={message.content} />
-                  </div>
-                  {message.role === 'user' && (
-                    <div className="w-8 h-8 rounded-lg bg-[rgba(255,255,255,0.1)] flex items-center justify-center flex-shrink-0 text-sm font-medium">
-                      {session?.user?.name?.[0] || 'U'}
-                    </div>
-                  )}
-                </div>
-              ))}
-              
-              {isLoading && (
-                <div className="flex gap-3">
-                  <img src="/pallisade_scout.svg" alt="AI" className="w-8 h-8 flex-shrink-0" />
-                  <div className="bg-[rgba(255,255,255,0.03)] rounded-2xl rounded-tl-md px-4 py-3">
-                    <div className="flex gap-1">
-                      <div className="w-2 h-2 rounded-full bg-[var(--muted)] animate-bounce" />
-                      <div className="w-2 h-2 rounded-full bg-[var(--muted)] animate-bounce" style={{ animationDelay: '0.1s' }} />
-                      <div className="w-2 h-2 rounded-full bg-[var(--muted)] animate-bounce" style={{ animationDelay: '0.2s' }} />
-                    </div>
-                  </div>
-                </div>
+
+            {/* Sources */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSources(!showSources)}
+              className={cn(
+                'gap-1.5 px-2.5 h-8 text-xs',
+                showSources && 'bg-white/[0.08]'
               )}
-              <div ref={messagesEndRef} />
-            </>
-          )}
-        </div>
-
-        {/* Input */}
-        <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)] pl-4">
-          <form onSubmit={handleSubmit}>
-            <div className="flex gap-2">
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Ask about your data..."
-                className="flex-1 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.08)] rounded-xl px-4 py-3 text-sm resize-none focus:outline-none focus:border-[var(--accent)]/50"
-                rows={1}
-              />
-              <button 
-                type="submit" 
-                disabled={!input.trim() || isLoading}
-                className="px-4 bg-[var(--accent)] text-white rounded-xl hover:bg-[var(--accent)]/80 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      {/* Sources Panel */}
-      <div className={`${showSources ? 'w-80' : 'w-0'} flex-shrink-0 transition-all duration-200 overflow-hidden`}>
-        <div className="h-full flex flex-col border-l border-[rgba(255,255,255,0.06)] pl-4 pr-2">
-          <div className="flex items-center justify-between py-3 mb-2">
-            <h3 className="text-sm font-semibold">Sources</h3>
-            <button onClick={() => setShowSources(false)} className="p-1 hover:bg-[rgba(255,255,255,0.05)] rounded transition-all">
-              <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+            >
+              {Icons.cube}
+              <span>Sources</span>
+              {sourceData.nodes.length > 0 && (
+                <span className="px-1.5 py-0.5 text-[10px] rounded-full bg-emerald-500/20 text-emerald-400">
+                  {sourceData.nodes.length}
+                </span>
+              )}
+            </Button>
           </div>
 
-          <div className="flex-1 overflow-y-auto space-y-4 pb-4">
-            {loadingSources ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : sourceData.nodes.length === 0 ? (
-              <div className="text-center py-8">
-                <svg className="w-8 h-8 text-[var(--muted)] mx-auto mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                </svg>
-                <p className="text-xs text-[var(--muted)]">No connected sources</p>
-                <p className="text-[10px] text-[var(--muted)] mt-1 opacity-60">Connect integrations in Pipeline Builder</p>
+          {/* Messages */}
+          <ScrollArea className="flex-1 px-4 py-3">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center px-4">
+                <Avatar className="w-14 h-14 mb-3">
+                  <AvatarImage src="/pallisade_scout.svg" alt="Scout" />
+                  <AvatarFallback className="text-xl">AI</AvatarFallback>
+                </Avatar>
+                <h2 className="text-base font-semibold mb-1">How can I help?</h2>
+                <p className="text-xs text-[var(--muted)] max-w-sm mb-4">
+                  Query your warehouse, explore lineage, debug pipelines.
+                </p>
+
+                {/* Quick prompts */}
+                <div className="flex flex-wrap gap-1.5 justify-center max-w-lg">
+                  {[
+                    "How many rows are in my tables?",
+                    "What's the freshness of my data?",
+                    "Show pipeline dependencies",
+                  ].map((prompt, i) => (
+                    <Button
+                      key={i}
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent, prompt)}
+                      className="text-xs text-[var(--muted)] hover:text-white h-7 px-2.5"
+                    >
+                      {prompt}
+                    </Button>
+                  ))}
+                </div>
               </div>
             ) : (
-              <>
-                {/* Connected Stack */}
-                <div>
-                  <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connected Stack</h4>
-                  <div className="space-y-1.5">
-                    {sourceData.nodes.map((node) => (
-                      <div key={node.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)]">
-                        <SourceIcon toolType={node.toolType} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium truncate">{node.name}</div>
-                          <div className="text-[10px] text-[var(--muted)] capitalize">{node.layer.toLowerCase()}</div>
+              <div className="space-y-3 pb-2">
+                {messages.map((message) => (
+                  <div key={message.id} className={cn('flex gap-2', message.role === 'user' && 'justify-end')}>
+                    {message.role === 'assistant' && (
+                      <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
+                        <AvatarImage src="/pallisade_scout.svg" alt="AI" />
+                        <AvatarFallback className="text-[10px]">AI</AvatarFallback>
+                      </Avatar>
+                    )}
+                    <div className={cn(
+                      'max-w-[85%] px-3 py-2',
+                      message.role === 'user'
+                        ? 'bg-[var(--accent)] text-white rounded-xl rounded-tr-sm'
+                        : 'bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm'
+                    )}>
+                      <MessageContent content={message.content} />
+                    </div>
+                    {message.role === 'user' && (
+                      <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
+                        <AvatarFallback className="bg-gradient-to-br from-violet-500 to-purple-600 text-white text-[10px]">
+                          {session?.user?.name?.[0] || 'U'}
+                        </AvatarFallback>
+                      </Avatar>
+                    )}
+                  </div>
+                ))}
+
+                {isLoading && (
+                  <div className="flex gap-2">
+                    <Avatar className="w-6 h-6 flex-shrink-0">
+                      <AvatarImage src="/pallisade_scout.svg" alt="AI" />
+                      <AvatarFallback className="text-[10px]">AI</AvatarFallback>
+                    </Avatar>
+                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm px-3 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className="flex gap-1">
+                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" style={{ animationDelay: '0.2s' }} />
+                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" style={{ animationDelay: '0.4s' }} />
                         </div>
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" title="Connected" />
+                        <span className="text-[12px] text-[var(--muted)] animate-pulse">
+                          {THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
+                        </span>
                       </div>
-                    ))}
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+            )}
+          </ScrollArea>
+
+          {/* Input - Cursor style */}
+          <div className="px-4 pb-4 pt-2">
+            <div className="max-w-2xl mx-auto">
+              <form onSubmit={handleSubmit}>
+                <div className="relative bg-[#1a1a24] border border-white/[0.1] rounded-xl focus-within:border-white/[0.2] transition-colors">
+                  {/* Textarea */}
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask about your data pipeline..."
+                    className="w-full min-h-[80px] max-h-[200px] bg-transparent border-0 focus:ring-0 resize-none px-4 pt-3 pb-14 text-sm placeholder:text-white/30 rounded-xl"
+                    rows={2}
+                  />
+
+                  {/* Bottom bar with mode selector and send button */}
+                  <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[#1a1a24] border-t border-white/[0.06] rounded-b-xl">
+                    <div className="flex items-center gap-2">
+                      <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
+                      <span className="text-[10px] text-white/30 hidden sm:inline">Enter to send</span>
+                    </div>
+                    <Button
+                      type="submit"
+                      disabled={!input.trim() || isLoading}
+                      size="sm"
+                      className="h-7 px-3 gap-1.5"
+                    >
+                      {Icons.send}
+                      <span className="text-xs hidden sm:inline">Send</span>
+                    </Button>
                   </div>
                 </div>
+              </form>
+            </div>
+          </div>
+        </div>
 
-                {/* dbt Models */}
-                {sourceData.models.length > 0 && (
-                  <SourceSection
-                    title="dbt Models"
-                    count={sourceData.models.length}
-                    items={sourceData.models}
-                    renderItem={(model) => (
-                      <div key={model.name} className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md hover:bg-[rgba(255,255,255,0.03)] transition-colors">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                            model.materialization === 'incremental' ? 'bg-blue-400' :
-                            model.materialization === 'table' ? 'bg-emerald-400' :
-                            model.materialization === 'view' ? 'bg-amber-400' : 'bg-[var(--muted)]'
-                          }`} />
-                          <span className="text-xs truncate">{model.name}</span>
-                        </div>
-                        <span className="text-[10px] text-[var(--muted)] flex-shrink-0">{model.materialization}</span>
-                      </div>
-                    )}
-                    groupBy={(model) => model.schema}
-                  />
-                )}
+        {/* Sources Panel */}
+        <div className={cn(
+          'flex-shrink-0 transition-all duration-300 overflow-hidden',
+          showSources ? 'w-80' : 'w-0'
+        )}>
+          <div className="h-full flex flex-col border-l border-white/[0.06] pl-4 pr-2">
+            <div className="py-3 mb-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Sources</h3>
+                <div className="flex items-center gap-1">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={syncSources}
+                        disabled={loadingSources}
+                        className="p-1.5 h-auto"
+                      >
+                        <span className={cn(loadingSources && 'animate-spin')}>
+                          {Icons.refresh}
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Sync sources</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowSources(false)}
+                        className="p-1.5 h-auto"
+                      >
+                        {Icons.close}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Close</TooltipContent>
+                  </Tooltip>
+                </div>
+              </div>
+              {sourceData.lastSync && (
+                <p className="text-[10px] text-[var(--muted)] mt-1">
+                  Last synced {new Date(sourceData.lastSync).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit'
+                  })}
+                </p>
+              )}
+            </div>
 
-                {/* Warehouse Tables */}
-                {sourceData.tables.length > 0 && (
-                  <SourceSection
-                    title="Tables"
-                    count={sourceData.tables.length}
-                    items={sourceData.tables}
-                    renderItem={(table) => (
-                      <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-[rgba(255,255,255,0.03)] transition-colors">
-                        <svg className="w-3 h-3 text-[var(--muted)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                        <span className="text-xs truncate">{table.name}</span>
-                      </div>
-                    )}
-                    groupBy={(table) => table.dataset || table.schema}
-                  />
-                )}
-
-                {/* Connectors */}
-                {sourceData.connectors.length > 0 && (
+            <ScrollArea className="flex-1 pb-4">
+              {loadingSources ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : sourceData.nodes.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-3">
+                    {Icons.cube}
+                  </div>
+                  <p className="text-xs text-[var(--muted)]">No connected sources</p>
+                  <p className="text-[10px] text-[var(--muted)] mt-1 opacity-60">Connect integrations in Pipeline Builder</p>
+                </div>
+              ) : (
+                <div className="space-y-4 pr-2">
+                  {/* Connected Stack */}
                   <div>
-                    <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connectors</h4>
-                    <div className="space-y-1">
-                      {sourceData.connectors.map((c) => (
-                        <div key={c.name} className="flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-[rgba(255,255,255,0.03)] transition-colors">
-                          <span className="text-xs">{c.name}</span>
-                          <span className={`text-[10px] ${c.status === 'active' ? 'text-emerald-400' : c.status === 'failed' ? 'text-red-400' : 'text-[var(--muted)]'}`}>{c.status}</span>
+                    <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connected Stack</h4>
+                    <div className="space-y-1.5">
+                      {sourceData.nodes.map((node) => (
+                        <div key={node.id} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+                          <SourceIcon toolType={node.toolType} />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-medium truncate">{node.name}</div>
+                            <div className="text-[10px] text-[var(--muted)] capitalize">{node.layer.toLowerCase()}</div>
+                          </div>
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" title="Connected" />
                         </div>
                       ))}
                     </div>
                   </div>
-                )}
-              </>
-            )}
+
+                  {/* dbt Models */}
+                  {sourceData.models.length > 0 && (
+                    <SourceSection
+                      title="dbt Models"
+                      count={sourceData.models.length}
+                      items={sourceData.models}
+                      renderItem={(model) => (
+                        <div key={model.name} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={cn(
+                              'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                              model.materialization === 'incremental' ? 'bg-blue-400' :
+                              model.materialization === 'table' ? 'bg-emerald-400' :
+                              model.materialization === 'view' ? 'bg-amber-400' : 'bg-[var(--muted)]'
+                            )} />
+                            <span className="text-xs truncate">{model.name}</span>
+                          </div>
+                          <span className="text-[10px] text-[var(--muted)] flex-shrink-0">{model.materialization}</span>
+                        </div>
+                      )}
+                      groupBy={(model) => model.schema}
+                    />
+                  )}
+
+                  {/* Warehouse Tables */}
+                  {sourceData.tables.length > 0 && (
+                    <SourceSection
+                      title="Tables"
+                      count={sourceData.tables.length}
+                      items={sourceData.tables}
+                      renderItem={(table) => (
+                        <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                          <span className="text-[var(--muted)]">{Icons.table}</span>
+                          <span className="text-xs truncate">{table.name}</span>
+                        </div>
+                      )}
+                      groupBy={(table) => table.dataset || table.schema}
+                    />
+                  )}
+
+                  {/* Connectors */}
+                  {sourceData.connectors.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connectors</h4>
+                      <div className="space-y-1">
+                        {sourceData.connectors.map((c) => (
+                          <div key={c.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                            <span className="text-xs">{c.name}</span>
+                            <span className={cn(
+                              'text-[10px]',
+                              c.status === 'active' ? 'text-emerald-400' :
+                              c.status === 'failed' ? 'text-red-400' : 'text-[var(--muted)]'
+                            )}>{c.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </ScrollArea>
           </div>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }
 
@@ -722,7 +813,10 @@ function SourceIcon({ toolType }: { toolType: string }) {
     airbyte: 'from-violet-500 to-violet-600',
   };
   return (
-    <div className={`w-7 h-7 rounded-md bg-gradient-to-br ${colors[toolType] || 'from-gray-500 to-gray-600'} flex items-center justify-center flex-shrink-0`}>
+    <div className={cn(
+      'w-7 h-7 rounded-lg bg-gradient-to-br flex items-center justify-center flex-shrink-0',
+      colors[toolType] || 'from-gray-500 to-gray-600'
+    )}>
       <span className="text-[9px] font-bold text-white">{icons[toolType] || toolType.slice(0, 2).toUpperCase()}</span>
     </div>
   );
@@ -743,7 +837,6 @@ function SourceSection<T>({
 }) {
   const [expanded, setExpanded] = useState(true);
 
-  // Group items
   const groups: Record<string, T[]> = {};
   items.forEach((item) => {
     const key = groupBy(item);
@@ -761,7 +854,7 @@ function SourceSection<T>({
           {title}
           <span className="ml-1.5 text-[var(--muted)] opacity-60">{count}</span>
         </h4>
-        <svg className={`w-3.5 h-3.5 text-[var(--muted)] transition-transform ${expanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className={cn('w-3.5 h-3.5 text-[var(--muted)] transition-transform', expanded && 'rotate-180')} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
@@ -769,7 +862,7 @@ function SourceSection<T>({
         <div className="space-y-3">
           {Object.entries(groups).map(([groupName, groupItems]) => (
             <div key={groupName}>
-              <div className="text-[10px] text-[var(--muted)] font-medium px-2.5 mb-1 opacity-70">{groupName}</div>
+              <div className="text-[10px] text-[var(--muted)] font-medium px-3 mb-1 opacity-70">{groupName}</div>
               <div className="space-y-0.5">
                 {groupItems.map(renderItem)}
               </div>
@@ -782,14 +875,11 @@ function SourceSection<T>({
 }
 
 function MessageContent({ content }: { content: string }) {
-  // Remove context blocks from display
   const displayContent = content.replace(/\[FINDING CONTEXT\][\s\S]*?\[QUESTION\]\n?/g, '');
-  
-  // Parse content into segments (text and code blocks)
   const segments = parseContentSegments(displayContent);
-  
+
   return (
-    <div className="text-sm font-mono tracking-tight space-y-3">
+    <div className="text-[13px] space-y-2">
       {segments.map((segment, i) => {
         if (segment.type === 'code') {
           return (
@@ -800,6 +890,9 @@ function MessageContent({ content }: { content: string }) {
             />
           );
         }
+        if (segment.type === 'table') {
+          return <TableBlock key={i} content={segment.content} />;
+        }
         return <TextBlock key={i} content={segment.content} />;
       })}
     </div>
@@ -807,7 +900,7 @@ function MessageContent({ content }: { content: string }) {
 }
 
 type ContentSegment = {
-  type: 'text' | 'code';
+  type: 'text' | 'code' | 'table';
   content: string;
   language?: string;
 };
@@ -819,38 +912,119 @@ function parseContentSegments(content: string): ContentSegment[] {
   let match;
 
   while ((match = codeBlockRegex.exec(content)) !== null) {
-    // Add text before code block
     if (match.index > lastIndex) {
       const textContent = content.slice(lastIndex, match.index).trim();
       if (textContent) {
-        segments.push({ type: 'text', content: textContent });
+        parseTextWithTables(textContent, segments);
       }
     }
-    
-    // Add code block
+
     segments.push({
       type: 'code',
       language: match[1] || 'text',
       content: match[2].trim(),
     });
-    
+
     lastIndex = match.index + match[0].length;
   }
-  
-  // Add remaining text
+
   if (lastIndex < content.length) {
     const textContent = content.slice(lastIndex).trim();
     if (textContent) {
-      segments.push({ type: 'text', content: textContent });
+      parseTextWithTables(textContent, segments);
     }
   }
-  
+
   return segments;
+}
+
+// Parse text content and extract tables
+function parseTextWithTables(text: string, segments: ContentSegment[]) {
+  const lines = text.split('\n');
+  let currentText: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Check if this line starts a table (has pipes and next line is separator)
+    if (line.includes('|') && i + 1 < lines.length && /^[\s|:-]+$/.test(lines[i + 1])) {
+      // Flush current text
+      if (currentText.length > 0) {
+        segments.push({ type: 'text', content: currentText.join('\n') });
+        currentText = [];
+      }
+
+      // Extract table
+      const tableLines: string[] = [];
+      while (i < lines.length && (lines[i].includes('|') || (tableLines.length === 1 && /^[\s|:-]+$/.test(lines[i])))) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+
+      if (tableLines.length >= 2) {
+        segments.push({ type: 'table', content: tableLines.join('\n') });
+      }
+    } else {
+      currentText.push(line);
+      i++;
+    }
+  }
+
+  // Flush remaining text
+  if (currentText.length > 0) {
+    const remaining = currentText.join('\n').trim();
+    if (remaining) {
+      segments.push({ type: 'text', content: remaining });
+    }
+  }
+}
+
+// Parse and render markdown table
+function TableBlock({ content }: { content: string }) {
+  const lines = content.trim().split('\n').filter(l => l.trim());
+  if (lines.length < 2) return <TextBlock content={content} />;
+
+  // Parse header
+  const headerCells = lines[0].split('|').map(c => c.trim()).filter(c => c);
+
+  // Skip separator line (line 1)
+  // Parse data rows
+  const dataRows = lines.slice(2).map(line =>
+    line.split('|').map(c => c.trim()).filter(c => c)
+  );
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
+      <table className="w-full text-[12px]">
+        <thead>
+          <tr className="bg-white/[0.04] border-b border-white/[0.08]">
+            {headerCells.map((cell, i) => (
+              <th key={i} className="px-3 py-2 text-left font-semibold text-white/80">
+                {cell}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {dataRows.map((row, rowIdx) => (
+            <tr key={rowIdx} className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02]">
+              {row.map((cell, cellIdx) => (
+                <td key={cellIdx} className="px-3 py-2 text-white/70">
+                  <span dangerouslySetInnerHTML={{ __html: formatInline(cell) }} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
   const [copied, setCopied] = useState(false);
-  
+
   const copyToClipboard = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -860,7 +1034,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
       console.error('Failed to copy:', err);
     }
   };
-  
+
   const languageLabels: Record<string, string> = {
     sql: 'SQL',
     python: 'Python',
@@ -872,38 +1046,38 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
     json: 'JSON',
     text: 'Text',
   };
-  
+
   return (
-    <div className="rounded-lg overflow-hidden bg-[#1e1e2e] border border-[rgba(255,255,255,0.08)]">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-[rgba(255,255,255,0.03)] border-b border-[rgba(255,255,255,0.06)]">
-        <span className="text-xs font-medium text-[var(--muted)]">
+    <div className="rounded-lg overflow-hidden bg-[#0d0d12] border border-white/[0.08]">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.02] border-b border-white/[0.06]">
+        <span className="text-[10px] font-medium text-[var(--muted)]">
           {languageLabels[language.toLowerCase()] || language.toUpperCase()}
         </span>
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={copyToClipboard}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--muted)] hover:text-white hover:bg-[rgba(255,255,255,0.08)] rounded transition-all"
+          className="h-6 px-1.5 gap-1 text-[10px]"
         >
           {copied ? (
             <>
-              <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              <span className="text-emerald-400">Copied!</span>
+              <span className="text-emerald-400">Copied</span>
             </>
           ) : (
             <>
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
               <span>Copy</span>
             </>
           )}
-        </button>
+        </Button>
       </div>
-      {/* Code */}
-      <pre className="p-4 overflow-x-auto">
-        <code className="text-[13px] font-mono text-emerald-300 leading-relaxed">
+      <pre className="p-3 overflow-x-auto">
+        <code className="text-[12px] font-mono text-emerald-300 leading-snug">
           {code}
         </code>
       </pre>
@@ -913,48 +1087,42 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
 
 function TextBlock({ content }: { content: string }) {
   const lines = content.split('\n');
-  
+
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1 leading-normal">
       {lines.map((line, i) => {
-        // Headers with ### or ##
         if (line.startsWith('### ')) {
           const headerText = line.replace(/^###\s*/, '');
-          return <h4 key={i} className="font-semibold mt-3 first:mt-0" dangerouslySetInnerHTML={{ __html: formatInline(headerText) }} />;
+          return <h4 key={i} className="font-semibold text-[13px] mt-2 first:mt-0" dangerouslySetInnerHTML={{ __html: formatInline(headerText) }} />;
         }
         if (line.startsWith('## ')) {
           const headerText = line.replace(/^##\s*/, '');
-          return <h3 key={i} className="font-semibold text-base mt-3 first:mt-0" dangerouslySetInnerHTML={{ __html: formatInline(headerText) }} />;
+          return <h3 key={i} className="font-semibold text-sm mt-2 first:mt-0" dangerouslySetInnerHTML={{ __html: formatInline(headerText) }} />;
         }
         if (line.startsWith('# ')) {
           const headerText = line.replace(/^#\s*/, '');
-          return <h2 key={i} className="font-bold text-lg mt-3 first:mt-0" dangerouslySetInnerHTML={{ __html: formatInline(headerText) }} />;
+          return <h2 key={i} className="font-bold text-[15px] mt-2 first:mt-0" dangerouslySetInnerHTML={{ __html: formatInline(headerText) }} />;
         }
-        // Bold text as headers (standalone bold line)
         if (line.startsWith('**') && line.endsWith('**') && !line.slice(2, -2).includes('**')) {
-          return <h4 key={i} className="font-semibold mt-3 first:mt-0">{line.replace(/\*\*/g, '')}</h4>;
+          return <h4 key={i} className="font-semibold text-[13px] mt-2 first:mt-0">{line.replace(/\*\*/g, '')}</h4>;
         }
-        // Bullet lists
         if (line.startsWith('- ') || line.startsWith('• ')) {
           return (
-            <div key={i} className="flex items-start gap-2 pl-1">
-              <span className="w-1 h-1 rounded-full bg-current mt-2 flex-shrink-0 opacity-50" />
+            <div key={i} className="flex items-start gap-2 pl-0.5">
+              <span className="w-1 h-1 rounded-full bg-current mt-1.5 flex-shrink-0 opacity-40" />
               <span dangerouslySetInnerHTML={{ __html: formatInline(line.replace(/^[-•]\s/, '')) }} />
             </div>
           );
         }
-        // Numbered lists
         if (line.match(/^\d+\.\s/)) {
           return (
-            <div key={i} className="flex items-start gap-2 pl-1">
-              <span className="font-medium opacity-70 min-w-[16px]">{line.match(/^(\d+)\./)?.[1]}.</span>
+            <div key={i} className="flex items-start gap-2 pl-0.5">
+              <span className="font-medium opacity-60 min-w-[16px] text-right text-[12px]">{line.match(/^(\d+)\./)?.[1]}.</span>
               <span dangerouslySetInnerHTML={{ __html: formatInline(line.replace(/^\d+\.\s/, '')) }} />
             </div>
           );
         }
-        // Empty lines
-        if (!line.trim()) return <div key={i} className="h-2" />;
-        // Regular text
+        if (!line.trim()) return <div key={i} className="h-1.5" />;
         return <p key={i} dangerouslySetInnerHTML={{ __html: formatInline(line) }} />;
       })}
     </div>
@@ -963,12 +1131,8 @@ function TextBlock({ content }: { content: string }) {
 
 function formatInline(text: string): string {
   return text
-    // Bold text
     .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-    // Italic text
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    // Inline code
-    .replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 bg-[rgba(0,0,0,0.3)] rounded text-[11px] font-mono text-emerald-300">$1</code>')
-    // Links [text](url)
+    .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 bg-black/30 border border-white/10 rounded text-[11px] font-mono text-emerald-300">$1</code>')
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank">$1</a>');
 }
