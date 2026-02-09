@@ -19,6 +19,17 @@ export type UnifiedNodeCategory =
   | 'source'          // dbt source
   | 'model';          // dbt model
 
+// Issue summary for data assets
+export interface DataAssetIssues {
+  total: number;
+  open: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  byType: Record<string, number>;  // e.g., { freshness: 2, quality: 1 }
+}
+
 // A node in the unified lineage graph
 export interface UnifiedLineageNode {
   id: string;
@@ -45,9 +56,17 @@ export interface UnifiedLineageNode {
   upstreamCount?: number;
   downstreamCount?: number;
 
+  // Data asset health & issues
+  lastUpdated?: string;           // When the table was last updated
+  freshnessStatus?: 'fresh' | 'stale' | 'unknown';  // Computed freshness
+  freshnessHours?: number;        // Hours since last update
+  issues?: DataAssetIssues;       // Issue summary
+
   // Common
   integrationId?: string;
   description?: string;
+  owner?: string;
+  tags?: string[];
 }
 
 // An edge in the unified lineage graph

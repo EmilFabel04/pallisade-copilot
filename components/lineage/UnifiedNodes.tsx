@@ -31,6 +31,16 @@ interface ToolNodeData {
   highCount?: number;
 }
 
+interface DataAssetIssues {
+  total: number;
+  open: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  byType: Record<string, number>;
+}
+
 interface DataAssetNodeData {
   name: string;
   fullName?: string;
@@ -44,6 +54,13 @@ interface DataAssetNodeData {
   rowCount?: number;
   upstreamCount?: number;
   downstreamCount?: number;
+  // Health & freshness
+  lastUpdated?: string;
+  freshnessStatus?: 'fresh' | 'stale' | 'unknown';
+  freshnessHours?: number;
+  issues?: DataAssetIssues;
+  owner?: string;
+  tags?: string[];
 }
 
 // Get layer icon component
@@ -235,17 +252,31 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
 
 /**
  * DataAssetNode - Renders a data asset node (table, view, source, model)
- * Dimensions: ~170x65px
+ * Enhanced with status indicators for freshness and issues
  */
 export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   const visuals = CATEGORY_VISUALS[data.category] || CATEGORY_VISUALS.table;
   const shortName = data.tableName || data.name?.split('.').pop() || data.name;
 
+  // Determine overall health status
+  const hasIssues = data.issues && data.issues.total > 0;
+  const hasCritical = data.issues && data.issues.critical > 0;
+  const hasHigh = data.issues && data.issues.high > 0;
+  const isStale = data.freshnessStatus === 'stale';
+
+  // Determine border color based on health
+  let borderColor = visuals.borderColor;
+  if (hasCritical) {
+    borderColor = '#EF4444'; // red
+  } else if (hasHigh || isStale) {
+    borderColor = '#F59E0B'; // amber
+  }
+
   return (
     <div
-      className="relative px-3 py-2 rounded-lg border min-w-[150px] max-w-[200px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02]"
+      className="relative px-3 py-2.5 rounded-lg border min-w-[160px] max-w-[220px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02]"
       style={{
-        borderColor: visuals.borderColor,
+        borderColor: borderColor,
         backgroundColor: visuals.bgColor,
       }}
     >
@@ -260,15 +291,41 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
         }}
       />
 
-      {/* Header with icon and type */}
-      <div className="flex items-center gap-2 mb-1">
-        <div style={{ color: visuals.color }}>{getDataAssetIcon(data.category)}</div>
-        <span
-          className="text-[10px] uppercase tracking-wide font-medium"
-          style={{ color: visuals.color }}
-        >
-          {visuals.label}
-        </span>
+      {/* Header with icon, type and status */}
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <div style={{ color: visuals.color }}>{getDataAssetIcon(data.category)}</div>
+          <span
+            className="text-[10px] uppercase tracking-wide font-medium"
+            style={{ color: visuals.color }}
+          >
+            {visuals.label}
+          </span>
+        </div>
+        {/* Status indicators */}
+        <div className="flex items-center gap-1">
+          {data.freshnessStatus === 'fresh' && (
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Fresh" />
+          )}
+          {isStale && (
+            <div className="flex items-center" title={`Stale (${data.freshnessHours}h ago)`}>
+              <Clock className="w-3 h-3 text-amber-400" />
+            </div>
+          )}
+          {hasCritical && (
+            <div className="flex items-center" title={`${data.issues?.critical} critical issues`}>
+              <AlertCircle className="w-3 h-3 text-red-400" />
+            </div>
+          )}
+          {!hasCritical && hasHigh && (
+            <div className="flex items-center" title={`${data.issues?.high} high severity issues`}>
+              <AlertCircle className="w-3 h-3 text-amber-400" />
+            </div>
+          )}
+          {!hasIssues && !isStale && data.freshnessStatus !== 'unknown' && (
+            <CheckCircle className="w-3 h-3 text-emerald-400" />
+          )}
+        </div>
       </div>
 
       {/* Name */}
@@ -277,13 +334,34 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
       </div>
 
       {/* Metadata row */}
-      <div className="flex items-center gap-3 mt-1 text-[10px] text-white/40">
+      <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-white/40">
         {(data.upstreamCount ?? 0) > 0 && <span>↑{data.upstreamCount}</span>}
         {(data.downstreamCount ?? 0) > 0 && <span>↓{data.downstreamCount}</span>}
         {data.rowCount !== undefined && data.rowCount > 0 && (
           <span>{data.rowCount.toLocaleString()} rows</span>
         )}
       </div>
+
+      {/* Issue badges */}
+      {hasIssues && (
+        <div className="flex items-center gap-1.5 mt-2">
+          {data.issues!.critical > 0 && (
+            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-red-500/25 text-red-300 rounded">
+              {data.issues!.critical}C
+            </span>
+          )}
+          {data.issues!.high > 0 && (
+            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-orange-500/25 text-orange-300 rounded">
+              {data.issues!.high}H
+            </span>
+          )}
+          {(data.issues!.medium > 0 || data.issues!.low > 0) && (
+            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-white/10 text-white/50 rounded">
+              +{data.issues!.medium + data.issues!.low}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Output handle (right side) */}
       <Handle

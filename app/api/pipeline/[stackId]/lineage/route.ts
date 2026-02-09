@@ -2,8 +2,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { decrypt } from '@/lib/crypto';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+
+// Helper to decrypt node config
+function decryptNodeConfig(config: any): Record<string, any> | null {
+  if (!config) return null;
+  try {
+    if (config.encrypted) {
+      const decrypted = decrypt(config.encrypted);
+      return JSON.parse(decrypted);
+    }
+    // Config is not encrypted (legacy data), return as-is
+    return config as Record<string, any>;
+  } catch (e) {
+    console.error('[LINEAGE] Failed to decrypt config:', e);
+    return null;
+  }
+}
 
 // POST /api/pipeline/[stackId]/lineage - Extract lineage from warehouse nodes
 export async function POST(
@@ -41,8 +58,9 @@ export async function POST(
     }
 
     // Find warehouse nodes to extract lineage from
+    // Valid statuses: CONNECTED (just connected) or HEALTHY (connected and healthy)
     const warehouseNodes = stack.nodes.filter(
-      (n) => n.layer === 'WAREHOUSE' && (n.status === 'CONNECTED' || n.status === 'ACTIVE')
+      (n) => n.layer === 'WAREHOUSE' && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
     );
 
     if (warehouseNodes.length === 0) {
@@ -69,14 +87,27 @@ export async function POST(
     for (const node of nodesToProcess) {
       try {
         console.log(`[LINEAGE] Extracting lineage from ${node.name} (${node.toolType})`);
-        
+
+        // Decrypt the config before sending to scanner
+        const decryptedConfig = decryptNodeConfig(node.config);
+        if (!decryptedConfig) {
+          console.error(`[LINEAGE] Failed to decrypt config for ${node.name}`);
+          results.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            success: false,
+            error: 'Failed to decrypt node configuration',
+          });
+          continue;
+        }
+
         // Call scanner API to extract lineage
         const response = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             integration_type: node.toolType.toUpperCase(),
-            config: node.config,
+            config: decryptedConfig,
             options: {
               region: options.region || 'auto',
               days_back: options.days_back || 30,

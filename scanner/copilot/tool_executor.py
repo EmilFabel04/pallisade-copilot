@@ -440,16 +440,18 @@ class ToolExecutor:
                     'type': row['data_type']
                 })
             
-            # Build TableSchema objects
+            # Build TableSchema objects with project for full BigQuery path
             for row in table_rows:
                 tbl_name = row['table_name']
                 tables.append(TableSchema(
                     name=tbl_name,
                     dataset=dataset,
-                    columns=table_columns.get(tbl_name, [])
+                    columns=table_columns.get(tbl_name, []),
+                    project=project,
+                    warehouse_type="BIGQUERY"
                 ))
-            
-            logger.info(f"BigQuery schema for {dataset}: {len(tables)} tables, columns: {sum(len(t.columns) for t in tables)}")
+
+            logger.info(f"BigQuery schema for {project}.{dataset}: {len(tables)} tables, columns: {sum(len(t.columns) for t in tables)}")
         
         elif adapter_type == "SNOWFLAKE":
             # Get tables
@@ -488,9 +490,10 @@ class ToolExecutor:
                 tables.append(TableSchema(
                     name=tbl_name,
                     dataset=dataset,
-                    columns=table_columns.get(tbl_name, [])
+                    columns=table_columns.get(tbl_name, []),
+                    warehouse_type="SNOWFLAKE"
                 ))
-        
+
         elif adapter_type == "POSTGRES":
             # Get tables
             tables_query = f"""
@@ -528,9 +531,10 @@ class ToolExecutor:
                 tables.append(TableSchema(
                     name=tbl_name,
                     dataset=dataset,
-                    columns=table_columns.get(tbl_name, [])
+                    columns=table_columns.get(tbl_name, []),
+                    warehouse_type="POSTGRES"
                 ))
-        
+
         return tables
     
     def _create_adapter(self, integration: IntegrationInfo) -> Optional[Any]:

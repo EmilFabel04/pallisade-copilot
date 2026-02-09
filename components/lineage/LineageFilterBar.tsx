@@ -21,10 +21,11 @@ interface LineageFilterBarProps {
   };
 }
 
-const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'];
+const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'];
 
 const LAYER_LABELS: Record<PipelineLayer, string> = {
   INGESTION: 'Ingestion',
+  VERSION_CONTROL: 'VCS',
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',

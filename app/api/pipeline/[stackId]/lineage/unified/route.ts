@@ -87,6 +87,30 @@ export async function GET(
       },
     });
 
+    // Fetch findings for all tables in this lineage
+    const tableNames = lineageNodes.map((n) => n.name);
+    const findings = await prisma.finding.findMany({
+      where: {
+        organizationId,
+        table: { in: tableNames },
+        status: { in: ['OPEN', 'IN_PROGRESS'] },
+      },
+      select: {
+        table: true,
+        severity: true,
+        scanType: true,
+        status: true,
+      },
+    });
+
+    // Group findings by table name
+    const findingsByTable = new Map<string, typeof findings>();
+    for (const finding of findings) {
+      const existing = findingsByTable.get(finding.table) || [];
+      existing.push(finding);
+      findingsByTable.set(finding.table, existing);
+    }
+
     // Get latest snapshot for timestamp
     const latestSnapshot = await prisma.lineageSnapshot.findFirst({
       where: {
@@ -138,6 +162,31 @@ export async function GET(
         layer = 'WAREHOUSE';
       }
 
+      // Get findings for this table
+      const tableFindings = findingsByTable.get(lNode.name) || [];
+      const issuesSummary = tableFindings.length > 0 ? {
+        total: tableFindings.length,
+        open: tableFindings.filter(f => f.status === 'OPEN').length,
+        critical: tableFindings.filter(f => f.severity === 'CRITICAL').length,
+        high: tableFindings.filter(f => f.severity === 'HIGH').length,
+        medium: tableFindings.filter(f => f.severity === 'MEDIUM').length,
+        low: tableFindings.filter(f => f.severity === 'LOW').length,
+        byType: tableFindings.reduce((acc, f) => {
+          acc[f.scanType] = (acc[f.scanType] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>),
+      } : undefined;
+
+      // Compute freshness status
+      let freshnessStatus: 'fresh' | 'stale' | 'unknown' = 'unknown';
+      let freshnessHours: number | undefined;
+      if (lNode.lastUpdated) {
+        const hoursSinceUpdate = (Date.now() - new Date(lNode.lastUpdated).getTime()) / (1000 * 60 * 60);
+        freshnessHours = Math.round(hoursSinceUpdate);
+        // Consider stale if older than 24 hours (configurable later)
+        freshnessStatus = hoursSinceUpdate <= 24 ? 'fresh' : 'stale';
+      }
+
       return {
         id: `lineage-${lNode.id}`,
         name: lNode.tableName,
@@ -154,6 +203,12 @@ export async function GET(
         downstreamCount: lNode.downstreamCount,
         integrationId: lNode.integrationId ?? undefined,
         description: lNode.description ?? undefined,
+        owner: lNode.owner ?? undefined,
+        tags: lNode.tags ?? undefined,
+        lastUpdated: lNode.lastUpdated?.toISOString() ?? undefined,
+        freshnessStatus,
+        freshnessHours,
+        issues: issuesSummary,
       };
     });
 

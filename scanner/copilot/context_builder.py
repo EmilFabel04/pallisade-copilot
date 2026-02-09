@@ -120,13 +120,22 @@ class TableSchema:
     dataset: str
     columns: List[Dict[str, str]] = field(default_factory=list)  # [{name, type, description}]
     row_count: Optional[int] = None
-    
+    project: Optional[str] = None  # BigQuery project ID (catalog)
+    warehouse_type: Optional[str] = None  # BIGQUERY, SNOWFLAKE, etc.
+
     def to_prompt_string(self) -> str:
         """Format table schema for LLM prompt."""
         cols = ", ".join([f"{c['name']} ({c['type']})" for c in self.columns[:20]])
         if len(self.columns) > 20:
             cols += f", ... (+{len(self.columns) - 20} more)"
-        return f"  - `{self.dataset}.{self.name}`: {cols}"
+
+        # Include full path for BigQuery (project.dataset.table)
+        if self.project and self.warehouse_type == "BIGQUERY":
+            full_path = f"`{self.project}.{self.dataset}.{self.name}`"
+        else:
+            full_path = f"`{self.dataset}.{self.name}`"
+
+        return f"  - {full_path}: {cols}"
 
 
 @dataclass

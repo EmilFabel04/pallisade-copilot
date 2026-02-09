@@ -247,6 +247,13 @@ export default function LineagePage() {
         rowCount: node.rowCount,
         upstreamCount: node.upstreamCount,
         downstreamCount: node.downstreamCount,
+        // Health & freshness data
+        lastUpdated: node.lastUpdated,
+        freshnessStatus: node.freshnessStatus,
+        freshnessHours: node.freshnessHours,
+        issues: node.issues,
+        owner: node.owner,
+        tags: node.tags,
       },
     }));
 
@@ -659,64 +666,214 @@ export default function LineagePage() {
               {/* Data asset-specific details */}
               {!isToolCategory(selectedNode.category) && (
                 <>
-                  {selectedNode.database && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Database
-                      </label>
-                      <p className="text-[13px] text-white font-mono mt-1">
-                        {selectedNode.database}
-                      </p>
+                  {/* Health Status Card */}
+                  <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-[11px] text-white/40 uppercase tracking-wide">Health Status</span>
+                      {selectedNode.freshnessStatus === 'fresh' && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          Fresh
+                        </span>
+                      )}
+                      {selectedNode.freshnessStatus === 'stale' && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                          Stale
+                        </span>
+                      )}
+                      {selectedNode.freshnessStatus === 'unknown' && (
+                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 text-white/50 text-[10px] font-medium">
+                          Unknown
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[12px]">
+                      <div>
+                        <span className="text-white/40">Last Updated</span>
+                        <p className="text-white mt-0.5">
+                          {selectedNode.lastUpdated
+                            ? selectedNode.freshnessHours !== undefined
+                              ? selectedNode.freshnessHours < 1
+                                ? 'Just now'
+                                : selectedNode.freshnessHours < 24
+                                ? `${selectedNode.freshnessHours}h ago`
+                                : `${Math.round(selectedNode.freshnessHours / 24)}d ago`
+                              : new Date(selectedNode.lastUpdated).toLocaleDateString()
+                            : 'Unknown'}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-white/40">Row Count</span>
+                        <p className="text-white mt-0.5">
+                          {selectedNode.rowCount?.toLocaleString() ?? '—'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Issues Section */}
+                  {selectedNode.issues && selectedNode.issues.total > 0 && (
+                    <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[11px] text-white/40 uppercase tracking-wide">Issues</span>
+                        <span className="text-[12px] text-white font-medium">
+                          {selectedNode.issues.open} open
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mb-3">
+                        {selectedNode.issues.critical > 0 && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-red-500/20">
+                            <span className="w-2 h-2 rounded-full bg-red-500" />
+                            <span className="text-[11px] text-red-300 font-medium">
+                              {selectedNode.issues.critical} Critical
+                            </span>
+                          </div>
+                        )}
+                        {selectedNode.issues.high > 0 && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-orange-500/20">
+                            <span className="w-2 h-2 rounded-full bg-orange-500" />
+                            <span className="text-[11px] text-orange-300 font-medium">
+                              {selectedNode.issues.high} High
+                            </span>
+                          </div>
+                        )}
+                        {selectedNode.issues.medium > 0 && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-yellow-500/20">
+                            <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                            <span className="text-[11px] text-yellow-300 font-medium">
+                              {selectedNode.issues.medium} Med
+                            </span>
+                          </div>
+                        )}
+                        {selectedNode.issues.low > 0 && (
+                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/10">
+                            <span className="w-2 h-2 rounded-full bg-white/50" />
+                            <span className="text-[11px] text-white/60 font-medium">
+                              {selectedNode.issues.low} Low
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      {/* Issues by type */}
+                      {Object.keys(selectedNode.issues.byType).length > 0 && (
+                        <div className="pt-2 border-t border-white/[0.06]">
+                          <div className="flex flex-wrap gap-1.5">
+                            {Object.entries(selectedNode.issues.byType).map(([type, count]) => (
+                              <span
+                                key={type}
+                                className="px-2 py-0.5 text-[10px] bg-white/5 text-white/60 rounded capitalize"
+                              >
+                                {type}: {count}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  {selectedNode.schema && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Schema/Dataset
-                      </label>
-                      <p className="text-[13px] text-white font-mono mt-1">
-                        {selectedNode.schema}
-                      </p>
+                  {/* No issues indicator */}
+                  {(!selectedNode.issues || selectedNode.issues.total === 0) && (
+                    <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span className="text-[12px] text-emerald-400 font-medium">No open issues</span>
+                      </div>
                     </div>
                   )}
 
+                  {/* Location Details */}
+                  <div className="space-y-3">
+                    {selectedNode.database && (
+                      <div>
+                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
+                          Database
+                        </label>
+                        <p className="text-[13px] text-white font-mono mt-1">
+                          {selectedNode.database}
+                        </p>
+                      </div>
+                    )}
+
+                    {selectedNode.schema && (
+                      <div>
+                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
+                          Schema/Dataset
+                        </label>
+                        <p className="text-[13px] text-white font-mono mt-1">
+                          {selectedNode.schema}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Lineage Stats */}
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
+                    <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                      <label className="text-[10px] text-white/40 uppercase tracking-wide">
                         Upstream
                       </label>
-                      <p className="text-[13px] text-white mt-1">
-                        {selectedNode.upstreamCount ?? 0} tables
+                      <p className="text-[15px] text-white font-medium mt-0.5">
+                        {selectedNode.upstreamCount ?? 0}
                       </p>
                     </div>
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
+                    <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                      <label className="text-[10px] text-white/40 uppercase tracking-wide">
                         Downstream
                       </label>
-                      <p className="text-[13px] text-white mt-1">
-                        {selectedNode.downstreamCount ?? 0} tables
+                      <p className="text-[15px] text-white font-medium mt-0.5">
+                        {selectedNode.downstreamCount ?? 0}
                       </p>
                     </div>
                   </div>
 
-                  {selectedNode.rowCount !== undefined && selectedNode.rowCount > 0 && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Row Count
-                      </label>
-                      <p className="text-[13px] text-white mt-1">
-                        {selectedNode.rowCount.toLocaleString()}
-                      </p>
-                    </div>
-                  )}
+                  {/* Criticality & Owner */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {selectedNode.criticality && (
+                      <div>
+                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
+                          Criticality
+                        </label>
+                        <p className={`text-[13px] mt-1 font-medium ${
+                          selectedNode.criticality === 'HIGH' || selectedNode.criticality === 'CRITICAL'
+                            ? 'text-red-400'
+                            : selectedNode.criticality === 'MEDIUM'
+                            ? 'text-amber-400'
+                            : 'text-white/70'
+                        }`}>
+                          {selectedNode.criticality}
+                        </p>
+                      </div>
+                    )}
+                    {selectedNode.owner && (
+                      <div>
+                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
+                          Owner
+                        </label>
+                        <p className="text-[13px] text-white mt-1">{selectedNode.owner}</p>
+                      </div>
+                    )}
+                  </div>
 
-                  {selectedNode.criticality && (
+                  {/* Tags */}
+                  {selectedNode.tags && selectedNode.tags.length > 0 && (
                     <div>
                       <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Criticality
+                        Tags
                       </label>
-                      <p className="text-[13px] text-white mt-1">{selectedNode.criticality}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {selectedNode.tags.map((tag, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 text-[11px] bg-[var(--accent)]/20 text-[var(--accent-2)] rounded"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </>
