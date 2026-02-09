@@ -5,7 +5,10 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING';
+export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'VERSION_CONTROL';
+
+// Integration types (for non-pipeline integrations like notifications/ticketing)
+export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
 
 // Node status
 export type PipelineNodeStatus = 'PENDING' | 'CONNECTED' | 'TESTING' | 'ERROR' | 'ACTIVE';
@@ -16,6 +19,14 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   TRANSFORMATION: '#F59E0B', // Amber
   WAREHOUSE: '#6366F1',      // Indigo
   REPORTING: '#06B6D4',      // Cyan
+  VERSION_CONTROL: '#8B5CF6', // Purple
+};
+
+// Integration type colors
+export const INTEGRATION_COLORS: Record<IntegrationType, string> = {
+  NOTIFICATIONS: '#EC4899',  // Pink
+  TICKETING: '#F97316',      // Orange
+  OBSERVABILITY: '#14B8A6',  // Teal
 };
 
 // Status colors
@@ -33,6 +44,14 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',
+  VERSION_CONTROL: 'Version Control',
+};
+
+// Integration type labels
+export const INTEGRATION_LABELS: Record<IntegrationType, string> = {
+  NOTIFICATIONS: 'Notifications',
+  TICKETING: 'Ticketing',
+  OBSERVABILITY: 'Observability',
 };
 
 // Get tools by layer
@@ -297,15 +316,190 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'workspace_id', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Optional: specific workspace' },
       ],
     },
-    { 
-      id: 'metabase', 
-      name: 'Metabase', 
-      description: 'Metabase dashboards', 
+    {
+      id: 'metabase',
+      name: 'Metabase',
+      description: 'Metabase dashboards',
       layer: 'REPORTING',
       configFields: [
         { name: 'host', label: 'Metabase URL', type: 'text', required: true, placeholder: 'https://your-metabase.com' },
         { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@example.com' },
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+      ],
+    },
+  ],
+  VERSION_CONTROL: [
+    {
+      id: 'github',
+      name: 'GitHub',
+      description: 'GitHub repositories & PRs',
+      layer: 'VERSION_CONTROL',
+      configFields: [
+        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx', helperText: 'Token needs repo access scope' },
+        { name: 'owner', label: 'Repository Owner', type: 'text', required: true, placeholder: 'organization or username' },
+        { name: 'repo', label: 'Repository Name', type: 'text', required: false, placeholder: 'Leave empty for all repos' },
+      ],
+    },
+    {
+      id: 'gitlab',
+      name: 'GitLab',
+      description: 'GitLab repositories & MRs',
+      layer: 'VERSION_CONTROL',
+      configFields: [
+        { name: 'host', label: 'GitLab URL', type: 'text', required: true, placeholder: 'https://gitlab.com' },
+        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'glpat-xxxxxxxxxxxx' },
+        { name: 'group_id', label: 'Group ID', type: 'text', required: false, placeholder: 'Optional: specific group' },
+      ],
+    },
+    {
+      id: 'bitbucket',
+      name: 'Bitbucket',
+      description: 'Bitbucket repositories',
+      layer: 'VERSION_CONTROL',
+      configFields: [
+        { name: 'workspace', label: 'Workspace', type: 'text', required: true, placeholder: 'Your Bitbucket workspace' },
+        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'Bitbucket username' },
+        { name: 'app_password', label: 'App Password', type: 'password', required: true, placeholder: 'Bitbucket app password' },
+      ],
+    },
+  ],
+};
+
+// Integration definitions (non-pipeline tools for notifications, ticketing, observability)
+export interface IntegrationDefinition {
+  id: string;
+  name: string;
+  description: string;
+  category: IntegrationType;
+  configFields: ConfigField[];
+}
+
+export const INTEGRATIONS: Record<IntegrationType, IntegrationDefinition[]> = {
+  NOTIFICATIONS: [
+    {
+      id: 'slack',
+      name: 'Slack',
+      description: 'Send alerts to Slack channels',
+      category: 'NOTIFICATIONS',
+      configFields: [
+        { name: 'webhook_url', label: 'Webhook URL', type: 'text', required: true, placeholder: 'https://hooks.slack.com/services/...' },
+        { name: 'channel', label: 'Default Channel', type: 'text', required: false, placeholder: '#data-alerts' },
+      ],
+    },
+    {
+      id: 'teams',
+      name: 'Microsoft Teams',
+      description: 'Send alerts to Teams channels',
+      category: 'NOTIFICATIONS',
+      configFields: [
+        { name: 'webhook_url', label: 'Webhook URL', type: 'text', required: true, placeholder: 'https://outlook.office.com/webhook/...' },
+      ],
+    },
+    {
+      id: 'pagerduty',
+      name: 'PagerDuty',
+      description: 'Incident management & on-call',
+      category: 'NOTIFICATIONS',
+      configFields: [
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your PagerDuty API key' },
+        { name: 'service_id', label: 'Service ID', type: 'text', required: true, placeholder: 'PagerDuty service ID' },
+      ],
+    },
+    {
+      id: 'opsgenie',
+      name: 'OpsGenie',
+      description: 'Alert management & on-call',
+      category: 'NOTIFICATIONS',
+      configFields: [
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your OpsGenie API key' },
+        { name: 'team', label: 'Team Name', type: 'text', required: false, placeholder: 'Optional: specific team' },
+      ],
+    },
+  ],
+  TICKETING: [
+    {
+      id: 'jira',
+      name: 'Jira',
+      description: 'Create & track Jira issues',
+      category: 'TICKETING',
+      configFields: [
+        { name: 'site_url', label: 'Jira Site URL', type: 'text', required: true, placeholder: 'https://yourcompany.atlassian.net' },
+        { name: 'email', label: 'Email', type: 'text', required: true, placeholder: 'user@company.com' },
+        { name: 'api_token', label: 'API Token', type: 'password', required: true, placeholder: 'Jira API token' },
+        { name: 'project_key', label: 'Default Project Key', type: 'text', required: true, placeholder: 'PROJ' },
+      ],
+    },
+    {
+      id: 'linear',
+      name: 'Linear',
+      description: 'Create & track Linear issues',
+      category: 'TICKETING',
+      configFields: [
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'lin_api_xxxxxxxxxxxx' },
+        { name: 'team_id', label: 'Team ID', type: 'text', required: false, placeholder: 'Optional: default team' },
+      ],
+    },
+    {
+      id: 'asana',
+      name: 'Asana',
+      description: 'Create & track Asana tasks',
+      category: 'TICKETING',
+      configFields: [
+        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'Asana PAT' },
+        { name: 'workspace_gid', label: 'Workspace ID', type: 'text', required: true, placeholder: 'Asana workspace GID' },
+        { name: 'project_gid', label: 'Default Project ID', type: 'text', required: false, placeholder: 'Optional: default project' },
+      ],
+    },
+    {
+      id: 'github_issues',
+      name: 'GitHub Issues',
+      description: 'Create issues in GitHub repos',
+      category: 'TICKETING',
+      configFields: [
+        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx' },
+        { name: 'owner', label: 'Repository Owner', type: 'text', required: true, placeholder: 'organization or username' },
+        { name: 'repo', label: 'Repository Name', type: 'text', required: true, placeholder: 'repository-name' },
+      ],
+    },
+  ],
+  OBSERVABILITY: [
+    {
+      id: 'monte_carlo',
+      name: 'Monte Carlo',
+      description: 'Data observability platform',
+      category: 'OBSERVABILITY',
+      configFields: [
+        { name: 'api_key_id', label: 'API Key ID', type: 'text', required: true, placeholder: 'Monte Carlo key ID' },
+        { name: 'api_key_secret', label: 'API Key Secret', type: 'password', required: true, placeholder: 'Monte Carlo key secret' },
+      ],
+    },
+    {
+      id: 'bigeye',
+      name: 'Bigeye',
+      description: 'Data quality monitoring',
+      category: 'OBSERVABILITY',
+      configFields: [
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Bigeye API key' },
+        { name: 'base_url', label: 'Base URL', type: 'text', required: false, placeholder: 'https://app.bigeye.com' },
+      ],
+    },
+    {
+      id: 'soda',
+      name: 'Soda',
+      description: 'Data quality testing',
+      category: 'OBSERVABILITY',
+      configFields: [
+        { name: 'api_key_id', label: 'API Key ID', type: 'text', required: true, placeholder: 'Soda Cloud key ID' },
+        { name: 'api_key_secret', label: 'API Key Secret', type: 'password', required: true, placeholder: 'Soda Cloud key secret' },
+      ],
+    },
+    {
+      id: 'elementary',
+      name: 'Elementary',
+      description: 'dbt-native data observability',
+      category: 'OBSERVABILITY',
+      configFields: [
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Elementary Cloud API key' },
       ],
     },
   ],

@@ -422,6 +422,7 @@ class CopilotContextBuilder:
                     layer=self.INTEGRATION_LAYERS.get(i["type"].upper(), IntegrationLayer.WAREHOUSE),
                     status="ACTIVE" if i["status"] == "ACTIVE" else i["status"],
                     config=i.get("config", {}),
+                    metadata=i.get("metadata", {}),
                 )
                 for i in integrations_data
             ]
@@ -704,6 +705,23 @@ class CopilotContextBuilder:
                 "trace_incident_root_cause",
                 "get_quality_checks",
                 "get_incident_details",
+            ])
+
+        # Change plan tools (always available - core copilot functionality)
+        tools.extend([
+            "create_change_plan",
+            "validate_change_plan",
+            "get_change_plan",
+            "apply_change_plan",
+            "list_change_plans",
+        ])
+
+        # GitHub tools (for reading repo contents and lineage mapping)
+        if "GITHUB" in integration_types:
+            tools.extend([
+                "list_github_repos",
+                "get_github_tree",
+                "get_github_file",
             ])
 
         return tools

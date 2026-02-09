@@ -12,11 +12,14 @@ import type {
 import { ChangePlanCard } from './ChangePlanCard';
 import { ValidationStatus } from './ValidationStatus';
 
+type ShareTargetType = 'slack' | 'jira' | 'github_issue';
+
 interface ChangePlanToolResultProps {
   toolName: string;
   result: CreateChangePlanResult | ValidateChangePlanResult | ApplyChangePlanResult | ListChangePlansResult | GetChangePlanResult;
   onValidate?: (planId: string, level: ValidationLevel) => void;
   onApply?: (planId: string) => void;
+  onShare?: (planId: string, target: ShareTargetType) => void;
 }
 
 const CHANGE_PLAN_TOOLS = [
@@ -31,7 +34,7 @@ export function isChangePlanTool(toolName: string): boolean {
   return CHANGE_PLAN_TOOLS.includes(toolName);
 }
 
-export function ChangePlanToolResult({ toolName, result, onValidate, onApply }: ChangePlanToolResultProps) {
+export function ChangePlanToolResult({ toolName, result, onValidate, onApply, onShare }: ChangePlanToolResultProps) {
   // Handle error case
   if ('error' in result && result.error) {
     return (
@@ -93,6 +96,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply }: 
             plan={createResult.plan}
             onValidate={onValidate}
             onApply={onApply}
+            onShare={onShare}
           />
         );
       }
@@ -218,6 +222,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply }: 
             plan={getResult.plan}
             onValidate={onValidate}
             onApply={onApply}
+            onShare={onShare}
           />
         );
       }

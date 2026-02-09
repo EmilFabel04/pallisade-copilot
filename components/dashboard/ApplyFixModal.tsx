@@ -241,7 +241,7 @@ export function ApplyFixModal({
             <div className="mb-4 p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
               {error}
               {error === 'GitHub not connected' && (
-                <a href="/dashboard/integrations" className="underline ml-2">
+                <a href="/dashboard/pipeline" className="underline ml-2">
                   Connect GitHub →
                 </a>
               )}
@@ -262,7 +262,7 @@ export function ApplyFixModal({
               ) : repos.length === 0 ? (
                 <div className="text-center py-12">
                   <p className="text-[var(--muted)] mb-4">No repositories with push access found.</p>
-                  <a href="/dashboard/integrations" className="text-[var(--accent-2)] hover:underline">
+                  <a href="/dashboard/pipeline" className="text-[var(--accent-2)] hover:underline">
                     Connect GitHub →
                   </a>
                 </div>

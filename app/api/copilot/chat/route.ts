@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
+import { Prisma } from '@prisma/client';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
@@ -95,13 +96,18 @@ export async function POST(request: Request) {
     ];
 
     // Fetch pipeline nodes (integrations) from the database
-    // Include CONNECTED, HEALTHY, and WARNING nodes (exclude PENDING, TESTING, ERROR)
+    // Include CONNECTED, HEALTHY, WARNING, and PENDING nodes that have config
+    // (PENDING with config means user saved credentials but hasn't tested yet)
     const pipelineStack = await prisma.pipelineStack.findFirst({
       where: { organizationId: user.organizationId },
       include: {
         nodes: {
           where: {
-            status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+            OR: [
+              { status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] } },
+              // Also include PENDING nodes that have config (credentials saved but not tested)
+              { status: 'PENDING', config: { not: Prisma.JsonNull } },
+            ],
           },
           select: {
             id: true,
@@ -114,6 +120,8 @@ export async function POST(request: Request) {
         },
       },
     });
+
+    console.log(`[COPILOT] Found ${pipelineStack?.nodes.length || 0} pipeline nodes`);
 
     // Convert pipeline nodes to integration format for the scanner
     // Note: type must be uppercase to match the scanner's tool registry
@@ -129,15 +137,19 @@ export async function POST(request: Request) {
             // Decrypt if credentials are encrypted
             const decrypted = decrypt(configJson.encrypted);
             credentials = JSON.parse(decrypted);
+            console.log(`[COPILOT] Decrypted config for ${node.name} (${node.toolType}), keys:`, Object.keys(credentials));
           } else {
             // Config is stored directly (not encrypted)
             const { _cached, ...creds } = configJson;
             credentials = creds;
+            console.log(`[COPILOT] Direct config for ${node.name} (${node.toolType}), keys:`, Object.keys(credentials));
           }
         } catch (e) {
           console.error(`[COPILOT] Failed to decrypt credentials for ${node.name}:`, e);
           credentials = {};
         }
+      } else {
+        console.log(`[COPILOT] No config for ${node.name} (${node.toolType})`);
       }
 
       // Map frontend field names to adapter field names
@@ -162,14 +174,80 @@ export async function POST(request: Request) {
         layer: node.layer.toLowerCase(),
         status: validActiveStatuses.includes(node.status) ? 'ACTIVE' : node.status,
         config,
+        metadata: {},
       };
     }) || [];
+
+    // Also fetch OAuth integrations (GitHub, Slack, Jira) from the Integration table
+    const oauthIntegrations = await prisma.integration.findMany({
+      where: {
+        organizationId: user.organizationId,
+        status: 'ACTIVE',
+      },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        status: true,
+        accessToken: true,
+        metadata: true,
+      },
+    });
+
+    console.log(`[COPILOT] Found ${oauthIntegrations.length} OAuth integrations:`, oauthIntegrations.map(o => ({ id: o.id, type: o.type, hasToken: !!o.accessToken })));
+
+    // Convert OAuth integrations to the same format and merge
+    for (const oauth of oauthIntegrations) {
+      // Decrypt access token if present
+      let accessToken = '';
+      if (oauth.accessToken) {
+        try {
+          accessToken = decrypt(oauth.accessToken);
+        } catch (e) {
+          console.error(`[COPILOT] Failed to decrypt token for ${oauth.name}:`, e);
+        }
+      }
+
+      // Check if this type already exists (from pipeline nodes)
+      const existingIdx = integrations.findIndex(i => i.type === oauth.type.toUpperCase());
+      if (existingIdx >= 0) {
+        // Merge the OAuth token into the existing integration's config
+        // This ensures pipeline nodes get the OAuth credentials
+        console.log(`[COPILOT] Merging OAuth token for ${oauth.type} into existing pipeline node at index ${existingIdx}`);
+        integrations[existingIdx].config = {
+          ...integrations[existingIdx].config,
+          access_token: accessToken,
+          token: accessToken,
+        };
+        integrations[existingIdx].metadata = {
+          ...integrations[existingIdx].metadata,
+          ...(oauth.metadata as Record<string, any> || {}),
+        };
+        continue;
+      }
+      console.log(`[COPILOT] No existing pipeline node for ${oauth.type}, adding as standalone integration`);
+
+      integrations.push({
+        id: oauth.id,
+        name: oauth.name,
+        type: oauth.type.toUpperCase(),
+        layer: 'version_control',
+        status: oauth.status === 'ACTIVE' ? 'ACTIVE' : oauth.status,
+        config: {
+          access_token: accessToken,
+          token: accessToken,
+        },
+        metadata: oauth.metadata as Record<string, any> || {},
+      });
+    }
 
     console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({
       name: i.name,
       type: i.type,
       status: i.status,
-      configKeys: Object.keys(i.config).filter(k => !k.startsWith('_'))
+      configKeys: Object.keys(i.config || {}).filter(k => !k.startsWith('_')),
+      hasToken: !!(i.config?.access_token || i.config?.token),
+      hasMetadata: !!i.metadata,
     })));
 
     // Call the scanner copilot API with full conversation history

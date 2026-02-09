@@ -6,6 +6,7 @@ import type { ValidationLevel, ValidationResult, ValidationStatus as VStatus } f
 interface ValidationStatusProps {
   validations: Partial<Record<ValidationLevel, ValidationResult>>;
   compact?: boolean;
+  onRunValidation?: (level: ValidationLevel) => void;
 }
 
 const LEVELS: ValidationLevel[] = ['static', 'ci', 'sandbox'];
@@ -74,7 +75,7 @@ const LEVEL_LABELS: Record<ValidationLevel, string> = {
   sandbox: 'Sandbox',
 };
 
-export function ValidationStatus({ validations, compact = false }: ValidationStatusProps) {
+export function ValidationStatus({ validations, compact = false, onRunValidation }: ValidationStatusProps) {
   const [expandedLevel, setExpandedLevel] = useState<ValidationLevel | null>(null);
 
   if (compact) {
@@ -101,6 +102,20 @@ export function ValidationStatus({ validations, compact = false }: ValidationSta
     );
   }
 
+  const handleClick = (level: ValidationLevel) => {
+    const result = validations[level];
+    const status = result?.status || 'pending';
+
+    // If pending and we have a callback, run validation
+    if (status === 'pending' && onRunValidation) {
+      onRunValidation(level);
+      return;
+    }
+
+    // Otherwise toggle expanded view
+    setExpandedLevel(expandedLevel === level ? null : level);
+  };
+
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-3 gap-2">
@@ -109,20 +124,23 @@ export function ValidationStatus({ validations, compact = false }: ValidationSta
           const status = result?.status || 'pending';
           const config = STATUS_CONFIG[status];
           const hasDetails = result && (result.errors.length > 0 || result.warnings.length > 0);
+          const hasResult = result && result.status !== 'pending';
+          const canClick = hasDetails || hasResult || (status === 'pending' && onRunValidation);
 
           return (
             <button
               key={level}
-              onClick={() => setExpandedLevel(expandedLevel === level ? null : level)}
-              disabled={!hasDetails}
+              onClick={() => handleClick(level)}
+              disabled={!canClick}
               className={`
                 flex flex-col items-center gap-1 p-2 rounded-lg transition-all
-                ${hasDetails ? 'cursor-pointer hover:bg-white/[0.04]' : 'cursor-default'}
+                ${canClick ? 'cursor-pointer hover:bg-white/[0.04]' : 'cursor-default opacity-60'}
               `}
               style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.02)',
                 border: `1px solid ${expandedLevel === level ? config.color : 'rgba(255, 255, 255, 0.06)'}`,
               }}
+              title={status === 'pending' && onRunValidation ? `Click to run ${level} validation` : undefined}
             >
               <div style={{ color: config.color }}>{config.icon}</div>
               <span className="text-xs font-medium text-white/80">{LEVEL_LABELS[level]}</span>
@@ -139,6 +157,9 @@ export function ValidationStatus({ validations, compact = false }: ValidationSta
                   )}
                 </div>
               )}
+              {status === 'pending' && onRunValidation && (
+                <span className="text-[9px] text-white/40">Click to run</span>
+              )}
             </button>
           );
         })}
@@ -152,6 +173,18 @@ export function ValidationStatus({ validations, compact = false }: ValidationSta
             border: '1px solid rgba(255, 255, 255, 0.06)',
           }}
         >
+          {/* Show status summary */}
+          {validations[expandedLevel]!.errors.length === 0 &&
+            validations[expandedLevel]!.warnings.length === 0 &&
+            validations[expandedLevel]!.status === 'passed' && (
+              <div className="flex items-center gap-2 text-emerald-400">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>All checks passed</span>
+              </div>
+            )}
+
           {validations[expandedLevel]!.errors.length > 0 && (
             <div>
               <span className="text-red-400 font-medium block mb-1">Errors:</span>

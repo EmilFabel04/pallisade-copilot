@@ -328,6 +328,104 @@ export async function POST(request: NextRequest) {
         };
         break;
 
+      // Version Control tools - test directly without scanner API
+      case 'github': {
+        try {
+          const token = config.access_token;
+          if (!token) {
+            return NextResponse.json({ success: false, message: 'Access token is required' });
+          }
+
+          // Test GitHub API with the token
+          const ghResponse = await fetch('https://api.github.com/user', {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'Pallisade',
+            },
+          });
+
+          if (ghResponse.ok) {
+            const user = await ghResponse.json();
+            return NextResponse.json({
+              success: true,
+              message: `Connected as @${user.login}`
+            });
+          } else if (ghResponse.status === 401) {
+            return NextResponse.json({ success: false, message: 'Invalid or expired access token' });
+          } else {
+            return NextResponse.json({ success: false, message: `GitHub API error: ${ghResponse.status}` });
+          }
+        } catch (error) {
+          return NextResponse.json({ success: false, message: 'Failed to connect to GitHub' });
+        }
+      }
+
+      case 'gitlab': {
+        try {
+          const token = config.access_token;
+          const host = config.host || 'https://gitlab.com';
+
+          if (!token) {
+            return NextResponse.json({ success: false, message: 'Access token is required' });
+          }
+
+          // Test GitLab API with the token
+          const glResponse = await fetch(`${host}/api/v4/user`, {
+            headers: {
+              'PRIVATE-TOKEN': token,
+            },
+          });
+
+          if (glResponse.ok) {
+            const user = await glResponse.json();
+            return NextResponse.json({
+              success: true,
+              message: `Connected as @${user.username}`
+            });
+          } else if (glResponse.status === 401) {
+            return NextResponse.json({ success: false, message: 'Invalid or expired access token' });
+          } else {
+            return NextResponse.json({ success: false, message: `GitLab API error: ${glResponse.status}` });
+          }
+        } catch (error) {
+          return NextResponse.json({ success: false, message: 'Failed to connect to GitLab' });
+        }
+      }
+
+      case 'bitbucket': {
+        try {
+          const username = config.username;
+          const appPassword = config.app_password;
+
+          if (!username || !appPassword) {
+            return NextResponse.json({ success: false, message: 'Username and app password are required' });
+          }
+
+          // Test Bitbucket API with basic auth
+          const credentials = Buffer.from(`${username}:${appPassword}`).toString('base64');
+          const bbResponse = await fetch('https://api.bitbucket.org/2.0/user', {
+            headers: {
+              'Authorization': `Basic ${credentials}`,
+            },
+          });
+
+          if (bbResponse.ok) {
+            const user = await bbResponse.json();
+            return NextResponse.json({
+              success: true,
+              message: `Connected as ${user.display_name}`
+            });
+          } else if (bbResponse.status === 401) {
+            return NextResponse.json({ success: false, message: 'Invalid username or app password' });
+          } else {
+            return NextResponse.json({ success: false, message: `Bitbucket API error: ${bbResponse.status}` });
+          }
+        } catch (error) {
+          return NextResponse.json({ success: false, message: 'Failed to connect to Bitbucket' });
+        }
+      }
+
       default:
         return NextResponse.json({ success: false, message: `Unknown tool type: ${toolType}` });
     }

@@ -41,6 +41,7 @@ interface PipelineCanvasProps {
 // Layer positions for auto-layout
 const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
   INGESTION: 100,
+  VERSION_CONTROL: 250,
   TRANSFORMATION: 400,
   WAREHOUSE: 700,
   REPORTING: 1000,
@@ -478,13 +479,15 @@ function PipelineCanvasInner({
         {/* Layer Headers */}
         <Panel position="top-center">
           <div className="flex items-center gap-4 px-5 py-2.5 rounded-full bg-[#141419]/90 backdrop-blur-md border border-[rgba(255,255,255,0.1)]">
-            {(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'] as const).map((layer, i) => (
+            {(['INGESTION', 'VERSION_CONTROL', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'] as const).map((layer, i) => (
               <div key={layer} className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS[layer] }} />
                 <span className="text-xs font-medium text-white/80">
-                  {layer === 'TRANSFORMATION' ? 'Transform' : layer.charAt(0) + layer.slice(1).toLowerCase()}
+                  {layer === 'TRANSFORMATION' ? 'Transform' :
+                   layer === 'VERSION_CONTROL' ? 'VCS' :
+                   layer.charAt(0) + layer.slice(1).toLowerCase()}
                 </span>
-                {i < 3 && <span className="text-white/30 ml-1">→</span>}
+                {i < 4 && <span className="text-white/30 ml-1">→</span>}
               </div>
             ))}
           </div>

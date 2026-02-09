@@ -64,8 +64,9 @@ class ChangePlanApplier:
             import aiohttp
             self._session = aiohttp.ClientSession(
                 headers={
-                    "Authorization": f"token {self.github_token}",
-                    "Accept": "application/vnd.github.v3+json",
+                    "Authorization": f"Bearer {self.github_token}",  # Bearer for fine-grained PATs
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
                     "User-Agent": "Pallisade-Scout/1.0",
                 }
             )
@@ -121,13 +122,13 @@ class ChangePlanApplier:
 
             # Step 2: Create a new branch
             branch_name = self._generate_branch_name(plan)
-            branch_created = await self._create_branch(
+            branch_created, branch_error = await self._create_branch(
                 repo_owner, repo_name, branch_name, base_sha
             )
             if not branch_created:
                 return ApplyResult(
                     success=False,
-                    error=f"Could not create branch '{branch_name}'",
+                    error=branch_error or f"Could not create branch '{branch_name}'",
                 )
 
             # Step 3: Apply each patch
@@ -214,8 +215,8 @@ class ChangePlanApplier:
         repo: str,
         branch_name: str,
         base_sha: str,
-    ) -> bool:
-        """Create a new branch from a base SHA."""
+    ) -> tuple[bool, str]:
+        """Create a new branch from a base SHA. Returns (success, error_message)."""
         session = await self._get_session()
         url = f"{self.github_api_base}/repos/{owner}/{repo}/git/refs"
 
@@ -226,11 +227,25 @@ class ChangePlanApplier:
 
         async with session.post(url, json=payload) as response:
             if response.status == 201:
-                return True
+                return True, ""
             else:
                 error_text = await response.text()
                 logger.error(f"Failed to create branch: {response.status} - {error_text}")
-                return False
+
+                # Provide helpful error messages based on status
+                if response.status == 403:
+                    return False, (
+                        f"Permission denied creating branch. Your GitHub token needs:\n"
+                        f"- 'Contents: Read and write' permission\n"
+                        f"- Repository access to '{owner}/{repo}'\n"
+                        f"GitHub error: {error_text}"
+                    )
+                elif response.status == 404:
+                    return False, f"Repository '{owner}/{repo}' not found or not accessible"
+                elif response.status == 422:
+                    return False, f"Branch '{branch_name}' may already exist or invalid ref"
+                else:
+                    return False, f"GitHub API error {response.status}: {error_text}"
 
     async def _apply_patch(
         self,

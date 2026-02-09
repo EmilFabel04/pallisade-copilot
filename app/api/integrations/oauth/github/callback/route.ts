@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     if (error) {
       console.error('GitHub OAuth error:', error);
       return NextResponse.redirect(
-        new URL(`/dashboard/integrations?error=${encodeURIComponent(error)}`, request.url)
+        new URL(`/dashboard/pipeline?error=${encodeURIComponent(error)}`, request.url)
       );
     }
 
@@ -29,13 +29,13 @@ export async function GET(request: NextRequest) {
     const storedState = request.cookies.get('github_oauth_state')?.value;
     if (!state || state !== storedState) {
       return NextResponse.redirect(
-        new URL('/dashboard/integrations?error=invalid_state', request.url)
+        new URL('/dashboard/pipeline?error=invalid_state', request.url)
       );
     }
 
     if (!code) {
       return NextResponse.redirect(
-        new URL('/dashboard/integrations?error=no_code', request.url)
+        new URL('/dashboard/pipeline?error=no_code', request.url)
       );
     }
 
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
     if (tokenData.error) {
       console.error('GitHub token error:', tokenData);
       return NextResponse.redirect(
-        new URL(`/dashboard/integrations?error=${encodeURIComponent(tokenData.error)}`, request.url)
+        new URL(`/dashboard/pipeline?error=${encodeURIComponent(tokenData.error)}`, request.url)
       );
     }
 
@@ -145,7 +145,7 @@ export async function GET(request: NextRequest) {
 
     // Clear state cookie and redirect
     const response = NextResponse.redirect(
-      new URL('/dashboard/integrations?success=github', request.url)
+      new URL('/dashboard/pipeline?success=github', request.url)
     );
     response.cookies.delete('github_oauth_state');
 
@@ -153,7 +153,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('GitHub OAuth callback error:', error);
     return NextResponse.redirect(
-      new URL('/dashboard/integrations?error=callback_failed', request.url)
+      new URL('/dashboard/pipeline?error=callback_failed', request.url)
     );
   }
 }

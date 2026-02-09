@@ -10,7 +10,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { ChangePlanToolResult, isChangePlanTool } from '@/components/copilot/change-plan';
+import { ChangePlanToolResult, isChangePlanTool, SharePlanModal } from '@/components/copilot/change-plan';
+import type { ChangePlan } from '@/types/change-plan';
 
 type ToolCall = {
   id?: string;
@@ -125,6 +126,11 @@ export default function AssistantPage() {
   const [showSources, setShowSources] = useState(false);
   const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
   const [loadingSources, setLoadingSources] = useState(false);
+  const [shareModal, setShareModal] = useState<{
+    plan: ChangePlan;
+    targetType: 'slack' | 'jira' | 'github_issue';
+  } | null>(null);
+  const [shareToast, setShareToast] = useState<{ message: string; url?: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastPipelineId = useRef<string | null>(null);
@@ -390,11 +396,21 @@ export default function AssistantPage() {
       }
 
       // Map backend tool_calls format to frontend format
-      const mappedToolCalls: ToolCall[] = (data.tool_calls || []).map((tc: { tool?: string; name?: string; input?: Record<string, unknown>; arguments?: Record<string, unknown>; result?: unknown }) => ({
-        name: tc.tool || tc.name || '',
-        arguments: tc.input || tc.arguments,
-        result: tc.result,
-      }));
+      // Backend returns { success, data: {...}, error } but frontend expects { success, ...data, error }
+      const mappedToolCalls: ToolCall[] = (data.tool_calls || []).map((tc: { tool?: string; name?: string; input?: Record<string, unknown>; arguments?: Record<string, unknown>; result?: { success?: boolean; data?: Record<string, unknown>; error?: string } }) => {
+        const result = tc.result || {};
+        // Flatten the result: merge success/error with the contents of data
+        const flattenedResult = {
+          success: result.success,
+          error: result.error,
+          ...(result.data || {}),
+        };
+        return {
+          name: tc.tool || tc.name || '',
+          arguments: tc.input || tc.arguments,
+          result: flattenedResult,
+        };
+      });
 
       const aiMessage: Message = {
         id: data.messageId || (Date.now() + 1).toString(),
@@ -622,6 +638,14 @@ export default function AssistantPage() {
                                   { preventDefault: () => {} } as React.FormEvent,
                                   `Apply change plan ${planId} to create a GitHub PR`
                                 );
+                              }}
+                              onShare={(planId, targetType) => {
+                                // Extract plan from tool result
+                                const result = toolCall.result as any;
+                                const plan = result?.plan || result;
+                                if (plan && plan.id) {
+                                  setShareModal({ plan, targetType });
+                                }
                               }}
                             />
                           ))}
@@ -860,6 +884,56 @@ export default function AssistantPage() {
           </div>
         </div>
       </div>
+
+      {/* Share Plan Modal */}
+      {shareModal && (
+        <SharePlanModal
+          plan={shareModal.plan}
+          targetType={shareModal.targetType}
+          isOpen={true}
+          onClose={() => setShareModal(null)}
+          onSuccess={(result) => {
+            setShareToast(result);
+            setTimeout(() => setShareToast(null), 5000);
+          }}
+        />
+      )}
+
+      {/* Share Toast */}
+      {shareToast && (
+        <div
+          className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg flex items-center gap-3 shadow-lg"
+          style={{
+            backgroundColor: 'rgba(16, 185, 129, 0.95)',
+            border: '1px solid rgba(16, 185, 129, 0.3)',
+          }}
+        >
+          <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          <div>
+            <p className="text-sm font-medium text-white">{shareToast.message}</p>
+            {shareToast.url && (
+              <a
+                href={shareToast.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-white/80 hover:underline"
+              >
+                View
+              </a>
+            )}
+          </div>
+          <button
+            onClick={() => setShareToast(null)}
+            className="p-1 hover:bg-white/10 rounded transition-colors"
+          >
+            <svg className="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
     </TooltipProvider>
   );
 }

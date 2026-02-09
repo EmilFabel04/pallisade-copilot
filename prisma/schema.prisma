@@ -507,6 +507,7 @@ enum PipelineLayer {
   TRANSFORMATION // dbt, Airflow, Dagster
   WAREHOUSE // Snowflake, BigQuery, PostgreSQL, Redshift, Azure SQL
   REPORTING // Tableau, Looker, Power BI, Metabase
+  VERSION_CONTROL // GitHub, GitLab, Bitbucket
 }
 
 enum PipelineNodeStatus {

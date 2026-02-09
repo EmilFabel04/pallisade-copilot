@@ -2,12 +2,24 @@
 
 /**
  * Node Configuration Modal
- * 
+ *
  * Professional modal for configuring node credentials and settings
+ * Supports OAuth flow for GitHub
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { PipelineNode, getToolById, LAYER_COLORS, ConfigField } from './types';
+import { Loader2, Check, ExternalLink } from 'lucide-react';
+
+// Tools that support OAuth authentication
+const OAUTH_TOOLS = ['github'];
+
+interface GitHubConnectionInfo {
+  connected: boolean;
+  username?: string;
+  repoCount?: number;
+  avatar?: string;
+}
 
 interface NodeConfigModalProps {
   node: PipelineNode;
@@ -205,6 +217,59 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // OAuth state for GitHub
+  const isOAuthTool = OAUTH_TOOLS.includes(node.toolType);
+  const [useOAuth, setUseOAuth] = useState(isOAuthTool);
+  const [githubInfo, setGithubInfo] = useState<GitHubConnectionInfo | null>(null);
+  const [loadingGithub, setLoadingGithub] = useState(false);
+
+  // Check for existing GitHub OAuth connection
+  useEffect(() => {
+    if (isOAuthTool) {
+      checkGitHubConnection();
+    }
+  }, [isOAuthTool]);
+
+  const checkGitHubConnection = async () => {
+    setLoadingGithub(true);
+    try {
+      const res = await fetch('/api/integrations');
+      if (res.ok) {
+        const data = await res.json();
+        const githubIntegration = data.integrations?.find(
+          (i: any) => i.type === 'GITHUB' && i.status === 'ACTIVE'
+        );
+        if (githubIntegration) {
+          setGithubInfo({
+            connected: true,
+            username: githubIntegration.metadata?.username,
+            repoCount: githubIntegration.metadata?.repoCount,
+            avatar: githubIntegration.metadata?.avatar,
+          });
+          // Pre-fill config with linked integration
+          setConfig(prev => ({
+            ...prev,
+            _integration_id: githubIntegration.id,
+            _oauth_linked: true,
+          }));
+        } else {
+          setGithubInfo({ connected: false });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check GitHub connection:', error);
+      setGithubInfo({ connected: false });
+    } finally {
+      setLoadingGithub(false);
+    }
+  };
+
+  const handleGitHubConnect = () => {
+    // Store node info in sessionStorage so we can update it after OAuth
+    sessionStorage.setItem('pending_github_node', JSON.stringify({ nodeId: node.id, stackId }));
+    window.location.href = '/api/integrations/oauth/github';
+  };
+
   // Get config fields - use tool's fields or provide a fallback
   const configFields: ConfigField[] = tool?.configFields || [
     { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your API key' },
@@ -319,7 +384,75 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
         {/* Body */}
         <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto">
-          {configFields.map(field => (
+          {/* OAuth section for GitHub */}
+          {isOAuthTool && (
+            <div className="mb-6">
+              {loadingGithub ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                </div>
+              ) : githubInfo?.connected ? (
+                // Already connected via OAuth
+                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                  <div className="flex items-center gap-3">
+                    {githubInfo.avatar ? (
+                      <img src={githubInfo.avatar} alt="" className="w-10 h-10 rounded-full" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-[#24292e] flex items-center justify-center">
+                        <GitHubIcon className="w-5 h-5 text-white" />
+                      </div>
+                    )}
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 text-emerald-400 mb-0.5">
+                        <Check className="w-4 h-4" />
+                        <span className="font-medium text-sm">GitHub Connected</span>
+                      </div>
+                      <p className="text-white text-sm">@{githubInfo.username}</p>
+                      <p className="text-xs text-gray-400">{githubInfo.repoCount} repositories available</p>
+                    </div>
+                    <button
+                      onClick={handleGitHubConnect}
+                      className="text-xs text-gray-400 hover:text-white underline"
+                    >
+                      Reconnect
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                // Not connected - show OAuth button
+                <div className="text-center py-6">
+                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#24292e] flex items-center justify-center">
+                    <GitHubIcon className="w-8 h-8 text-white" />
+                  </div>
+                  <h3 className="text-lg font-medium text-white mb-2">Connect to GitHub</h3>
+                  <p className="text-sm text-gray-400 mb-6 max-w-sm mx-auto">
+                    Sign in with GitHub to access your repositories for creating PRs and tracking changes.
+                  </p>
+
+                  <button
+                    onClick={handleGitHubConnect}
+                    className="inline-flex items-center gap-2 px-6 py-3 bg-[#24292e] hover:bg-[#2d3339] text-white font-medium rounded-lg transition-colors"
+                  >
+                    <GitHubIcon className="w-5 h-5" />
+                    Connect with GitHub
+                    <ExternalLink className="w-4 h-4 ml-1 opacity-50" />
+                  </button>
+
+                  <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)]">
+                    <button
+                      onClick={() => setUseOAuth(false)}
+                      className="text-xs text-gray-500 hover:text-gray-300"
+                    >
+                      Or configure manually with Personal Access Token →
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Manual config fields (shown if not using OAuth or if OAuth is connected) */}
+          {(!isOAuthTool || !useOAuth || githubInfo?.connected) && configFields.map(field => (
             <div key={field.name}>
               <label className="block text-sm font-medium text-white mb-2">
                 {field.label}
@@ -461,7 +594,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
             </button>
             <button
               onClick={() => onSave(config)}
-              disabled={!isValid}
+              disabled={!isValid && !(isOAuthTool && githubInfo?.connected)}
               className="px-5 py-2.5 text-sm font-medium rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Save Configuration
@@ -470,5 +603,14 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
         </div>
       </div>
     </div>
+  );
+}
+
+// GitHub Icon Component
+function GitHubIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+    </svg>
   );
 }

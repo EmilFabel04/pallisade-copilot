@@ -1,0 +1,261 @@
+/**
+ * Share Plan Formatting Utilities
+ *
+ * Formats ChangePlan data for Slack, Jira, and GitHub Issues
+ */
+
+import type { ChangePlan, ValidationLevel } from '@/types/change-plan';
+
+// ============================================================================
+// Slack Formatting
+// ============================================================================
+
+interface SlackMessage {
+  title: string;
+  text: string;
+  severity?: 'critical' | 'high' | 'medium' | 'low';
+  fields?: Array<{ label: string; value: string }>;
+  actions?: Array<{ text: string; url: string }>;
+  footer?: string;
+}
+
+function mapRiskToSeverity(risk?: string): 'critical' | 'high' | 'medium' | 'low' {
+  switch (risk?.toUpperCase()) {
+    case 'HIGH':
+      return 'high';
+    case 'MEDIUM':
+      return 'medium';
+    case 'LOW':
+    default:
+      return 'low';
+  }
+}
+
+export function formatPlanForSlack(plan: ChangePlan): SlackMessage {
+  const fields: Array<{ label: string; value: string }> = [
+    { label: 'Status', value: plan.status.charAt(0).toUpperCase() + plan.status.slice(1) },
+    { label: 'Files Changed', value: String(plan.patches.length) },
+  ];
+
+  if (plan.impact_analysis?.risk_level) {
+    fields.push({ label: 'Risk Level', value: plan.impact_analysis.risk_level });
+  }
+
+  if (plan.impact_analysis?.affected_tables?.length) {
+    fields.push({
+      label: 'Affected Tables',
+      value: plan.impact_analysis.affected_tables.slice(0, 3).join(', ') +
+        (plan.impact_analysis.affected_tables.length > 3 ? '...' : '')
+    });
+  }
+
+  // Build validation summary
+  const validationEntries = Object.entries(plan.validations || {});
+  if (validationEntries.length > 0) {
+    const validationStatus = validationEntries
+      .map(([level, result]) => {
+        const emoji = result.status === 'passed' ? '✅' : result.status === 'failed' ? '❌' : '⏳';
+        return `${emoji} ${level}`;
+      })
+      .join(' | ');
+    fields.push({ label: 'Validations', value: validationStatus });
+  }
+
+  // Build actions
+  const actions: Array<{ text: string; url: string }> = [];
+  if (plan.pr_url) {
+    actions.push({ text: `View PR #${plan.pr_number || ''}`, url: plan.pr_url });
+  }
+
+  return {
+    title: `Change Plan: ${plan.title}`,
+    text: plan.description || plan.root_cause || 'A change plan has been created.',
+    severity: mapRiskToSeverity(plan.impact_analysis?.risk_level),
+    fields,
+    actions: actions.length > 0 ? actions : undefined,
+    footer: `Plan ID: ${plan.id} | Pallisade Scout`,
+  };
+}
+
+// ============================================================================
+// Jira Formatting
+// ============================================================================
+
+interface JiraIssue {
+  summary: string;
+  description: string;
+  priority?: 'Highest' | 'High' | 'Medium' | 'Low' | 'Lowest';
+  labels?: string[];
+}
+
+function mapRiskToPriority(risk?: string): 'Highest' | 'High' | 'Medium' | 'Low' | 'Lowest' {
+  switch (risk?.toUpperCase()) {
+    case 'HIGH':
+      return 'High';
+    case 'MEDIUM':
+      return 'Medium';
+    case 'LOW':
+    default:
+      return 'Low';
+  }
+}
+
+export function formatPlanForJira(plan: ChangePlan): JiraIssue {
+  const sections: string[] = [];
+
+  // Description
+  if (plan.description) {
+    sections.push(plan.description);
+  }
+
+  // Root Cause
+  if (plan.root_cause) {
+    sections.push(`h2. Root Cause\n${plan.root_cause}`);
+  }
+
+  // Changes
+  if (plan.patches.length > 0) {
+    const changes = plan.patches
+      .map(p => `* {{${p.file_path}}}: ${p.rationale}`)
+      .join('\n');
+    sections.push(`h2. Changes\n${changes}`);
+  }
+
+  // Impact Analysis
+  if (plan.impact_analysis) {
+    const impactLines: string[] = [`h2. Impact Analysis`];
+    impactLines.push(`* *Risk Level:* ${plan.impact_analysis.risk_level}`);
+
+    if (plan.impact_analysis.affected_tables?.length) {
+      impactLines.push(`* *Affected Tables:* ${plan.impact_analysis.affected_tables.join(', ')}`);
+    }
+
+    if (plan.impact_analysis.downstream_dependencies?.length) {
+      impactLines.push(`* *Downstream Dependencies:* ${plan.impact_analysis.downstream_dependencies.join(', ')}`);
+    }
+
+    if (plan.impact_analysis.expected_data_changes) {
+      impactLines.push(`* *Expected Changes:* ${plan.impact_analysis.expected_data_changes}`);
+    }
+
+    sections.push(impactLines.join('\n'));
+  }
+
+  // Validation Results
+  const validationEntries = Object.entries(plan.validations || {});
+  if (validationEntries.length > 0) {
+    const validationLines = validationEntries
+      .map(([level, result]) => {
+        const emoji = result.status === 'passed' ? '(/)' : result.status === 'failed' ? '(x)' : '(?)';
+        return `* ${emoji} *${level}:* ${result.status}`;
+      });
+    sections.push(`h2. Validation Results\n${validationLines.join('\n')}`);
+  }
+
+  // PR Link
+  if (plan.pr_url) {
+    sections.push(`h2. Pull Request\n[PR #${plan.pr_number || ''}|${plan.pr_url}]`);
+  }
+
+  // Footer
+  sections.push(`----\n_Generated by Pallisade Scout | Plan ID: {{${plan.id}}}_`);
+
+  // Build labels
+  const labels = ['pallisade', 'change-plan'];
+  if (plan.impact_analysis?.risk_level) {
+    labels.push(plan.impact_analysis.risk_level.toLowerCase());
+  }
+
+  return {
+    summary: `[Scout] ${plan.title}`,
+    description: sections.join('\n\n'),
+    priority: mapRiskToPriority(plan.impact_analysis?.risk_level),
+    labels,
+  };
+}
+
+// ============================================================================
+// GitHub Issue Formatting
+// ============================================================================
+
+interface GitHubIssue {
+  title: string;
+  body: string;
+  labels?: string[];
+}
+
+export function formatPlanForGitHubIssue(plan: ChangePlan): GitHubIssue {
+  const sections: string[] = [];
+
+  // Description
+  if (plan.description) {
+    sections.push(`## Summary\n${plan.description}`);
+  }
+
+  // Root Cause
+  if (plan.root_cause) {
+    sections.push(`## Root Cause\n${plan.root_cause}`);
+  }
+
+  // Changes
+  if (plan.patches.length > 0) {
+    const changes = plan.patches
+      .map(p => `- \`${p.file_path}\`: ${p.rationale}`)
+      .join('\n');
+    sections.push(`## Changes\n${changes}`);
+  }
+
+  // Impact Analysis
+  if (plan.impact_analysis) {
+    const impactLines: string[] = [];
+    impactLines.push(`- **Risk Level:** ${plan.impact_analysis.risk_level}`);
+
+    if (plan.impact_analysis.affected_tables?.length) {
+      impactLines.push(`- **Affected Tables:** ${plan.impact_analysis.affected_tables.join(', ')}`);
+    }
+
+    if (plan.impact_analysis.downstream_dependencies?.length) {
+      impactLines.push(`- **Downstream Dependencies:** ${plan.impact_analysis.downstream_dependencies.join(', ')}`);
+    }
+
+    sections.push(`## Impact Analysis\n${impactLines.join('\n')}`);
+  }
+
+  // Validation Results
+  const validationEntries = Object.entries(plan.validations || {});
+  if (validationEntries.length > 0) {
+    const validationLines = validationEntries
+      .map(([level, result]) => {
+        const emoji = result.status === 'passed' ? ':white_check_mark:' :
+                      result.status === 'failed' ? ':x:' : ':hourglass:';
+        return `- ${emoji} **${level}:** ${result.status}`;
+      });
+    sections.push(`## Validation Results\n${validationLines.join('\n')}`);
+  }
+
+  // Related PR
+  if (plan.pr_url) {
+    sections.push(`## Related Pull Request\n- ${plan.pr_url}`);
+  }
+
+  // Footer
+  sections.push(`---\n_Generated by [Pallisade Scout](https://pallisade.io) | Plan ID: \`${plan.id}\`_`);
+
+  // Build labels
+  const labels = ['pallisade', 'change-plan'];
+  if (plan.impact_analysis?.risk_level) {
+    labels.push(`risk:${plan.impact_analysis.risk_level.toLowerCase()}`);
+  }
+
+  return {
+    title: `[Scout] ${plan.title}`,
+    body: sections.join('\n\n'),
+    labels,
+  };
+}
+
+// ============================================================================
+// Type exports for API
+// ============================================================================
+
+export type { SlackMessage, JiraIssue, GitHubIssue };

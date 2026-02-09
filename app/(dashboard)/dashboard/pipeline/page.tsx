@@ -9,11 +9,24 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import PipelineCanvas from '@/components/pipeline/PipelineCanvas';
 import NodeSidebar from '@/components/pipeline/NodeSidebar';
-import { PipelineStack, PipelineNode, PipelineEdge, PipelineLayer, getToolById } from '@/components/pipeline/types';
-import { BookTemplate, ChevronDown } from 'lucide-react';
+import { IntegrationConfigModal } from '@/components/pipeline/IntegrationConfigModal';
+import {
+  PipelineStack,
+  PipelineNode,
+  PipelineEdge,
+  PipelineLayer,
+  getToolById,
+  INTEGRATIONS,
+  INTEGRATION_COLORS,
+  INTEGRATION_LABELS,
+  IntegrationType,
+  IntegrationDefinition,
+} from '@/components/pipeline/types';
+import { BookTemplate, ChevronDown, Bell, Ticket, Eye, Plus, Check } from 'lucide-react';
 
 // Pipeline templates for quick start
 const PIPELINE_TEMPLATES = [
@@ -85,6 +98,14 @@ const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
   TRANSFORMATION: 400,
   WAREHOUSE: 700,
   REPORTING: 1000,
+  VERSION_CONTROL: 250,  // Between Ingestion and Transformation (connects to dbt)
+};
+
+// Category icons for integrations
+const CATEGORY_ICONS: Record<IntegrationType, React.ReactNode> = {
+  NOTIFICATIONS: <Bell className="w-4 h-4" />,
+  TICKETING: <Ticket className="w-4 h-4" />,
+  OBSERVABILITY: <Eye className="w-4 h-4" />,
 };
 
 // Track how many nodes are in each layer for Y positioning
@@ -107,6 +128,59 @@ export default function PipelinePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [configModal, setConfigModal] = useState<{ integration: IntegrationDefinition } | null>(null);
+  const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
+  const searchParams = useSearchParams();
+
+  // Handle OAuth callback URL parameters
+  useEffect(() => {
+    const success = searchParams.get('success');
+    const error = searchParams.get('error');
+
+    if (success === 'github') {
+      toast.success('GitHub connected successfully!');
+      setIntegrationsRefreshKey(prev => prev + 1);
+
+      // Update any GitHub nodes on the canvas to mark as connected and auto-save
+      setStack(prev => {
+        const updatedStack = {
+          ...prev,
+          nodes: prev.nodes.map(node => {
+            if (node.toolType === 'github') {
+              return {
+                ...node,
+                status: 'CONNECTED' as const,
+                config: { ...node.config, _oauth_linked: true },
+              };
+            }
+            return node;
+          }),
+        };
+
+        // Auto-save if there are GitHub nodes
+        if (prev.nodes.some(n => n.toolType === 'github') && prev.id && prev.id !== 'new') {
+          fetch('/api/pipeline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedStack),
+          }).catch(e => console.error('Failed to save GitHub node status:', e));
+        }
+
+        return updatedStack;
+      });
+
+      // Clean up URL
+      window.history.replaceState({}, '', '/dashboard/pipeline');
+    } else if (error) {
+      const errorMessages: Record<string, string> = {
+        invalid_state: 'GitHub authentication failed: Invalid state',
+        no_code: 'GitHub authentication failed: No authorization code',
+        callback_failed: 'GitHub authentication failed: Callback error',
+      };
+      toast.error(errorMessages[error] || `GitHub authentication failed: ${error}`);
+      window.history.replaceState({}, '', '/dashboard/pipeline');
+    }
+  }, [searchParams]);
 
   // Load existing pipeline stack
   useEffect(() => {
@@ -274,6 +348,15 @@ export default function PipelinePage() {
     toast.success(`Applied "${template.name}" template`);
   }, []);
 
+  // These hooks must be before any conditional returns
+  const openConfigModal = useCallback((integration: IntegrationDefinition) => {
+    setConfigModal({ integration });
+  }, []);
+
+  const handleIntegrationSuccess = useCallback(() => {
+    setIntegrationsRefreshKey(prev => prev + 1);
+  }, []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[600px]">
@@ -291,7 +374,7 @@ export default function PipelinePage() {
   const unconfiguredCount = stack.nodes.filter(n => !n.config).length;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-120px)]">
+    <div className="flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-4 px-1">
         <div>
@@ -305,7 +388,7 @@ export default function PipelinePage() {
             )}
           </p>
         </div>
-        
+
         <div className="flex items-center gap-3">
           {/* Templates Dropdown */}
           <div className="relative">
@@ -317,7 +400,7 @@ export default function PipelinePage() {
               Templates
               <ChevronDown className={`w-4 h-4 transition-transform ${showTemplates ? 'rotate-180' : ''}`} />
             </button>
-            
+
             {showTemplates && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowTemplates(false)} />
@@ -366,7 +449,7 @@ export default function PipelinePage() {
               </>
             )}
           </button>
-          
+
           <button
             onClick={scanPipeline}
             disabled={stack.nodes.length === 0}
@@ -380,11 +463,11 @@ export default function PipelinePage() {
         </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex flex-1 gap-4 min-h-0">
+      {/* Main Content - Pipeline Canvas */}
+      <div className="flex gap-4 h-[600px]">
         {/* Sidebar */}
         <NodeSidebar onAddNode={onAddNode} />
-        
+
         {/* Canvas */}
         <div className="flex-1 dashboard-card overflow-hidden">
           <PipelineCanvas
@@ -397,6 +480,158 @@ export default function PipelinePage() {
           />
         </div>
       </div>
+
+      {/* Integrations Section */}
+      <div className="mt-8 pb-8">
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold">Integrations</h2>
+          <p className="text-sm text-[var(--muted)] mt-1">
+            Connect notifications, ticketing, and observability tools
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {(Object.keys(INTEGRATIONS) as IntegrationType[]).map((category) => (
+            <IntegrationCategory
+              key={`${category}-${integrationsRefreshKey}`}
+              category={category}
+              integrations={INTEGRATIONS[category]}
+              onConfigureIntegration={openConfigModal}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Integration Config Modal */}
+      <IntegrationConfigModal
+        integration={configModal?.integration || null}
+        isOpen={configModal !== null}
+        onClose={() => setConfigModal(null)}
+        onSuccess={handleIntegrationSuccess}
+      />
+    </div>
+  );
+}
+
+// Integration Category Component
+function IntegrationCategory({
+  category,
+  integrations,
+  onConfigureIntegration,
+}: {
+  category: IntegrationType;
+  integrations: IntegrationDefinition[];
+  onConfigureIntegration: (integration: IntegrationDefinition) => void;
+}) {
+  const [connectedIds, setConnectedIds] = useState<string[]>([]);
+
+  // Fetch connected integrations on mount
+  useEffect(() => {
+    const fetchConnected = async () => {
+      try {
+        const res = await fetch('/api/integrations');
+        if (res.ok) {
+          const data = await res.json();
+          const connected = data.integrations
+            ?.filter((i: any) => i.status === 'ACTIVE')
+            .map((i: any) => i.type.toLowerCase()) || [];
+          setConnectedIds(connected);
+        }
+      } catch (error) {
+        console.error('Failed to fetch integrations:', error);
+      }
+    };
+    fetchConnected();
+  }, []);
+
+  return (
+    <div
+      className="dashboard-card p-4"
+      style={{
+        borderTop: `3px solid ${INTEGRATION_COLORS[category]}`,
+      }}
+    >
+      <div className="flex items-center gap-2 mb-4">
+        <div
+          className="w-8 h-8 rounded-lg flex items-center justify-center"
+          style={{
+            backgroundColor: `${INTEGRATION_COLORS[category]}20`,
+            color: INTEGRATION_COLORS[category],
+          }}
+        >
+          {CATEGORY_ICONS[category]}
+        </div>
+        <div>
+          <h3 className="font-medium">{INTEGRATION_LABELS[category]}</h3>
+          <p className="text-xs text-[var(--muted)]">{integrations.length} available</p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {integrations.map((integration) => {
+          const isConnected = connectedIds.includes(integration.id);
+          return (
+            <div
+              key={integration.id}
+              className="flex items-center justify-between p-3 rounded-lg bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.04)] transition-colors cursor-pointer"
+              onClick={() => onConfigureIntegration(integration)}
+            >
+              <div className="flex items-center gap-3">
+                <IntegrationIcon id={integration.id} />
+                <div>
+                  <div className="text-sm font-medium">{integration.name}</div>
+                  <div className="text-xs text-[var(--muted)]">{integration.description}</div>
+                </div>
+              </div>
+              {isConnected ? (
+                <div className="flex items-center gap-1 text-xs text-emerald-400">
+                  <Check className="w-3 h-3" />
+                  Connected
+                </div>
+              ) : (
+                <button
+                  className="p-1.5 rounded-lg hover:bg-[rgba(255,255,255,0.06)] transition-colors text-[var(--muted)] hover:text-white"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onConfigureIntegration(integration);
+                  }}
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Integration Icon Component
+function IntegrationIcon({ id }: { id: string }) {
+  const icons: Record<string, { icon: string; color: string }> = {
+    slack: { icon: 'S', color: '#4A154B' },
+    teams: { icon: 'T', color: '#6264A7' },
+    pagerduty: { icon: 'PD', color: '#06AC38' },
+    opsgenie: { icon: 'OG', color: '#2684FF' },
+    jira: { icon: 'J', color: '#0052CC' },
+    linear: { icon: 'L', color: '#5E6AD2' },
+    asana: { icon: 'A', color: '#F06A6A' },
+    github_issues: { icon: 'GH', color: '#24292e' },
+    monte_carlo: { icon: 'MC', color: '#00D4AA' },
+    bigeye: { icon: 'BE', color: '#FF6B35' },
+    soda: { icon: 'SD', color: '#00C7B7' },
+    elementary: { icon: 'EL', color: '#FF914D' },
+  };
+
+  const config = icons[id] || { icon: id.slice(0, 2).toUpperCase(), color: '#6B7280' };
+
+  return (
+    <div
+      className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
+      style={{ backgroundColor: config.color }}
+    >
+      {config.icon}
     </div>
   );
 }

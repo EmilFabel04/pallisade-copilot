@@ -53,13 +53,19 @@ class ToolExecutor:
         Fetch schema information from warehouses relevant to the user's query.
 
         Uses query-based filtering:
-        1. Detect which warehouse(s) the user is asking about from their query
-        2. Only fetch schema from those specific warehouses
-        3. If no warehouse detected or fetch fails, fall back to all connected warehouses
+        1. Skip if query is clearly about non-warehouse integrations (GitHub, etc.)
+        2. Detect which warehouse(s) the user is asking about from their query
+        3. Only fetch schema from those specific warehouses
+        4. If no warehouse detected or fetch fails, fall back to all connected warehouses
 
         Returns a dict of "WAREHOUSE_TYPE:dataset" -> list of TableSchema objects.
         """
         schema_info: Dict[str, List[TableSchema]] = {}
+
+        # Step 0: Skip warehouse fetch if query is clearly about non-warehouse integrations
+        if self._is_non_warehouse_query():
+            logger.info("[Schema Fetch] Query is about non-warehouse integration (GitHub, etc.) - skipping schema fetch")
+            return schema_info
 
         all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
 
@@ -143,6 +149,41 @@ class ToolExecutor:
                     break  # Found this warehouse, move to next
 
         return detected
+
+    def _is_non_warehouse_query(self) -> bool:
+        """
+        Detect if the query is clearly about non-warehouse integrations.
+
+        Returns True if the query is about GitHub, repos, PRs, code, etc.
+        and does NOT mention data, tables, queries, or warehouse concepts.
+        """
+        query = self.context.query
+        if not query:
+            return False
+
+        query_lower = query.lower()
+
+        # Patterns that indicate GitHub/VCS queries
+        vcs_patterns = [
+            "github", "repo", "repository", "repositories",
+            "pull request", "pr", "commit", "branch",
+            "code", "file", "folder", "directory",
+            "gitlab", "bitbucket", "git",
+        ]
+
+        # Patterns that indicate warehouse/data queries (should NOT skip)
+        data_patterns = [
+            "table", "column", "schema", "query", "sql",
+            "data", "row", "record", "database",
+            "bigquery", "snowflake", "postgres", "redshift",
+            "select", "from", "where", "join",
+        ]
+
+        has_vcs_pattern = any(p in query_lower for p in vcs_patterns)
+        has_data_pattern = any(p in query_lower for p in data_patterns)
+
+        # Only skip if it's clearly VCS-related AND NOT data-related
+        return has_vcs_pattern and not has_data_pattern
 
     async def _fetch_warehouse_schema_single(
         self,
@@ -2363,6 +2404,28 @@ class ToolExecutor:
                 error="GitHub is not connected. Please connect GitHub in your integrations to apply changes."
             )
 
+        # Auto-detect repo from context if not provided
+        if not repo_owner or not repo_name:
+            detected_repo = self._get_github_repo()
+            if detected_repo:
+                repo_owner = repo_owner or detected_repo.get("owner")
+                repo_name = repo_name or detected_repo.get("name")
+
+            if not repo_owner or not repo_name:
+                # List available repos for the user
+                repos = self._get_github_repos_list()
+                if repos:
+                    repo_list = ", ".join(repos[:5])
+                    return ToolResult(
+                        success=False,
+                        error=f"Please specify which repository to create the PR in. Available repos: {repo_list}. "
+                              f"Example: Apply change plan {plan_id} to owner/repo-name"
+                    )
+                return ToolResult(
+                    success=False,
+                    error="Could not determine target repository. Please specify repo_owner and repo_name."
+                )
+
         # Apply the plan
         applier = ChangePlanApplier(github_token)
         try:
@@ -2395,5 +2458,351 @@ class ToolExecutor:
         """Get GitHub token from context integrations."""
         for integration in self.context.integrations:
             if integration.type.upper() == "GITHUB":
-                return integration.config.get("access_token") or integration.config.get("token")
+                config = integration.config or {}
+                token = config.get("access_token") or config.get("token")
+                if token:
+                    logger.info(f"[GitHub] Found token in integration config (key: {'access_token' if config.get('access_token') else 'token'})")
+                    return token
+                else:
+                    logger.warning(f"[GitHub] Found GITHUB integration but no token in config. Keys: {list(config.keys())}")
+        logger.warning("[GitHub] No GITHUB integration found in context")
         return None
+
+    def _get_github_repo(self) -> Optional[Dict[str, str]]:
+        """Get the primary GitHub repo from context (e.g., from VERSION_CONTROL node or first repo)."""
+        for integration in self.context.integrations:
+            if integration.type.upper() == "GITHUB":
+                # Check if there's a specific repo configured
+                config = integration.config or {}
+                if config.get("repo"):
+                    # Format: "owner/repo"
+                    parts = config["repo"].split("/")
+                    if len(parts) == 2:
+                        return {"owner": parts[0], "name": parts[1]}
+
+                # Check metadata for repos list
+                metadata = getattr(integration, 'metadata', {}) or config.get('metadata', {})
+                repos = metadata.get("repos", [])
+                if repos and len(repos) == 1:
+                    # Only one repo connected, use it
+                    full_name = repos[0].get("name", "")
+                    parts = full_name.split("/")
+                    if len(parts) == 2:
+                        return {"owner": parts[0], "name": parts[1]}
+        return None
+
+    def _get_github_repos_list(self) -> List[str]:
+        """Get list of available GitHub repo names from integrations."""
+        repos = []
+        for integration in self.context.integrations:
+            if integration.type.upper() == "GITHUB":
+                config = integration.config or {}
+                metadata = getattr(integration, 'metadata', {}) or config.get('metadata', {})
+                for repo in metadata.get("repos", []):
+                    name = repo.get("name", "")
+                    if name:
+                        repos.append(name)
+        return repos
+
+    async def _execute_list_github_repos(self, args: Dict[str, Any]) -> ToolResult:
+        """List available GitHub repositories."""
+        import aiohttp
+
+        token = self._get_github_token()
+        if not token:
+            return ToolResult(
+                success=False,
+                error="GitHub is not connected. Please connect GitHub in your integrations."
+            )
+
+        # Detect token type for logging
+        token_type = "classic"
+        if token.startswith("github_pat_"):
+            token_type = "fine-grained"
+        elif token.startswith("gho_"):
+            token_type = "oauth"
+        elif token.startswith("ghu_"):
+            token_type = "user-to-server"
+        logger.info(f"[GitHub] Using {token_type} token (prefix: {token[:10]}...)")
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {token}",  # Use Bearer for fine-grained PATs
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                    "User-Agent": "Pallisade-Copilot/1.0",
+                }
+
+                all_repos = []
+
+                # First, check token scopes and permissions
+                async with session.get(
+                    "https://api.github.com/user",
+                    headers=headers
+                ) as user_response:
+                    if user_response.status == 200:
+                        user_data = await user_response.json()
+                        scopes = user_response.headers.get("X-OAuth-Scopes", "none")
+                        logger.info(f"[GitHub] Authenticated as: {user_data.get('login')}, scopes: {scopes}")
+                    else:
+                        error_text = await user_response.text()
+                        logger.warning(f"[GitHub] Auth check failed: {user_response.status} - {error_text}")
+
+                # Try /user/repos with all visibility and affiliations
+                async with session.get(
+                    "https://api.github.com/user/repos",
+                    headers=headers,
+                    params={
+                        "per_page": 100,
+                        "sort": "updated",
+                        "visibility": "all",  # Include private repos
+                        "affiliation": "owner,collaborator,organization_member",
+                    }
+                ) as response:
+                    if response.status == 200:
+                        repos = await response.json()
+                        all_repos.extend(repos)
+                        logger.info(f"[GitHub] /user/repos returned {len(repos)} repos")
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"[GitHub] /user/repos failed: {response.status} - {error_text}")
+
+                # For fine-grained PATs, also try /installation/repositories
+                # This works for GitHub App installation tokens
+                if not all_repos:
+                    async with session.get(
+                        "https://api.github.com/installation/repositories",
+                        headers=headers,
+                        params={"per_page": 100}
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            repos = data.get("repositories", [])
+                            all_repos.extend(repos)
+                            logger.info(f"[GitHub] /installation/repositories returned {len(repos)} repos")
+
+                if not all_repos:
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            "No repositories found. This could mean:\n"
+                            "1. Your PAT doesn't have 'Repository access' configured\n"
+                            "2. For fine-grained PATs: Select the specific repos under 'Repository access'\n"
+                            "3. Ensure the PAT has at least 'Metadata: Read-only' permission"
+                        )
+                    )
+
+                # Format repo list (deduplicate by full_name)
+                seen = set()
+                repo_list = []
+                for repo in all_repos:
+                    full_name = repo["full_name"]
+                    if full_name in seen:
+                        continue
+                    seen.add(full_name)
+                    repo_list.append({
+                        "full_name": full_name,
+                        "name": repo["name"],
+                        "owner": repo["owner"]["login"],
+                        "default_branch": repo.get("default_branch", "main"),
+                        "private": repo.get("private", False),
+                        "description": repo.get("description", ""),
+                        "language": repo.get("language"),
+                        "updated_at": repo.get("updated_at"),
+                    })
+
+                # Log repo stats for debugging
+                private_count = sum(1 for r in repo_list if r["private"])
+                public_count = len(repo_list) - private_count
+                logger.info(f"[GitHub] Found {len(repo_list)} repos: {private_count} private, {public_count} public")
+
+                # Warn if only public repos found with fine-grained PAT
+                if token_type == "fine-grained" and private_count == 0 and public_count > 0:
+                    logger.warning(
+                        "[GitHub] Fine-grained PAT only returned public repos. "
+                        "Check that 'Repository access' includes your private repos and "
+                        "'Metadata: Read-only' permission is granted."
+                    )
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "repos": repo_list,
+                        "count": len(repo_list),
+                        "message": f"Found {len(repo_list)} repositories ({private_count} private, {public_count} public)"
+                    }
+                )
+        except Exception as e:
+            logger.exception("Failed to list GitHub repos")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_github_tree(self, args: Dict[str, Any]) -> ToolResult:
+        """Get file tree from a GitHub repository."""
+        import aiohttp
+
+        repo = args.get("repo", "")
+        path = args.get("path", "")
+        branch = args.get("branch", "main")
+
+        if not repo:
+            return ToolResult(success=False, error="repo is required (format: owner/repo)")
+
+        if "/" not in repo:
+            return ToolResult(success=False, error="repo must be in format 'owner/repo'")
+
+        token = self._get_github_token()
+        if not token:
+            return ToolResult(
+                success=False,
+                error="GitHub is not connected. Please connect GitHub in your integrations."
+            )
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "Pallisade-Copilot/1.0",
+                }
+
+                # Get contents at path
+                url = f"https://api.github.com/repos/{repo}/contents/{path}"
+                params = {"ref": branch}
+
+                async with session.get(url, headers=headers, params=params) as response:
+                    if response.status == 404:
+                        return ToolResult(
+                            success=False,
+                            error=f"Path not found: {path} in {repo} (branch: {branch})"
+                        )
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return ToolResult(
+                            success=False,
+                            error=f"GitHub API error: {response.status} - {error_text}"
+                        )
+
+                    contents = await response.json()
+
+                    # Handle single file vs directory
+                    if isinstance(contents, dict):
+                        # Single file
+                        return ToolResult(
+                            success=True,
+                            data={
+                                "type": "file",
+                                "path": contents["path"],
+                                "name": contents["name"],
+                                "size": contents["size"],
+                            }
+                        )
+
+                    # Directory listing
+                    items = []
+                    for item in contents:
+                        items.append({
+                            "name": item["name"],
+                            "path": item["path"],
+                            "type": item["type"],  # "file" or "dir"
+                            "size": item.get("size", 0) if item["type"] == "file" else None,
+                        })
+
+                    # Sort: directories first, then files
+                    items.sort(key=lambda x: (0 if x["type"] == "dir" else 1, x["name"]))
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "repo": repo,
+                            "branch": branch,
+                            "path": path or "/",
+                            "items": items,
+                            "count": len(items),
+                        }
+                    )
+        except Exception as e:
+            logger.exception("Failed to get GitHub tree")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_github_file(self, args: Dict[str, Any]) -> ToolResult:
+        """Read a file from a GitHub repository."""
+        import aiohttp
+        import base64
+
+        repo = args.get("repo", "")
+        path = args.get("path", "")
+        branch = args.get("branch", "main")
+
+        if not repo:
+            return ToolResult(success=False, error="repo is required (format: owner/repo)")
+        if not path:
+            return ToolResult(success=False, error="path is required")
+
+        if "/" not in repo:
+            return ToolResult(success=False, error="repo must be in format 'owner/repo'")
+
+        token = self._get_github_token()
+        if not token:
+            return ToolResult(
+                success=False,
+                error="GitHub is not connected. Please connect GitHub in your integrations."
+            )
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": "Pallisade-Copilot/1.0",
+                }
+
+                url = f"https://api.github.com/repos/{repo}/contents/{path}"
+                params = {"ref": branch}
+
+                async with session.get(url, headers=headers, params=params) as response:
+                    if response.status == 404:
+                        return ToolResult(
+                            success=False,
+                            error=f"File not found: {path} in {repo} (branch: {branch})"
+                        )
+                    if response.status != 200:
+                        error_text = await response.text()
+                        return ToolResult(
+                            success=False,
+                            error=f"GitHub API error: {response.status} - {error_text}"
+                        )
+
+                    data = await response.json()
+
+                    if data.get("type") != "file":
+                        return ToolResult(
+                            success=False,
+                            error=f"Path is a directory, not a file. Use get_github_tree to list contents."
+                        )
+
+                    # Decode base64 content
+                    content_b64 = data.get("content", "")
+                    try:
+                        content = base64.b64decode(content_b64).decode("utf-8")
+                    except Exception:
+                        return ToolResult(
+                            success=False,
+                            error="File is binary and cannot be displayed as text"
+                        )
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "repo": repo,
+                            "branch": branch,
+                            "path": path,
+                            "name": data["name"],
+                            "size": data["size"],
+                            "content": content,
+                            "sha": data["sha"],
+                        }
+                    )
+        except Exception as e:
+            logger.exception("Failed to read GitHub file")
+            return ToolResult(success=False, error=str(e))

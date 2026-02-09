@@ -44,12 +44,19 @@ const LayerIcon = ({ layer }: { layer: PipelineLayer }) => {
           <path d="M16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
         </svg>
       );
+    case 'VERSION_CONTROL':
+      return (
+        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
+        </svg>
+      );
   }
 };
 
 export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
+  // Layers collapsed by default - click to expand
   const [expandedLayers, setExpandedLayers] = useState<Set<PipelineLayer>>(
-    new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'])
+    new Set()
   );
 
   const toggleLayer = (layer: PipelineLayer) => {
@@ -62,7 +69,7 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
     setExpandedLayers(newExpanded);
   };
 
-  const layers: PipelineLayer[] = ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'];
+  const layers: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'];
 
   return (
     <div className="w-72 flex flex-col bg-[#0F0F14] border border-[rgba(255,255,255,0.08)] rounded-xl overflow-hidden flex-shrink-0">
@@ -90,9 +97,11 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
                 </div>
                 <div className="text-left">
                   <div className="text-sm font-medium text-white">
-                    {layer === 'TRANSFORMATION' ? 'Transform' : layer.charAt(0) + layer.slice(1).toLowerCase()}
+                    {layer === 'TRANSFORMATION' ? 'Transform' :
+                     layer === 'VERSION_CONTROL' ? 'Version Control' :
+                     layer.charAt(0) + layer.slice(1).toLowerCase()}
                   </div>
-                  <div className="text-[10px] text-gray-500">{TOOLS[layer].length} tools</div>
+                  <div className="text-[10px] text-gray-500">{TOOLS[layer]?.length || 0} tools</div>
                 </div>
               </div>
               <svg
@@ -107,9 +116,9 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
             </button>
 
             {/* Tools in Layer */}
-            {expandedLayers.has(layer) && (
+            {expandedLayers.has(layer) && TOOLS[layer] && (
               <div className="mt-1 space-y-1 pl-2">
-                {TOOLS[layer].map((tool) => (
+                {(TOOLS[layer] || []).map((tool) => (
                   <button
                     key={tool.id}
                     onClick={() => {
@@ -149,20 +158,27 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
       {/* Footer - Data Flow Legend */}
       <div className="px-4 py-3 border-t border-[rgba(255,255,255,0.08)] bg-[rgba(0,0,0,0.2)]">
         <div className="text-[10px] text-gray-500 mb-2 uppercase tracking-wider">Data Flow</div>
-        <div className="flex items-center gap-1.5">
-          {layers.map((layer, i) => (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'].map((layer, i, arr) => (
             <div key={layer} className="flex items-center gap-1.5">
               <div
                 className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: LAYER_COLORS[layer] }}
+                style={{ backgroundColor: LAYER_COLORS[layer as PipelineLayer] }}
               />
-              {i < layers.length - 1 && (
+              {i < arr.length - 1 && (
                 <svg className="w-3 h-3 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M5 12h14M12 5l7 7-7 7" />
                 </svg>
               )}
             </div>
           ))}
+        </div>
+        <div className="flex items-center gap-1.5 mt-1.5">
+          <div
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: LAYER_COLORS['VERSION_CONTROL'] }}
+          />
+          <span className="text-[9px] text-gray-500">Version Control</span>
         </div>
       </div>
     </div>

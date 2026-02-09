@@ -724,6 +724,7 @@ class ToolRegistry:
             description=(
                 "Apply a validated change plan by creating a GitHub Pull Request. "
                 "The plan must have passed at least static validation. "
+                "If repo_owner/repo_name are not provided, will auto-detect from connected GitHub integration. "
                 "Returns the PR URL on success."
             ),
             category=ToolCategory.CHANGE_PLAN,
@@ -734,11 +735,13 @@ class ToolRegistry:
                 ),
                 ToolParameter(
                     "repo_owner", "string",
-                    "GitHub repository owner (username or organization)",
+                    "GitHub repository owner (username or organization). Auto-detected if not provided.",
+                    required=False,
                 ),
                 ToolParameter(
                     "repo_name", "string",
-                    "GitHub repository name",
+                    "GitHub repository name. Auto-detected if not provided.",
+                    required=False,
                 ),
                 ToolParameter(
                     "base_branch", "string",
@@ -758,7 +761,76 @@ class ToolRegistry:
             category=ToolCategory.CHANGE_PLAN,
             parameters=[],
         ))
-    
+
+        # ==========================================
+        # GitHub Tools
+        # ==========================================
+
+        self._register(Tool(
+            name="list_github_repos",
+            description=(
+                "List GitHub repositories available from the connected GitHub integration. "
+                "Returns repo names, default branches, and basic metadata."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[],
+            alternative_integrations={"GITHUB"},
+        ))
+
+        self._register(Tool(
+            name="get_github_tree",
+            description=(
+                "Get the file tree (directory structure) of a GitHub repository. "
+                "Useful for understanding repo structure before reading files."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[
+                ToolParameter(
+                    "repo", "string",
+                    "Repository in format 'owner/repo' (e.g., 'acme/dbt-models')",
+                ),
+                ToolParameter(
+                    "path", "string",
+                    "Path to list (e.g., 'models/' or 'models/staging'). Use '' for root.",
+                    required=False,
+                    default="",
+                ),
+                ToolParameter(
+                    "branch", "string",
+                    "Branch to read from (default: main)",
+                    required=False,
+                    default="main",
+                ),
+            ],
+            alternative_integrations={"GITHUB"},
+        ))
+
+        self._register(Tool(
+            name="get_github_file",
+            description=(
+                "Read the contents of a file from a GitHub repository. "
+                "Use this to examine dbt models, SQL files, YAML configs, etc."
+            ),
+            category=ToolCategory.CHANGE_PLAN,
+            parameters=[
+                ToolParameter(
+                    "repo", "string",
+                    "Repository in format 'owner/repo' (e.g., 'acme/dbt-models')",
+                ),
+                ToolParameter(
+                    "path", "string",
+                    "Path to the file (e.g., 'models/staging/stg_customers.sql')",
+                ),
+                ToolParameter(
+                    "branch", "string",
+                    "Branch to read from (default: main)",
+                    required=False,
+                    default="main",
+                ),
+            ],
+            alternative_integrations={"GITHUB"},
+        ))
+
     def _register(self, tool: Tool) -> None:
         """Register a tool."""
         self._tools[tool.name] = tool
