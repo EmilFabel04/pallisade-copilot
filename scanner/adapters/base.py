@@ -573,16 +573,66 @@ class DatabaseAdapter(ABC):
     def get_row_count(self, table: str) -> int:
         """
         Get row count for a table.
-        
+
         Args:
             table: Fully qualified table name
-            
+
         Returns:
             Number of rows
         """
         query = f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(table)}"
         result = self.execute_query(query)
         return result[0]['cnt'] if result else 0
+
+    # =========================================================================
+    # COMPREHENSIVE TABLE STATS
+    # =========================================================================
+
+    def get_table_stats(self, table: str) -> Dict[str, Any]:
+        """
+        Get comprehensive stats for a table including row count, freshness, and columns.
+
+        This is a convenience method that combines multiple metadata queries.
+
+        Args:
+            table: Fully qualified table name
+
+        Returns:
+            Dict with:
+                - table_name: str
+                - row_count: int
+                - freshness: dict (from get_table_freshness)
+                - columns: list (from get_table_metadata)
+                - last_modified: datetime or None
+        """
+        try:
+            metadata = self.get_table_metadata(table)
+        except Exception as e:
+            logger.warning(f"Failed to get table metadata for {table}: {e}")
+            metadata = None
+
+        try:
+            freshness = self.get_table_freshness(table)
+        except Exception as e:
+            logger.warning(f"Failed to get freshness for {table}: {e}")
+            freshness = None
+
+        try:
+            row_count = self.get_row_count(table)
+        except Exception as e:
+            logger.warning(f"Failed to get row count for {table}: {e}")
+            row_count = None
+
+        return {
+            "table_name": table,
+            "row_count": row_count,
+            "freshness": freshness,
+            "columns": [
+                {"name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
+                for c in (metadata.columns if metadata else [])
+            ],
+            "last_modified": metadata.last_modified if metadata else None,
+        }
     
     # =========================================================================
     # CONTEXT MANAGER

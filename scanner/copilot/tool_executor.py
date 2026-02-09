@@ -934,11 +934,15 @@ class ToolExecutor:
         limit = args.get("limit", 100)
         target_warehouse = args.get("warehouse", "").upper().strip()
 
-        # Validate query is SELECT only
-        if not sql.upper().startswith("SELECT"):
+        # Validate query is read-only (SELECT or WITH...SELECT for CTEs)
+        sql_upper = sql.upper()
+        is_select = sql_upper.startswith("SELECT")
+        is_cte = sql_upper.startswith("WITH") and "SELECT" in sql_upper
+
+        if not (is_select or is_cte):
             return ToolResult(
                 success=False,
-                error="Only SELECT queries are allowed"
+                error="Only SELECT queries are allowed (including WITH...SELECT CTEs)"
             )
 
         # Find warehouse adapter — use specified warehouse or infer
@@ -1455,17 +1459,48 @@ class ToolExecutor:
     # ==========================================
     # DBT TOOL IMPLEMENTATIONS
     # ==========================================
-    
-    async def _execute_get_dbt_model(self, args: Dict[str, Any]) -> ToolResult:
-        """Get dbt model details."""
-        model_name = args["model_name"]
-        
+
+    def _get_dbt_adapter_with_manifest(self) -> tuple:
+        """
+        Get dbt adapter and ensure manifest is loaded.
+
+        Returns:
+            Tuple of (dbt_adapter, error_result)
+            - If successful: (adapter, None)
+            - If failed: (None, ToolResult with error)
+        """
         dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
         if not dbt_adapter:
-            return ToolResult(
+            return None, ToolResult(
                 success=False,
                 error="dbt adapter is not connected. Use search_knowledge_base with a query about this dbt topic to provide expert guidance instead."
             )
+
+        # Ensure manifest is loaded for DbtIntegration (local dbt)
+        if hasattr(dbt_adapter, 'manifest') and dbt_adapter.manifest is None:
+            try:
+                dbt_adapter.load_manifest()
+                logger.info("[dbt] Auto-loaded manifest.json")
+            except FileNotFoundError as e:
+                return None, ToolResult(
+                    success=False,
+                    error=f"dbt manifest.json not found. Ensure dbt compile has been run. Error: {e}"
+                )
+            except Exception as e:
+                return None, ToolResult(
+                    success=False,
+                    error=f"Failed to load dbt manifest: {e}"
+                )
+
+        return dbt_adapter, None
+
+    async def _execute_get_dbt_model(self, args: Dict[str, Any]) -> ToolResult:
+        """Get dbt model details."""
+        model_name = args["model_name"]
+
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             model = dbt_adapter.get_model(model_name)
@@ -1501,13 +1536,10 @@ class ToolExecutor:
         """Get dbt run history."""
         model_name = args.get("model_name")
         limit = args.get("limit", 10)
-        
-        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
-        if not dbt_adapter:
-            return ToolResult(
-                success=False,
-                error="dbt adapter is not connected. Use search_knowledge_base with a query about this dbt topic to provide expert guidance instead."
-            )
+
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             runs = dbt_adapter.get_run_history(model_name=model_name, limit=limit)
@@ -1515,8 +1547,8 @@ class ToolExecutor:
                 success=True,
                 data={
                     "model_name": model_name,
-                    "run_count": len(runs),
-                    "runs": runs
+                    "runs": runs,
+                    **runs  # Include the full response dict (available, message, etc.)
                 }
             )
         except Exception as e:
@@ -1526,12 +1558,9 @@ class ToolExecutor:
         """Get dbt test results."""
         model_name = args.get("model_name")
 
-        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
-        if not dbt_adapter:
-            return ToolResult(
-                success=False,
-                error="dbt adapter is not connected. Use search_knowledge_base with a query about dbt test failures to provide expert guidance instead."
-            )
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             results = dbt_adapter.get_test_results(model_name=model_name)
@@ -1539,7 +1568,6 @@ class ToolExecutor:
                 success=True,
                 data={
                     "model_name": model_name,
-                    "test_count": len(results),
                     "results": results
                 }
             )
@@ -1550,12 +1578,9 @@ class ToolExecutor:
         """Get dbt model lineage."""
         model_name = args["model_name"]
 
-        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
-        if not dbt_adapter:
-            return ToolResult(
-                success=False,
-                error="dbt adapter is not connected. Use search_knowledge_base with a query about dbt lineage to provide expert guidance instead."
-            )
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             lineage = dbt_adapter.get_lineage(model_name=model_name)
