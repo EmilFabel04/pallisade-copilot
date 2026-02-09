@@ -129,8 +129,24 @@ export default function PipelinePage() {
   const [saving, setSaving] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [configModal, setConfigModal] = useState<{ integration: IntegrationDefinition } | null>(null);
-  const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
+  const [connectedIntegrationIds, setConnectedIntegrationIds] = useState<string[]>([]);
   const searchParams = useSearchParams();
+
+  // Fetch connected integrations (for the integration cards)
+  const fetchConnectedIntegrations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations');
+      if (res.ok) {
+        const data = await res.json();
+        const connected = data.integrations
+          ?.filter((i: any) => i.status === 'ACTIVE')
+          .map((i: any) => i.type.toLowerCase()) || [];
+        setConnectedIntegrationIds(connected);
+      }
+    } catch (error) {
+      console.error('Failed to fetch integrations:', error);
+    }
+  }, []);
 
   // Handle OAuth callback URL parameters
   useEffect(() => {
@@ -139,7 +155,7 @@ export default function PipelinePage() {
 
     if (success === 'github') {
       toast.success('GitHub connected successfully!');
-      setIntegrationsRefreshKey(prev => prev + 1);
+      fetchConnectedIntegrations();
 
       // Update any GitHub nodes on the canvas to mark as connected and auto-save
       setStack(prev => {
@@ -180,15 +196,20 @@ export default function PipelinePage() {
       toast.error(errorMessages[error] || `GitHub authentication failed: ${error}`);
       window.history.replaceState({}, '', '/dashboard/pipeline');
     }
-  }, [searchParams]);
+  }, [searchParams, fetchConnectedIntegrations]);
 
-  // Load existing pipeline stack
+  // Load existing pipeline stack and integrations in parallel
   useEffect(() => {
-    const loadStack = async () => {
+    const loadData = async () => {
       try {
-        const res = await fetch('/api/pipeline');
-        if (res.ok) {
-          const data = await res.json();
+        // Fetch pipeline and integrations in parallel
+        const [pipelineRes] = await Promise.all([
+          fetch('/api/pipeline'),
+          fetchConnectedIntegrations(),
+        ]);
+
+        if (pipelineRes.ok) {
+          const data = await pipelineRes.json();
           if (data.stack) {
             setStack(data.stack);
           }
@@ -200,8 +221,8 @@ export default function PipelinePage() {
       }
     };
 
-    loadStack();
-  }, []);
+    loadData();
+  }, [fetchConnectedIntegrations]);
 
   // Save pipeline changes
   const savePipeline = useCallback(async () => {
@@ -354,8 +375,8 @@ export default function PipelinePage() {
   }, []);
 
   const handleIntegrationSuccess = useCallback(() => {
-    setIntegrationsRefreshKey(prev => prev + 1);
-  }, []);
+    fetchConnectedIntegrations();
+  }, [fetchConnectedIntegrations]);
 
   if (loading) {
     return (
@@ -493,9 +514,10 @@ export default function PipelinePage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {(Object.keys(INTEGRATIONS) as IntegrationType[]).map((category) => (
             <IntegrationCategory
-              key={`${category}-${integrationsRefreshKey}`}
+              key={category}
               category={category}
               integrations={INTEGRATIONS[category]}
+              connectedIds={connectedIntegrationIds}
               onConfigureIntegration={openConfigModal}
             />
           ))}
@@ -517,32 +539,14 @@ export default function PipelinePage() {
 function IntegrationCategory({
   category,
   integrations,
+  connectedIds,
   onConfigureIntegration,
 }: {
   category: IntegrationType;
   integrations: IntegrationDefinition[];
+  connectedIds: string[];
   onConfigureIntegration: (integration: IntegrationDefinition) => void;
 }) {
-  const [connectedIds, setConnectedIds] = useState<string[]>([]);
-
-  // Fetch connected integrations on mount
-  useEffect(() => {
-    const fetchConnected = async () => {
-      try {
-        const res = await fetch('/api/integrations');
-        if (res.ok) {
-          const data = await res.json();
-          const connected = data.integrations
-            ?.filter((i: any) => i.status === 'ACTIVE')
-            .map((i: any) => i.type.toLowerCase()) || [];
-          setConnectedIds(connected);
-        }
-      } catch (error) {
-        console.error('Failed to fetch integrations:', error);
-      }
-    };
-    fetchConnected();
-  }, []);
 
   return (
     <div

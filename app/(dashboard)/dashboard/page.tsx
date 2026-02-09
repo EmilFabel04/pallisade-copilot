@@ -71,15 +71,19 @@ export default function DashboardPage() {
 
     const fetchDashboardData = async () => {
       let pipelineData: any = null;
-      
+
       try {
-        // Fetch specific pipeline stack data
-        const pipelineRes = await fetch(`/api/pipeline?stackId=${selectedPipelineId}`);
+        // Fetch pipeline and chat sessions in parallel (optimized with excludeConfigs and no stacks list)
+        const [pipelineRes, chatsRes] = await Promise.all([
+          fetch(`/api/pipeline?stackId=${selectedPipelineId}&excludeConfigs=true&includeStacksList=false`),
+          fetch(`/api/copilot/sessions?limit=6&pipelineStackId=${selectedPipelineId}`),
+        ]);
+
         if (pipelineRes.ok) {
           pipelineData = await pipelineRes.json();
           const nodes = pipelineData.stack?.nodes || [];
           const connectedNodes = nodes.filter((n: any) => n.status === 'CONNECTED');
-          
+
           setIntegrations(connectedNodes.map((node: any) => ({
             id: node.id,
             name: node.name,
@@ -87,7 +91,7 @@ export default function DashboardPage() {
             status: node.status,
             lastSync: 'Connected',
           })));
-          
+
           setStats(prev => ({
             ...prev,
             totalIntegrations: nodes.length,
@@ -95,19 +99,17 @@ export default function DashboardPage() {
           }));
         }
 
-        // Fetch recent chat sessions for this pipeline
-        const chatsRes = await fetch(`/api/copilot/sessions?limit=6&pipelineStackId=${selectedPipelineId}`);
         if (chatsRes.ok) {
           const chatsData = await chatsRes.json();
           const sessions = chatsData.sessions || [];
-          
+
           setRecentChats(sessions.slice(0, 3).map((session: any) => ({
             id: session.id,
             title: session.title || 'New Chat',
             updatedAt: formatTimeAgo(session.updatedAt),
             lastMessage: session.lastMessage,
           })));
-          
+
           setStats(prev => ({
             ...prev,
             totalChats: sessions.length,

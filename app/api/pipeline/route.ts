@@ -63,6 +63,8 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const stackId = searchParams.get('id') || searchParams.get('stackId');
     const listAll = searchParams.get('all') === 'true';
+    const includeStacksList = searchParams.get('includeStacksList') !== 'false'; // default true for backwards compat
+    const excludeConfigs = searchParams.get('excludeConfigs') === 'true'; // Skip decrypting configs for faster loads
 
     // If listAll=true, return all stacks (for dropdown/selection)
     if (listAll) {
@@ -108,30 +110,42 @@ export async function GET(request: NextRequest) {
           },
         });
 
-    // Get all stacks for the dropdown (always include)
-    const allStacks = await prisma.pipelineStack.findMany({
-      where: { organizationId },
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        status: true,
-        healthScore: true,
-        lastScanAt: true,
-        _count: { select: { nodes: true } },
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
+    // Only fetch stacks list if requested (saves a query on dashboard page loads)
+    let stacksList: Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      status: string;
+      healthScore: number | null;
+      lastScanAt: string | undefined;
+      nodeCount: number;
+    }> = [];
 
-    const stacksList = allStacks.map(s => ({
-      id: s.id,
-      name: s.name,
-      description: s.description,
-      status: s.status,
-      healthScore: s.healthScore,
-      lastScanAt: s.lastScanAt?.toISOString(),
-      nodeCount: s._count.nodes,
-    }));
+    if (includeStacksList) {
+      const allStacks = await prisma.pipelineStack.findMany({
+        where: { organizationId },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          status: true,
+          healthScore: true,
+          lastScanAt: true,
+          _count: { select: { nodes: true } },
+        },
+        orderBy: { updatedAt: 'desc' },
+      });
+
+      stacksList = allStacks.map(s => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        status: s.status,
+        healthScore: s.healthScore,
+        lastScanAt: s.lastScanAt?.toISOString(),
+        nodeCount: s._count.nodes,
+      }));
+    }
 
     if (!stack) {
       return NextResponse.json({ stack: null, stacks: stacksList });
@@ -156,7 +170,8 @@ export async function GET(request: NextRequest) {
           name: node.name,
           layer: node.layer,
           toolType: node.toolType,
-          config: decryptNodeConfig(node.config),
+          // Skip config decryption if excludeConfigs=true (faster dashboard loads)
+          config: excludeConfigs ? null : decryptNodeConfig(node.config),
           positionX: node.positionX,
           positionY: node.positionY,
           status: node.status,

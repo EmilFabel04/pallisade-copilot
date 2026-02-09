@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { Prisma } from '@prisma/client';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
@@ -96,18 +95,13 @@ export async function POST(request: Request) {
     ];
 
     // Fetch pipeline nodes (integrations) from the database
-    // Include CONNECTED, HEALTHY, WARNING, and PENDING nodes that have config
-    // (PENDING with config means user saved credentials but hasn't tested yet)
+    // Include all nodes except ERROR status - PENDING nodes with config are valid
     const pipelineStack = await prisma.pipelineStack.findFirst({
       where: { organizationId: user.organizationId },
       include: {
         nodes: {
           where: {
-            OR: [
-              { status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] } },
-              // Also include PENDING nodes that have config (credentials saved but not tested)
-              { status: 'PENDING', config: { not: Prisma.JsonNull } },
-            ],
+            status: { notIn: ['ERROR', 'TESTING'] },
           },
           select: {
             id: true,
@@ -121,7 +115,8 @@ export async function POST(request: Request) {
       },
     });
 
-    console.log(`[COPILOT] Found ${pipelineStack?.nodes.length || 0} pipeline nodes`);
+    console.log(`[COPILOT] Found ${pipelineStack?.nodes.length || 0} pipeline nodes:`,
+      pipelineStack?.nodes.map(n => ({ name: n.name, type: n.toolType, status: n.status, hasConfig: !!n.config })));
 
     // Convert pipeline nodes to integration format for the scanner
     // Note: type must be uppercase to match the scanner's tool registry

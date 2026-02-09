@@ -382,7 +382,12 @@ export default function AssistantPage() {
         }),
       });
 
-      if (!response.ok) throw new Error('Failed to get response');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMsg = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+        console.error('[Assistant] API error:', errorMsg, errorData);
+        throw new Error(errorMsg);
+      }
 
       const data = await response.json();
 
