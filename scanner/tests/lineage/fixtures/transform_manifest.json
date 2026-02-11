@@ -1,0 +1,256 @@
+{
+  "metadata": {
+    "system": "dbt",
+    "namespace": "acme-prod",
+    "case_hint": "lower"
+  },
+  "sources": [
+    {
+      "name": "raw_customers",
+      "database": "warehouse",
+      "schema": "raw",
+      "identifier": "customers",
+      "columns": [
+        {"name": "id", "type": "integer"},
+        {"name": "name", "type": "varchar"},
+        {"name": "email", "type": "varchar"},
+        {"name": "created_at", "type": "timestamp"},
+        {"name": "country", "type": "varchar"}
+      ]
+    },
+    {
+      "name": "raw_orders",
+      "database": "warehouse",
+      "schema": "raw",
+      "identifier": "orders",
+      "columns": [
+        {"name": "id", "type": "integer"},
+        {"name": "customer_id", "type": "integer"},
+        {"name": "amount", "type": "numeric"},
+        {"name": "status", "type": "varchar"},
+        {"name": "created_at", "type": "timestamp"}
+      ]
+    },
+    {
+      "name": "raw_payments",
+      "database": "warehouse",
+      "schema": "raw",
+      "identifier": "payments",
+      "columns": [
+        {"name": "id", "type": "integer"},
+        {"name": "order_id", "type": "integer"},
+        {"name": "amount", "type": "numeric"},
+        {"name": "method", "type": "varchar"},
+        {"name": "created_at", "type": "timestamp"}
+      ]
+    },
+    {
+      "name": "raw_products",
+      "database": "warehouse",
+      "schema": "raw",
+      "identifier": "products",
+      "columns": [
+        {"name": "id", "type": "integer"},
+        {"name": "name", "type": "varchar"},
+        {"name": "category", "type": "varchar"},
+        {"name": "price", "type": "numeric"}
+      ]
+    },
+    {
+      "name": "raw_order_items",
+      "database": "warehouse",
+      "schema": "raw",
+      "identifier": "order_items",
+      "columns": [
+        {"name": "id", "type": "integer"},
+        {"name": "order_id", "type": "integer"},
+        {"name": "product_id", "type": "integer"},
+        {"name": "quantity", "type": "integer"},
+        {"name": "unit_price", "type": "numeric"}
+      ]
+    }
+  ],
+  "models": [
+    {
+      "name": "stg_customers",
+      "database": "warehouse",
+      "schema": "staging",
+      "materialized": "view",
+      "depends_on": ["raw_customers"],
+      "columns": [
+        {"name": "customer_id", "type": "integer"},
+        {"name": "customer_name", "type": "varchar"},
+        {"name": "email", "type": "varchar"},
+        {"name": "signup_date", "type": "timestamp"},
+        {"name": "country", "type": "varchar"}
+      ],
+      "column_mappings": [
+        {"from_column": "id", "to_column": "customer_id"},
+        {"from_column": "name", "to_column": "customer_name"},
+        {"from_column": "email", "to_column": "email"},
+        {"from_column": "created_at", "to_column": "signup_date"},
+        {"from_column": "country", "to_column": "country"}
+      ],
+      "description": "Staged customers with renamed columns",
+      "owner": "analytics-team",
+      "tags": ["staging"]
+    },
+    {
+      "name": "stg_orders",
+      "database": "warehouse",
+      "schema": "staging",
+      "materialized": "view",
+      "depends_on": ["raw_orders"],
+      "columns": [
+        {"name": "order_id", "type": "integer"},
+        {"name": "customer_id", "type": "integer"},
+        {"name": "order_amount", "type": "numeric"},
+        {"name": "order_status", "type": "varchar"},
+        {"name": "ordered_at", "type": "timestamp"}
+      ],
+      "column_mappings": [
+        {"from_column": "id", "to_column": "order_id"},
+        {"from_column": "customer_id", "to_column": "customer_id"},
+        {"from_column": "amount", "to_column": "order_amount"},
+        {"from_column": "status", "to_column": "order_status"},
+        {"from_column": "created_at", "to_column": "ordered_at"}
+      ],
+      "description": "Staged orders",
+      "owner": "analytics-team",
+      "tags": ["staging"]
+    },
+    {
+      "name": "stg_payments",
+      "database": "warehouse",
+      "schema": "staging",
+      "materialized": "view",
+      "depends_on": ["raw_payments"],
+      "columns": [
+        {"name": "payment_id", "type": "integer"},
+        {"name": "order_id", "type": "integer"},
+        {"name": "payment_amount", "type": "numeric"},
+        {"name": "payment_method", "type": "varchar"}
+      ],
+      "description": "Staged payments",
+      "owner": "analytics-team",
+      "tags": ["staging"]
+    },
+    {
+      "name": "stg_products",
+      "database": "warehouse",
+      "schema": "staging",
+      "materialized": "view",
+      "depends_on": ["raw_products"],
+      "columns": [
+        {"name": "product_id", "type": "integer"},
+        {"name": "product_name", "type": "varchar"},
+        {"name": "category", "type": "varchar"},
+        {"name": "price", "type": "numeric"}
+      ],
+      "description": "Staged products",
+      "tags": ["staging"]
+    },
+    {
+      "name": "stg_order_items",
+      "database": "warehouse",
+      "schema": "staging",
+      "materialized": "view",
+      "depends_on": ["raw_order_items"],
+      "description": "Staged order items",
+      "tags": ["staging"]
+    },
+    {
+      "name": "dim_customers",
+      "database": "warehouse",
+      "schema": "analytics",
+      "materialized": "table",
+      "depends_on": ["stg_customers", "stg_orders"],
+      "columns": [
+        {"name": "customer_id", "type": "integer"},
+        {"name": "customer_name", "type": "varchar"},
+        {"name": "email", "type": "varchar"},
+        {"name": "signup_date", "type": "timestamp"},
+        {"name": "country", "type": "varchar"},
+        {"name": "total_orders", "type": "integer"},
+        {"name": "first_order_date", "type": "timestamp"}
+      ],
+      "compiled_sql": "SELECT c.customer_id, c.customer_name, c.email, c.signup_date, c.country, COUNT(o.order_id) AS total_orders, MIN(o.ordered_at) AS first_order_date FROM staging.stg_customers c LEFT JOIN staging.stg_orders o ON c.customer_id = o.customer_id GROUP BY 1,2,3,4,5",
+      "description": "Customer dimension with order stats",
+      "owner": "analytics-team",
+      "tags": ["tier1", "dimension"]
+    },
+    {
+      "name": "fct_orders",
+      "database": "warehouse",
+      "schema": "analytics",
+      "materialized": "table",
+      "depends_on": ["stg_orders", "stg_payments", "stg_order_items"],
+      "columns": [
+        {"name": "order_id", "type": "integer"},
+        {"name": "customer_id", "type": "integer"},
+        {"name": "order_amount", "type": "numeric"},
+        {"name": "payment_amount", "type": "numeric"},
+        {"name": "item_count", "type": "integer"},
+        {"name": "ordered_at", "type": "timestamp"}
+      ],
+      "compiled_sql": "SELECT o.order_id, o.customer_id, o.order_amount, COALESCE(p.payment_amount, 0) AS payment_amount, COALESCE(i.item_count, 0) AS item_count, o.ordered_at FROM staging.stg_orders o LEFT JOIN staging.stg_payments p ON o.order_id = p.order_id LEFT JOIN (SELECT order_id, COUNT(*) AS item_count FROM staging.stg_order_items GROUP BY 1) i ON o.order_id = i.order_id",
+      "description": "Fact table for orders with payment and item info",
+      "owner": "analytics-team",
+      "tags": ["tier1", "fact"]
+    },
+    {
+      "name": "fct_revenue",
+      "database": "warehouse",
+      "schema": "analytics",
+      "materialized": "incremental",
+      "depends_on": ["stg_orders", "stg_payments"],
+      "columns": [
+        {"name": "order_date", "type": "date"},
+        {"name": "total_revenue", "type": "numeric"},
+        {"name": "total_payments", "type": "numeric"},
+        {"name": "order_count", "type": "integer"}
+      ],
+      "description": "Daily revenue summary",
+      "owner": "finance-team",
+      "tags": ["tier1", "fact", "finance"]
+    },
+    {
+      "name": "dim_products",
+      "database": "warehouse",
+      "schema": "analytics",
+      "materialized": "table",
+      "depends_on": ["stg_products", "stg_order_items"],
+      "columns": [
+        {"name": "product_id", "type": "integer"},
+        {"name": "product_name", "type": "varchar"},
+        {"name": "category", "type": "varchar"},
+        {"name": "price", "type": "numeric"},
+        {"name": "total_sold", "type": "integer"}
+      ],
+      "description": "Product dimension with sales stats",
+      "tags": ["tier2", "dimension"]
+    },
+    {
+      "name": "rpt_customer_ltv",
+      "database": "warehouse",
+      "schema": "reporting",
+      "materialized": "table",
+      "depends_on": ["dim_customers", "fct_orders"],
+      "columns": [
+        {"name": "customer_id", "type": "integer"},
+        {"name": "customer_name", "type": "varchar"},
+        {"name": "lifetime_value", "type": "numeric"},
+        {"name": "order_count", "type": "integer"}
+      ],
+      "column_mappings": [
+        {"from_column": "customer_id", "to_column": "customer_id"},
+        {"from_column": "customer_name", "to_column": "customer_name"},
+        {"from_column": "order_amount", "to_column": "lifetime_value", "transform_expr": "SUM(order_amount)"},
+        {"from_column": "order_id", "to_column": "order_count", "transform_expr": "COUNT(order_id)"}
+      ],
+      "description": "Customer lifetime value report",
+      "owner": "finance-team",
+      "tags": ["tier1", "reporting"]
+    }
+  ]
+}

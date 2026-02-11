@@ -208,30 +208,30 @@ class BigQueryParser(BaseParser):
         """Parse INFORMATION_SCHEMA.JOBS for lineage with multi-region support."""
         regions_to_try = self._get_regions_to_try()
         job_count = 0
-        
+
         for region in regions_to_try:
             try:
                 query = self._build_jobs_query(region)
                 results = self.client.query(query).result()
-                
+
                 # If we got results, mark this as the detected region
                 if self._detected_region is None:
                     self._detected_region = region
                     print(f"📍 Using BigQuery region: {region}")
-                
+
                 for row in results:
                     dest_table = row.dest_table
                     if not dest_table:
                         continue
-                    
+
                     target_fqn = f"{row.dest_project}.{row.dest_dataset}.{dest_table}"
                     target_id = self.generate_node_id(target_fqn)
-                    
+
                     # Process referenced tables
                     for ref_table in (row.referenced_tables or []):
                         source_fqn = f"{ref_table['project_id']}.{ref_table['dataset_id']}.{ref_table['table_id']}"
                         source_id = self.generate_node_id(source_fqn)
-                        
+
                         if source_id in self.graph.nodes and target_id in self.graph.nodes:
                             edge = self.create_edge(
                                 source_id=source_id,
@@ -241,13 +241,21 @@ class BigQueryParser(BaseParser):
                             )
                             self.graph.add_edge(edge)
                             job_count += 1
-                
+
                 # If not in auto mode, don't try other regions
                 if self.region != "auto":
                     break
-                    
+
             except Exception as e:
                 error_msg = str(e)
+                # Permission errors apply to all regions — stop immediately
+                if "Access Denied" in error_msg or "403" in error_msg:
+                    self.add_error(
+                        f"No permission to query INFORMATION_SCHEMA.JOBS "
+                        f"(needs bigquery.jobs.list). Skipping job history. "
+                        f"View-definition lineage will still work."
+                    )
+                    return
                 # If the region doesn't exist, try the next one
                 if "Not found" in error_msg or "Invalid region" in error_msg:
                     if self.region == "auto":
@@ -258,7 +266,7 @@ class BigQueryParser(BaseParser):
                     self.add_error(f"Failed to parse job history in region {region}: {e}")
                     if self.region != "auto":
                         break
-        
+
         if job_count == 0 and self.region == "auto":
             self.add_error("No job history found in any common region. Check project permissions.")
     

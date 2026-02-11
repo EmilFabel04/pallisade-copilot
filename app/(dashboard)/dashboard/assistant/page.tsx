@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { ModeSelector, getModeFromSlashCommand } from '@/components/copilot/ModeSelector';
@@ -12,6 +12,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils';
 import { ChangePlanToolResult, isChangePlanTool, SharePlanModal } from '@/components/copilot/change-plan';
 import type { ChangePlan } from '@/types/change-plan';
+import { MessageActionMenu, MessageActionButton, SaveArtifactModal } from '@/components/artifacts';
+import { OnboardingBanner } from '@/components/copilot';
 
 type ToolCall = {
   id?: string;
@@ -60,6 +62,9 @@ const THINKING_STEPS = [
   'Querying data sources...',
   'Formulating response...',
 ];
+
+// Max characters before collapsing user messages
+const MAX_MESSAGE_LENGTH = 200;
 
 // Icons as components for cleaner code
 const Icons = {
@@ -120,6 +125,8 @@ export default function AssistantPage() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(256);
+  const [isResizing, setIsResizing] = useState(false);
   const [selectedMode, setSelectedMode] = useState('ask');
   const [selectedModel, setSelectedModel] = useState('gpt-5.2');
   const [thinkingStep, setThinkingStep] = useState(0);
@@ -130,12 +137,65 @@ export default function AssistantPage() {
     plan: ChangePlan;
     targetType: 'slack' | 'jira' | 'github_issue';
   } | null>(null);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [shareToast, setShareToast] = useState<{ message: string; url?: string } | null>(null);
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [saveArtifactModal, setSaveArtifactModal] = useState<{
+    content: string;
+    messageId: string;
+  } | null>(null);
+  const [onboardingStatus, setOnboardingStatus] = useState<string>('NOT_STARTED');
+  const [onboardingLoading, setOnboardingLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastPipelineId = useRef<string | null>(null);
   const modelLoadedRef = useRef(false);
   const initialLoadDone = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Sidebar resize constants
+  const minSidebarWidth = 200;
+  const maxSidebarWidth = 400;
+
+  // Handle sidebar resize
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  // Resize effect - handles mouse move and mouse up
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.min(maxSidebarWidth, Math.max(minSidebarWidth, e.clientX));
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      localStorage.setItem('chat-sidebar-width', String(sidebarWidth));
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, sidebarWidth]);
+
+  // Load saved sidebar width
+  useEffect(() => {
+    const savedWidth = localStorage.getItem('chat-sidebar-width');
+    if (savedWidth) {
+      const width = parseInt(savedWidth);
+      if (!isNaN(width)) {
+        setSidebarWidth(Math.min(maxSidebarWidth, Math.max(minSidebarWidth, width)));
+      }
+    }
+  }, []);
 
   // Load mode and model from localStorage on client
   useEffect(() => {
@@ -165,6 +225,28 @@ export default function AssistantPage() {
   // Fetch sources when pipeline changes (uses cached data)
   useEffect(() => {
     if (selectedPipelineId) fetchSources(selectedPipelineId, false);
+  }, [selectedPipelineId]);
+
+  // Fetch onboarding status when pipeline changes
+  useEffect(() => {
+    if (!selectedPipelineId) {
+      setOnboardingStatus('NOT_STARTED');
+      return;
+    }
+
+    const fetchOnboardingStatus = async () => {
+      try {
+        const res = await fetch(`/api/pipeline/${selectedPipelineId}/context`);
+        if (res.ok) {
+          const data = await res.json();
+          setOnboardingStatus(data.context?.onboardingStatus || 'NOT_STARTED');
+        }
+      } catch (error) {
+        console.error('Failed to fetch onboarding status:', error);
+      }
+    };
+
+    fetchOnboardingStatus();
   }, [selectedPipelineId]);
 
   // Fetch sources - uses cached data by default, pass refresh=true for fresh discovery
@@ -226,6 +308,32 @@ export default function AssistantPage() {
     }
   };
 
+  const handleStartOnboarding = async () => {
+    if (!selectedPipelineId) return;
+
+    setOnboardingLoading(true);
+    try {
+      // Start onboarding via API
+      await fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+
+      setOnboardingStatus('IN_PROGRESS');
+
+      // Send onboarding message to start the interview
+      handleSubmit(
+        { preventDefault: () => {} } as React.FormEvent,
+        '/onboard Start onboarding - ask me questions about my pipeline setup so you can help me more effectively.'
+      );
+    } catch (error) {
+      console.error('Failed to start onboarding:', error);
+    } finally {
+      setOnboardingLoading(false);
+    }
+  };
+
   // Fetch sessions on mount
   useEffect(() => {
     if (initialLoadDone.current) return;
@@ -283,6 +391,7 @@ export default function AssistantPage() {
             role: m.role.toLowerCase() as 'user' | 'assistant',
             content: m.content,
             timestamp: new Date(m.createdAt),
+            toolCalls: m.toolCalls || undefined,
           }))
         );
       }
@@ -369,6 +478,9 @@ export default function AssistantPage() {
     if (!customMessage) setInput('');
     setIsLoading(true);
 
+    // Create abort controller for this request
+    abortControllerRef.current = new AbortController();
+
     try {
       const response = await fetch('/api/copilot/chat', {
         method: 'POST',
@@ -380,6 +492,7 @@ export default function AssistantPage() {
           model: selectedModel,
           mode: modeToUse,
         }),
+        signal: abortControllerRef.current.signal,
       });
 
       if (!response.ok) {
@@ -425,8 +538,51 @@ export default function AssistantPage() {
         toolCalls: mappedToolCalls,
       };
 
+      // Handle onboarding tool calls - persist to database
+      if (selectedPipelineId && mappedToolCalls.length > 0) {
+        for (const tc of mappedToolCalls) {
+          try {
+            if (tc.name === 'complete_onboarding' && (tc.result as Record<string, unknown>)?.completed) {
+              // Mark onboarding as complete in database
+              const completeRes = await fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'complete' }),
+              });
+              if (completeRes.ok) {
+                setOnboardingStatus('COMPLETED');
+              }
+            } else if (tc.name === 'save_onboarding_context' && (tc.result as Record<string, unknown>)?.saved) {
+              // Save onboarding answer to database
+              const result = tc.result as Record<string, unknown>;
+              await fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  questionKey: result.question_key,
+                  answer: result.answer,
+                  contextField: result.context_field,
+                  integrationTтype: result.integration_type,
+                }),
+              });
+              // Set to IN_PROGRESS if not already
+              if (onboardingStatus === 'NOT_STARTED') {
+                setOnboardingStatus('IN_PROGRESS');
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to persist ${tc.name} to database:`, err);
+          }
+        }
+      }
+
       setMessages(prev => [...prev, aiMessage]);
     } catch (error) {
+      // Don't show error message if request was aborted
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Request aborted by user');
+        return;
+      }
       console.error('Chat error:', error);
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -436,6 +592,14 @@ export default function AssistantPage() {
       };
       setMessages(prev => [...prev, aiMessage]);
     } finally {
+      setIsLoading(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
       setIsLoading(false);
     }
   };
@@ -463,11 +627,18 @@ export default function AssistantPage() {
     <TooltipProvider>
       <div className="h-[calc(100vh-120px)] flex">
         {/* Chat History Sidebar */}
-        <div className={cn(
-          'flex-shrink-0 transition-all duration-300 overflow-hidden',
-          showHistory ? 'w-72' : 'w-0'
-        )}>
-          <div className="h-full flex flex-col border-r border-white/[0.06] pr-4">
+        <div
+          className={cn(
+            'flex-shrink-0 overflow-hidden relative',
+            !showHistory && 'w-0',
+            isResizing ? '' : 'transition-[width] duration-200'
+          )}
+          style={{ width: showHistory ? sidebarWidth : 0 }}
+        >
+          <div
+            className="h-full flex flex-col border-r border-white/[0.06] px-3"
+            style={{ width: sidebarWidth }}
+          >
             {/* New Chat Button */}
             <Button onClick={startNewChat} className="mb-4 gap-2">
               {Icons.plus}
@@ -476,7 +647,7 @@ export default function AssistantPage() {
 
             {/* Sessions List */}
             <ScrollArea className="flex-1">
-              <div className="space-y-1 pr-2">
+              <div className="space-y-1">
                 {loadingSessions ? (
                   <div className="flex items-center justify-center py-8">
                     <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
@@ -494,22 +665,22 @@ export default function AssistantPage() {
                       onClick={() => loadSession(s.id)}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') loadSession(s.id); }}
                       className={cn(
-                        'w-full text-left px-3 py-2.5 rounded-xl transition-all group cursor-pointer',
+                        'w-full text-left px-2.5 py-2 rounded-lg transition-all group cursor-pointer',
                         sessionId === s.id
                           ? 'bg-white/[0.08] text-white'
                           : 'hover:bg-white/[0.04] text-[var(--muted)] hover:text-white'
                       )}
                     >
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{s.title}</div>
-                          <div className="text-xs opacity-50 mt-0.5">{formatDate(s.updatedAt)}</div>
+                          <div className="text-sm font-medium truncate leading-tight">{s.title}</div>
+                          <div className="text-[10px] opacity-50 mt-0.5">{formatDate(s.updatedAt)}</div>
                         </div>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
                               onClick={(e) => deleteSession(s.id, e)}
-                              className="p-1 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:text-red-400 transition-all rounded"
+                              className="p-1 flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all rounded"
                             >
                               {Icons.trash}
                             </button>
@@ -523,6 +694,17 @@ export default function AssistantPage() {
               </div>
             </ScrollArea>
           </div>
+
+          {/* Resize Handle */}
+          {showHistory && (
+            <div
+              className={cn(
+                "absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 transition-colors",
+                isResizing ? "bg-violet-500" : "hover:bg-violet-500/50"
+              )}
+              onMouseDown={handleResizeStart}
+            />
+          )}
         </div>
 
         {/* Main Chat Area */}
@@ -570,6 +752,17 @@ export default function AssistantPage() {
             </Button>
           </div>
 
+          {/* Onboarding Banner */}
+          {selectedPipelineId && onboardingStatus !== 'COMPLETED' && (
+            <div className="px-4 pt-3">
+              <OnboardingBanner
+                status={onboardingStatus as 'NOT_STARTED' | 'IN_PROGRESS' | 'NEEDS_UPDATE'}
+                onStart={handleStartOnboarding}
+                isLoading={onboardingLoading}
+              />
+            </div>
+          )}
+
           {/* Messages */}
           <ScrollArea className="flex-1 px-4 py-3">
             {messages.length === 0 ? (
@@ -616,44 +809,103 @@ export default function AssistantPage() {
                       'max-w-[85%]',
                       message.role === 'user' ? '' : 'space-y-2'
                     )}>
-                      <div className={cn(
-                        'px-3 py-2',
-                        message.role === 'user'
-                          ? 'bg-[var(--accent)] text-white rounded-xl rounded-tr-sm'
-                          : 'bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm'
-                      )}>
-                        <MessageContent content={message.content} />
-                      </div>
+                      {message.role === 'assistant' ? (
+                        <div className="relative group">
+                          <div className="px-3 py-2 bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm">
+                            <MessageContent content={message.content} />
+                          </div>
+                          {/* Three-dot menu button */}
+                          <div className="absolute top-1 right-1">
+                            <MessageActionButton
+                              onClick={() => setActiveMenuId(activeMenuId === message.id ? null : message.id)}
+                            />
+                            <MessageActionMenu
+                              content={message.content}
+                              messageId={message.id}
+                              sessionId={sessionId}
+                              isOpen={activeMenuId === message.id}
+                              onClose={() => setActiveMenuId(null)}
+                              onSaveToArtifacts={() => {
+                                setSaveArtifactModal({ content: message.content, messageId: message.id });
+                                setActiveMenuId(null);
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="px-3 py-2 bg-[var(--accent)] text-white rounded-xl rounded-tr-sm">
+                          {message.content.length > MAX_MESSAGE_LENGTH ? (
+                            <div>
+                              <div className="text-sm whitespace-pre-wrap break-words">
+                                {expandedMessages.has(message.id)
+                                  ? message.content
+                                  : message.content.slice(0, MAX_MESSAGE_LENGTH) + '...'}
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedMessages(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(message.id)) {
+                                      next.delete(message.id);
+                                    } else {
+                                      next.add(message.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                className="text-xs opacity-70 hover:opacity-100 mt-1.5 underline"
+                              >
+                                {expandedMessages.has(message.id) ? 'Show less' : 'Show more'}
+                              </button>
+                            </div>
+                          ) : (
+                            <MessageContent content={message.content} />
+                          )}
+                        </div>
+                      )}
                       {/* Render change plan tool results */}
                       {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (
                         <div className="space-y-2 mt-2">
-                          {message.toolCalls.filter(tc => isChangePlanTool(tc.name)).map((toolCall, idx) => (
-                            <ChangePlanToolResult
-                              key={toolCall.id || idx}
-                              toolName={toolCall.name}
-                              result={toolCall.result as any}
-                              onValidate={(planId, level) => {
-                                handleSubmit(
-                                  { preventDefault: () => {} } as React.FormEvent,
-                                  `Validate change plan ${planId} at ${level} level`
-                                );
-                              }}
-                              onApply={(planId) => {
-                                handleSubmit(
-                                  { preventDefault: () => {} } as React.FormEvent,
-                                  `Apply change plan ${planId} to create a GitHub PR`
-                                );
-                              }}
-                              onShare={(planId, targetType) => {
-                                // Extract plan from tool result
-                                const result = toolCall.result as any;
-                                const plan = result?.plan || result;
-                                if (plan && plan.id) {
-                                  setShareModal({ plan, targetType });
-                                }
-                              }}
-                            />
-                          ))}
+                          {message.toolCalls.filter(tc => isChangePlanTool(tc.name)).map((toolCall, idx) => {
+                            // Extract associated plan from other tool calls for context
+                            const associatedPlan = message.toolCalls?.find(
+                              tc => (tc.name === 'create_change_plan' || tc.name === 'get_change_plan') &&
+                                    (tc.result as any)?.plan
+                            )?.result as any;
+
+                            return (
+                              <ChangePlanToolResult
+                                key={toolCall.id || idx}
+                                toolName={toolCall.name}
+                                result={toolCall.result as any}
+                                onValidate={(planId, level) => {
+                                  handleSubmit(
+                                    { preventDefault: () => {} } as React.FormEvent,
+                                    `Validate change plan ${planId} at ${level} level`
+                                  );
+                                }}
+                                onApply={(planId) => {
+                                  handleSubmit(
+                                    { preventDefault: () => {} } as React.FormEvent,
+                                    `Apply change plan ${planId} to create a GitHub PR`
+                                  );
+                                }}
+                                onShare={(planId, targetType) => {
+                                  // Extract plan from tool result
+                                  const result = toolCall.result as any;
+                                  const plan = result?.plan || result;
+                                  if (plan && plan.id) {
+                                    setShareModal({ plan, targetType });
+                                  }
+                                }}
+                                onSaveToArtifacts={(content) => {
+                                  setSaveArtifactModal({ content, messageId: message.id });
+                                }}
+                                associatedPlan={associatedPlan?.plan}
+                              />
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -724,15 +976,26 @@ export default function AssistantPage() {
                       </select>
                       <span className="text-[10px] text-white/30 hidden sm:inline">Enter to send</span>
                     </div>
-                    <Button
-                      type="submit"
-                      disabled={!input.trim() || isLoading}
-                      size="sm"
-                      className="h-7 px-3 gap-1.5"
-                    >
-                      {Icons.send}
-                      <span className="text-xs hidden sm:inline">Send</span>
-                    </Button>
+                    {isLoading ? (
+                      <Button
+                        type="button"
+                        onClick={handleStop}
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        variant="ghost"
+                      >
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      </Button>
+                    ) : (
+                      <Button
+                        type="submit"
+                        disabled={!input.trim()}
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                      >
+                        {Icons.send}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </form>
@@ -903,6 +1166,15 @@ export default function AssistantPage() {
           }}
         />
       )}
+
+      {/* Save Artifact Modal */}
+      <SaveArtifactModal
+        isOpen={!!saveArtifactModal}
+        onClose={() => setSaveArtifactModal(null)}
+        content={saveArtifactModal?.content || ''}
+        sessionId={sessionId}
+        messageId={saveArtifactModal?.messageId || ''}
+      />
 
       {/* Share Toast */}
       {shareToast && (
@@ -1279,8 +1551,23 @@ function TextBlock({ content }: { content: string }) {
 
 function formatInline(text: string): string {
   return text
-    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 bg-black/30 border border-white/10 rounded text-[11px] font-mono text-emerald-300">$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank">$1</a>');
+    // Bold - make it white for emphasis
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
+    // Italic - subtle emphasis with opacity
+    .replace(/\*([^*]+)\*/g, '<em class="text-white/80 italic">$1</em>')
+    // Inline code with smart detection
+    .replace(/`([^`]+)`/g, (_match, code) => {
+      // File paths (contains / or common extensions)
+      if (code.includes('/') || /\.(sql|py|yml|yaml|json|ts|tsx|js|md)$/.test(code)) {
+        return `<code class="px-1.5 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[11px] font-mono text-blue-400">${code}</code>`;
+      }
+      // Table/schema names (uppercase, snake_case with data prefixes, or schema.table pattern)
+      if (/^[A-Z][A-Z0-9_]+$/.test(code) || /^\w+\.\w+$/.test(code) || /^(stg_|fct_|dim_|raw_|int_|src_)/.test(code)) {
+        return `<code class="px-1.5 py-0.5 bg-purple-500/10 border border-purple-500/20 rounded text-[11px] font-mono text-purple-300">${code}</code>`;
+      }
+      // Default code styling (data/values) - emerald
+      return `<code class="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[11px] font-mono text-emerald-300">${code}</code>`;
+    })
+    // Links
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank" rel="noopener">$1</a>');
 }

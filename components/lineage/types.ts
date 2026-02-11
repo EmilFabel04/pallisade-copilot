@@ -69,6 +69,14 @@ export interface UnifiedLineageNode {
   tags?: string[];
 }
 
+// Evidence record for a lineage edge (from engine)
+export interface EdgeEvidence {
+  adapterId: string;
+  sourceRef: string;
+  observedAt?: string;
+  snippet?: string;
+}
+
 // An edge in the unified lineage graph
 export interface UnifiedLineageEdge {
   id: string;
@@ -78,7 +86,14 @@ export interface UnifiedLineageEdge {
   label?: string;
   columns?: string[];
   animated?: boolean;
+  // Engine fields (when available)
+  confidence?: number;          // 0.0–1.0 from evidence weighting
+  lineageLevel?: string;        // "tool" | "table" | "column"
+  evidence?: EdgeEvidence[];    // provenance records from adapters
 }
+
+// Lineage level for engine filtering
+export type LineageLevelFilter = 'all' | 'tool' | 'table' | 'column';
 
 // Filter state for the lineage view
 export interface LineageFilterState {
@@ -86,10 +101,24 @@ export interface LineageFilterState {
   showToolNodes: boolean;          // Show ingestion/transformation/warehouse/reporting tool nodes
   showTableNodes: boolean;         // Show table/view/model nodes
   searchQuery: string;
+  lineageLevel: LineageLevelFilter; // Filter edges by lineage level
+  minConfidence: number;            // Min confidence threshold (0.0–1.0)
 }
 
 // Quick filter preset
 export type LineageFilterPreset = 'full' | 'warehouse-only' | 'etl-only' | 'bi-impact';
+
+// Engine coverage statistics
+export interface EngineCoverageStats {
+  totalNodes: number;
+  totalEdges: number;
+  edgesByLevel: Record<string, number>;
+  coverageTable: number;   // 0.0–1.0
+  coverageColumn: number;  // 0.0–1.0
+  highConfidencePct: number;
+  mediumConfidencePct: number;
+  lowConfidencePct: number;
+}
 
 // API response from unified endpoint
 export interface UnifiedLineageResponse {
@@ -106,6 +135,7 @@ export interface UnifiedLineageResponse {
   availableLayers: PipelineLayer[];
   availableTools: string[];
   lastExtracted?: string;
+  engineStats?: EngineCoverageStats;  // Present when engine graph is available
 }
 
 // Category-to-layer mapping
@@ -241,6 +271,8 @@ export function getDefaultFilterState(): LineageFilterState {
     showToolNodes: true,
     showTableNodes: true,
     searchQuery: '',
+    lineageLevel: 'all',
+    minConfidence: 0,
   };
 }
 
@@ -252,7 +284,33 @@ export function applyFilterPreset(preset: LineageFilterPreset): LineageFilterSta
     showToolNodes: config.showToolNodes,
     showTableNodes: config.showTableNodes,
     searchQuery: '',
+    lineageLevel: 'all',
+    minConfidence: 0,
   };
+}
+
+// Get edge color based on confidence score
+export function getConfidenceColor(confidence?: number): string {
+  if (confidence === undefined) return '#818CF8'; // default indigo
+  if (confidence >= 0.8) return '#10B981'; // green
+  if (confidence >= 0.5) return '#F59E0B'; // amber
+  return '#EF4444'; // red
+}
+
+// Check if an edge passes confidence/level filters
+export function edgePassesFilter(
+  edge: UnifiedLineageEdge,
+  filters: LineageFilterState
+): boolean {
+  if (filters.lineageLevel !== 'all') {
+    if (!edge.lineageLevel || edge.lineageLevel !== filters.lineageLevel) {
+      return false;
+    }
+  }
+  if (filters.minConfidence > 0 && edge.confidence !== undefined && edge.confidence < filters.minConfidence) {
+    return false;
+  }
+  return true;
 }
 
 // Check if a node passes the current filters

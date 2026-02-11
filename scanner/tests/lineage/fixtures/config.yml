@@ -1,0 +1,27 @@
+adapters:
+  - id: warehouse_main
+    type: warehouse_catalog
+    params:
+      path: scanner/tests/lineage/fixtures/warehouse_catalog.json
+
+  - id: transform_dbt
+    type: transform_artifact
+    params:
+      path: scanner/tests/lineage/fixtures/transform_manifest.json
+
+  - id: bi_looker
+    type: bi_query
+    params:
+      path: scanner/tests/lineage/fixtures/bi_export.json
+
+resolver:
+  evidence_weights:
+    declarative: 1.0
+    api_metadata: 0.9
+    compiled_sql: 0.8
+    query_history: 0.6
+    regex: 0.3
+  fuzzy_resolution: false
+
+sql_parser:
+  default_dialect: postgres

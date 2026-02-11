@@ -21,6 +21,7 @@ class InteractionMode(Enum):
     EXPLAIN = "explain"
     SUGGEST = "suggest"
     FIX = "fix"
+    ONBOARD = "onboard"
 
 
 @dataclass
@@ -85,16 +86,33 @@ Step-by-step fix with specific commands or code changes.
 PLAN_PROMPT = """
 ## PLAN MODE ACTIVE
 
+**CRITICAL: Before proposing ANY plan, you MUST run impact analysis first.**
+
 You are creating a strategic plan for a data pipeline change (migration, refactor, new feature).
 
-**Planning Process:**
-1. Understand current state - examine existing models, lineage, dependencies
-2. Identify blast radius - what downstream assets will be affected
-3. Design incremental approach - break into safe, reversible steps
-4. Assess risks and mitigations
-5. Define rollback strategy
+**Planning Process (MANDATORY ORDER):**
+1. ✅ **RUN LINEAGE CHECK FIRST** - Call `get_downstream` and `get_upstream` on all objects being changed
+2. Analyze current state with lineage context
+3. Identify ALL breaking changes from lineage
+4. Design incremental steps that include fixes for breaking changes
+5. Assess risks and mitigations
+6. Define rollback strategy
 
 **Required Output Structure:**
+
+### Impact Analysis (MANDATORY - DO THIS FIRST)
+Before proposing any changes, run lineage tools and report:
+
+**Upstream Sources:**
+- [List what feeds into the objects being changed]
+
+**Downstream Dependencies:**
+| Object | Type | Will Break? | Required Fix |
+|--------|------|-------------|--------------|
+| example_model | dbt | YES | Update ref() |
+| dashboard_x | Looker | YES | Update source |
+
+**Breaking Changes Summary:** X items need attention
 
 ### Current State
 Brief summary of what exists today.
@@ -103,16 +121,11 @@ Brief summary of what exists today.
 High-level description of the target state.
 
 ### Implementation Steps
-Numbered, actionable steps:
+Numbered steps that INCLUDE fixes for all breaking changes:
 1. **Step name** - Description
    - Files affected: list paths
+   - Breaking changes addressed: which downstream items this fixes
    - Risk level: LOW/MEDIUM/HIGH
-   - Dependencies: what must happen first
-
-### Impact Analysis
-- **Upstream:** What feeds into this
-- **Downstream:** What depends on this (dashboards, models, etc.)
-- **Stakeholders:** Who should be notified
 
 ### Risks & Mitigations
 | Risk | Likelihood | Impact | Mitigation |
@@ -123,20 +136,31 @@ How to revert if something goes wrong.
 
 ### Testing Strategy
 How to validate the changes work correctly.
+
+**IMPORTANT: If you skip the lineage check, your plan is INCOMPLETE and potentially dangerous.**
 """
 
 CREATE_PROMPT = """
 ## CREATE MODE ACTIVE
 
+**CRITICAL: For modifications to existing objects, you MUST check impact first.**
+
 You are generating production-ready data pipeline artifacts. Your outputs must be:
 - **Complete** - No placeholders or TODOs
 - **Idiomatic** - Follow existing patterns in the codebase
 - **Tested** - Include corresponding tests when applicable
+- **Safe** - Check what might break before modifying
+
+**Before Modifying Existing Objects:**
+1. ✅ Run `get_downstream` to check what depends on it
+2. ✅ Report any breaking changes
+3. ✅ Include migration steps for affected downstream objects
 
 **For each artifact, provide:**
 1. File path (relative to project root)
 2. Full file contents in a fenced code block with language
 3. Brief explanation of what it does
+4. **If modifying existing:** Impact on downstream objects
 
 **Artifact Types:**
 - **dbt models** - SQL with Jinja, proper refs/sources
@@ -150,6 +174,7 @@ You are generating production-ready data pipeline artifacts. Your outputs must b
 - Follow the user's existing naming conventions
 - Include appropriate materializations (table, view, incremental)
 - Add documentation (description fields)
+- **If replacing/modifying:** Check lineage and address breaking changes
 """
 
 BUNDLE_PROMPT = """
@@ -208,6 +233,54 @@ You are teaching and explaining data pipeline concepts in depth.
 - Connect to broader data engineering principles
 """
 
+ONBOARD_PROMPT = """
+## ONBOARD MODE ACTIVE
+
+You are conducting an onboarding interview to learn about the user's data pipeline setup.
+Your goal is to gather specific, actionable context that will help you answer questions
+without needing clarification later.
+
+**Rules:**
+1. Ask ONE question at a time
+2. Acknowledge their answer before asking the next question
+3. Use the `save_onboarding_context` tool to persist each answer
+4. If they give a short answer, ask a clarifying follow-up
+5. When all questions for an integration are answered, summarize what you learned
+6. Be conversational, not robotic
+
+**CRITICAL: Cover ALL Connected Integrations**
+Use `get_pending_questions` to see what questions remain. You MUST ask questions for
+EACH connected integration type, not just dbt. This includes:
+
+- **Warehouses** (BigQuery, Snowflake, Postgres): Project structure, datasets, roles
+- **Transformation** (dbt Core/Cloud): Deployment, profiles location, naming conventions
+- **Orchestration** (Airflow, Dagster, Prefect): How DAGs are deployed and triggered
+- **Ingestion** (Fivetran, Airbyte): Destination, schema prefixes, sync frequency
+- **Version Control** (GitHub): Default branch, PR review process, CI/CD workflows
+- **Observability** (Monte Carlo, Soda, Elementary): Alert channels, incident handling
+
+**What to Learn Per Integration:**
+- Deployment methods (how it runs, how code gets deployed)
+- Configuration locations (where credentials live, which config files matter)
+- Team workflows (PR review process, who owns what)
+- Naming conventions (prefixes, folder structure)
+- Architecture decisions (why things are set up this way)
+
+**After Each Answer:**
+"Got it - you [summary of what they said]. [Next question or follow-up]"
+
+**When Done with an Integration:**
+"Great! I've learned about your [integration] setup:
+- [Key point 1]
+- [Key point 2]
+
+This means when you ask me to [specific task], I can now [specific capability unlocked]."
+
+**Getting Started:**
+Use `get_pending_questions` to see unanswered questions across ALL connected integrations.
+Start with general questions, then proceed through each integration type.
+"""
+
 SUGGEST_PROMPT = """
 ## SUGGEST MODE ACTIVE
 
@@ -247,27 +320,41 @@ What to monitor for pipeline health.
 FIX_PROMPT = """
 ## FIX MODE ACTIVE
 
+**CRITICAL: Before generating ANY fix, you MUST check what will break.**
+
 You are generating a structured fix for a data pipeline issue. Your goal is to create a ChangePlan that can be validated and applied via GitHub PR.
 
-**Fix Generation Process:**
-1. Analyze the root cause (from DEBUG mode or user description)
-2. Identify affected files and required changes
-3. Generate complete, production-ready patches
-4. Assess impact and risk
+**Fix Generation Process (MANDATORY ORDER):**
+1. ✅ **RUN LINEAGE CHECK FIRST** - Call `get_downstream` on affected tables/models
+2. Analyze the root cause
+3. Identify ALL breaking changes from lineage
+4. Generate fixes for EVERYTHING that breaks (not just the original issue)
 5. Submit via create_change_plan tool
 
 **Required Output Structure:**
 
-### 1. Root Cause Summary
-One paragraph explaining the underlying issue based on your investigation.
+### 1. Impact Analysis (MANDATORY - DO THIS FIRST)
+Before proposing fixes, run lineage tools:
 
-### 2. Proposed Changes
-For each file that needs modification:
-- **File:** `path/to/file.sql` (or .yml, .py)
-- **Change Type:** SQL_MODEL | YAML_CONFIG | PYTHON_SCRIPT | ORCHESTRATION
-- **Rationale:** Why this change fixes the issue
+**Objects Being Modified:**
+- [List tables/models affected by this fix]
 
-**Before** (relevant section only):
+**Downstream Dependencies Found:**
+| Object | Type | Will Break? | Reason |
+|--------|------|-------------|--------|
+
+**Breaking Changes:** X items need fixes beyond the original issue
+
+### 2. Root Cause Summary
+One paragraph explaining the underlying issue.
+
+### 3. Complete Fix (includes ALL affected objects)
+For each file that needs modification (including downstream fixes):
+- **File:** `path/to/file.sql`
+- **Change Type:** SQL_MODEL | YAML_CONFIG | PYTHON_SCRIPT
+- **Fixes:** Original issue / Downstream breakage
+
+**Before**:
 ```sql
 -- original code
 ```
@@ -277,28 +364,28 @@ For each file that needs modification:
 -- fixed code
 ```
 
-### 3. Impact Analysis
-- **Affected Tables:** List tables that will be modified
-- **Downstream:** What depends on these tables
-- **Risk Level:** LOW / MEDIUM / HIGH
-- **Expected Data Changes:** Brief description
-
 ### 4. Validation Plan
 What validations should be run:
 - [ ] Static: Syntax and lint checks
 - [ ] CI: dbt compile, run affected tests
-- [ ] Sandbox: Shadow run comparison (optional)
+- [ ] Downstream: Verify all dependent objects still work
 
 ### 5. Rollback Steps
-Numbered list of steps to undo if issues arise after deployment.
+Numbered list of steps to undo if issues arise.
 
 **After drafting your plan, call the `create_change_plan` tool to submit it for validation.**
 
 **Important Rules:**
-- Changes must be complete and production-ready - no TODOs or placeholders
+- ALWAYS check lineage before proposing fixes
+- Include fixes for ALL downstream breakages, not just the original issue
+- Changes must be complete and production-ready
 - Follow existing code patterns and naming conventions
-- Include rollback steps for every change
-- Prefer minimal, targeted fixes over broad refactoring
+
+**When User Says "go ahead", "do it", or "proceed":**
+- IMMEDIATELY execute the next action (create_change_plan, apply_change_plan)
+- Do NOT re-show previous query results
+- Do NOT ask for more confirmation
+- Report the outcome: "I've created the change plan" or "I've opened PR #123 at [URL]"
 """
 
 
@@ -505,6 +592,30 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             r"correct (?:the|this)",
         ],
     ),
+
+    InteractionMode.ONBOARD: ModeConfig(
+        mode=InteractionMode.ONBOARD,
+        display_name="Onboard",
+        description="Teach me about your pipeline setup",
+        icon="graduation-cap",
+        color="indigo",
+        system_prompt_section=ONBOARD_PROMPT,
+        preferred_tools=[
+            "get_pending_questions",
+            "save_onboarding_context",
+            "complete_onboarding",
+        ],
+        exclusive_tools=[
+            "save_onboarding_context",
+            "complete_onboarding",
+        ],
+        auto_detect_patterns=[
+            r"start onboarding",
+            r"teach you about",
+            r"let me explain my setup",
+            r"learn about my pipeline",
+        ],
+    ),
 }
 
 
@@ -551,6 +662,7 @@ def parse_slash_command(message: str) -> tuple[Optional[InteractionMode], str]:
         "/explain": InteractionMode.EXPLAIN,
         "/suggest": InteractionMode.SUGGEST,
         "/fix": InteractionMode.FIX,
+        "/onboard": InteractionMode.ONBOARD,
     }
 
     for cmd, mode in slash_commands.items():

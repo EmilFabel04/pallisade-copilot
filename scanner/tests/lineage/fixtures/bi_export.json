@@ -1,0 +1,93 @@
+{
+  "metadata": {
+    "system": "looker",
+    "namespace": "acme-prod",
+    "case_hint": "lower"
+  },
+  "dashboards": [
+    {
+      "name": "Revenue Overview",
+      "owner": "finance-team",
+      "tags": ["finance", "executive"],
+      "tiles": ["monthly_revenue", "daily_orders", "revenue_by_country"]
+    },
+    {
+      "name": "Customer Analytics",
+      "owner": "growth-team",
+      "tags": ["customers", "growth"],
+      "tiles": ["customer_ltv", "top_customers", "signups_over_time"]
+    },
+    {
+      "name": "Product Performance",
+      "owner": "product-team",
+      "tags": ["product"],
+      "tiles": ["top_products", "category_breakdown"]
+    }
+  ],
+  "datasets": [
+    {
+      "name": "monthly_revenue",
+      "sql": "SELECT DATE_TRUNC('month', ordered_at) AS month, SUM(order_amount) AS revenue, SUM(payment_amount) AS collected FROM analytics.fct_orders GROUP BY 1",
+      "tables": ["analytics.fct_orders"],
+      "columns": [
+        {"name": "month", "source_column": "ordered_at", "source_table": "analytics.fct_orders", "transform_expr": "DATE_TRUNC('month', ordered_at)"},
+        {"name": "revenue", "source_column": "order_amount", "source_table": "analytics.fct_orders", "transform_expr": "SUM(order_amount)"},
+        {"name": "collected", "source_column": "payment_amount", "source_table": "analytics.fct_orders", "transform_expr": "SUM(payment_amount)"}
+      ]
+    },
+    {
+      "name": "daily_orders",
+      "sql": "SELECT ordered_at::date AS order_date, COUNT(*) AS order_count, AVG(order_amount) AS avg_amount FROM analytics.fct_orders GROUP BY 1",
+      "tables": ["analytics.fct_orders"],
+      "columns": [
+        {"name": "order_date", "source_column": "ordered_at", "source_table": "analytics.fct_orders"},
+        {"name": "order_count", "source_column": "order_id", "source_table": "analytics.fct_orders", "transform_expr": "COUNT(*)"},
+        {"name": "avg_amount", "source_column": "order_amount", "source_table": "analytics.fct_orders", "transform_expr": "AVG(order_amount)"}
+      ]
+    },
+    {
+      "name": "revenue_by_country",
+      "sql": "SELECT c.country, COUNT(o.order_id) AS orders, SUM(o.order_amount) AS revenue FROM analytics.dim_customers c JOIN analytics.fct_orders o ON c.customer_id = o.customer_id GROUP BY 1",
+      "tables": ["analytics.dim_customers", "analytics.fct_orders"],
+      "columns": [
+        {"name": "country", "source_column": "country", "source_table": "analytics.dim_customers"},
+        {"name": "orders", "source_column": "order_id", "source_table": "analytics.fct_orders", "transform_expr": "COUNT(order_id)"},
+        {"name": "revenue", "source_column": "order_amount", "source_table": "analytics.fct_orders", "transform_expr": "SUM(order_amount)"}
+      ]
+    },
+    {
+      "name": "customer_ltv",
+      "tables": ["reporting.rpt_customer_ltv"],
+      "columns": [
+        {"name": "customer_id", "source_column": "customer_id", "source_table": "reporting.rpt_customer_ltv"},
+        {"name": "customer_name", "source_column": "customer_name", "source_table": "reporting.rpt_customer_ltv"},
+        {"name": "lifetime_value", "source_column": "lifetime_value", "source_table": "reporting.rpt_customer_ltv"},
+        {"name": "order_count", "source_column": "order_count", "source_table": "reporting.rpt_customer_ltv"}
+      ]
+    },
+    {
+      "name": "top_customers",
+      "sql": "SELECT customer_id, customer_name, lifetime_value, order_count FROM reporting.rpt_customer_ltv ORDER BY lifetime_value DESC LIMIT 100",
+      "tables": ["reporting.rpt_customer_ltv"]
+    },
+    {
+      "name": "signups_over_time",
+      "sql": "SELECT DATE_TRUNC('week', signup_date) AS week, COUNT(*) AS signups FROM analytics.dim_customers GROUP BY 1",
+      "tables": ["analytics.dim_customers"]
+    },
+    {
+      "name": "top_products",
+      "tables": ["reporting.rpt_top_products"],
+      "columns": [
+        {"name": "product_name", "source_column": "product_name", "source_table": "reporting.rpt_top_products"},
+        {"name": "total_sold", "source_column": "total_sold", "source_table": "reporting.rpt_top_products"},
+        {"name": "total_revenue", "source_column": "total_revenue", "source_table": "reporting.rpt_top_products"}
+      ]
+    },
+    {
+      "name": "category_breakdown",
+      "sql": "SELECT category, SUM(total_sold) AS units_sold, SUM(price * total_sold) AS revenue FROM analytics.dim_products GROUP BY 1",
+      "tables": ["analytics.dim_products"]
+    }
+  ]
+}

@@ -34,6 +34,13 @@ class IntegrationData(BaseModel):
     status: str
     config: Dict[str, Any] = {}
 
+
+class LineageData(BaseModel):
+    """Pre-fetched lineage data from database."""
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+
+
 class ConversationMessage(BaseModel):
     """A message in the conversation history."""
     role: str = Field(..., description="Message role: 'user' or 'assistant'")
@@ -49,6 +56,7 @@ class ChatRequest(BaseModel):
     model: str = Field("gpt-4o", description="Model to use: gpt-4o, gpt-4o-mini, gpt-4-turbo, o3-mini, claude-sonnet, claude-opus")
     mode: str = Field("ask", description="Interaction mode: ask, debug, plan, create, bundle, explain, suggest")
     integrations: Optional[List[IntegrationData]] = Field(None, description="User's pipeline integrations")
+    lineage: Optional[LineageData] = Field(None, description="Pre-fetched lineage data from database")
 
 
 class ChatResponse(BaseModel):
@@ -150,6 +158,7 @@ async def chat(
             integrations_data=integration_data,
             mode=mode,
             mode_config=mode_config,
+            lineage_data=request.lineage.model_dump() if request.lineage else None,
         )
         
         # Log the context

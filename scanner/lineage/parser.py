@@ -276,6 +276,122 @@ class UniversalLineageParser:
             successful_parses=successful
         )
     
+    def extract_column_lineage(
+        self, sql: str, dialect: Optional[str] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Extract column-level lineage from a SQL statement.
+
+        Only produces mappings when the SELECT list is explicit (no SELECT *).
+        Traces columns through CTEs deterministically.  Returns empty list
+        when ambiguity prevents safe mapping.
+
+        Returns:
+            List of dicts with keys: from_table, from_column, to_column, confidence
+        """
+        if not SQLGLOT_AVAILABLE:
+            return []
+
+        dialect = self._normalize_dialect(dialect or self.default_dialect)
+        mappings: List[Dict[str, str]] = []
+
+        try:
+            parsed = sqlglot.parse(sql, dialect=dialect)
+            if not parsed:
+                return []
+
+            for statement in parsed:
+                if statement is None:
+                    continue
+
+                # Collect CTE definitions so we can trace through them
+                cte_defs: Dict[str, exp.Expression] = {}
+                for cte in statement.find_all(exp.CTE):
+                    cte_name = cte.alias
+                    if cte_name:
+                        cte_defs[str(cte_name)] = cte.this
+
+                # Find the outermost SELECT
+                select = statement.find(exp.Select)
+                if not select:
+                    continue
+
+                # Bail out if SELECT * is present — we cannot safely map columns
+                for expr in select.expressions:
+                    if isinstance(expr, exp.Star):
+                        return []
+                    if isinstance(expr, exp.Column) and isinstance(expr.this, exp.Star):
+                        return []
+
+                # Map each output column to its source
+                for expr in select.expressions:
+                    out_col = self._get_output_alias(expr)
+                    if not out_col:
+                        continue
+
+                    source_cols = self._trace_column_sources(expr, cte_defs)
+                    for src_table, src_col in source_cols:
+                        if self._is_temp_table(src_table):
+                            continue
+                        mappings.append({
+                            "from_table": src_table,
+                            "from_column": src_col,
+                            "to_column": out_col,
+                            "confidence": "0.9",
+                        })
+
+        except Exception:
+            return []
+
+        return mappings
+
+    def _get_output_alias(self, expr: 'exp.Expression') -> Optional[str]:
+        """Get the output column name from a SELECT expression."""
+        if not SQLGLOT_AVAILABLE:
+            return None
+        if isinstance(expr, exp.Alias):
+            return str(expr.alias)
+        if isinstance(expr, exp.Column):
+            return str(expr.name)
+        return None
+
+    def _trace_column_sources(
+        self,
+        expr: 'exp.Expression',
+        cte_defs: Dict[str, 'exp.Expression'],
+    ) -> List[Tuple[str, str]]:
+        """Trace a SELECT expression back to source table.column pairs."""
+        if not SQLGLOT_AVAILABLE:
+            return []
+
+        results: List[Tuple[str, str]] = []
+
+        # Walk all Column references in this expression
+        for col in expr.find_all(exp.Column):
+            col_name = str(col.name)
+            table_ref = str(col.table) if col.table else ""
+
+            if table_ref and table_ref in cte_defs:
+                # Column from a CTE — try to resolve through the CTE
+                cte_select = cte_defs[table_ref].find(exp.Select)
+                if cte_select:
+                    for cte_expr in cte_select.expressions:
+                        alias = self._get_output_alias(cte_expr)
+                        if alias and alias == col_name:
+                            deeper = self._trace_column_sources(cte_expr, cte_defs)
+                            results.extend(deeper)
+                            break
+                    else:
+                        # CTE column not found; can't trace further
+                        results.append((table_ref, col_name))
+            elif table_ref:
+                results.append((table_ref, col_name))
+            else:
+                # No table qualifier — ambiguous, still record with empty table
+                results.append(("", col_name))
+
+        return results
+
     def extract_tables_from_sql(self, sql: str, dialect: Optional[str] = None) -> Dict[str, List[str]]:
         """
         Simple method to extract all tables from SQL.

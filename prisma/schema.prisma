@@ -44,6 +44,7 @@ model User {
   scanSchedules    ScanSchedule[]
   auditLogs        AuditLog[]
   appliedFixes     AppliedFix[]
+  artifacts        Artifact[]
 
   @@index([organizationId])
 }
@@ -145,6 +146,7 @@ model Organization {
   copilotSessions CopilotSession[]
   lineageEvents   LineageEvent[]
   debugSessions   DebugSession[]
+  artifacts       Artifact[]
 
   @@index([domain])
 }
@@ -297,8 +299,40 @@ model PipelineStack {
   // Access control
   accessList PipelineAccess[]
 
+  // Copilot context (onboarding data)
+  context PipelineContext?
+
   @@index([organizationId])
   @@index([status])
+}
+
+// Pipeline context - stores learned knowledge from onboarding
+model PipelineContext {
+  id              String   @id @default(cuid())
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String   @unique
+
+  // Onboarding state
+  onboardingStatus      OnboardingStatus @default(NOT_STARTED)
+  onboardingCompletedAt DateTime?
+
+  // Learned context (JSON for flexibility)
+  environmentContext  Json?  // deployment method, team size, environments
+  integrationContexts Json?  // per-integration learned context (keyed by integration ID)
+  conventionsContext  Json?  // naming conventions, folder structures
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([pipelineStackId])
+  @@index([onboardingStatus])
+}
+
+enum OnboardingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  NEEDS_UPDATE
 }
 
 // User access to a specific pipeline
@@ -1173,6 +1207,7 @@ model CopilotSession {
   messages       CopilotMessage[]
   debugSession   DebugSession?
   changePlans    ChangePlan[]
+  artifacts      Artifact[]
 
   @@index([userId])
   @@index([organizationId])
@@ -2662,4 +2697,45 @@ enum PatternRuleAction {
   SUPPRESSED // Finding was suppressed due to rule
   NEEDS_CONFIRMATION // Pattern detected, shown to user for confirmation
   FLAGGED // No rule matched, flagged as issue
+}
+
+// ============================================
+// ARTIFACTS (Saved LLM Responses)
+// ============================================
+
+model Artifact {
+  id      String       @id @default(cuid())
+  title   String
+  content String       @db.Text
+  type    ArtifactType
+  tags    String[]
+
+  // Source reference (link back to original chat)
+  sourceSessionId String?
+  sourceMessageId String?
+  sourceSession   CopilotSession? @relation(fields: [sourceSessionId], references: [id], onDelete: SetNull)
+
+  metadata Json?
+  isPinned Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([type])
+}
+
+enum ArtifactType {
+  QUERY   // SQL queries
+  FIX     // Bug fixes, config fixes
+  INSIGHT // Analysis, explanations
+  CODE    // Code snippets
+  PLAN    // Implementation plans
 }

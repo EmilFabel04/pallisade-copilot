@@ -5,11 +5,13 @@ Orchestrates multiple parsers to build a comprehensive lineage graph
 across an organization's entire data stack.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from datetime import datetime
 import json
+import logging
 
 from .graph import LineageGraph, LineageNode, LineageEdge, NodeType
+from .canonical import normalize_to_canonical_fqn
 from .parsers import (
     DbtManifestParser,
     SnowflakeQueryParser,
@@ -195,32 +197,104 @@ class LineageBuilder:
             existing.columns = new.columns
     
     def _deduplicate_nodes(self) -> None:
-        """Find and merge duplicate nodes (same table, different sources)."""
-        # Group by normalized FQN
-        by_fqn: Dict[str, List[str]] = {}
-        
+        """
+        Find and merge duplicate nodes (same table, different sources).
+
+        Uses canonical FQN matching to identify the same physical table
+        discovered by different tools (e.g., BigQuery table = dbt model target).
+        """
+        logger = logging.getLogger(__name__)
+
+        # Group by canonical FQN for cross-tool matching
+        by_canonical: Dict[str, List[str]] = {}
+
         for node_id, node in self.graph.nodes.items():
-            normalized = node.fqn.lower()
-            if normalized not in by_fqn:
-                by_fqn[normalized] = []
-            by_fqn[normalized].append(node_id)
-        
+            # Build canonical FQN: warehouse_type:database.schema.table
+            canonical = self._get_canonical_fqn(node)
+            if canonical not in by_canonical:
+                by_canonical[canonical] = []
+            by_canonical[canonical].append(node_id)
+
         # Merge duplicates
-        for fqn, node_ids in by_fqn.items():
+        nodes_merged = 0
+        for canonical_fqn, node_ids in by_canonical.items():
             if len(node_ids) > 1:
-                # Keep the first, merge others into it
-                primary_id = node_ids[0]
+                # Sort by priority: warehouse > dbt > bi tools
+                sorted_ids = sorted(node_ids, key=lambda nid: self._node_priority(nid))
+                primary_id = sorted_ids[0]
                 primary = self.graph.nodes[primary_id]
-                
-                for other_id in node_ids[1:]:
-                    other = self.graph.nodes[other_id]
+
+                for other_id in sorted_ids[1:]:
+                    other = self.graph.nodes.get(other_id)
+                    if not other:
+                        continue
+
                     self._merge_node_metadata(primary, other)
-                    
+
+                    # Track discovery sources
+                    discovered_by: Set[str] = set(primary.raw_metadata.get("discovered_by", [primary.platform]))
+                    discovered_by.add(other.platform)
+                    primary.raw_metadata["discovered_by"] = list(discovered_by)
+
                     # Redirect edges
                     self._redirect_edges(other_id, primary_id)
-                    
+
                     # Remove duplicate
                     del self.graph.nodes[other_id]
+                    nodes_merged += 1
+
+        if nodes_merged > 0:
+            logger.info(f"Deduplicated {nodes_merged} nodes using canonical FQN matching")
+
+    def _get_canonical_fqn(self, node: LineageNode) -> str:
+        """Get canonical FQN for a node for cross-tool matching."""
+        # Determine warehouse type from dialect or platform
+        warehouse_type = (node.dialect or node.platform or "unknown").lower()
+
+        # Normalize warehouse type
+        if warehouse_type == "dbt":
+            # dbt nodes use the target warehouse dialect
+            warehouse_type = node.raw_metadata.get("adapter_type", "bigquery").lower()
+
+        # Build canonical FQN
+        if node.database and node.schema:
+            return normalize_to_canonical_fqn(
+                warehouse_type, node.database, node.schema, node.name
+            )
+        elif node.fqn:
+            # Parse FQN
+            parts = node.fqn.replace("`", "").replace('"', "").lower().split(".")
+            if len(parts) >= 3:
+                return normalize_to_canonical_fqn(warehouse_type, parts[-3], parts[-2], parts[-1])
+            elif len(parts) == 2:
+                return normalize_to_canonical_fqn(warehouse_type, "", parts[0], parts[1])
+            else:
+                return normalize_to_canonical_fqn(warehouse_type, "", "", parts[0])
+
+        # Fallback to original FQN-based key
+        return f"{warehouse_type}:{node.fqn.lower()}"
+
+    def _node_priority(self, node_id: str) -> int:
+        """
+        Get priority for a node (lower = higher priority).
+
+        Warehouse nodes have highest priority (most accurate metadata),
+        followed by dbt, then BI tools.
+        """
+        node = self.graph.nodes.get(node_id)
+        if not node:
+            return 99
+
+        platform = (node.platform or "").lower()
+
+        if platform in ("bigquery", "snowflake", "postgres", "redshift"):
+            return 1  # Warehouse: highest priority
+        elif platform == "dbt":
+            return 2  # dbt: good metadata but less accurate row counts
+        elif platform in ("looker", "tableau", "powerbi", "metabase"):
+            return 3  # BI tools
+        else:
+            return 4  # Unknown
     
     def _redirect_edges(self, old_id: str, new_id: str) -> None:
         """Redirect edges from old node to new node."""

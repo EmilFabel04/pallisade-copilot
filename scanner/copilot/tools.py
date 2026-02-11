@@ -22,6 +22,7 @@ class ToolCategory(Enum):
     KNOWLEDGE = "knowledge"
     OBSERVABILITY = "observability"
     CHANGE_PLAN = "change_plan"
+    ONBOARDING = "onboarding"
 
 
 @dataclass
@@ -166,22 +167,28 @@ class ToolRegistry:
         
         self._register(Tool(
             name="get_upstream",
-            description="Get all upstream dependencies (tables/models that feed into this node). Use this to understand where data comes from.",
+            description="Get all upstream dependencies (tables/models that feed into this node). Use this to understand where data comes from. Supports optional filtering by lineage level, confidence, and system.",
             category=ToolCategory.LINEAGE,
             parameters=[
                 ToolParameter("node_id", "string", "The fully qualified name of the node (e.g., 'database.schema.table')"),
                 ToolParameter("depth", "integer", "How many levels upstream to traverse (-1 for all)", required=False, default=-1),
+                ToolParameter("level", "string", "Filter by lineage level", required=False, enum=["tool", "table", "column"]),
+                ToolParameter("min_confidence", "number", "Minimum edge confidence (0.0-1.0)", required=False),
+                ToolParameter("system", "string", "Filter to a specific system (e.g., 'bigquery', 'dbt', 'looker')", required=False),
             ],
             alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DBT_CLOUD", "DBT_CORE"},
         ))
-        
+
         self._register(Tool(
             name="get_downstream",
-            description="Get all downstream dependents (tables/models/dashboards that depend on this node). Use this to understand impact of changes.",
+            description="Get all downstream dependents (tables/models/dashboards that depend on this node). Use this to understand impact of changes. Supports optional filtering by lineage level, confidence, and system.",
             category=ToolCategory.LINEAGE,
             parameters=[
                 ToolParameter("node_id", "string", "The fully qualified name of the node"),
                 ToolParameter("depth", "integer", "How many levels downstream to traverse (-1 for all)", required=False, default=-1),
+                ToolParameter("level", "string", "Filter by lineage level", required=False, enum=["tool", "table", "column"]),
+                ToolParameter("min_confidence", "number", "Minimum edge confidence (0.0-1.0)", required=False),
+                ToolParameter("system", "string", "Filter to a specific system (e.g., 'bigquery', 'dbt', 'looker')", required=False),
             ],
             alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DBT_CLOUD", "DBT_CORE"},
         ))
@@ -217,7 +224,49 @@ class ToolRegistry:
             ],
             alternative_integrations={"SNOWFLAKE", "BIGQUERY", "DBT_CLOUD", "DBT_CORE"},
         ))
-        
+
+        self._register(Tool(
+            name="analyze_change_impact",
+            description="Analyze the full impact of a proposed change. Returns upstream sources, downstream dependents, breaking changes, and required remediations. ALWAYS call this BEFORE making any code changes or plans that modify tables/models.",
+            category=ToolCategory.LINEAGE,
+            parameters=[
+                ToolParameter(
+                    "objects",
+                    "array",
+                    "List of tables/models being changed (fully qualified names)",
+                    items={"type": "string"},
+                ),
+                ToolParameter(
+                    "change_type",
+                    "string",
+                    "Type of change being made",
+                    enum=["RENAME", "MOVE", "DELETE", "MODIFY_COLUMNS", "MODIFY_LOGIC"],
+                ),
+                ToolParameter(
+                    "details",
+                    "string",
+                    "Specific change details (e.g., 'moving from dbt_dev to analytics dataset')",
+                ),
+            ],
+            alternative_integrations={"BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DBT_CLOUD", "DBT_CORE"},
+        ))
+
+        self._register(Tool(
+            name="explain_edge",
+            description="Explain a lineage edge — shows evidence provenance, confidence score, source adapter, and how the relationship was discovered. Use this when the user asks WHY two assets are connected or wants to verify lineage accuracy.",
+            category=ToolCategory.LINEAGE,
+            parameters=[
+                ToolParameter("edge_id", "string", "The edge ID to explain (from upstream/downstream results)"),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_lineage_stats",
+            description="Get lineage coverage statistics: total nodes/edges, coverage by level (tool/table/column), confidence distribution, and resolution quality. Use this to assess lineage completeness.",
+            category=ToolCategory.LINEAGE,
+            parameters=[],
+        ))
+
         # ==========================================
         # WAREHOUSE TOOLS
         # ==========================================
@@ -829,6 +878,75 @@ class ToolRegistry:
                 ),
             ],
             alternative_integrations={"GITHUB"},
+        ))
+
+        # ==========================================
+        # ONBOARDING TOOLS
+        # ==========================================
+
+        self._register(Tool(
+            name="get_pending_questions",
+            description="Get the next onboarding questions that haven't been answered yet. Returns questions sorted by priority.",
+            category=ToolCategory.ONBOARDING,
+            parameters=[
+                ToolParameter(
+                    "integration_type",
+                    "string",
+                    "Optional filter to get questions for a specific integration type (e.g., 'DBT_CORE', 'BIGQUERY')",
+                    required=False,
+                ),
+                ToolParameter(
+                    "limit",
+                    "integer",
+                    "Maximum number of questions to return",
+                    required=False,
+                    default=3,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="save_onboarding_context",
+            description="Save the user's answer to an onboarding question. Extracts key facts and stores them for future use.",
+            category=ToolCategory.ONBOARDING,
+            parameters=[
+                ToolParameter(
+                    "question_key",
+                    "string",
+                    "The unique key of the question being answered (e.g., 'dbt_deployment_method')",
+                ),
+                ToolParameter(
+                    "answer",
+                    "string",
+                    "The user's answer to the question",
+                ),
+                ToolParameter(
+                    "extracted_facts",
+                    "object",
+                    "Key-value pairs of facts extracted from the answer (e.g., {'deployment_method': 'github_actions', 'workflow_path': '.github/workflows/dbt.yml'})",
+                    required=False,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="complete_onboarding",
+            description="Mark onboarding as complete for this pipeline or a specific integration.",
+            category=ToolCategory.ONBOARDING,
+            parameters=[
+                ToolParameter(
+                    "integration_id",
+                    "string",
+                    "Optional: complete onboarding for a specific integration only",
+                    required=False,
+                ),
+                ToolParameter(
+                    "summary",
+                    "string",
+                    "Summary of what was learned during onboarding",
+                    required=False,
+                ),
+            ],
         ))
 
     def _register(self, tool: Tool) -> None:

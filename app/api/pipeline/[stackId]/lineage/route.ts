@@ -57,26 +57,27 @@ export async function POST(
       return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
     }
 
-    // Find warehouse nodes to extract lineage from
+    // Find extractable nodes (warehouse + transformation layers)
     // Valid statuses: CONNECTED (just connected) or HEALTHY (connected and healthy)
-    const warehouseNodes = stack.nodes.filter(
-      (n) => n.layer === 'WAREHOUSE' && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
+    const extractableNodes = stack.nodes.filter(
+      (n) => (n.layer === 'WAREHOUSE' || n.layer === 'TRANSFORMATION')
+          && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
     );
 
-    if (warehouseNodes.length === 0) {
-      return NextResponse.json({ 
-        error: 'No connected warehouse nodes found' 
+    if (extractableNodes.length === 0) {
+      return NextResponse.json({
+        error: 'No connected warehouse or transformation nodes found'
       }, { status: 400 });
     }
 
     // If nodeId specified, only extract from that node
-    const nodesToProcess = nodeId 
-      ? warehouseNodes.filter(n => n.id === nodeId)
-      : warehouseNodes;
+    const nodesToProcess = nodeId
+      ? extractableNodes.filter(n => n.id === nodeId)
+      : extractableNodes;
 
     if (nodesToProcess.length === 0) {
-      return NextResponse.json({ 
-        error: 'Specified node not found or not a connected warehouse' 
+      return NextResponse.json({
+        error: 'Specified node not found or not a connected extractable node'
       }, { status: 400 });
     }
 
@@ -101,13 +102,36 @@ export async function POST(
           continue;
         }
 
+        // For TRANSFORMATION (dbt) nodes, attach GitHub config from any connected VERSION_CONTROL node
+        const extractConfig = { ...decryptedConfig };
+        if (node.layer === 'TRANSFORMATION') {
+          const githubNode = stack.nodes.find(
+            (n) => n.layer === 'VERSION_CONTROL' && n.toolType === 'github' && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
+          );
+          if (githubNode) {
+            const ghConfig = decryptNodeConfig(githubNode.config);
+            if (ghConfig?.access_token && ghConfig?.owner) {
+              extractConfig.github = {
+                repo: ghConfig.repo
+                  ? `${ghConfig.owner}/${ghConfig.repo}`
+                  : ghConfig.owner,
+                token: ghConfig.access_token,
+                branch: ghConfig.branch || 'main',
+                dbt_root: ghConfig.dbt_root || '',
+              };
+              console.log(`[LINEAGE] Attached GitHub config from ${githubNode.name} for dbt schema enrichment`);
+            }
+          }
+        }
+
         // Call scanner API to extract lineage
         const response = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             integration_type: node.toolType.toUpperCase(),
-            config: decryptedConfig,
+            config: extractConfig,
+            integration_id: node.integrationId || undefined,
             options: {
               region: options.region || 'auto',
               days_back: options.days_back || 30,

@@ -6,9 +6,10 @@ Supports multiple node types and relationship semantics.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional, Any
+from typing import Dict, List, Set, Optional, Any, Tuple
 from enum import Enum
 from datetime import datetime
+import hashlib
 import json
 
 
@@ -69,6 +70,131 @@ class HealthStatus(Enum):
     STALE = "stale"
 
 
+class PlatformDomain(Enum):
+    """High-level domain of a platform/tool."""
+    WAREHOUSE = "warehouse"
+    TRANSFORM = "transform"
+    ORCHESTRATION = "orchestration"
+    BI = "bi"
+    INGESTION = "ingestion"
+    CATALOG = "catalog"
+    APP = "app"
+    OTHER = "other"
+
+
+class AssetKind(Enum):
+    """Kind of data asset (tool-agnostic)."""
+    TABLE = "table"
+    VIEW = "view"
+    MODEL = "model"
+    DATASET = "dataset"
+    DASHBOARD = "dashboard"
+    JOB = "job"
+    TASK = "task"
+    FILE = "file"
+    TOPIC = "topic"
+    STREAM = "stream"
+    API = "api"
+    UNKNOWN = "unknown"
+
+
+class LineageLevel(Enum):
+    """Granularity level of a lineage edge."""
+    TOOL = "tool"
+    TABLE = "table"
+    COLUMN = "column"
+
+
+@dataclass
+class Evidence:
+    """Provenance record for a lineage edge."""
+    adapter_id: str
+    source_ref: str  # file path, api endpoint, run id, query id
+    observed_at: Optional[datetime] = None
+    snippet: Optional[str] = None  # <=200 chars
+    payload: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "adapter_id": self.adapter_id,
+            "source_ref": self.source_ref,
+            "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+            "snippet": self.snippet,
+            "payload": self.payload,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Evidence':
+        observed = data.get("observed_at")
+        return cls(
+            adapter_id=data["adapter_id"],
+            source_ref=data["source_ref"],
+            observed_at=datetime.fromisoformat(observed) if observed else None,
+            snippet=data.get("snippet"),
+            payload=data.get("payload"),
+        )
+
+
+@dataclass
+class ColumnMapping:
+    """A single column-to-column derivation."""
+    from_column: str
+    to_column: str
+    transform_expr: Optional[str] = None
+    confidence: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "from_column": self.from_column,
+            "to_column": self.to_column,
+            "transform_expr": self.transform_expr,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ColumnMapping':
+        return cls(
+            from_column=data["from_column"],
+            to_column=data["to_column"],
+            transform_expr=data.get("transform_expr"),
+            confidence=data.get("confidence", 1.0),
+        )
+
+
+@dataclass
+class TimeWindow:
+    """Time range for observed lineage."""
+    start: datetime
+    end: datetime
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TimeWindow':
+        return cls(
+            start=datetime.fromisoformat(data["start"]),
+            end=datetime.fromisoformat(data["end"]),
+        )
+
+
+def generate_stable_id(
+    platform_domain: str, namespace: str,
+    container: str, name: str,
+) -> str:
+    """Generate a deterministic stable ID from physical identity components.
+
+    Does NOT include system/platform so that the same physical asset
+    discovered by different adapters (e.g. postgres vs dbt) gets the
+    same stable_id for deduplication.
+    """
+    key = f"{platform_domain}|{namespace}|{container}|{name}".lower()
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
 @dataclass
 class LineageNode:
     """A node in the lineage graph representing a data asset."""
@@ -119,7 +245,25 @@ class LineageNode:
     
     # Raw data from source
     raw_metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
+    # Engine extensions (backward-compatible defaults)
+    platform_domain: PlatformDomain = PlatformDomain.OTHER
+    asset_kind: AssetKind = AssetKind.UNKNOWN
+    namespace: Optional[str] = None  # account/project/env
+    observed_at: Optional[datetime] = None
+    sources: List[str] = field(default_factory=list)  # adapter ids
+
+    @property
+    def stable_id(self) -> str:
+        """Deterministic ID from physical identity (no system/platform)."""
+        container = f"{self.database or ''}.{self.schema or ''}"
+        return generate_stable_id(
+            self.platform_domain.value,
+            self.namespace or "",
+            container,
+            self.name,
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -144,6 +288,12 @@ class LineageNode:
             "depth": self.depth,
             "upstream_count": self.upstream_count,
             "downstream_count": self.downstream_count,
+            "platform_domain": self.platform_domain.value,
+            "asset_kind": self.asset_kind.value,
+            "namespace": self.namespace,
+            "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+            "sources": self.sources,
+            "integration_id": self.integration_id,
         }
 
 
@@ -164,7 +314,13 @@ class LineageEdge:
     # Source of this edge
     discovered_from: Optional[str] = None  # query_history, dbt_manifest, fk, manual
     discovered_at: Optional[datetime] = None
-    
+
+    # Engine extensions (backward-compatible defaults)
+    lineage_level: LineageLevel = LineageLevel.TABLE
+    evidence: List[Evidence] = field(default_factory=list)
+    column_mappings: List[ColumnMapping] = field(default_factory=list)
+    time_window: Optional[TimeWindow] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -176,6 +332,10 @@ class LineageEdge:
             "transformation": self.transformation,
             "confidence": self.confidence,
             "discovered_from": self.discovered_from,
+            "lineage_level": self.lineage_level.value,
+            "evidence": [e.to_dict() for e in self.evidence],
+            "column_mappings": [m.to_dict() for m in self.column_mappings],
+            "time_window": self.time_window.to_dict() if self.time_window else None,
         }
 
 
@@ -203,7 +363,16 @@ class LineageGraph:
         self._by_platform: Dict[str, Set[str]] = {}
         self._by_type: Dict[NodeType, Set[str]] = {}
         self._by_database: Dict[str, Set[str]] = {}
-        
+
+        # Engine indexes
+        self._by_lineage_level: Dict[LineageLevel, Set[str]] = {}  # edge_id sets
+        self._by_asset_kind: Dict[AssetKind, Set[str]] = {}  # node_id sets
+        self._by_confidence_bucket: Dict[str, Set[str]] = {
+            "low": set(),    # < 0.5
+            "medium": set(), # 0.5 - 0.8
+            "high": set(),   # > 0.8
+        }
+
         # Metadata
         self.built_at: Optional[datetime] = None
         self.source_counts: Dict[str, int] = {}  # How many edges from each source
@@ -233,6 +402,11 @@ class LineageGraph:
             if db_key not in self._by_database:
                 self._by_database[db_key] = set()
             self._by_database[db_key].add(node.id)
+
+        # Engine index: asset kind
+        if node.asset_kind not in self._by_asset_kind:
+            self._by_asset_kind[node.asset_kind] = set()
+        self._by_asset_kind[node.asset_kind].add(node.id)
     
     def add_edge(self, edge: LineageEdge) -> None:
         """Add an edge to the graph."""
@@ -257,6 +431,18 @@ class LineageGraph:
         # Track source counts
         source = edge.discovered_from or "unknown"
         self.source_counts[source] = self.source_counts.get(source, 0) + 1
+
+        # Engine indexes
+        if edge.lineage_level not in self._by_lineage_level:
+            self._by_lineage_level[edge.lineage_level] = set()
+        self._by_lineage_level[edge.lineage_level].add(edge.id)
+
+        if edge.confidence < 0.5:
+            self._by_confidence_bucket["low"].add(edge.id)
+        elif edge.confidence <= 0.8:
+            self._by_confidence_bucket["medium"].add(edge.id)
+        else:
+            self._by_confidence_bucket["high"].add(edge.id)
     
     def get_upstream(self, node_id: str, depth: int = -1) -> List[LineageNode]:
         """
@@ -479,6 +665,7 @@ class LineageGraph:
         
         # Add nodes first
         for node_data in data.get("nodes", []):
+            observed_at = node_data.get("observed_at")
             node = LineageNode(
                 id=node_data["id"],
                 name=node_data["name"],
@@ -494,11 +681,18 @@ class LineageGraph:
                 domain=node_data.get("domain"),
                 criticality=node_data.get("criticality", "medium"),
                 health_status=HealthStatus(node_data.get("health_status", "unknown")),
+                platform_domain=PlatformDomain(node_data.get("platform_domain", "other")),
+                asset_kind=AssetKind(node_data.get("asset_kind", "unknown")),
+                namespace=node_data.get("namespace"),
+                observed_at=datetime.fromisoformat(observed_at) if observed_at else None,
+                sources=node_data.get("sources", []),
+                integration_id=node_data.get("integration_id"),
             )
             graph.add_node(node)
-        
+
         # Add edges
         for edge_data in data.get("edges", []):
+            tw_data = edge_data.get("time_window")
             edge = LineageEdge(
                 id=edge_data["id"],
                 source_id=edge_data["source_id"],
@@ -508,6 +702,10 @@ class LineageGraph:
                 transformation=edge_data.get("transformation"),
                 confidence=edge_data.get("confidence", 1.0),
                 discovered_from=edge_data.get("discovered_from"),
+                lineage_level=LineageLevel(edge_data.get("lineage_level", "table")),
+                evidence=[Evidence.from_dict(e) for e in edge_data.get("evidence", [])],
+                column_mappings=[ColumnMapping.from_dict(m) for m in edge_data.get("column_mappings", [])],
+                time_window=TimeWindow.from_dict(tw_data) if tw_data else None,
             )
             graph.add_edge(edge)
         

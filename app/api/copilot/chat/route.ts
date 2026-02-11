@@ -245,6 +245,62 @@ export async function POST(request: Request) {
       hasMetadata: !!i.metadata,
     })));
 
+    // Fetch lineage data from database to pass to copilot
+    let lineageData: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
+    try {
+      const [lineageNodes, lineageEdges] = await Promise.all([
+        prisma.lineageNode.findMany({
+          where: { organizationId: user.organizationId },
+          select: {
+            id: true,
+            name: true,
+            database: true,
+            schema: true,
+            tableName: true,
+            nodeType: true,
+            description: true,
+            upstreamCount: true,
+            downstreamCount: true,
+          },
+        }),
+        prisma.lineageEdge.findMany({
+          where: { organizationId: user.organizationId },
+          select: {
+            id: true,
+            sourceId: true,
+            targetId: true,
+            edgeType: true,
+            columns: true,
+          },
+        }),
+      ]);
+
+      lineageData = {
+        nodes: lineageNodes.map(n => ({
+          id: n.id,
+          name: n.name,
+          fqn: n.name, // name is already FQN format
+          database: n.database,
+          schema: n.schema,
+          node_type: n.nodeType,
+          description: n.description,
+          upstream_count: n.upstreamCount,
+          downstream_count: n.downstreamCount,
+        })),
+        edges: lineageEdges.map(e => ({
+          id: e.id,
+          source_id: e.sourceId,
+          target_id: e.targetId,
+          edge_type: e.edgeType,
+          columns: e.columns,
+        })),
+      };
+
+      console.log(`[COPILOT] Fetched lineage: ${lineageData.nodes.length} nodes, ${lineageData.edges.length} edges`);
+    } catch (e) {
+      console.error('[COPILOT] Failed to fetch lineage:', e);
+    }
+
     // Call the scanner copilot API with full conversation history
     const response = await fetch(`${SCANNER_API_URL}/api/v1/copilot/chat`, {
       method: 'POST',
@@ -261,6 +317,7 @@ export async function POST(request: Request) {
         model,
         mode, // Interaction mode (ask, debug, plan, create, etc.)
         integrations, // Pass integrations from pipeline nodes
+        lineage: lineageData, // Pass pre-fetched lineage data
       }),
     });
 
@@ -349,21 +406,56 @@ export async function POST(request: Request) {
 }
 
 /**
- * Generate a session title from the first user message
+ * Generate a short, descriptive session title from the first user message
  */
 function generateSessionTitle(message: string): string {
-  // Remove context blocks
-  const cleanMessage = message.replace(/\[FINDING CONTEXT\][\s\S]*?\[QUESTION\]\n?/g, '').trim();
-  
-  // Truncate to reasonable length
-  if (cleanMessage.length <= 50) {
+  // Remove context blocks and clean up
+  let cleanMessage = message
+    .replace(/\[FINDING CONTEXT\][\s\S]*?\[QUESTION\]\n?/g, '')
+    .replace(/```[\s\S]*?```/g, '[code]') // Replace code blocks
+    .replace(/`[^`]+`/g, '') // Remove inline code
+    .replace(/\n+/g, ' ') // Replace newlines with spaces
+    .trim();
+
+  // If very short, return as-is
+  if (cleanMessage.length <= 40) {
     return cleanMessage;
   }
-  
-  // Try to find a natural break point
-  const truncated = cleanMessage.substring(0, 50);
+
+  // Extract key phrases based on common patterns
+  const patterns = [
+    /(?:how (?:do i|can i|to)|what(?:'s| is| are)|show me|find|get|query|check|analyze|debug|fix|explain|list|count|compare)\s+(.{10,60}?)(?:\?|$|\.|\n)/i,
+    /(?:why (?:is|are|does|do)|when (?:did|does|was)|where (?:is|are))\s+(.{10,60}?)(?:\?|$|\.|\n)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = cleanMessage.match(pattern);
+    if (match) {
+      let title = match[0].replace(/[?.!]+$/, '').trim();
+      // Capitalize first letter
+      title = title.charAt(0).toUpperCase() + title.slice(1);
+      if (title.length <= 50) {
+        return title;
+      }
+    }
+  }
+
+  // Fallback: smart truncation
+  // Remove filler words at the start
+  const fillerStart = /^(hey|hi|hello|please|can you|could you|i want to|i need to|i'd like to|help me)\s+/i;
+  cleanMessage = cleanMessage.replace(fillerStart, '');
+
+  // Capitalize first letter
+  cleanMessage = cleanMessage.charAt(0).toUpperCase() + cleanMessage.slice(1);
+
+  // Truncate at word boundary
+  if (cleanMessage.length <= 45) {
+    return cleanMessage;
+  }
+
+  const truncated = cleanMessage.substring(0, 42);
   const lastSpace = truncated.lastIndexOf(' ');
-  if (lastSpace > 30) {
+  if (lastSpace > 25) {
     return truncated.substring(0, lastSpace) + '...';
   }
   return truncated + '...';

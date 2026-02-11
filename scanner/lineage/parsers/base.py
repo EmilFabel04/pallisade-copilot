@@ -31,9 +31,38 @@ class BaseParser(ABC):
         pass
     
     def generate_node_id(self, fqn: str) -> str:
-        """Generate a unique node ID from FQN."""
+        """Generate a unique node ID from FQN (includes platform prefix for backward compat)."""
         return hashlib.md5(f"{self.PLATFORM}:{fqn}".encode()).hexdigest()[:16]
-    
+
+    def generate_canonical_node_id(self, fqn: str, warehouse_type: str = None) -> str:
+        """
+        Generate a platform-agnostic node ID for cross-tool matching.
+
+        The canonical ID is based on warehouse_type:database.schema.table
+        which allows the same physical table to be identified across tools.
+
+        Args:
+            fqn: Fully qualified name (database.schema.table)
+            warehouse_type: The underlying warehouse type (bigquery, snowflake, etc.)
+                           If not provided, uses DIALECT or PLATFORM
+
+        Returns:
+            16-character canonical node ID
+        """
+        wh_type = warehouse_type or self.DIALECT or self.PLATFORM
+        canonical_fqn = f"{wh_type.lower()}:{fqn.lower()}"
+        return hashlib.md5(canonical_fqn.encode()).hexdigest()[:16]
+
+    def get_canonical_fqn(self, database: str, schema: str, table: str, warehouse_type: str = None) -> str:
+        """
+        Build a canonical FQN for cross-tool matching.
+
+        Format: {warehouse_type}:{database}.{schema}.{table}
+        """
+        wh_type = warehouse_type or self.DIALECT or self.PLATFORM
+        parts = [p.lower() for p in [database, schema, table] if p]
+        return f"{wh_type.lower()}:{'.'.join(parts)}"
+
     def generate_edge_id(self, source_id: str, target_id: str, edge_type: str) -> str:
         """Generate a unique edge ID."""
         return hashlib.md5(f"{source_id}:{target_id}:{edge_type}".encode()).hexdigest()[:16]

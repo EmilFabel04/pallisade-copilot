@@ -24,9 +24,12 @@ import {
   type UnifiedLineageEdge,
   type UnifiedLineageResponse,
   type LineageFilterState,
+  type EngineCoverageStats,
   getDefaultFilterState,
   isToolCategory,
   nodePassesFilter,
+  edgePassesFilter,
+  getConfidenceColor,
   CATEGORY_VISUALS,
 } from '@/components/lineage/types';
 
@@ -102,9 +105,10 @@ function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode)
     };
   }
 
-  // Table-to-table lineage edges
+  // Table-to-table lineage edges — color by confidence when available
+  const confidenceColor = getConfidenceColor(edge.confidence);
   return {
-    stroke: '#818CF8',
+    stroke: confidenceColor,
     strokeWidth: 2,
     animated: true,
   };
@@ -117,6 +121,7 @@ export default function LineagePage() {
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<UnifiedLineageNode | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<UnifiedLineageEdge | null>(null);
   const [filters, setFilters] = useState<LineageFilterState>(getDefaultFilterState());
 
   // Fetch unified lineage data
@@ -257,9 +262,9 @@ export default function LineagePage() {
       },
     }));
 
-    // Filter and convert edges
+    // Filter and convert edges (apply node membership + engine-level filters)
     const edges: Edge[] = (lineageData?.edges || [])
-      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
+      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target) && edgePassesFilter(e, filters))
       .map((edge) => {
         const sourceNode = nodeMap.get(edge.source);
         const style = getEdgeStyle(edge, sourceNode);
@@ -278,7 +283,9 @@ export default function LineagePage() {
             type: MarkerType.ArrowClosed,
             color: style.stroke,
           },
-          label: edge.label,
+          label: edge.confidence !== undefined
+            ? `${Math.round(edge.confidence * 100)}%`
+            : edge.label,
         };
       });
 
@@ -286,7 +293,7 @@ export default function LineagePage() {
 
     const layouted = getLayoutedElements(nodes, edges);
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges]);
+  }, [filteredNodes, lineageData?.edges, filters]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
@@ -300,8 +307,18 @@ export default function LineagePage() {
     (event: React.MouseEvent, node: Node) => {
       const unifiedNode = lineageData?.nodes.find((n) => n.id === node.id);
       setSelectedNode(unifiedNode || null);
+      setSelectedEdge(null);
     },
     [lineageData?.nodes]
+  );
+
+  const handleEdgeClick = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      const unifiedEdge = lineageData?.edges.find((e) => e.id === edge.id);
+      setSelectedEdge(unifiedEdge || null);
+      setSelectedNode(null);
+    },
+    [lineageData?.edges]
   );
 
   const formatDate = (dateStr: string) => {
@@ -401,6 +418,31 @@ export default function LineagePage() {
             </div>
             <div className="text-[11px] text-white/40">Dependencies</div>
           </div>
+
+          {/* Engine coverage stats (when available) */}
+          {lineageData?.engineStats && (
+            <>
+              <div className="w-px h-8 bg-white/10" />
+              <div className="text-center">
+                <div className="text-xl font-semibold text-emerald-400">
+                  {Math.round(lineageData.engineStats.coverageTable * 100)}%
+                </div>
+                <div className="text-[11px] text-white/40">Table Coverage</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-violet-400">
+                  {Math.round(lineageData.engineStats.coverageColumn * 100)}%
+                </div>
+                <div className="text-[11px] text-white/40">Column Coverage</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-emerald-400">
+                  {Math.round(lineageData.engineStats.highConfidencePct * 100)}%
+                </div>
+                <div className="text-[11px] text-white/40">High Confidence</div>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -460,6 +502,7 @@ export default function LineagePage() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
               nodeTypes={unifiedNodeTypes}
               fitView
               fitViewOptions={{ padding: 0.2 }}
@@ -539,12 +582,151 @@ export default function LineagePage() {
                 />
                 <span className="text-white/50">View</span>
               </div>
+              {/* Confidence legend (shows when engine data present) */}
+              {lineageData?.engineStats && (
+                <>
+                  <div className="w-px h-3 bg-white/20" />
+                  <div className="flex items-center gap-1">
+                    <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#10B981' }} />
+                    <span className="text-white/50">&ge;80%</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#F59E0B' }} />
+                    <span className="text-white/50">50-80%</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#EF4444' }} />
+                    <span className="text-white/50">&lt;50%</span>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
 
+        {/* Side panel - Edge evidence */}
+        {selectedEdge && (
+          <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[15px] font-medium text-white">Edge Details</h3>
+              <button
+                onClick={() => setSelectedEdge(null)}
+                className="p-1 hover:bg-white/[0.05] rounded"
+              >
+                <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Edge type */}
+              <div>
+                <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
+                <p className="text-[13px] text-white mt-1 capitalize">{selectedEdge.edgeType.replace('_', ' ')}</p>
+              </div>
+
+              {/* Lineage level */}
+              {selectedEdge.lineageLevel && (
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Level</label>
+                  <p className="text-[13px] text-white mt-1 capitalize">{selectedEdge.lineageLevel}</p>
+                </div>
+              )}
+
+              {/* Confidence */}
+              {selectedEdge.confidence !== undefined && (
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Confidence</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${selectedEdge.confidence * 100}%`,
+                          backgroundColor: getConfidenceColor(selectedEdge.confidence),
+                        }}
+                      />
+                    </div>
+                    <span className="text-[13px] text-white">
+                      {Math.round(selectedEdge.confidence * 100)}%
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Source → Target */}
+              <div className="grid grid-cols-1 gap-2">
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Source</label>
+                  <p className="text-[12px] text-white font-mono mt-1 break-all">
+                    {lineageData?.nodes.find((n) => n.id === selectedEdge.source)?.fullName || selectedEdge.source}
+                  </p>
+                </div>
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Target</label>
+                  <p className="text-[12px] text-white font-mono mt-1 break-all">
+                    {lineageData?.nodes.find((n) => n.id === selectedEdge.target)?.fullName || selectedEdge.target}
+                  </p>
+                </div>
+              </div>
+
+              {/* Column mappings */}
+              {selectedEdge.columns && selectedEdge.columns.length > 0 && (
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Columns</label>
+                  <div className="mt-1 space-y-1">
+                    {selectedEdge.columns.map((col, i) => (
+                      <span key={i} className="inline-block px-2 py-0.5 text-[11px] bg-white/5 text-white/60 rounded font-mono mr-1">
+                        {col}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Evidence records */}
+              {selectedEdge.evidence && selectedEdge.evidence.length > 0 && (
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide mb-2 block">
+                    Evidence ({selectedEdge.evidence.length})
+                  </label>
+                  <div className="space-y-2">
+                    {selectedEdge.evidence.map((ev, i) => (
+                      <div key={i} className="p-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[11px] text-violet-400 font-medium">{ev.adapterId}</span>
+                          {ev.observedAt && (
+                            <span className="text-[10px] text-white/30">{new Date(ev.observedAt).toLocaleDateString()}</span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-white/60 font-mono break-all">{ev.sourceRef}</p>
+                        {ev.snippet && (
+                          <pre className="mt-1.5 p-2 text-[10px] text-white/50 bg-black/30 rounded overflow-x-auto">
+                            {ev.snippet}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* No evidence fallback */}
+              {(!selectedEdge.evidence || selectedEdge.evidence.length === 0) && (
+                <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                  <p className="text-[12px] text-white/40">
+                    No evidence metadata available for this edge.
+                    {!selectedEdge.confidence && ' Engine graph not connected.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Side panel - Node details */}
-        {selectedNode && (
+        {selectedNode && !selectedEdge && (
           <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[15px] font-medium text-white">
@@ -819,6 +1001,9 @@ export default function LineagePage() {
                       <p className="text-[15px] text-white font-medium mt-0.5">
                         {selectedNode.upstreamCount ?? 0}
                       </p>
+                      {(selectedNode.upstreamCount ?? 0) === 0 && (
+                        <span className="text-[10px] text-emerald-400/70">Root source</span>
+                      )}
                     </div>
                     <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                       <label className="text-[10px] text-white/40 uppercase tracking-wide">
@@ -827,6 +1012,9 @@ export default function LineagePage() {
                       <p className="text-[15px] text-white font-medium mt-0.5">
                         {selectedNode.downstreamCount ?? 0}
                       </p>
+                      {(selectedNode.downstreamCount ?? 0) === 0 && (
+                        <span className="text-[10px] text-amber-400/70">Leaf node</span>
+                      )}
                     </div>
                   </div>
 

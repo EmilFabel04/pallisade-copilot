@@ -12,6 +12,8 @@ import asyncio
 
 from .tools import Tool, ToolResult, get_tool_registry
 from .context_builder import CopilotContext, IntegrationInfo, TableSchema
+from lineage.engine.store import Filters
+from lineage.graph import LineageLevel, PlatformDomain, AssetKind
 
 logger = logging.getLogger(__name__)
 
@@ -685,16 +687,43 @@ class ToolExecutor:
     # LINEAGE TOOL IMPLEMENTATIONS
     # ==========================================
     
+    def _build_filters(self, args: Dict[str, Any]) -> Optional[Filters]:
+        """Build engine Filters from tool args (returns None if no filter params)."""
+        level = args.get("level")
+        min_confidence = args.get("min_confidence")
+        system = args.get("system")
+
+        if not any([level, min_confidence, system]):
+            return None
+
+        filters = Filters()
+        if level:
+            try:
+                filters.lineage_levels = {LineageLevel(level)}
+            except ValueError:
+                pass
+        if min_confidence is not None:
+            filters.min_confidence = float(min_confidence)
+        if system:
+            filters.systems = {system}
+        return filters
+
     async def _execute_get_upstream(self, args: Dict[str, Any]) -> ToolResult:
-        """Get upstream dependencies."""
+        """Get upstream dependencies with optional engine filtering."""
         node_id = args["node_id"]
         depth = args.get("depth", -1)
-        
+
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
-        
-        upstream = self.context.graph.get_upstream(node_id, depth=depth)
-        
+
+        filters = self._build_filters(args)
+
+        # Use engine store when filters are requested and available
+        if filters and self.context.engine_store:
+            upstream = self.context.engine_store.get_upstream(node_id, depth=depth, filters=filters)
+        else:
+            upstream = self.context.graph.get_upstream(node_id, depth=depth)
+
         return ToolResult(
             success=True,
             data={
@@ -707,22 +736,29 @@ class ToolExecutor:
                         "type": node.node_type.value,
                         "platform": node.platform,
                         "depth": node.depth,
+                        "platform_domain": node.platform_domain.value if hasattr(node, 'platform_domain') else None,
+                        "asset_kind": node.asset_kind.value if hasattr(node, 'asset_kind') else None,
                     }
                     for node in upstream
                 ]
             }
         )
-    
+
     async def _execute_get_downstream(self, args: Dict[str, Any]) -> ToolResult:
-        """Get downstream dependents."""
+        """Get downstream dependents with optional engine filtering."""
         node_id = args["node_id"]
         depth = args.get("depth", -1)
-        
+
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
-        
-        downstream = self.context.graph.get_downstream(node_id, depth=depth)
-        
+
+        filters = self._build_filters(args)
+
+        if filters and self.context.engine_store:
+            downstream = self.context.engine_store.get_downstream(node_id, depth=depth, filters=filters)
+        else:
+            downstream = self.context.graph.get_downstream(node_id, depth=depth)
+
         return ToolResult(
             success=True,
             data={
@@ -735,11 +771,51 @@ class ToolExecutor:
                         "type": node.node_type.value,
                         "platform": node.platform,
                         "depth": node.depth,
+                        "platform_domain": node.platform_domain.value if hasattr(node, 'platform_domain') else None,
+                        "asset_kind": node.asset_kind.value if hasattr(node, 'asset_kind') else None,
                     }
                     for node in downstream
                 ]
             }
         )
+
+    async def _execute_explain_edge(self, args: Dict[str, Any]) -> ToolResult:
+        """Explain a lineage edge — show evidence, confidence, and provenance."""
+        edge_id = args["edge_id"]
+
+        if not self.context.engine_store:
+            # Fall back to basic edge lookup from raw graph
+            if self.context.graph and edge_id in self.context.graph.edges:
+                edge = self.context.graph.edges[edge_id]
+                return ToolResult(success=True, data={
+                    "edge_id": edge.id,
+                    "from": edge.source_id,
+                    "to": edge.target_id,
+                    "edge_type": edge.edge_type.value,
+                    "confidence": edge.confidence,
+                })
+            return ToolResult(success=False, error=f"Edge {edge_id} not found")
+
+        result = self.context.engine_store.explain_edge(edge_id)
+        if "error" in result:
+            return ToolResult(success=False, error=result["error"])
+        return ToolResult(success=True, data=result)
+
+    async def _execute_get_lineage_stats(self, args: Dict[str, Any]) -> ToolResult:
+        """Get lineage coverage statistics."""
+        if not self.context.engine_store:
+            # Fall back to basic stats from raw graph
+            if self.context.graph:
+                return ToolResult(success=True, data={
+                    "total_nodes": len(self.context.graph.nodes),
+                    "total_edges": len(self.context.graph.edges),
+                    "roots": len(self.context.graph.get_roots()),
+                    "leaves": len(self.context.graph.get_leaves()),
+                })
+            return ToolResult(success=False, error="No lineage graph available")
+
+        stats = self.context.engine_store.get_stats()
+        return ToolResult(success=True, data=stats.to_dict())
     
     async def _execute_get_node_details(self, args: Dict[str, Any]) -> ToolResult:
         """Get detailed node information."""
@@ -985,9 +1061,8 @@ class ToolExecutor:
                 if not connected:
                     return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
 
-            # Add LIMIT if not present
-            if "LIMIT" not in sql.upper():
-                sql = f"{sql} LIMIT {limit}"
+            # Add LIMIT if not present at the outer query level
+            sql = self._add_limit_if_needed(sql, limit)
 
             logger.info(f"Executing query on {adapter_type}: {sql[:100]}...")
 
@@ -1019,6 +1094,105 @@ class ToolExecutor:
                 error_msg = f"{error_msg}\n\n{validation_warning}"
 
             return ToolResult(success=False, error=error_msg)
+
+    def _add_limit_if_needed(self, sql: str, limit: int) -> str:
+        """
+        Add LIMIT to a query if it doesn't already have one at the outer level.
+
+        Handles edge cases:
+        - Trailing semicolons
+        - CTEs (WITH...SELECT) where LIMIT in subquery doesn't count
+        - UNION/INTERSECT/EXCEPT queries
+        - Queries ending with ) from subqueries
+
+        Returns the modified SQL.
+        """
+        # Strip trailing semicolons and whitespace
+        sql = sql.rstrip().rstrip(';').rstrip()
+
+        sql_upper = sql.upper()
+
+        # Find the position of the outermost SELECT for analysis
+        # For CTEs, we need to find the main SELECT after all WITH clauses
+        if sql_upper.startswith("WITH"):
+            # Find the main SELECT after all CTE definitions
+            # CTEs can be nested, so we need to track parentheses
+            paren_depth = 0
+            main_select_pos = -1
+            i = 0
+            while i < len(sql):
+                if sql[i] == '(':
+                    paren_depth += 1
+                elif sql[i] == ')':
+                    paren_depth -= 1
+                elif paren_depth == 0 and sql_upper[i:i+6] == "SELECT":
+                    # Found a SELECT at depth 0 - this is the main query
+                    main_select_pos = i
+                    break
+                i += 1
+
+            if main_select_pos > 0:
+                # Check if the main SELECT already has LIMIT
+                main_query = sql_upper[main_select_pos:]
+                # Look for LIMIT that's not inside parentheses
+                paren_depth = 0
+                has_outer_limit = False
+                for j, char in enumerate(main_query):
+                    if char == '(':
+                        paren_depth += 1
+                    elif char == ')':
+                        paren_depth -= 1
+                    elif paren_depth == 0 and main_query[j:j+5] == "LIMIT":
+                        has_outer_limit = True
+                        break
+
+                if has_outer_limit:
+                    return sql
+        else:
+            # Regular SELECT - check for LIMIT at outer level
+            paren_depth = 0
+            has_outer_limit = False
+            for i, char in enumerate(sql_upper):
+                if char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    paren_depth -= 1
+                elif paren_depth == 0 and sql_upper[i:i+5] == "LIMIT":
+                    has_outer_limit = True
+                    break
+
+            if has_outer_limit:
+                return sql
+
+        # Check if query ends with a closing paren (subquery or CTE final expression)
+        # In this case, we need to be careful - appending LIMIT might break it
+        # Example: SELECT * FROM (SELECT 1) AS t  -> SELECT * FROM (SELECT 1) AS t LIMIT 100 (OK)
+        # Example: (SELECT 1 UNION SELECT 2) -> (SELECT 1 UNION SELECT 2) LIMIT 100 (might break)
+        if sql.rstrip().endswith(')'):
+            # Check if the entire query is wrapped in parens (set operation)
+            stripped = sql.strip()
+            if stripped.startswith('(') and self._is_balanced_parens(stripped):
+                # Entire query is in parens - don't append, let user handle it
+                logger.info("Query wrapped in parentheses, skipping auto-LIMIT")
+                return sql
+
+        # Safe to append LIMIT
+        return f"{sql} LIMIT {limit}"
+
+    def _is_balanced_parens(self, sql: str) -> bool:
+        """Check if a string starting with ( has its closing ) at the very end."""
+        if not sql.startswith('(') or not sql.endswith(')'):
+            return False
+        depth = 0
+        for i, char in enumerate(sql):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0 and i < len(sql) - 1:
+                    # Closed before the end
+                    return False
+        return depth == 0
 
     def _infer_warehouse_from_sql(self, sql: str) -> Optional[str]:
         """
@@ -2835,3 +3009,309 @@ class ToolExecutor:
         except Exception as e:
             logger.exception("Failed to read GitHub file")
             return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # ONBOARDING TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_pending_questions(self, args: Dict[str, Any]) -> ToolResult:
+        """Get pending onboarding questions based on connected integrations."""
+        try:
+            from .onboarding.questions import get_all_pending_questions
+
+            # Get integration types from context
+            integration_types = self.context.integration_types or []
+
+            # Get already answered questions from pipeline context
+            answered_keys = set()
+            if self.context.pipeline_context:
+                # Extract answered keys from environment, integration, and conventions contexts
+                env_ctx = self.context.pipeline_context.get("environmentContext") or {}
+                int_ctx = self.context.pipeline_context.get("integrationContexts") or {}
+                conv_ctx = self.context.pipeline_context.get("conventionsContext") or {}
+
+                answered_keys.update(env_ctx.keys())
+                answered_keys.update(conv_ctx.keys())
+                for int_answers in int_ctx.values():
+                    if isinstance(int_answers, dict):
+                        answered_keys.update(int_answers.keys())
+
+            # Get pending questions
+            questions = get_all_pending_questions(integration_types, answered_keys)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "pending_count": len(questions),
+                    "questions": [
+                        {
+                            "key": q.key,
+                            "text": q.text,
+                            "category": q.category.value,
+                            "integration_type": q.integration_type,
+                            "priority": q.priority,
+                            "required": q.required,
+                            "example_answers": q.example_answers,
+                        }
+                        for q in questions[:10]  # Return top 10 by priority
+                    ],
+                    "answered_count": len(answered_keys),
+                }
+            )
+        except Exception as e:
+            logger.exception("Failed to get pending questions")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_save_onboarding_context(self, args: Dict[str, Any]) -> ToolResult:
+        """Save an answer from onboarding to the pipeline context."""
+        question_key = args.get("question_key")
+        answer = args.get("answer")
+        integration_type = args.get("integration_type")
+
+        if not question_key or not answer:
+            return ToolResult(
+                success=False,
+                error="Both question_key and answer are required"
+            )
+
+        try:
+            from .onboarding.questions import get_question_by_key, QuestionCategory
+
+            # Validate the question exists
+            question = get_question_by_key(question_key)
+            if not question:
+                return ToolResult(
+                    success=False,
+                    error=f"Unknown question key: {question_key}"
+                )
+
+            # Determine where to store based on category
+            context_field = "environmentContext"
+            if question.category == QuestionCategory.CONVENTIONS:
+                context_field = "conventionsContext"
+            elif question.integration_type:
+                context_field = "integrationContexts"
+
+            # Note: The actual persistence happens via the API endpoint
+            # This tool returns the structured data for the LLM to confirm
+            return ToolResult(
+                success=True,
+                data={
+                    "saved": True,
+                    "question_key": question_key,
+                    "answer": answer,
+                    "category": question.category.value,
+                    "context_field": context_field,
+                    "integration_type": integration_type or question.integration_type,
+                    "message": f"Saved answer for '{question_key}': {answer}",
+                }
+            )
+        except Exception as e:
+            logger.exception("Failed to save onboarding context")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_complete_onboarding(self, args: Dict[str, Any]) -> ToolResult:
+        """Mark onboarding as complete."""
+        summary = args.get("summary", "")
+
+        try:
+            # Build summary of what was learned
+            learned_items = []
+
+            if self.context.pipeline_context:
+                env_ctx = self.context.pipeline_context.get("environmentContext") or {}
+                int_ctx = self.context.pipeline_context.get("integrationContexts") or {}
+                conv_ctx = self.context.pipeline_context.get("conventionsContext") or {}
+
+                for key, value in env_ctx.items():
+                    learned_items.append(f"- {key}: {value}")
+                for key, value in conv_ctx.items():
+                    learned_items.append(f"- {key}: {value}")
+                for int_type, answers in int_ctx.items():
+                    if isinstance(answers, dict):
+                        for key, value in answers.items():
+                            learned_items.append(f"- [{int_type}] {key}: {value}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "completed": True,
+                    "summary": summary or "Onboarding complete",
+                    "learned_items": learned_items,
+                    "message": "Onboarding has been marked as complete. I now have context about your pipeline setup.",
+                }
+            )
+        except Exception as e:
+            logger.exception("Failed to complete onboarding")
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # IMPACT ANALYSIS TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_analyze_change_impact(self, args: Dict[str, Any]) -> ToolResult:
+        """
+        Analyze the full impact of a proposed change.
+
+        Returns upstream sources, downstream dependents, breaking changes,
+        and required remediations.
+        """
+        objects = args.get("objects", [])
+        change_type = args.get("change_type", "MODIFY_LOGIC")
+        details = args.get("details", "")
+
+        if not objects:
+            return ToolResult(
+                success=False,
+                error="objects parameter is required - provide list of tables/models being changed"
+            )
+
+        results = {
+            "objects_analyzed": objects,
+            "change_type": change_type,
+            "details": details,
+            "upstream": [],
+            "downstream": [],
+            "breaking_changes": [],
+            "safe_changes": [],
+            "remediation_needed": [],
+        }
+
+        try:
+            for obj in objects:
+                # Get downstream dependents
+                downstream_result = await self._execute_get_downstream({
+                    "node_id": obj,
+                    "depth": 3
+                })
+
+                # Get upstream sources
+                upstream_result = await self._execute_get_upstream({
+                    "node_id": obj,
+                    "depth": 2
+                })
+
+                if upstream_result.success and upstream_result.data:
+                    results["upstream"].extend(
+                        upstream_result.data.get("upstream_nodes", [])
+                    )
+
+                if downstream_result.success and downstream_result.data:
+                    downstream_nodes = downstream_result.data.get("downstream_nodes", [])
+                    results["downstream"].extend(downstream_nodes)
+
+                    # Analyze each downstream for breaking changes
+                    for dep in downstream_nodes:
+                        impact = self._analyze_dependency_impact(dep, change_type, details)
+                        if impact["breaking"]:
+                            results["breaking_changes"].append({
+                                "object": dep.get("name", dep.get("id")),
+                                "type": dep.get("type", "unknown"),
+                                "platform": dep.get("platform", "unknown"),
+                                "reason": impact["reason"],
+                                "suggested_fix": impact["suggested_fix"],
+                            })
+                            results["remediation_needed"].append({
+                                "object": dep.get("name", dep.get("id")),
+                                "action": impact["suggested_fix"],
+                            })
+                        else:
+                            results["safe_changes"].append(dep.get("name", dep.get("id")))
+
+            # Add summary
+            results["summary"] = {
+                "total_upstream": len(results["upstream"]),
+                "total_downstream": len(results["downstream"]),
+                "breaking_count": len(results["breaking_changes"]),
+                "safe_count": len(results["safe_changes"]),
+                "requires_action": len(results["breaking_changes"]) > 0,
+            }
+
+            return ToolResult(success=True, data=results)
+
+        except Exception as e:
+            logger.exception("Failed to analyze change impact")
+            return ToolResult(success=False, error=str(e))
+
+    def _analyze_dependency_impact(
+        self,
+        dependent: Dict[str, Any],
+        change_type: str,
+        details: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze how a change impacts a specific dependent object.
+
+        Returns dict with:
+        - breaking: bool
+        - reason: str
+        - suggested_fix: str
+        """
+        dep_type = dependent.get("type", "").lower()
+        dep_platform = dependent.get("platform", "").lower()
+        dep_name = dependent.get("name", dependent.get("id", "unknown"))
+
+        # Default to breaking for destructive changes
+        if change_type == "DELETE":
+            return {
+                "breaking": True,
+                "reason": f"Deleting source will break {dep_name}",
+                "suggested_fix": f"Update or remove {dep_name} before deletion",
+            }
+
+        if change_type == "RENAME":
+            return {
+                "breaking": True,
+                "reason": f"Rename will break references in {dep_name}",
+                "suggested_fix": f"Update references in {dep_name} to use new name",
+            }
+
+        if change_type == "MOVE":
+            # Moving to different dataset/schema
+            if "model" in dep_type or "dbt" in dep_platform:
+                return {
+                    "breaking": True,
+                    "reason": f"Dataset change will break ref() or source() in {dep_name}",
+                    "suggested_fix": f"Update ref() in {dep_name} to point to new location. Details: {details}",
+                }
+            elif "dashboard" in dep_type or "looker" in dep_platform or "bi" in dep_platform:
+                return {
+                    "breaking": True,
+                    "reason": f"Dataset change will break data source in {dep_name}",
+                    "suggested_fix": f"Update data source in {dep_name} to point to new location",
+                }
+            elif "view" in dep_type:
+                return {
+                    "breaking": True,
+                    "reason": f"Dataset change will break view definition in {dep_name}",
+                    "suggested_fix": f"Recreate view {dep_name} with updated source reference",
+                }
+
+        if change_type == "MODIFY_COLUMNS":
+            if "model" in dep_type or "view" in dep_type:
+                return {
+                    "breaking": True,
+                    "reason": f"Column changes may break SELECT in {dep_name}",
+                    "suggested_fix": f"Check and update column references in {dep_name}",
+                }
+            elif "dashboard" in dep_type or "report" in dep_type:
+                return {
+                    "breaking": True,
+                    "reason": f"Column changes may break metrics/dimensions in {dep_name}",
+                    "suggested_fix": f"Update field mappings in {dep_name}",
+                }
+
+        # MODIFY_LOGIC is generally safe unless it changes output schema
+        if change_type == "MODIFY_LOGIC":
+            return {
+                "breaking": False,
+                "reason": "Logic change preserves schema compatibility",
+                "suggested_fix": "No action needed - verify output data quality",
+            }
+
+        # Default: assume potentially breaking for safety
+        return {
+            "breaking": True,
+            "reason": f"Change may impact {dep_name}",
+            "suggested_fix": f"Review {dep_name} for compatibility with changes",
+        }

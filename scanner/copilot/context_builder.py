@@ -13,6 +13,7 @@ import logging
 
 from lineage.graph import LineageGraph, LineageNode
 from lineage.builder import LineageBuilder
+from lineage.engine.store import GraphStore
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,10 @@ class CopilotContext:
     
     # Lineage graph
     graph: Optional[LineageGraph] = None
-    
+
+    # Engine-powered graph store (adds filtering, evidence, confidence, explain_edge)
+    engine_store: Optional[GraphStore] = None
+
     # Relevant nodes for current query
     relevant_nodes: List[LineageNode] = field(default_factory=list)
     
@@ -175,6 +179,9 @@ class CopilotContext:
     # Interaction mode
     mode: str = "ask"
     mode_config: Optional[Any] = None  # ModeConfig from modes.py
+
+    # Pipeline context from onboarding (learned knowledge about user's setup)
+    pipeline_context: Optional[Dict[str, Any]] = None
 
     def has_integration(self, integration_type: str) -> bool:
         """Check if a specific integration type is connected."""
@@ -260,6 +267,19 @@ class CopilotContext:
             leaves = self.graph.get_leaves()
             lines.append(f"- {len(roots)} source nodes (roots)")
             lines.append(f"- {len(leaves)} output nodes (leaves)")
+
+            # Add engine coverage stats when available
+            if self.engine_store:
+                try:
+                    stats = self.engine_store.get_stats()
+                    if stats.edges_by_level:
+                        level_parts = [f"{v} {k}" for k, v in stats.edges_by_level.items()]
+                        lines.append(f"- Edges by level: {', '.join(level_parts)}")
+                    lines.append(f"- Table coverage: {stats.coverage_table:.0%}, Column coverage: {stats.coverage_column:.0%}")
+                    lines.append(f"- You can use `explain_edge` to inspect evidence on any edge")
+                except Exception:
+                    pass
+
             lines.append("")
 
         # Add warehouse schema with relevance filtering
@@ -405,6 +425,7 @@ class CopilotContextBuilder:
         integrations_data: Optional[List[Dict[str, Any]]] = None,
         mode: str = "ask",
         mode_config: Optional[Any] = None,
+        lineage_data: Optional[Dict[str, Any]] = None,
     ) -> CopilotContext:
         """
         Build the AI context for a given organization.
@@ -417,6 +438,7 @@ class CopilotContextBuilder:
             integrations_data: Optional pre-fetched integrations from frontend
             mode: Interaction mode (ask, debug, plan, create, etc.)
             mode_config: Mode configuration from modes.py
+            lineage_data: Optional pre-fetched lineage data from database
 
         Returns:
             CopilotContext with all relevant information
@@ -438,25 +460,43 @@ class CopilotContextBuilder:
         else:
             integrations = await self._get_integrations(org_id)
         integration_types = {i.type.upper() for i in integrations if i.is_active}
+
+        # 2. Build lineage graph from pre-fetched data or connected sources
+        graph = None
+        if lineage_data and (lineage_data.get('nodes') or lineage_data.get('edges')):
+            logger.info(f"[Lineage] Building from pre-fetched data: {len(lineage_data.get('nodes', []))} nodes, {len(lineage_data.get('edges', []))} edges")
+            graph = self._build_lineage_from_data(lineage_data)
+        else:
+            # Fall back to integration-based lineage (currently TODO stubs)
+            graph = await self._build_lineage_graph(org_id, integrations)
         
-        # 2. Build lineage graph from all connected sources
-        graph = await self._build_lineage_graph(org_id, integrations)
-        
-        # 3. Find relevant nodes based on query
+        # 3. Wrap graph in engine GraphStore for filtering/evidence/explain
+        engine_store = None
+        if graph and graph.nodes:
+            try:
+                engine_store = GraphStore()
+                engine_store.graph = graph
+                logger.info(f"[Engine] GraphStore initialized: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+            except Exception as e:
+                logger.warning(f"[Engine] Failed to initialize GraphStore: {e}")
+                engine_store = None
+
+        # 4. Find relevant nodes based on query
         relevant_nodes = []
         if query and graph:
             relevant_nodes = self._find_relevant_nodes(graph, query)
-        
-        # 4. Determine available tools based on integrations
+
+        # 5. Determine available tools based on integrations
         available_tools = self._get_available_tools(integration_types)
-        
-        # 5. Build context
+
+        # 6. Build context
         context = CopilotContext(
             org_id=org_id,
             query=query,
             integrations=integrations,
             integration_types=integration_types,
             graph=graph,
+            engine_store=engine_store,
             relevant_nodes=relevant_nodes,
             available_tools=available_tools,
             pipeline_stack_id=pipeline_stack_id,
@@ -503,58 +543,257 @@ class CopilotContextBuilder:
         integrations: List[IntegrationInfo]
     ) -> Optional[LineageGraph]:
         """
-        Build unified lineage graph from all connected integrations.
-        
-        Each integration contributes its portion of the lineage.
+        Build unified cross-tool lineage graph from all connected integrations.
+
+        Uses the CrossToolLineageOrchestrator to:
+        1. Extract lineage from each tool in parallel
+        2. Merge and deduplicate nodes across tools
+        3. Synthesize cross-tool edges (dbt source -> warehouse table, etc.)
+        """
+        try:
+            from lineage.orchestrator import CrossToolLineageOrchestrator
+        except ImportError:
+            logger.warning("CrossToolLineageOrchestrator not available, using legacy method")
+            return await self._build_lineage_graph_legacy(org_id, integrations)
+
+        # Convert integrations to dict format for orchestrator
+        integration_dicts = [
+            {
+                "id": i.id,
+                "type": i.type,
+                "status": "ACTIVE" if i.is_active else i.status,
+                "config": i.config,
+            }
+            for i in integrations
+            if i.is_active
+        ]
+
+        if not integration_dicts:
+            logger.info("No active integrations for lineage extraction")
+            return None
+
+        try:
+            orchestrator = CrossToolLineageOrchestrator(
+                organization_id=org_id,
+                integrations=integration_dicts,
+            )
+
+            result = await orchestrator.extract_all()
+
+            if result.success and result.graph and result.graph.nodes:
+                logger.info(
+                    f"[Lineage] Cross-tool extraction complete: "
+                    f"{result.total_nodes} nodes, {result.total_edges} edges"
+                )
+                if result.synthesis_stats:
+                    logger.info(
+                        f"[Lineage] Synthesis: {result.synthesis_stats.nodes_merged} nodes merged, "
+                        f"{result.synthesis_stats.total_edges_created} edges synthesized"
+                    )
+                return result.graph
+            else:
+                if result.errors:
+                    logger.warning(f"[Lineage] Extraction errors: {result.errors}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[Lineage] Cross-tool extraction failed: {e}", exc_info=True)
+            # Fall back to legacy method
+            return await self._build_lineage_graph_legacy(org_id, integrations)
+
+    async def _build_lineage_graph_legacy(
+        self,
+        org_id: str,
+        integrations: List[IntegrationInfo]
+    ) -> Optional[LineageGraph]:
+        """
+        Legacy lineage graph building (per-tool extraction without cross-tool synthesis).
+
+        Used as fallback when orchestrator is not available.
         """
         graph = LineageGraph()
-        
+
         for integration in integrations:
             if not integration.is_active:
                 continue
-            
+
             try:
                 # Get lineage from each integration type
                 if integration.type in ("SNOWFLAKE", "BIGQUERY", "POSTGRES"):
-                    # Warehouse lineage from query history
                     warehouse_graph = await self._get_warehouse_lineage(integration)
                     if warehouse_graph:
                         self._merge_graphs(graph, warehouse_graph)
-                
+
                 elif integration.type in ("DBT_CLOUD", "DBT_CORE"):
-                    # dbt lineage from manifest
                     dbt_graph = await self._get_dbt_lineage(integration)
                     if dbt_graph:
                         self._merge_graphs(graph, dbt_graph)
-                
+
                 elif integration.type == "AIRFLOW":
-                    # Airflow lineage from DAGs
                     airflow_graph = await self._get_airflow_lineage(integration)
                     if airflow_graph:
                         self._merge_graphs(graph, airflow_graph)
-                
-                # Add more integration types as needed
-                
+
             except Exception as e:
                 logger.warning(f"Failed to get lineage from {integration.name}: {e}")
-        
+
         return graph if graph.nodes else None
-    
+
     async def _get_warehouse_lineage(self, integration: IntegrationInfo) -> Optional[LineageGraph]:
         """Get lineage from warehouse query history."""
-        # TODO: Implement warehouse lineage extraction
+        try:
+            if integration.type == "BIGQUERY":
+                from lineage.parsers.bigquery import BigQueryParser
+
+                config = integration.config
+                project_id = config.get("project_id") or config.get("project")
+                if not project_id:
+                    return None
+
+                # Create BigQuery client
+                from google.cloud import bigquery
+                from google.oauth2 import service_account
+                import json
+
+                credentials_json = config.get("credentials_json") or config.get("credentials")
+                if credentials_json:
+                    if isinstance(credentials_json, str):
+                        credentials_dict = json.loads(credentials_json)
+                    else:
+                        credentials_dict = credentials_json
+                    credentials = service_account.Credentials.from_service_account_info(credentials_dict)
+                    client = bigquery.Client(project=project_id, credentials=credentials)
+                else:
+                    client = bigquery.Client(project=project_id)
+
+                parser = BigQueryParser(
+                    client=client,
+                    project_id=project_id,
+                    region=config.get("region", "auto"),
+                    days_back=config.get("days_back", 30),
+                )
+                return parser.parse()
+
+            elif integration.type == "SNOWFLAKE":
+                from lineage.parsers.snowflake import SnowflakeQueryParser
+
+                parser = SnowflakeQueryParser(config=integration.config)
+                return parser.parse()
+
+        except Exception as e:
+            logger.warning(f"Failed to get warehouse lineage from {integration.name}: {e}")
+
         return None
-    
+
     async def _get_dbt_lineage(self, integration: IntegrationInfo) -> Optional[LineageGraph]:
         """Get lineage from dbt manifest."""
-        # TODO: Implement dbt lineage extraction
+        try:
+            from lineage.parsers.dbt import DbtManifestParser
+
+            config = integration.config
+
+            # Try to fetch manifest from dbt Cloud
+            if integration.type == "DBT_CLOUD":
+                from integrations.dbt import DbtCloudClient
+
+                api_token = config.get("api_token") or config.get("access_token")
+                account_id = config.get("account_id")
+
+                if api_token and account_id:
+                    client = DbtCloudClient(api_token=api_token, account_id=account_id)
+                    jobs = client.get_jobs()
+
+                    for job in jobs[:3]:  # Try first 3 jobs
+                        runs = client.get_runs(job["id"], limit=1)
+                        if runs and runs[0].get("status") == "Success":
+                            manifest = client.get_run_artifact(runs[0]["id"], "manifest.json")
+                            if manifest:
+                                parser = DbtManifestParser(manifest=manifest)
+                                return parser.parse()
+
+            # If manifest provided directly in config
+            elif config.get("manifest"):
+                parser = DbtManifestParser(manifest=config["manifest"])
+                return parser.parse()
+
+        except Exception as e:
+            logger.warning(f"Failed to get dbt lineage from {integration.name}: {e}")
+
         return None
-    
+
     async def _get_airflow_lineage(self, integration: IntegrationInfo) -> Optional[LineageGraph]:
-        """Get lineage from Airflow DAGs."""
-        # TODO: Implement Airflow lineage extraction
+        """Get lineage from Airflow DAGs via OpenLineage events."""
+        # OpenLineage integration would be handled by the orchestrator
+        # This is a placeholder for direct Airflow API access if needed
         return None
-    
+
+    def _build_lineage_from_data(self, lineage_data: Dict[str, Any]) -> Optional[LineageGraph]:
+        """
+        Build lineage graph from pre-fetched database data.
+
+        This is used when lineage is passed from the Next.js frontend,
+        which fetches it from the Prisma database.
+        """
+        from lineage.graph import LineageEdge, NodeType, EdgeType
+
+        graph = LineageGraph()
+
+        # Map node types from database to enum
+        node_type_map = {
+            'table': NodeType.TABLE,
+            'view': NodeType.VIEW,
+            'model': NodeType.MODEL,
+            'source': NodeType.SOURCE,
+            'snapshot': NodeType.SNAPSHOT,
+            'seed': NodeType.SEED,
+            'dashboard': NodeType.DASHBOARD,
+            'materialized_view': NodeType.MATERIALIZED_VIEW,
+        }
+
+        edge_type_map = {
+            'depends_on': EdgeType.DEPENDS_ON,
+            'derived_from': EdgeType.DERIVED_FROM,
+            'joins': EdgeType.JOINS,
+            'references': EdgeType.REFERENCES,
+            'triggers': EdgeType.TRIGGERS,
+            'populates': EdgeType.POPULATES,
+        }
+
+        # Add nodes
+        for node_data in lineage_data.get('nodes', []):
+            node_type_str = node_data.get('node_type', node_data.get('nodeType', 'table'))
+            node_type = node_type_map.get(node_type_str.lower(), NodeType.TABLE)
+
+            node = LineageNode(
+                id=node_data['id'],
+                name=node_data['name'],
+                fqn=node_data.get('fqn', node_data['name']),
+                node_type=node_type,
+                database=node_data.get('database'),
+                schema=node_data.get('schema'),
+                description=node_data.get('description'),
+                upstream_count=node_data.get('upstream_count', node_data.get('upstreamCount', 0)),
+                downstream_count=node_data.get('downstream_count', node_data.get('downstreamCount', 0)),
+            )
+            graph.add_node(node)
+
+        # Add edges
+        for edge_data in lineage_data.get('edges', []):
+            edge_type_str = edge_data.get('edge_type', edge_data.get('edgeType', 'depends_on'))
+            edge_type = edge_type_map.get(edge_type_str.lower(), EdgeType.DEPENDS_ON)
+
+            edge = LineageEdge(
+                id=edge_data['id'],
+                source_id=edge_data.get('source_id', edge_data.get('sourceId', edge_data.get('source'))),
+                target_id=edge_data.get('target_id', edge_data.get('targetId', edge_data.get('target'))),
+                edge_type=edge_type,
+                columns=edge_data.get('columns', []),
+            )
+            graph.add_edge(edge)
+
+        logger.info(f"[Lineage] Built graph from data: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+        return graph if graph.nodes else None
+
     def _merge_graphs(self, target: LineageGraph, source: LineageGraph) -> None:
         """Merge source graph into target graph."""
         # Add all nodes

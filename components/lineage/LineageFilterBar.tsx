@@ -5,8 +5,7 @@ import { Search } from 'lucide-react';
 import { PipelineLayer, LAYER_COLORS } from '@/components/pipeline/types';
 import {
   LineageFilterState,
-  LineageFilterPreset,
-  FILTER_PRESETS,
+  LineageLevelFilter,
 } from './types';
 
 interface LineageFilterBarProps {
@@ -48,32 +47,9 @@ export function LineageFilterBar({
     onChange({ ...filters, layers: newLayers });
   };
 
-  // Apply a preset
-  const applyPreset = (preset: LineageFilterPreset) => {
-    const config = FILTER_PRESETS[preset];
-    onChange({
-      layers: new Set(config.layers),
-      showToolNodes: config.showToolNodes,
-      showTableNodes: config.showTableNodes,
-      searchQuery: filters.searchQuery, // Preserve search
-    });
-  };
-
   // Update search
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     onChange({ ...filters, searchQuery: e.target.value });
-  };
-
-  // Check if a preset matches current state
-  const isPresetActive = (preset: LineageFilterPreset): boolean => {
-    const config = FILTER_PRESETS[preset];
-    if (config.showToolNodes !== filters.showToolNodes) return false;
-    if (config.showTableNodes !== filters.showTableNodes) return false;
-    if (config.layers.length !== filters.layers.size) return false;
-    for (const layer of config.layers) {
-      if (!filters.layers.has(layer)) return false;
-    }
-    return true;
   };
 
   return (
@@ -113,34 +89,6 @@ export function LineageFilterBar({
       {/* Separator */}
       <div className="w-px h-6 bg-white/10" />
 
-      {/* Quick presets */}
-      <div className="flex items-center gap-1">
-        {(Object.keys(FILTER_PRESETS) as LineageFilterPreset[]).map((preset) => {
-          const config = FILTER_PRESETS[preset];
-          const isActive = isPresetActive(preset);
-          return (
-            <button
-              key={preset}
-              onClick={() => applyPreset(preset)}
-              className={`
-                px-2.5 py-1 rounded text-[11px] font-medium transition-all
-                ${
-                  isActive
-                    ? 'bg-white/10 text-white border border-white/20'
-                    : 'text-white/40 hover:text-white/60 hover:bg-white/5'
-                }
-              `}
-              title={config.description}
-            >
-              {config.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Separator */}
-      <div className="w-px h-6 bg-white/10" />
-
       {/* Node type toggles */}
       <div className="flex items-center gap-2">
         <button
@@ -170,6 +118,47 @@ export function LineageFilterBar({
           )}
         </button>
       </div>
+
+      {/* Separator */}
+      <div className="w-px h-6 bg-white/10" />
+
+      {/* Lineage level toggle */}
+      <div className="flex items-center gap-1">
+        {(['all', 'table', 'column'] as LineageLevelFilter[]).map((level) => (
+          <button
+            key={level}
+            onClick={() => onChange({ ...filters, lineageLevel: level })}
+            className={`
+              px-2 py-1 rounded text-[11px] font-medium transition-all capitalize
+              ${
+                filters.lineageLevel === level
+                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                  : 'text-white/40 hover:text-white/60 hover:bg-white/5'
+              }
+            `}
+          >
+            {level === 'all' ? 'All Levels' : level}
+          </button>
+        ))}
+      </div>
+
+      {/* Confidence threshold */}
+      {filters.minConfidence > 0 && (
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/40">Min Confidence</span>
+          <span className="text-[11px] text-white font-medium">{Math.round(filters.minConfidence * 100)}%</span>
+        </div>
+      )}
+      <input
+        type="range"
+        min="0"
+        max="100"
+        step="10"
+        value={filters.minConfidence * 100}
+        onChange={(e) => onChange({ ...filters, minConfidence: parseInt(e.target.value) / 100 })}
+        className="w-16 h-1 accent-violet-500 cursor-pointer"
+        title={`Min confidence: ${Math.round(filters.minConfidence * 100)}%`}
+      />
 
       {/* Search */}
       <div className="ml-auto relative">

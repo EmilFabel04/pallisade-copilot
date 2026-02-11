@@ -142,6 +142,40 @@ class CopilotLLM:
 
 9. **ANSWERS MUST BE PIPELINE-SPECIFIC** - When giving code suggestions, config changes, or architecture advice, base it on the user's ACTUAL connected integrations and current configuration. Call `get_dbt_model` or other tools to get the real state before suggesting changes. Your answer should be copy-paste ready with the user's real project names, file paths, table names, and schema names — not generic examples.
 
+10. **MANDATORY IMPACT ANALYSIS FOR CHANGES** - Before creating ANY code change, plan, or fix:
+   - ✅ Call `get_downstream` on every table/model being modified
+   - ✅ Call `get_upstream` to understand data sources
+   - ✅ Identify ALL breaking changes (column renames, table moves, schema changes)
+   - ✅ Report an Impact Analysis table showing what will break
+   - ✅ Include fixes for EVERYTHING that breaks, not just the original request
+   - **If you skip impact analysis for a change request, your response is INCOMPLETE and potentially dangerous.**
+
+11. **SYNTHESIZE TOOL RESULTS - NEVER DUMP RAW DATA** - After calling a tool:
+   - ✅ Interpret the results and explain what they mean
+   - ✅ For action tools (create_change_plan, apply_change_plan): State the outcome clearly ("I've created PR #123 at [URL]")
+   - ✅ For query results: Summarize the key findings, don't just show the raw table
+   - ❌ NEVER paste raw JSON or tool output without interpretation
+   - ❌ NEVER say "Here's what I found:" followed by a raw data dump
+   - **If the user asks you to "go ahead" with an action, EXECUTE the action and report the result - don't show previous query results.**
+
+## Impact Analysis Requirements (For PLAN, FIX, CREATE Modes)
+
+When the user asks you to make changes (modify code, change datasets, rename models, etc.), you MUST:
+
+1. **Check Lineage First** - Run `get_downstream` on all objects being changed
+2. **Report Breaking Changes** - Include an Impact Analysis section:
+
+   ### Impact Analysis
+   **Downstream Dependencies:**
+   | Object | Type | Will Break? | Required Fix |
+   |--------|------|-------------|--------------|
+   | model_x | dbt | YES | Update ref() |
+   | dashboard | Looker | YES | Update source |
+
+   **Breaking Changes:** X items need attention
+
+3. **Include All Fixes** - Your implementation must address ALL breaking changes, not just the original request
+
 ## How to Answer Simple Data Questions
 
 1. Look at the schema below to find the right table and columns
@@ -215,6 +249,9 @@ NEVER use placeholders like `your_project`, `<your_dataset>`, `your_table`. Use 
 
         # Add context about user's stack
         prompt += context.to_system_prompt_context(query=context.query)
+
+        # Add learned context from onboarding (if available)
+        prompt += self._build_onboarded_context(context)
 
         # If warehouse is connected but schema is empty, add discovery instructions
         if context.has_warehouse() and not context.warehouse_schema:
@@ -299,6 +336,58 @@ You have multiple data warehouses connected. When calling `query_warehouse`, you
             return sections[0] + "\n"
 
         return ""
+
+    def _build_onboarded_context(self, context: CopilotContext) -> str:
+        """
+        Inject learned context from onboarding into system prompt.
+
+        This includes information the user provided during onboarding about:
+        - How they run dbt (dbt Cloud, GitHub Actions, etc.)
+        - Where credentials are stored (profiles.yml, env vars)
+        - Team workflows, naming conventions, etc.
+        """
+        # Check if context has pipeline_context attribute with onboarding data
+        pipeline_context = getattr(context, 'pipeline_context', None)
+        if not pipeline_context:
+            return ""
+
+        # Extract context fields (assuming dict format from API)
+        environment_ctx = pipeline_context.get('environmentContext') if isinstance(pipeline_context, dict) else getattr(pipeline_context, 'environment_context', None)
+        integration_ctx = pipeline_context.get('integrationContexts') if isinstance(pipeline_context, dict) else getattr(pipeline_context, 'integration_contexts', None)
+        conventions_ctx = pipeline_context.get('conventionsContext') if isinstance(pipeline_context, dict) else getattr(pipeline_context, 'conventions_context', None)
+
+        if not any([environment_ctx, integration_ctx, conventions_ctx]):
+            return ""
+
+        lines = ["\n## Your Environment (from Onboarding)\n"]
+        lines.append("I already know the following about your setup:\n")
+
+        # Add environment context
+        if environment_ctx and isinstance(environment_ctx, dict):
+            for key, value in environment_ctx.items():
+                # Convert snake_case keys to readable format
+                readable_key = key.replace('_', ' ').title()
+                lines.append(f"- **{readable_key}:** {value}")
+
+        # Add integration-specific context
+        if integration_ctx and isinstance(integration_ctx, dict):
+            for int_id, int_ctx in integration_ctx.items():
+                lines.append(f"\n**{int_id}:**")
+                if isinstance(int_ctx, dict):
+                    for key, value in int_ctx.items():
+                        readable_key = key.replace('_', ' ').title()
+                        lines.append(f"- {readable_key}: {value}")
+
+        # Add conventions context
+        if conventions_ctx and isinstance(conventions_ctx, dict):
+            lines.append("\n**Conventions:**")
+            for key, value in conventions_ctx.items():
+                readable_key = key.replace('_', ' ').title()
+                lines.append(f"- {readable_key}: {value}")
+
+        lines.append("\n**Use this context - do NOT ask clarifying questions about topics covered above.**\n")
+
+        return "\n".join(lines)
 
     def _build_few_shot_examples(self, context: CopilotContext) -> str:
         """Build few-shot examples relevant to the user's connected integrations."""
@@ -553,7 +642,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         total_input_tokens = 0
         total_output_tokens = 0
         all_tool_calls = []
-        
+        accumulated_text = []  # Accumulate text from ALL iterations, not just final
+
         # Iterate until we get a final response
         for iteration in range(max_tool_iterations):
             try:
@@ -569,17 +659,20 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 # Track tokens
                 total_input_tokens += response.usage.input_tokens
                 total_output_tokens += response.usage.output_tokens
-                
+
+                # Extract text from EVERY response (not just end_turn)
+                # This captures intermediate text like "I will create this now"
+                for block in response.content:
+                    if hasattr(block, "text") and block.text:
+                        accumulated_text.append(block.text)
+
                 # Check if we're done
                 if response.stop_reason == "end_turn":
-                    # Extract text content
-                    text_content = ""
-                    for block in response.content:
-                        if hasattr(block, "text"):
-                            text_content += block.text
-                    
+                    # Return all accumulated text from all iterations
+                    final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
+
                     return CopilotResponse(
-                        content=text_content,
+                        content=final_content,
                         tool_calls=all_tool_calls,
                         input_tokens=total_input_tokens,
                         output_tokens=total_output_tokens,
@@ -634,8 +727,9 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 
                 # Unexpected stop reason
                 logger.warning(f"Unexpected stop reason: {response.stop_reason}")
+                final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
                 return CopilotResponse(
-                    content="Unexpected response from AI.",
+                    content=final_content,
                     model=self.model,
                     stop_reason=response.stop_reason,
                 )
@@ -646,9 +740,9 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     content=f"Error communicating with AI: {str(e)}",
                     model=self.model,
                 )
-        
-        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens)
-    
+
+        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+
     async def _chat_openai(
         self,
         messages: List[Message],
@@ -692,7 +786,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         total_input_tokens = 0
         total_output_tokens = 0
         all_tool_calls = []
-        
+        accumulated_text = []  # Accumulate text from ALL iterations, not just final
+
         # Check if this is a reasoning model (o1, o3) that uses different params
         is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
         
@@ -726,11 +821,18 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 
                 message = response.choices[0].message
                 finish_reason = response.choices[0].finish_reason
-                
+
+                # Extract text from EVERY response (not just stop)
+                # This captures intermediate text like "I will create this now"
+                if message.content:
+                    accumulated_text.append(message.content)
+
                 # Check if we're done
                 if finish_reason == "stop":
+                    # Return all accumulated text from all iterations
+                    final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
                     return CopilotResponse(
-                        content=message.content or "",
+                        content=final_content,
                         tool_calls=all_tool_calls,
                         input_tokens=total_input_tokens,
                         output_tokens=total_output_tokens,
@@ -789,31 +891,46 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 
                 # Unexpected finish reason
                 logger.warning(f"Unexpected finish reason: {finish_reason}")
+                final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
                 return CopilotResponse(
-                    content=message.content or "Unexpected response from AI.",
+                    content=final_content,
                     model=self.model,
                     stop_reason=finish_reason or "unknown",
                 )
-                
+
             except Exception as e:
                 logger.exception("Error in OpenAI chat")
                 return CopilotResponse(
                     content=f"Error communicating with AI: {str(e)}",
                     model=self.model,
                 )
-        
-        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens)
+
+        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
     
     def _build_max_iterations_response(
-        self, 
-        all_tool_calls: List[Dict], 
-        total_input_tokens: int, 
-        total_output_tokens: int
+        self,
+        all_tool_calls: List[Dict],
+        total_input_tokens: int,
+        total_output_tokens: int,
+        accumulated_text: List[str] = None,
     ) -> CopilotResponse:
         """Build response when max iterations reached."""
         logger.warning(f"Max tool iterations reached")
-        
-        # Try to summarize the results with actual data
+
+        # If we have accumulated text from the LLM, use that first
+        if accumulated_text:
+            content = "\n\n".join(accumulated_text)
+            if content.strip():
+                return CopilotResponse(
+                    content=content,
+                    tool_calls=all_tool_calls,
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                    model=self.model,
+                    stop_reason="max_iterations",
+                )
+
+        # Fall back to summarizing tool results
         summary_parts = ["Here's what I found from the tool calls:\n"]
         for tc in all_tool_calls:
             result = tc.get("result", {})
