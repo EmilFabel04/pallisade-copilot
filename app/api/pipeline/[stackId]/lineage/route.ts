@@ -85,6 +85,17 @@ export async function POST(
     let totalNodes = 0;
     let totalEdges = 0;
 
+    // Clear engine cache before fresh extraction to prevent stale data accumulation
+    try {
+      await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/clear-cache`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(5000),
+      });
+      console.log('[LINEAGE] Engine cache cleared for fresh extraction');
+    } catch (e) {
+      console.warn('[LINEAGE] Failed to clear engine cache (non-fatal):', e);
+    }
+
     for (const node of nodesToProcess) {
       try {
         console.log(`[LINEAGE] Extracting lineage from ${node.name} (${node.toolType})`);

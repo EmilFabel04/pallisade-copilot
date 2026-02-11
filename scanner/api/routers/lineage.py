@@ -674,6 +674,7 @@ class EngineNodeResponse(BaseModel):
     namespace: Optional[str] = None
     sources: List[str] = []
     integration_id: Optional[str] = None
+    dbt_resource_type: Optional[str] = None
     upstream_count: int = 0
     downstream_count: int = 0
 
@@ -740,6 +741,7 @@ def _node_to_engine_response(node) -> EngineNodeResponse:
         namespace=node.namespace,
         sources=node.sources,
         integration_id=node.integration_id,
+        dbt_resource_type=node.raw_metadata.get("dbt_resource_type"),
         upstream_count=node.upstream_count,
         downstream_count=node.downstream_count,
     )
@@ -780,6 +782,16 @@ _engine_store = None
 
 # Cached engine adapter results — nodes/edges from each extraction, fed to resolver
 _engine_collected_results: dict = {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
+
+
+def _clear_engine_cache():
+    """Reset cached results for a fresh extraction run.
+
+    Called before a batch of extractions to prevent stale data from
+    previous runs accumulating and causing non-deterministic graphs.
+    """
+    global _engine_collected_results
+    _engine_collected_results = {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
 
 
 def _get_engine_store():
@@ -906,6 +918,19 @@ def _parse_filters(
     if kind:
         filters.asset_kinds = {AssetKind(k.strip()) for k in kind.split(",")}
     return filters
+
+
+@router.post("/lineage/engine/clear-cache")
+async def engine_clear_cache():
+    """Reset engine cache before a fresh extraction batch.
+
+    The frontend calls this before looping over pipeline nodes so that
+    stale data from a previous extraction run doesn't accumulate.
+    """
+    import logging
+    _clear_engine_cache()
+    logging.getLogger(__name__).info("[Engine] clear-cache: Reset engine collected results")
+    return {"success": True, "message": "Engine cache cleared"}
 
 
 @router.post("/lineage/engine/build", response_model=EngineGraphResponse)

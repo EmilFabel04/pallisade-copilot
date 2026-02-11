@@ -174,7 +174,14 @@ class ResolverPipeline:
                 continue
 
             # Sort by priority: warehouse > transform > bi > other
-            group.sort(key=lambda n: _domain_priority(n.platform_domain.value))
+            # Secondary key: prefer real warehouse platforms over dbt (both
+            # use platform_domain=WAREHOUSE, so without this tiebreaker the
+            # winner depends on extraction order which is non-deterministic).
+            _WH_PLATFORMS = {"bigquery", "snowflake", "postgres", "redshift"}
+            group.sort(key=lambda n: (
+                _domain_priority(n.platform_domain.value),
+                0 if n.platform in _WH_PLATFORMS else 1,
+            ))
             primary = group[0]
 
             for secondary in group[1:]:
@@ -323,6 +330,14 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
 
     # Merge sources
     primary.sources = list(set(primary.sources + secondary.sources))
+
+    # Preserve dbt resource type info so the UI can identify dbt models after dedup.
+    # When a dbt model node is merged into a warehouse node, the warehouse node_type
+    # (view/table) wins, losing the "model" type. Stash it in raw_metadata.
+    if not primary.raw_metadata.get("dbt_resource_type"):
+        dbt_resource = secondary.raw_metadata.get("dbt_resource_type")
+        if dbt_resource and dbt_resource in ("model", "seed", "snapshot"):
+            primary.raw_metadata["dbt_resource_type"] = dbt_resource
 
     # Prefer primary's integration_id (warehouse priority), fallback to secondary
     if not primary.integration_id and secondary.integration_id:

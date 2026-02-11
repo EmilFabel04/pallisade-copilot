@@ -301,6 +301,11 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
           >
             {visuals.label}
           </span>
+          {data.category === 'model' && data.nodeType && data.nodeType !== 'model' && (
+            <span className="text-[9px] text-white/30 lowercase">
+              · {data.nodeType}
+            </span>
+          )}
         </div>
         {/* Status indicators */}
         <div className="flex items-center gap-1">

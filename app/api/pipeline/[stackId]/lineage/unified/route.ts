@@ -70,7 +70,17 @@ function engineNodeToUnified(
   let category: UnifiedNodeCategory = 'table';
   let layer: PipelineLayer = 'WAREHOUSE';
 
-  if (nodeType === 'view' || nodeType === 'materialized_view') {
+  // Check if this node is a dbt model/seed/snapshot (survives resolver dedup).
+  // After resolver merges dbt + warehouse nodes, node_type becomes view/table,
+  // but dbt_resource_type is preserved in raw_metadata through the merge.
+  const dbtResourceType = eNode.dbt_resource_type;
+  const isDbtModel = dbtResourceType === 'model' || dbtResourceType === 'seed' || dbtResourceType === 'snapshot';
+
+  if (nodeType === 'model' || isDbtModel) {
+    // Nodes that are dbt models (including merged warehouse+dbt nodes)
+    category = 'model';
+    layer = 'TRANSFORMATION';
+  } else if (nodeType === 'view' || nodeType === 'materialized_view') {
     category = 'view';
     layer = 'WAREHOUSE';
   } else if (nodeType === 'source') {
@@ -82,9 +92,6 @@ function engineNodeToUnified(
       category = 'source';
       layer = 'INGESTION';
     }
-  } else if (nodeType === 'model') {
-    category = 'model';
-    layer = 'TRANSFORMATION';
   }
 
   // Match findings by FQN
