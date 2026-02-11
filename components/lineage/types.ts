@@ -77,6 +77,14 @@ export interface EdgeEvidence {
   snippet?: string;
 }
 
+// Column mapping from engine (from_column -> to_column)
+export interface ColumnMapping {
+  from: string;
+  to: string;
+  transformExpr?: string;
+  confidence?: number;
+}
+
 // An edge in the unified lineage graph
 export interface UnifiedLineageEdge {
   id: string;
@@ -84,12 +92,26 @@ export interface UnifiedLineageEdge {
   target: string;       // target node ID
   edgeType: string;     // depends_on, populates, reads_from, contains, etc.
   label?: string;
-  columns?: string[];
+  columns?: (string | ColumnMapping)[];  // strings from Prisma, objects from engine
   animated?: boolean;
   // Engine fields (when available)
   confidence?: number;          // 0.0–1.0 from evidence weighting
   lineageLevel?: string;        // "tool" | "table" | "column"
   evidence?: EdgeEvidence[];    // provenance records from adapters
+}
+
+// Blast radius result from engine API
+export interface BlastRadiusResult {
+  total_downstream: number;
+  by_domain: Record<string, number>;
+  by_kind: Record<string, number>;
+  critical_paths: number;
+}
+
+// Helper to render a column mapping (handles both string and object forms)
+export function formatColumnMapping(col: string | ColumnMapping): string {
+  if (typeof col === 'string') return col;
+  return `${col.from} \u2192 ${col.to}`;
 }
 
 // Lineage level for engine filtering

@@ -19,6 +19,8 @@ import { usePipeline } from '@/contexts/PipelineContext';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { unifiedNodeTypes } from '@/components/lineage/UnifiedNodes';
 import { LineageFilterBar } from '@/components/lineage/LineageFilterBar';
+import { DataAssetDetailPanel } from '@/components/lineage/DataAssetDetailPanel';
+import { EdgeDetailPanel } from '@/components/lineage/EdgeDetailPanel';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,
@@ -321,6 +323,18 @@ export default function LineagePage() {
     [lineageData?.edges]
   );
 
+  // Navigate to a node from the detail panel (e.g. clicking an upstream/downstream node)
+  const handleNavigateToNode = useCallback(
+    (nodeId: string) => {
+      const targetNode = lineageData?.nodes.find((n) => n.id === nodeId);
+      if (targetNode) {
+        setSelectedNode(targetNode);
+        setSelectedEdge(null);
+      }
+    },
+    [lineageData?.nodes]
+  );
+
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleString();
@@ -606,478 +620,103 @@ export default function LineagePage() {
 
         {/* Side panel - Edge evidence */}
         {selectedEdge && (
-          <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-medium text-white">Edge Details</h3>
-              <button
-                onClick={() => setSelectedEdge(null)}
-                className="p-1 hover:bg-white/[0.05] rounded"
-              >
-                <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {/* Edge type */}
-              <div>
-                <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
-                <p className="text-[13px] text-white mt-1 capitalize">{selectedEdge.edgeType.replace('_', ' ')}</p>
-              </div>
-
-              {/* Lineage level */}
-              {selectedEdge.lineageLevel && (
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Level</label>
-                  <p className="text-[13px] text-white mt-1 capitalize">{selectedEdge.lineageLevel}</p>
-                </div>
-              )}
-
-              {/* Confidence */}
-              {selectedEdge.confidence !== undefined && (
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Confidence</label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full"
-                        style={{
-                          width: `${selectedEdge.confidence * 100}%`,
-                          backgroundColor: getConfidenceColor(selectedEdge.confidence),
-                        }}
-                      />
-                    </div>
-                    <span className="text-[13px] text-white">
-                      {Math.round(selectedEdge.confidence * 100)}%
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              {/* Source → Target */}
-              <div className="grid grid-cols-1 gap-2">
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Source</label>
-                  <p className="text-[12px] text-white font-mono mt-1 break-all">
-                    {lineageData?.nodes.find((n) => n.id === selectedEdge.source)?.fullName || selectedEdge.source}
-                  </p>
-                </div>
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Target</label>
-                  <p className="text-[12px] text-white font-mono mt-1 break-all">
-                    {lineageData?.nodes.find((n) => n.id === selectedEdge.target)?.fullName || selectedEdge.target}
-                  </p>
-                </div>
-              </div>
-
-              {/* Column mappings */}
-              {selectedEdge.columns && selectedEdge.columns.length > 0 && (
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Columns</label>
-                  <div className="mt-1 space-y-1">
-                    {selectedEdge.columns.map((col, i) => (
-                      <span key={i} className="inline-block px-2 py-0.5 text-[11px] bg-white/5 text-white/60 rounded font-mono mr-1">
-                        {col}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Evidence records */}
-              {selectedEdge.evidence && selectedEdge.evidence.length > 0 && (
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide mb-2 block">
-                    Evidence ({selectedEdge.evidence.length})
-                  </label>
-                  <div className="space-y-2">
-                    {selectedEdge.evidence.map((ev, i) => (
-                      <div key={i} className="p-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[11px] text-violet-400 font-medium">{ev.adapterId}</span>
-                          {ev.observedAt && (
-                            <span className="text-[10px] text-white/30">{new Date(ev.observedAt).toLocaleDateString()}</span>
-                          )}
-                        </div>
-                        <p className="text-[11px] text-white/60 font-mono break-all">{ev.sourceRef}</p>
-                        {ev.snippet && (
-                          <pre className="mt-1.5 p-2 text-[10px] text-white/50 bg-black/30 rounded overflow-x-auto">
-                            {ev.snippet}
-                          </pre>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* No evidence fallback */}
-              {(!selectedEdge.evidence || selectedEdge.evidence.length === 0) && (
-                <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
-                  <p className="text-[12px] text-white/40">
-                    No evidence metadata available for this edge.
-                    {!selectedEdge.confidence && ' Engine graph not connected.'}
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+          <EdgeDetailPanel
+            edge={selectedEdge}
+            allNodes={lineageData?.nodes || []}
+            onClose={() => setSelectedEdge(null)}
+          />
         )}
 
         {/* Side panel - Node details */}
         {selectedNode && !selectedEdge && (
-          <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[15px] font-medium text-white">
-                {isToolCategory(selectedNode.category) ? 'Tool Details' : 'Data Asset Details'}
-              </h3>
-              <button
-                onClick={() => setSelectedNode(null)}
-                className="p-1 hover:bg-white/[0.05] rounded"
-              >
-                <svg
-                  className="w-4 h-4 text-white/40"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+          isToolCategory(selectedNode.category) ? (
+            <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[15px] font-medium text-white">Tool Details</h3>
+                <button
+                  onClick={() => setSelectedNode(null)}
+                  className="p-1 hover:bg-white/[0.05] rounded"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              {/* Name */}
-              <div>
-                <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
-                <p className="text-[13px] text-white font-mono mt-1 break-all">
-                  {selectedNode.fullName || selectedNode.name}
-                </p>
+                  <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
-
-              {/* Type and Layer */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
-                  <p className="text-[13px] text-white mt-1 capitalize">
-                    {selectedNode.category}
-                  </p>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
+                  <p className="text-[13px] text-white font-mono mt-1 break-all">{selectedNode.fullName || selectedNode.name}</p>
                 </div>
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Layer</label>
-                  <p className="text-[13px] text-white mt-1">{selectedNode.layer}</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
+                    <p className="text-[13px] text-white mt-1 capitalize">{selectedNode.category}</p>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Layer</label>
+                    <p className="text-[13px] text-white mt-1">{selectedNode.layer}</p>
+                  </div>
                 </div>
+                {selectedNode.toolType && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Tool Type</label>
+                    <p className="text-[13px] text-white mt-1">{selectedNode.toolType}</p>
+                  </div>
+                )}
+                {selectedNode.status && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Status</label>
+                    <p className="text-[13px] text-white mt-1">{selectedNode.status}</p>
+                  </div>
+                )}
+                {selectedNode.healthScore !== undefined && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Health Score</label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${selectedNode.healthScore}%`,
+                            backgroundColor: selectedNode.healthScore >= 80 ? '#10B981' : selectedNode.healthScore >= 60 ? '#F59E0B' : '#EF4444',
+                          }}
+                        />
+                      </div>
+                      <span className="text-[13px] text-white">{Math.round(selectedNode.healthScore)}%</span>
+                    </div>
+                  </div>
+                )}
+                {(selectedNode.findingsCount ?? 0) > 0 && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Findings</label>
+                    <div className="flex items-center gap-2 mt-1">
+                      {(selectedNode.criticalCount ?? 0) > 0 && (
+                        <span className="px-2 py-1 text-[11px] bg-red-500/20 text-red-400 rounded">{selectedNode.criticalCount} Critical</span>
+                      )}
+                      {(selectedNode.highCount ?? 0) > 0 && (
+                        <span className="px-2 py-1 text-[11px] bg-orange-500/20 text-orange-400 rounded">{selectedNode.highCount} High</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {selectedNode.description && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Description</label>
+                    <p className="text-[13px] text-white/70 mt-1">{selectedNode.description}</p>
+                  </div>
+                )}
               </div>
-
-              {/* Tool-specific details */}
-              {isToolCategory(selectedNode.category) && (
-                <>
-                  {selectedNode.toolType && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Tool Type
-                      </label>
-                      <p className="text-[13px] text-white mt-1">{selectedNode.toolType}</p>
-                    </div>
-                  )}
-
-                  {selectedNode.status && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Status
-                      </label>
-                      <p className="text-[13px] text-white mt-1">{selectedNode.status}</p>
-                    </div>
-                  )}
-
-                  {selectedNode.healthScore !== undefined && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Health Score
-                      </label>
-                      <div className="flex items-center gap-2 mt-1">
-                        <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${selectedNode.healthScore}%`,
-                              backgroundColor:
-                                selectedNode.healthScore >= 80
-                                  ? '#10B981'
-                                  : selectedNode.healthScore >= 60
-                                  ? '#F59E0B'
-                                  : '#EF4444',
-                            }}
-                          />
-                        </div>
-                        <span className="text-[13px] text-white">
-                          {Math.round(selectedNode.healthScore)}%
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {(selectedNode.findingsCount ?? 0) > 0 && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Findings
-                      </label>
-                      <div className="flex items-center gap-2 mt-1">
-                        {(selectedNode.criticalCount ?? 0) > 0 && (
-                          <span className="px-2 py-1 text-[11px] bg-red-500/20 text-red-400 rounded">
-                            {selectedNode.criticalCount} Critical
-                          </span>
-                        )}
-                        {(selectedNode.highCount ?? 0) > 0 && (
-                          <span className="px-2 py-1 text-[11px] bg-orange-500/20 text-orange-400 rounded">
-                            {selectedNode.highCount} High
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Data asset-specific details */}
-              {!isToolCategory(selectedNode.category) && (
-                <>
-                  {/* Health Status Card */}
-                  <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="text-[11px] text-white/40 uppercase tracking-wide">Health Status</span>
-                      {selectedNode.freshnessStatus === 'fresh' && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-medium">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          Fresh
-                        </span>
-                      )}
-                      {selectedNode.freshnessStatus === 'stale' && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                          Stale
-                        </span>
-                      )}
-                      {selectedNode.freshnessStatus === 'unknown' && (
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 text-white/50 text-[10px] font-medium">
-                          Unknown
-                        </span>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[12px]">
-                      <div>
-                        <span className="text-white/40">Last Updated</span>
-                        <p className="text-white mt-0.5">
-                          {selectedNode.lastUpdated
-                            ? selectedNode.freshnessHours !== undefined
-                              ? selectedNode.freshnessHours < 1
-                                ? 'Just now'
-                                : selectedNode.freshnessHours < 24
-                                ? `${selectedNode.freshnessHours}h ago`
-                                : `${Math.round(selectedNode.freshnessHours / 24)}d ago`
-                              : new Date(selectedNode.lastUpdated).toLocaleDateString()
-                            : 'Unknown'}
-                        </p>
-                      </div>
-                      <div>
-                        <span className="text-white/40">Row Count</span>
-                        <p className="text-white mt-0.5">
-                          {selectedNode.rowCount?.toLocaleString() ?? '—'}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Issues Section */}
-                  {selectedNode.issues && selectedNode.issues.total > 0 && (
-                    <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-[11px] text-white/40 uppercase tracking-wide">Issues</span>
-                        <span className="text-[12px] text-white font-medium">
-                          {selectedNode.issues.open} open
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 mb-3">
-                        {selectedNode.issues.critical > 0 && (
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-red-500/20">
-                            <span className="w-2 h-2 rounded-full bg-red-500" />
-                            <span className="text-[11px] text-red-300 font-medium">
-                              {selectedNode.issues.critical} Critical
-                            </span>
-                          </div>
-                        )}
-                        {selectedNode.issues.high > 0 && (
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-orange-500/20">
-                            <span className="w-2 h-2 rounded-full bg-orange-500" />
-                            <span className="text-[11px] text-orange-300 font-medium">
-                              {selectedNode.issues.high} High
-                            </span>
-                          </div>
-                        )}
-                        {selectedNode.issues.medium > 0 && (
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-yellow-500/20">
-                            <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                            <span className="text-[11px] text-yellow-300 font-medium">
-                              {selectedNode.issues.medium} Med
-                            </span>
-                          </div>
-                        )}
-                        {selectedNode.issues.low > 0 && (
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/10">
-                            <span className="w-2 h-2 rounded-full bg-white/50" />
-                            <span className="text-[11px] text-white/60 font-medium">
-                              {selectedNode.issues.low} Low
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                      {/* Issues by type */}
-                      {Object.keys(selectedNode.issues.byType).length > 0 && (
-                        <div className="pt-2 border-t border-white/[0.06]">
-                          <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(selectedNode.issues.byType).map(([type, count]) => (
-                              <span
-                                key={type}
-                                className="px-2 py-0.5 text-[10px] bg-white/5 text-white/60 rounded capitalize"
-                              >
-                                {type}: {count}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* No issues indicator */}
-                  {(!selectedNode.issues || selectedNode.issues.total === 0) && (
-                    <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                      <div className="flex items-center gap-2">
-                        <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        <span className="text-[12px] text-emerald-400 font-medium">No open issues</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Location Details */}
-                  <div className="space-y-3">
-                    {selectedNode.database && (
-                      <div>
-                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                          Database
-                        </label>
-                        <p className="text-[13px] text-white font-mono mt-1">
-                          {selectedNode.database}
-                        </p>
-                      </div>
-                    )}
-
-                    {selectedNode.schema && (
-                      <div>
-                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                          Schema/Dataset
-                        </label>
-                        <p className="text-[13px] text-white font-mono mt-1">
-                          {selectedNode.schema}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Lineage Stats */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                      <label className="text-[10px] text-white/40 uppercase tracking-wide">
-                        Upstream
-                      </label>
-                      <p className="text-[15px] text-white font-medium mt-0.5">
-                        {selectedNode.upstreamCount ?? 0}
-                      </p>
-                      {(selectedNode.upstreamCount ?? 0) === 0 && (
-                        <span className="text-[10px] text-emerald-400/70">Root source</span>
-                      )}
-                    </div>
-                    <div className="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                      <label className="text-[10px] text-white/40 uppercase tracking-wide">
-                        Downstream
-                      </label>
-                      <p className="text-[15px] text-white font-medium mt-0.5">
-                        {selectedNode.downstreamCount ?? 0}
-                      </p>
-                      {(selectedNode.downstreamCount ?? 0) === 0 && (
-                        <span className="text-[10px] text-amber-400/70">Leaf node</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Criticality & Owner */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {selectedNode.criticality && (
-                      <div>
-                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                          Criticality
-                        </label>
-                        <p className={`text-[13px] mt-1 font-medium ${
-                          selectedNode.criticality === 'HIGH' || selectedNode.criticality === 'CRITICAL'
-                            ? 'text-red-400'
-                            : selectedNode.criticality === 'MEDIUM'
-                            ? 'text-amber-400'
-                            : 'text-white/70'
-                        }`}>
-                          {selectedNode.criticality}
-                        </p>
-                      </div>
-                    )}
-                    {selectedNode.owner && (
-                      <div>
-                        <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                          Owner
-                        </label>
-                        <p className="text-[13px] text-white mt-1">{selectedNode.owner}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Tags */}
-                  {selectedNode.tags && selectedNode.tags.length > 0 && (
-                    <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                        Tags
-                      </label>
-                      <div className="flex flex-wrap gap-1.5 mt-1.5">
-                        {selectedNode.tags.map((tag, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-0.5 text-[11px] bg-[var(--accent)]/20 text-[var(--accent-2)] rounded"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Description */}
-              {selectedNode.description && (
-                <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">
-                    Description
-                  </label>
-                  <p className="text-[13px] text-white/70 mt-1">{selectedNode.description}</p>
-                </div>
-              )}
             </div>
-          </div>
+          ) : (
+            <DataAssetDetailPanel
+              node={selectedNode}
+              allNodes={lineageData?.nodes || []}
+              allEdges={lineageData?.edges || []}
+              stackId={stackId || ''}
+              onClose={() => setSelectedNode(null)}
+              onNodeNavigate={handleNavigateToNode}
+            />
+          )
         )}
       </div>
     </div>
