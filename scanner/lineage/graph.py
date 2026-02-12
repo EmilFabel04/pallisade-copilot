@@ -294,6 +294,7 @@ class LineageNode:
             "observed_at": self.observed_at.isoformat() if self.observed_at else None,
             "sources": self.sources,
             "integration_id": self.integration_id,
+            "raw_metadata": self.raw_metadata,
         }
 
 
@@ -687,6 +688,7 @@ class LineageGraph:
                 observed_at=datetime.fromisoformat(observed_at) if observed_at else None,
                 sources=node_data.get("sources", []),
                 integration_id=node_data.get("integration_id"),
+                raw_metadata=node_data.get("raw_metadata", {}),
             )
             graph.add_node(node)
 

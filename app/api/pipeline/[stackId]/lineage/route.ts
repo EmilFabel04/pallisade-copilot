@@ -303,6 +303,35 @@ export async function POST(
       }
     }
 
+    // After all extractions, persist the engine graph to LineageSnapshot.graphData
+    // so it survives server restarts (engine graph is in-memory only on FastAPI).
+    if (results.some(r => r.success)) {
+      try {
+        const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot`, {
+          signal: AbortSignal.timeout(10000),
+        });
+        if (snapshotRes.ok) {
+          const snapshotData = await snapshotRes.json();
+          if (snapshotData.has_graph && snapshotData.graph_data) {
+            // Update the most recent LineageSnapshot with the engine graph JSON
+            const latestSnapshot = await prisma.lineageSnapshot.findFirst({
+              where: { organizationId },
+              orderBy: { createdAt: 'desc' },
+            });
+            if (latestSnapshot) {
+              await prisma.lineageSnapshot.update({
+                where: { id: latestSnapshot.id },
+                data: { graphData: snapshotData.graph_data },
+              });
+              console.log(`[LINEAGE] Persisted engine graph to snapshot ${latestSnapshot.id}`);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[LINEAGE] Failed to persist engine graph snapshot (non-fatal):', e);
+      }
+    }
+
     return NextResponse.json({
       success: results.some(r => r.success),
       results,

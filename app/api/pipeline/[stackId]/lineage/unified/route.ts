@@ -34,6 +34,55 @@ async function fetchEngineGraph(): Promise<{
 }
 
 /**
+ * Try to restore the engine graph from a persisted LineageSnapshot.
+ * Called when the in-memory engine graph is empty (e.g., after server restart).
+ * Returns the restored engine graph, or null if no snapshot exists.
+ */
+async function tryRestoreEngineFromSnapshot(
+  organizationId: string,
+  integrationIds: string[],
+): Promise<{ nodes: any[]; edges: any[] } | null> {
+  try {
+    // Find the latest snapshot with graphData
+    const snapshot = await prisma.lineageSnapshot.findFirst({
+      where: {
+        organizationId,
+        ...(integrationIds.length > 0
+          ? { integrationId: { in: integrationIds } }
+          : {}),
+        graphData: { not: null as any },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, graphData: true },
+    });
+
+    if (!snapshot?.graphData) return null;
+
+    console.log(`[UNIFIED LINEAGE] Restoring engine graph from snapshot ${snapshot.id}`);
+
+    // Send the graph data to FastAPI to restore the in-memory store
+    const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graph_data: snapshot.graphData }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!restoreRes.ok) return null;
+    const restoreData = await restoreRes.json();
+    if (!restoreData.success) return null;
+
+    console.log(`[UNIFIED LINEAGE] Engine graph restored: ${restoreData.nodes} nodes, ${restoreData.edges} edges`);
+
+    // Now fetch the engine graph normally (it's in memory again)
+    return fetchEngineGraph();
+  } catch (e) {
+    console.warn('[UNIFIED LINEAGE] Failed to restore engine from snapshot:', e);
+    return null;
+  }
+}
+
+/**
  * Fetch engine coverage stats.
  */
 async function fetchEngineStats() {
@@ -221,10 +270,19 @@ export async function GET(
       .filter((id): id is string => id !== null);
 
     // Fetch engine graph and stats in parallel
-    const [engineGraph, engineStats] = await Promise.all([
+    let [engineGraph, engineStats] = await Promise.all([
       fetchEngineGraph(),
       fetchEngineStats(),
     ]);
+
+    // If engine graph is empty (e.g., after server restart), try restoring from DB snapshot
+    if (!engineGraph) {
+      engineGraph = await tryRestoreEngineFromSnapshot(organizationId, integrationIds);
+      if (engineGraph) {
+        // Re-fetch stats now that the graph is restored
+        engineStats = await fetchEngineStats();
+      }
+    }
 
     // We still need Prisma lineage nodes for integration ID mapping and as fallback
     const lineageNodes = await prisma.lineageNode.findMany({

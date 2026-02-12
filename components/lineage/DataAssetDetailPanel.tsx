@@ -371,9 +371,9 @@ export function DataAssetDetailPanel({
             </div>
           ) : (
             <div className="space-y-1.5">
-              {visibleUpstream.map(({ node: relNode, edge }) => (
+              {visibleUpstream.map(({ node: relNode, edge }, i) => (
                 <RelationshipItem
-                  key={relNode.id}
+                  key={`${relNode.id}-${edge.id}`}
                   relNode={relNode}
                   edge={edge}
                   direction="upstream"
@@ -401,9 +401,9 @@ export function DataAssetDetailPanel({
             </div>
           ) : (
             <div className="space-y-1.5">
-              {visibleDownstream.map(({ node: relNode, edge }) => (
+              {visibleDownstream.map(({ node: relNode, edge }, i) => (
                 <RelationshipItem
-                  key={relNode.id}
+                  key={`${relNode.id}-${edge.id}`}
                   relNode={relNode}
                   edge={edge}
                   direction="downstream"

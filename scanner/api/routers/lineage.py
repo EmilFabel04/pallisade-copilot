@@ -1038,6 +1038,60 @@ async def engine_full_graph():
     }
 
 
+@router.get("/lineage/engine/snapshot")
+async def engine_snapshot():
+    """Return the engine graph serialized for persistence (to store in DB).
+
+    The response includes the full graph dict (nodes + edges with all metadata
+    including raw_metadata / dbt_resource_type) so the frontend can save it
+    to LineageSnapshot.graphData and restore on server restart.
+    """
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        return {"has_graph": False, "graph_data": None}
+    return {"has_graph": True, "graph_data": store.graph.to_dict()}
+
+
+class EngineRestoreRequest(BaseModel):
+    """Request to restore the engine graph from a persisted snapshot."""
+    graph_data: Dict[str, Any] = Field(..., description="Serialized graph dict from LineageGraph.to_dict()")
+
+
+@router.post("/lineage/engine/restore")
+async def engine_restore(request: EngineRestoreRequest):
+    """Restore the engine graph from a previously persisted snapshot.
+
+    Called by the frontend when the in-memory engine graph is empty (after
+    server restart) but a snapshot exists in the database.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.graph import LineageGraph
+        except ImportError:
+            from scanner.lineage.graph import LineageGraph
+
+        graph = LineageGraph.from_dict(request.graph_data)
+        store = _get_engine_store()
+        store.graph = graph
+        _logger.info(
+            f"[Engine] Restored graph from snapshot: {len(graph.nodes)} nodes, "
+            f"{len(graph.edges)} edges"
+        )
+        return {
+            "success": True,
+            "nodes": len(graph.nodes),
+            "edges": len(graph.edges),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        _logger.error(f"[Engine] Failed to restore graph: {e}")
+        return {"success": False, "error": str(e)}
+
+
 @router.get("/lineage/engine/stats", response_model=CoverageStatsResponse)
 async def engine_stats():
     """Get coverage statistics for the built lineage graph."""
