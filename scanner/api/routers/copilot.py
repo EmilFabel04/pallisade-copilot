@@ -148,6 +148,19 @@ async def chat(
         else:
             logger.warning("No integrations received in chat request")
 
+        # Try to use the in-process engine graph (richer: deduped, confidence,
+        # dbt_resource_type) instead of the basic Prisma lineage data.
+        # Both live in the same FastAPI process — no HTTP round-trip needed.
+        engine_graph = None
+        try:
+            from api.routers.lineage import _get_engine_store
+            _store = _get_engine_store()
+            if _store and _store.graph and _store.graph.nodes:
+                engine_graph = _store.graph
+                logger.info(f"[Copilot] Using in-process engine graph: {len(engine_graph.nodes)} nodes, {len(engine_graph.edges)} edges")
+        except Exception as e:
+            logger.debug(f"[Copilot] Engine store not available: {e}")
+
         # Build context with mode
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
@@ -159,6 +172,7 @@ async def chat(
             mode=mode,
             mode_config=mode_config,
             lineage_data=request.lineage.model_dump() if request.lineage else None,
+            engine_graph=engine_graph,
         )
         
         # Log the context

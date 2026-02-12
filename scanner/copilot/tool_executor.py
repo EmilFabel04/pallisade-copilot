@@ -708,6 +708,46 @@ class ToolExecutor:
             filters.systems = {system}
         return filters
 
+    def _resolve_node_id(self, node_id: str) -> Optional[str]:
+        """
+        Resolve an FQN, name, or partial name to an actual graph node ID.
+
+        The LLM sees node names/FQNs in the system prompt catalog but graph
+        nodes are keyed by hash IDs. This resolves the LLM-provided value
+        to the correct graph key.
+
+        Resolution order:
+          1. Direct ID match (already a graph key)
+          2. Exact FQN or name match
+          3. Suffix match (user says "orders", graph has "project.dataset.orders")
+        """
+        graph = self.context.graph
+        if not graph:
+            return None
+
+        # 1. Direct ID match
+        if node_id in graph.nodes:
+            return node_id
+
+        # 2. Exact FQN or name match
+        for nid, node in graph.nodes.items():
+            if node.fqn == node_id or node.name == node_id:
+                return nid
+
+        # 3. Suffix match (case-insensitive)
+        lower = node_id.lower()
+        for nid, node in graph.nodes.items():
+            name_lower = node.name.lower()
+            fqn_lower = (node.fqn or "").lower()
+            if name_lower == lower or fqn_lower.endswith('.' + lower):
+                return nid
+            # Also match last part of name (e.g. "orders" matches "stg_orders" via underscore split)
+            name_parts = name_lower.split('.')
+            if name_parts[-1] == lower:
+                return nid
+
+        return None
+
     async def _execute_get_upstream(self, args: Dict[str, Any]) -> ToolResult:
         """Get upstream dependencies with optional engine filtering."""
         node_id = args["node_id"]
@@ -715,6 +755,11 @@ class ToolExecutor:
 
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
+
+        resolved = self._resolve_node_id(node_id)
+        if not resolved:
+            return ToolResult(success=False, error=f"Node '{node_id}' not found in lineage graph. Use search_lineage to find it.")
+        node_id = resolved
 
         filters = self._build_filters(args)
 
@@ -751,6 +796,11 @@ class ToolExecutor:
 
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
+
+        resolved = self._resolve_node_id(node_id)
+        if not resolved:
+            return ToolResult(success=False, error=f"Node '{node_id}' not found in lineage graph. Use search_lineage to find it.")
+        node_id = resolved
 
         filters = self._build_filters(args)
 
@@ -820,10 +870,15 @@ class ToolExecutor:
     async def _execute_get_node_details(self, args: Dict[str, Any]) -> ToolResult:
         """Get detailed node information."""
         node_id = args["node_id"]
-        
+
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
-        
+
+        resolved = self._resolve_node_id(node_id)
+        if not resolved:
+            return ToolResult(success=False, error=f"Node '{node_id}' not found in lineage graph. Use search_lineage to find it.")
+        node_id = resolved
+
         node = self.context.graph.nodes.get(node_id)
         if not node:
             return ToolResult(success=False, error=f"Node not found: {node_id}")

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   ChevronDown,
   Table,
@@ -158,29 +158,76 @@ export function DataAssetDetailPanel({
   const [showAllUpstream, setShowAllUpstream] = useState(false);
   const [showAllDownstream, setShowAllDownstream] = useState(false);
 
-  // Derive upstream and downstream from the full edge list (client-side, instant)
-  const { upstreamItems, downstreamItems, allColumnMappings } = useMemo(() => {
+  // Reset expand/blast state when navigating to a different node
+  useEffect(() => {
+    setShowAllUpstream(false);
+    setShowAllDownstream(false);
+    setBlastRadius(null);
+  }, [node.id]);
+
+  // BFS traversal to find upstream/downstream grouped by hop depth
+  const { upstreamByHop, downstreamByHop, totalUpstream, totalDownstream, allColumnMappings } = useMemo(() => {
     const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
+    const MAX_DEPTH = 3;
 
-    // Edges where this node is the target = upstream (things feeding into this node)
-    const incoming = allEdges.filter(
-      (e) => e.target === node.id && e.edgeType !== 'pipeline_flow' && e.edgeType !== 'contains' && e.edgeType !== 'produces'
+    // Only traverse data-level edges (exclude synthetic tool edges)
+    const dataEdges = allEdges.filter(
+      (e) =>
+        e.edgeType !== 'pipeline_flow' &&
+        e.edgeType !== 'contains' &&
+        e.edgeType !== 'produces' &&
+        e.edgeType !== 'reads_from'
     );
-    const up = incoming
-      .map((e) => ({ node: nodeMap.get(e.source), edge: e }))
-      .filter((x): x is { node: UnifiedLineageNode; edge: UnifiedLineageEdge } => !!x.node);
 
-    // Edges where this node is the source = downstream (things consuming this node)
-    const outgoing = allEdges.filter(
-      (e) => e.source === node.id && e.edgeType !== 'pipeline_flow' && e.edgeType !== 'contains' && e.edgeType !== 'produces'
-    );
-    const down = outgoing
-      .map((e) => ({ node: nodeMap.get(e.target), edge: e }))
-      .filter((x): x is { node: UnifiedLineageNode; edge: UnifiedLineageEdge } => !!x.node);
+    function bfs(
+      startId: string,
+      direction: 'upstream' | 'downstream',
+    ): Map<number, Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }>> {
+      const result = new Map<number, Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }>>();
+      const visited = new Set<string>([startId]);
+      let frontier = [startId];
+      let depth = 0;
 
-    // Aggregate column mappings from incoming edges
+      while (frontier.length > 0 && depth < MAX_DEPTH) {
+        depth++;
+        const nextFrontier: string[] = [];
+        const hopItems: Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }> = [];
+
+        for (const currentId of frontier) {
+          const edges =
+            direction === 'upstream'
+              ? dataEdges.filter((e) => e.target === currentId)
+              : dataEdges.filter((e) => e.source === currentId);
+
+          for (const edge of edges) {
+            const neighborId = direction === 'upstream' ? edge.source : edge.target;
+            if (visited.has(neighborId)) continue;
+            visited.add(neighborId);
+
+            const neighborNode = nodeMap.get(neighborId);
+            if (!neighborNode) continue;
+
+            hopItems.push({ node: neighborNode, edge });
+            nextFrontier.push(neighborId);
+          }
+        }
+
+        if (hopItems.length > 0) result.set(depth, hopItems);
+        frontier = nextFrontier;
+      }
+      return result;
+    }
+
+    const upByHop = bfs(node.id, 'upstream');
+    const downByHop = bfs(node.id, 'downstream');
+
+    const upTotal = Array.from(upByHop.values()).reduce((sum, items) => sum + items.length, 0);
+    const downTotal = Array.from(downByHop.values()).reduce((sum, items) => sum + items.length, 0);
+
+    // Aggregate column mappings from direct upstream (hop 1) edges
     const colMappings: Array<{ sourceName: string; from: string; to: string }> = [];
-    for (const item of up) {
+    const hop1Up = upByHop.get(1) || [];
+    for (const item of hop1Up) {
       if (item.edge.columns) {
         for (const col of item.edge.columns) {
           if (typeof col === 'object' && col.from && col.to) {
@@ -194,7 +241,13 @@ export function DataAssetDetailPanel({
       }
     }
 
-    return { upstreamItems: up, downstreamItems: down, allColumnMappings: colMappings };
+    return {
+      upstreamByHop: upByHop,
+      downstreamByHop: downByHop,
+      totalUpstream: upTotal,
+      totalDownstream: downTotal,
+      allColumnMappings: colMappings,
+    };
   }, [node.id, allNodes, allEdges]);
 
   // Blast radius — lazy loaded on button click
@@ -218,9 +271,7 @@ export function DataAssetDetailPanel({
     }
   }, [stackId, node.id, blastLoading]);
 
-  const VISIBLE_LIMIT = 8;
-  const visibleUpstream = showAllUpstream ? upstreamItems : upstreamItems.slice(0, VISIBLE_LIMIT);
-  const visibleDownstream = showAllDownstream ? downstreamItems : downstreamItems.slice(0, VISIBLE_LIMIT);
+  const VISIBLE_LIMIT = 6;
 
   const hasIssues = node.issues && node.issues.total > 0;
   const hasCritical = node.issues && node.issues.critical > 0;
@@ -363,61 +414,89 @@ export function DataAssetDetailPanel({
         )}
 
         {/* ─── Upstream ──────────────────────────────────────── */}
-        <Section title="Upstream" count={upstreamItems.length} defaultOpen={true}>
-          {upstreamItems.length === 0 ? (
+        <Section title="Upstream" count={totalUpstream} defaultOpen={true}>
+          {totalUpstream === 0 ? (
             <div className="py-2 text-[12px] text-emerald-400/70 flex items-center gap-1.5">
               <ArrowDownToLine className="w-3.5 h-3.5" />
               Root source — no upstream dependencies
             </div>
           ) : (
-            <div className="space-y-1.5">
-              {visibleUpstream.map(({ node: relNode, edge }, i) => (
-                <RelationshipItem
-                  key={`${relNode.id}-${edge.id}`}
-                  relNode={relNode}
-                  edge={edge}
-                  direction="upstream"
-                  onNavigate={onNodeNavigate}
-                />
-              ))}
-              {upstreamItems.length > VISIBLE_LIMIT && !showAllUpstream && (
-                <button
-                  onClick={() => setShowAllUpstream(true)}
-                  className="w-full text-center text-[11px] text-white/40 hover:text-white/60 py-1.5 transition-colors"
-                >
-                  Show all {upstreamItems.length} upstream
-                </button>
-              )}
+            <div className="space-y-3">
+              {Array.from(upstreamByHop.entries())
+                .sort(([a], [b]) => a - b)
+                .map(([hop, items]) => {
+                  const visible = showAllUpstream ? items : items.slice(0, VISIBLE_LIMIT);
+                  return (
+                    <div key={hop}>
+                      <div className="text-[10px] text-white/30 uppercase tracking-wide mb-1.5">
+                        Hop {hop} <span className="text-white/20">({items.length})</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {visible.map(({ node: relNode, edge }) => (
+                          <RelationshipItem
+                            key={relNode.id}
+                            relNode={relNode}
+                            edge={edge}
+                            direction="upstream"
+                            onNavigate={onNodeNavigate}
+                          />
+                        ))}
+                      </div>
+                      {!showAllUpstream && items.length > VISIBLE_LIMIT && (
+                        <button
+                          onClick={() => setShowAllUpstream(true)}
+                          className="w-full text-center text-[11px] text-white/40 hover:text-white/60 py-1.5 transition-colors"
+                        >
+                          Show all {items.length} at hop {hop}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           )}
         </Section>
 
         {/* ─── Downstream ────────────────────────────────────── */}
-        <Section title="Downstream" count={downstreamItems.length} defaultOpen={true}>
-          {downstreamItems.length === 0 ? (
+        <Section title="Downstream" count={totalDownstream} defaultOpen={true}>
+          {totalDownstream === 0 ? (
             <div className="py-2 text-[12px] text-amber-400/70 flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5" />
               Leaf node — no downstream consumers
             </div>
           ) : (
-            <div className="space-y-1.5">
-              {visibleDownstream.map(({ node: relNode, edge }, i) => (
-                <RelationshipItem
-                  key={`${relNode.id}-${edge.id}`}
-                  relNode={relNode}
-                  edge={edge}
-                  direction="downstream"
-                  onNavigate={onNodeNavigate}
-                />
-              ))}
-              {downstreamItems.length > VISIBLE_LIMIT && !showAllDownstream && (
-                <button
-                  onClick={() => setShowAllDownstream(true)}
-                  className="w-full text-center text-[11px] text-white/40 hover:text-white/60 py-1.5 transition-colors"
-                >
-                  Show all {downstreamItems.length} downstream
-                </button>
-              )}
+            <div className="space-y-3">
+              {Array.from(downstreamByHop.entries())
+                .sort(([a], [b]) => a - b)
+                .map(([hop, items]) => {
+                  const visible = showAllDownstream ? items : items.slice(0, VISIBLE_LIMIT);
+                  return (
+                    <div key={hop}>
+                      <div className="text-[10px] text-white/30 uppercase tracking-wide mb-1.5">
+                        Hop {hop} <span className="text-white/20">({items.length})</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {visible.map(({ node: relNode, edge }) => (
+                          <RelationshipItem
+                            key={relNode.id}
+                            relNode={relNode}
+                            edge={edge}
+                            direction="downstream"
+                            onNavigate={onNodeNavigate}
+                          />
+                        ))}
+                      </div>
+                      {!showAllDownstream && items.length > VISIBLE_LIMIT && (
+                        <button
+                          onClick={() => setShowAllDownstream(true)}
+                          className="w-full text-center text-[11px] text-white/40 hover:text-white/60 py-1.5 transition-colors"
+                        >
+                          Show all {items.length} at hop {hop}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
             </div>
           )}
         </Section>

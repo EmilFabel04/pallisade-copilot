@@ -257,29 +257,9 @@ class CopilotContext:
                             lines.append(f"  - Schema: `{config.get('schema')}`")
                 lines.append("")
 
-        # Add lineage summary if available
+        # Add lineage node catalog so LLM can use lineage tools
         if self.graph and self.graph.nodes:
-            lines.append(f"### Lineage Graph")
-            lines.append(f"- {len(self.graph.nodes)} nodes tracked")
-            lines.append(f"- {len(self.graph.edges)} edges (dependencies)")
-
-            roots = self.graph.get_roots()
-            leaves = self.graph.get_leaves()
-            lines.append(f"- {len(roots)} source nodes (roots)")
-            lines.append(f"- {len(leaves)} output nodes (leaves)")
-
-            # Add engine coverage stats when available
-            if self.engine_store:
-                try:
-                    stats = self.engine_store.get_stats()
-                    if stats.edges_by_level:
-                        level_parts = [f"{v} {k}" for k, v in stats.edges_by_level.items()]
-                        lines.append(f"- Edges by level: {', '.join(level_parts)}")
-                    lines.append(f"- Table coverage: {stats.coverage_table:.0%}, Column coverage: {stats.coverage_column:.0%}")
-                    lines.append(f"- You can use `explain_edge` to inspect evidence on any edge")
-                except Exception:
-                    pass
-
+            lines.append(self._build_lineage_prompt_section(query))
             lines.append("")
 
         # Add warehouse schema with relevance filtering
@@ -370,6 +350,203 @@ class CopilotContext:
 
         return relevant, other
 
+    def _build_lineage_prompt_section(self, query: str = "") -> str:
+        """
+        Build a compact node catalog for the LLM system prompt.
+
+        Groups nodes by graph role (sources → intermediates → outputs)
+        and shows adjacency so the LLM can construct valid tool calls.
+
+        Tiered truncation:
+          ≤50 nodes  — full catalog with adjacency
+          51-150     — roots/leaves + query-relevant with adjacency, rest as compact list
+          150+       — top 50 relevant + roots/leaves, summary for rest
+        """
+        graph = self.graph
+        if not graph or not graph.nodes:
+            return ""
+
+        total_nodes = len(graph.nodes)
+        total_edges = len(graph.edges)
+
+        lines = [f"### Lineage Graph ({total_nodes} nodes, {total_edges} edges)", ""]
+        lines.append("Use node names/FQNs below as `node_id` for get_upstream, get_downstream, get_node_details, and analyze_change_impact.")
+        lines.append("")
+
+        # Classify nodes into sources, intermediates, outputs
+        roots = set(n.id for n in graph.get_roots())
+        leaves = set(n.id for n in graph.get_leaves())
+
+        sources = []
+        intermediates = []
+        outputs = []
+        for nid, node in graph.nodes.items():
+            if nid in roots:
+                sources.append(node)
+            elif nid in leaves:
+                outputs.append(node)
+            else:
+                intermediates.append(node)
+
+        # Sort each group alphabetically by name
+        sources.sort(key=lambda n: n.name.lower())
+        intermediates.sort(key=lambda n: n.name.lower())
+        outputs.sort(key=lambda n: n.name.lower())
+
+        def _node_type_label(node: LineageNode) -> str:
+            """Short type label for a node."""
+            if hasattr(node, 'raw_metadata') and node.raw_metadata.get('dbt_resource_type'):
+                return node.raw_metadata['dbt_resource_type']
+            return node.node_type.value if hasattr(node.node_type, 'value') else str(node.node_type)
+
+        def _short_name(node: LineageNode) -> str:
+            """Shortest useful name — last 2 parts of FQN or just name."""
+            name = node.fqn or node.name
+            parts = name.split('.')
+            if len(parts) > 2:
+                return '.'.join(parts[-2:])
+            return name
+
+        def _adjacency_str(node: LineageNode, max_neighbors: int = 3) -> str:
+            """Build <- upstream -> downstream string."""
+            parts = []
+
+            # Upstream
+            up_ids = list(graph._upstream.get(node.id, set()))[:max_neighbors]
+            up_names = [_short_name(graph.nodes[uid]) for uid in up_ids if uid in graph.nodes]
+            up_extra = len(graph._upstream.get(node.id, set())) - len(up_names)
+            if up_names:
+                up_str = ", ".join(up_names)
+                if up_extra > 0:
+                    up_str += f" +{up_extra}"
+                parts.append(f"<- {up_str}")
+
+            # Downstream
+            down_ids = list(graph._downstream.get(node.id, set()))[:max_neighbors]
+            down_names = [_short_name(graph.nodes[did]) for did in down_ids if did in graph.nodes]
+            down_extra = len(graph._downstream.get(node.id, set())) - len(down_names)
+            if down_names:
+                down_str = ", ".join(down_names)
+                if down_extra > 0:
+                    down_str += f" +{down_extra}"
+                parts.append(f"-> {down_str}")
+
+            return " ".join(parts)
+
+        def _format_node(node: LineageNode, show_adjacency: bool = True) -> str:
+            """Format a single node line."""
+            type_label = _node_type_label(node)
+            name = _short_name(node)
+            line = f"  {name} [{type_label}]"
+            if show_adjacency:
+                adj = _adjacency_str(node)
+                if adj:
+                    line += f" {adj}"
+            return line
+
+        if total_nodes <= 50:
+            # Full catalog with adjacency
+            if sources:
+                lines.append("**Sources** (roots — no upstream):")
+                for node in sources:
+                    lines.append(_format_node(node))
+                lines.append("")
+            if intermediates:
+                lines.append("**Transformations:**")
+                for node in intermediates:
+                    lines.append(_format_node(node))
+                lines.append("")
+            if outputs:
+                lines.append("**Outputs** (leaves — no downstream):")
+                for node in outputs:
+                    lines.append(_format_node(node))
+                lines.append("")
+
+        elif total_nodes <= 150:
+            # Roots and leaves with adjacency + query-relevant nodes
+            relevant_ids = set()
+            if query:
+                relevant_nodes = CopilotContextBuilder._find_relevant_nodes_static(graph, query)
+                relevant_ids = set(n.id for n in relevant_nodes)
+
+            if sources:
+                lines.append("**Sources** (roots):")
+                for node in sources:
+                    lines.append(_format_node(node))
+                lines.append("")
+
+            # Show query-relevant intermediates with adjacency
+            relevant_intermediates = [n for n in intermediates if n.id in relevant_ids]
+            other_intermediates = [n for n in intermediates if n.id not in relevant_ids]
+            if relevant_intermediates:
+                lines.append("**Relevant Transformations:**")
+                for node in relevant_intermediates:
+                    lines.append(_format_node(node))
+                lines.append("")
+            if other_intermediates:
+                names = ", ".join(_short_name(n) for n in other_intermediates[:30])
+                extra = len(other_intermediates) - 30
+                lines.append(f"**Other Transformations** ({len(other_intermediates)}):")
+                lines.append(f"  {names}{'...' if extra > 0 else ''}")
+                lines.append("")
+
+            if outputs:
+                lines.append("**Outputs** (leaves):")
+                for node in outputs:
+                    lines.append(_format_node(node))
+                lines.append("")
+
+        else:
+            # 150+ nodes: top 50 relevant + roots/leaves, summary for rest
+            relevant_nodes = CopilotContextBuilder._find_relevant_nodes_static(graph, query) if query else []
+            relevant_ids = set(n.id for n in relevant_nodes)
+
+            # Show up to 10 sources, 10 outputs
+            lines.append(f"**Sources** ({len(sources)} total, showing top {min(10, len(sources))}):")
+            for node in sources[:10]:
+                lines.append(_format_node(node))
+            if len(sources) > 10:
+                lines.append(f"  ... +{len(sources) - 10} more sources")
+            lines.append("")
+
+            if relevant_nodes:
+                lines.append(f"**Query-Relevant Nodes** (top {len(relevant_nodes)}):")
+                for node in relevant_nodes:
+                    if node.id not in roots and node.id not in leaves:
+                        lines.append(_format_node(node))
+                lines.append("")
+
+            lines.append(f"**Outputs** ({len(outputs)} total, showing top {min(10, len(outputs))}):")
+            for node in outputs[:10]:
+                lines.append(_format_node(node))
+            if len(outputs) > 10:
+                lines.append(f"  ... +{len(outputs) - 10} more outputs")
+            lines.append("")
+
+            remaining = total_nodes - len(sources[:10]) - len(outputs[:10]) - len([n for n in relevant_nodes if n.id not in roots and n.id not in leaves])
+            if remaining > 0:
+                lines.append(f"_{remaining} more nodes not shown. Use `search_lineage` to find specific nodes._")
+                lines.append("")
+
+        # Engine coverage stats
+        if self.engine_store:
+            try:
+                stats = self.engine_store.get_stats()
+                stat_parts = []
+                if stats.coverage_table:
+                    stat_parts.append(f"Table coverage: {stats.coverage_table:.0%}")
+                if stats.coverage_column:
+                    stat_parts.append(f"Column coverage: {stats.coverage_column:.0%}")
+                if stats.edges_by_level:
+                    level_parts = [f"{v} {k}" for k, v in stats.edges_by_level.items()]
+                    stat_parts.append(f"Edges: {', '.join(level_parts)}")
+                if stat_parts:
+                    lines.append(" | ".join(stat_parts))
+            except Exception:
+                pass
+
+        return "\n".join(lines)
+
 
 class CopilotContextBuilder:
     """
@@ -426,6 +603,7 @@ class CopilotContextBuilder:
         mode: str = "ask",
         mode_config: Optional[Any] = None,
         lineage_data: Optional[Dict[str, Any]] = None,
+        engine_graph: Optional[LineageGraph] = None,
     ) -> CopilotContext:
         """
         Build the AI context for a given organization.
@@ -439,6 +617,7 @@ class CopilotContextBuilder:
             mode: Interaction mode (ask, debug, plan, create, etc.)
             mode_config: Mode configuration from modes.py
             lineage_data: Optional pre-fetched lineage data from database
+            engine_graph: Optional in-process engine graph (preferred over lineage_data)
 
         Returns:
             CopilotContext with all relevant information
@@ -461,9 +640,13 @@ class CopilotContextBuilder:
             integrations = await self._get_integrations(org_id)
         integration_types = {i.type.upper() for i in integrations if i.is_active}
 
-        # 2. Build lineage graph from pre-fetched data or connected sources
+        # 2. Build lineage graph — prefer in-process engine graph (richest),
+        #    then pre-fetched Prisma data, then integration-based extraction.
         graph = None
-        if lineage_data and (lineage_data.get('nodes') or lineage_data.get('edges')):
+        if engine_graph and engine_graph.nodes:
+            graph = engine_graph
+            logger.info(f"[Lineage] Using in-process engine graph: {len(graph.nodes)} nodes, {len(graph.edges)} edges")
+        elif lineage_data and (lineage_data.get('nodes') or lineage_data.get('edges')):
             logger.info(f"[Lineage] Building from pre-fetched data: {len(lineage_data.get('nodes', []))} nodes, {len(lineage_data.get('edges', []))} edges")
             graph = self._build_lineage_from_data(lineage_data)
         else:
@@ -857,7 +1040,45 @@ class CopilotContextBuilder:
         # Sort by score descending, return top 10
         scored.sort(key=lambda x: x[0], reverse=True)
         return [node for _, node in scored[:10]]
-    
+
+    @staticmethod
+    def _find_relevant_nodes_static(
+        graph: LineageGraph,
+        query: str,
+        limit: int = 10,
+    ) -> List[LineageNode]:
+        """Static version of _find_relevant_nodes for use from CopilotContext."""
+        query_lower = query.lower()
+        query_tokens = set(_tokenize_query(query_lower))
+
+        if not query_tokens:
+            return []
+
+        scored: List[Tuple[int, LineageNode]] = []
+        for node in graph.nodes.values():
+            score = 0
+            node_lower = node.name.lower()
+            node_parts = set(re.findall(r'[a-z][a-z0-9]*', node_lower))
+
+            if node_lower in query_lower:
+                score += 10
+            overlap = query_tokens & node_parts
+            score += len(overlap) * 5
+            for token in query_tokens:
+                if token in node_lower and token not in node_parts:
+                    score += 1
+            if node.description:
+                desc_lower = node.description.lower()
+                for token in query_tokens:
+                    if token in desc_lower:
+                        score += 2
+
+            if score > 0:
+                scored.append((score, node))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [node for _, node in scored[:limit]]
+
     def _get_available_tools(self, integration_types: Set[str]) -> List[str]:
         """
         Determine which tools are available based on connected integrations.

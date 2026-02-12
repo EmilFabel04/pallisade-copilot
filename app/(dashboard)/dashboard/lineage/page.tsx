@@ -212,6 +212,13 @@ export default function LineagePage() {
     return lineageData.nodes.filter((node) => nodePassesFilter(node, filters));
   }, [lineageData?.nodes, filters]);
 
+  // Filter edges to only include those between visible nodes
+  const filteredEdges = useMemo(() => {
+    if (!lineageData?.edges) return [];
+    const nodeIds = new Set(filteredNodes.map((n) => n.id));
+    return lineageData.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+  }, [filteredNodes, lineageData?.edges]);
+
   // Build filtered stats
   const filteredStats = useMemo(() => {
     return {
@@ -710,8 +717,8 @@ export default function LineagePage() {
           ) : (
             <DataAssetDetailPanel
               node={selectedNode}
-              allNodes={lineageData?.nodes || []}
-              allEdges={lineageData?.edges || []}
+              allNodes={filteredNodes}
+              allEdges={filteredEdges}
               stackId={stackId || ''}
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}
