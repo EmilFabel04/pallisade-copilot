@@ -115,10 +115,14 @@ class ChangePlanApplier:
             # Step 1: Get the base branch SHA
             base_sha = await self._get_branch_sha(repo_owner, repo_name, base_branch)
             if not base_sha:
-                return ApplyResult(
-                    success=False,
-                    error=f"Could not find branch '{base_branch}'",
-                )
+                # Repo may be empty (no commits/branches) — bootstrap it
+                logger.info(f"Branch '{base_branch}' not found, attempting to initialize empty repo")
+                base_sha = await self._initialize_empty_repo(repo_owner, repo_name, base_branch)
+                if not base_sha:
+                    return ApplyResult(
+                        success=False,
+                        error=f"Could not find branch '{base_branch}'. If the repo is empty, ensure the GitHub token has write permissions.",
+                    )
 
             # Step 2: Create a new branch
             branch_name = self._generate_branch_name(plan)
@@ -208,6 +212,44 @@ class ChangePlanApplier:
             else:
                 logger.error(f"Failed to get branch SHA: {response.status}")
                 return None
+
+    async def _initialize_empty_repo(
+        self,
+        owner: str,
+        repo: str,
+        branch: str,
+    ) -> Optional[str]:
+        """
+        Initialize an empty GitHub repo by creating an initial commit.
+
+        Uses the GitHub Contents API to create a README.md, which automatically
+        creates the default branch. Returns the SHA of the new branch.
+        """
+        session = await self._get_session()
+        url = f"{self.github_api_base}/repos/{owner}/{repo}/contents/README.md"
+
+        content = f"# {repo}\n\nInitialized by Pallisade Scout.\n"
+        content_b64 = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+
+        payload = {
+            "message": "Initial commit",
+            "content": content_b64,
+            "branch": branch,
+        }
+
+        try:
+            async with session.put(url, json=payload) as response:
+                if response.status in (200, 201):
+                    logger.info(f"Initialized empty repo {owner}/{repo} with README on branch '{branch}'")
+                    # Now fetch the branch SHA
+                    return await self._get_branch_sha(owner, repo, branch)
+                else:
+                    error_text = await response.text()
+                    logger.error(f"Failed to initialize empty repo: {response.status} - {error_text}")
+                    return None
+        except Exception as e:
+            logger.error(f"Failed to initialize empty repo: {e}")
+            return None
 
     async def _create_branch(
         self,

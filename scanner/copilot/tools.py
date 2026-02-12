@@ -712,7 +712,7 @@ class ToolRegistry:
                         "type": "object",
                         "properties": {
                             "file_path": {"type": "string", "description": "Path to the file to modify"},
-                            "patch_type": {"type": "string", "enum": ["sql_model", "yaml_config", "python_script", "orchestration"], "description": "Type of file being patched"},
+                            "patch_type": {"type": "string", "enum": ["sql_model", "yaml_config", "python_script", "orchestration", "text_file"], "description": "Type of file: sql_model (.sql), yaml_config (.yml/.yaml), python_script (.py), orchestration (Airflow DAG .py), text_file (.md, .txt, .gitignore, .cfg, requirements.txt, Dockerfile, etc.)"},
                             "new_content": {"type": "string", "description": "The new content for the file"},
                             "rationale": {"type": "string", "description": "Why this change fixes the issue"},
                             "original_content": {"type": "string", "description": "Original file content (optional)"},

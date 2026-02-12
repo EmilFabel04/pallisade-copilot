@@ -34,6 +34,7 @@ class PatchType(Enum):
     YAML_CONFIG = "yaml_config"       # schema.yml, sources.yml
     PYTHON_SCRIPT = "python_script"   # Python transformations
     ORCHESTRATION = "orchestration"   # Airflow DAG, Dagster asset
+    TEXT_FILE = "text_file"           # README, .gitignore, requirements.txt, configs
 
 
 class ChangePlanStatus(Enum):

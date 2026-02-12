@@ -12,7 +12,7 @@ export type ValidationLevel = 'static' | 'ci' | 'sandbox';
 export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped';
 
 // Types of file patches
-export type PatchType = 'sql_model' | 'yaml_config' | 'python_script' | 'orchestration';
+export type PatchType = 'sql_model' | 'yaml_config' | 'python_script' | 'orchestration' | 'text_file';
 
 // Overall status of a change plan
 export type ChangePlanStatus =

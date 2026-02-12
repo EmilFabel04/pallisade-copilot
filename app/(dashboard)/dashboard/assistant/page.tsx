@@ -798,7 +798,7 @@ export default function AssistantPage() {
             ) : (
               <div className="space-y-3 pb-2">
                 {messages.map((message) => (
-                  <div key={message.id} className={cn('flex gap-2', message.role === 'user' && 'justify-end')}>
+                  <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
                     {message.role === 'assistant' && (
                       <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
                         <AvatarImage src="/pallisade_scout.svg" alt="AI" />
@@ -806,11 +806,11 @@ export default function AssistantPage() {
                       </Avatar>
                     )}
                     <div className={cn(
-                      'max-w-[85%]',
+                      'max-w-[85%] min-w-0',
                       message.role === 'user' ? '' : 'space-y-2'
                     )}>
                       {message.role === 'assistant' ? (
-                        <div className="relative group">
+                        <div className="relative group min-w-0">
                           <div className="px-3 py-2 bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm">
                             <MessageContent content={message.content} />
                           </div>
@@ -1299,7 +1299,7 @@ function MessageContent({ content }: { content: string }) {
   const segments = parseContentSegments(displayContent);
 
   return (
-    <div className="text-[13px] space-y-2">
+    <div className="text-[13px] space-y-2 break-words">
       {segments.map((segment, i) => {
         if (segment.type === 'code') {
           return (

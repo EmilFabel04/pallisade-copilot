@@ -119,6 +119,16 @@ class StaticValidator(BaseValidator):
             errors.extend(errs)
             warnings.extend(warns)
 
+        elif patch.patch_type == PatchType.ORCHESTRATION:
+            # Orchestration files (Airflow DAGs, Dagster assets) are Python
+            errs, warns = self._validate_python(patch)
+            errors.extend(errs)
+            warnings.extend(warns)
+
+        elif patch.patch_type == PatchType.TEXT_FILE:
+            # Text files (README, .gitignore, requirements.txt) - no validation needed
+            pass
+
         return errors, warnings
 
     def _validate_sql(self, patch: FilePatch) -> tuple[List[str], List[str]]:

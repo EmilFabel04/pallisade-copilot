@@ -14,6 +14,7 @@ const PATCH_TYPE_LABELS: Record<PatchType, { label: string; color: string }> = {
   yaml_config: { label: 'YAML', color: '#c084fc' },
   python_script: { label: 'Python', color: '#fbbf24' },
   orchestration: { label: 'Orchestration', color: '#34d399' },
+  text_file: { label: 'Text', color: '#94a3b8' },
 };
 
 function getFileExtension(filePath: string): string {

@@ -716,6 +716,7 @@ export default function LineagePage() {
             </div>
           ) : (
             <DataAssetDetailPanel
+              key={selectedNode.id}
               node={selectedNode}
               allNodes={filteredNodes}
               allEdges={filteredEdges}
