@@ -179,4 +179,70 @@ dag = DAG(
 - Index frequently queried columns in task_instance table
 """,
     ),
+    KnowledgeArticle(
+        id="airflow-api-auth-401",
+        title="Fixing Airflow REST API 401 Unauthorized Errors",
+        category=KnowledgeCategory.TROUBLESHOOTING,
+        tags=["airflow", "api", "auth", "401", "unauthorized", "basic-auth", "rest-api", "docker", "docker-compose"],
+        tools=["AIRFLOW"],
+        summary="How to fix 401 Unauthorized errors when accessing the Airflow REST API. Covers enabling basic auth, Docker Compose config, and common auth pitfalls.",
+        content="""## Fixing Airflow REST API 401 Unauthorized
+
+### Symptom
+API calls to Airflow endpoints like `/api/v1/dags` or `/api/v1/dagRuns` return
+`401 UNAUTHORIZED`, even though the Airflow web UI login works fine with the
+same username/password.
+
+### Root Cause
+Airflow 2.x separates **web UI auth** from **REST API auth**. By default, the
+REST API auth backend may deny programmatic requests or only support
+session-based auth (cookies), which doesn't work for tools like MCP servers.
+
+### Fix: Enable Basic Auth for the REST API
+
+**Docker Compose** — add this environment variable to ALL Airflow services
+(webserver, scheduler, worker, triggerer):
+
+```yaml
+environment:
+  AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+```
+
+**airflow.cfg** — set in the `[api]` section:
+
+```ini
+[api]
+auth_backends = airflow.api.auth.backend.basic_auth
+```
+
+Then restart all Airflow services.
+
+### Verifying the Fix
+Test with curl:
+```bash
+curl -u username:password http://localhost:8080/api/v1/dags
+```
+You should get a JSON response with your DAGs instead of a 401 error.
+
+### Multiple Auth Backends
+You can enable both session auth (for the UI) and basic auth (for API) together:
+```yaml
+AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth'
+```
+
+### Common Pitfalls
+- **Setting it on webserver only**: The env var must be on ALL Airflow services, not just the webserver
+- **Airflow 2.x default**: Some Docker images default to `deny_all` or `session` only
+- **Typo in backend name**: It must be exactly `airflow.api.auth.backend.basic_auth`
+- **User doesn't exist**: The username/password must match an existing Airflow user. Create one with:
+  `airflow users create --username admin --password admin --role Admin --firstname Admin --lastname User --email admin@example.com`
+
+### Debugging Steps (for the AI assistant)
+When you encounter a 401 from Airflow:
+1. Use GitHub tools to find the user's `docker-compose.yml` or `airflow.cfg`
+2. Check if `AIRFLOW__API__AUTH_BACKENDS` or `auth_backends` is set
+3. If missing, tell the user to add it with the exact setting above
+4. If present, verify the value is correct and includes `basic_auth`
+""",
+    ),
 ]
