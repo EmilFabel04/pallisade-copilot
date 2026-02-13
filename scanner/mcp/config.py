@@ -97,7 +97,7 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
     # --- Custom Pallisade servers ---
     "lineage": MCPServerConfig(
         name="lineage",
-        command=["python", "-m", "scanner.mcp.servers.lineage_server"],
+        command=["python", "-m", "mcp.servers.lineage_server"],
         supported_integration_types=set(),  # Always available when graph exists
         tool_prefix="mcp_lineage",
         env_mapping={},
