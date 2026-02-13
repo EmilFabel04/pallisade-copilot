@@ -2286,7 +2286,12 @@ class ToolExecutor:
     # ==========================================
 
     def _run_coverage_analysis(self) -> Any:
-        """Run the coverage scorer + gap analyzer on the current lineage graph."""
+        """Run the coverage scorer + gap analyzer on the current lineage graph.
+
+        Hydrates the scorer with monitors from dbt tests, observability
+        checks from connected tools, and contracts from graph node metadata
+        so that the coverage report reflects the user's actual setup.
+        """
         try:
             from scanner.coverage.scorer import CoverageScorer
             from scanner.coverage.gap_analyzer import GapAnalyzer
@@ -2298,7 +2303,95 @@ class ToolExecutor:
         if not graph or not graph.nodes:
             return None
 
-        scorer = CoverageScorer(graph=graph)
+        monitors: Dict[str, List[str]] = {}
+        contracts: Dict[str, Dict[str, Any]] = {}
+        observability_checks: Dict[str, List[str]] = {}
+
+        # -----------------------------------------------------------
+        # 1. Extract monitors from dbt tests (manifest)
+        # -----------------------------------------------------------
+        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
+        if dbt_adapter:
+            try:
+                # Ensure manifest is loaded
+                if hasattr(dbt_adapter, "manifest") and dbt_adapter.manifest is None:
+                    dbt_adapter.load_manifest()
+
+                manifest = getattr(dbt_adapter, "manifest", None)
+                if manifest:
+                    # Map dbt test names → scorer monitor type strings
+                    _TEST_TO_MONITOR = {
+                        "not_null": "not_null",
+                        "unique": "unique",
+                        "relationships": "relationships",
+                        "accepted_values": "distribution",
+                        "freshness": "freshness",
+                        "recency": "freshness",
+                        "schema": "schema_change",
+                        "dbt_expectations.expect_column_values_to_not_be_null": "not_null",
+                        "dbt_expectations.expect_column_values_to_be_unique": "unique",
+                    }
+
+                    for model in manifest.models.values():
+                        fqn = model.full_name.lower()
+                        model_tests = manifest.get_tests_for_model(model.name)
+                        if model_tests:
+                            test_types = []
+                            for t in model_tests:
+                                test_name = t.test_metadata.get("name", t.name) if t.test_metadata else t.name
+                                mapped = _TEST_TO_MONITOR.get(test_name, test_name)
+                                test_types.append(mapped)
+                            monitors[fqn] = test_types
+
+                    # dbt sources with freshness config → freshness monitor
+                    for source in getattr(manifest, "sources", {}).values():
+                        if getattr(source, "has_freshness_config", False):
+                            src_fqn = source.full_name.lower()
+                            monitors.setdefault(src_fqn, []).append("freshness")
+
+            except Exception as e:
+                logger.debug(f"[Coverage] Could not load dbt tests: {e}")
+
+        # -----------------------------------------------------------
+        # 2. Build contracts from graph node metadata
+        # -----------------------------------------------------------
+        for node in graph.nodes.values():
+            fqn = (node.fqn or node.name).lower()
+            contract: Dict[str, Any] = {}
+            if node.owner:
+                contract["owner"] = node.owner
+            if node.description:
+                contract["description"] = node.description
+            if getattr(node, "expected_freshness_hours", None) is not None:
+                contract["freshnessEnabled"] = True
+            if contract:
+                contracts[fqn] = contract
+
+        # -----------------------------------------------------------
+        # 3. Collect observability checks from connected tools
+        # -----------------------------------------------------------
+        try:
+            obs_clients = self._get_observability_clients()
+            for client in obs_clients:
+                for node in graph.nodes.values():
+                    fqn = (node.fqn or node.name).lower()
+                    try:
+                        checks = client.get_checks_for_asset(fqn)
+                        if checks:
+                            check_types = [c.check_type.value for c in checks]
+                            existing = observability_checks.get(fqn, [])
+                            observability_checks[fqn] = existing + check_types
+                    except Exception:
+                        pass  # Some assets may not exist in this tool
+        except Exception as e:
+            logger.debug(f"[Coverage] Could not load observability checks: {e}")
+
+        scorer = CoverageScorer(
+            graph=graph,
+            monitors=monitors,
+            contracts=contracts,
+            observability_checks=observability_checks,
+        )
         report = scorer.score()
         analyzer = GapAnalyzer(graph)
         report = analyzer.analyze(report)
