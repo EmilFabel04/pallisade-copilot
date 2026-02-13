@@ -202,6 +202,17 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
         if context.mode_config and context.mode != "ask":
             prompt += f"\n{context.mode_config.system_prompt_section}\n"
 
+        # Inject preferred tools for the active mode so the LLM knows
+        # which tools to reach for first in this context
+        if context.mode_config and context.mode_config.preferred_tools:
+            tools_list = ", ".join(
+                f"`{t}`" for t in context.mode_config.preferred_tools
+            )
+            prompt += (
+                f"\n**Preferred tools for this mode**: {tools_list}. "
+                "Use these tools first when they match the user's question.\n"
+            )
+
         # Add warehouse-specific SQL syntax guidance
         prompt += self._build_warehouse_syntax_section(context)
 
@@ -219,11 +230,12 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 - **Table health** ("is my data fresh?", "how big is X?"): Use `get_table_stats`.
 - **Impact analysis** ("what breaks if I change X?"): Use `get_downstream` to find all dependents.
 - **Lineage coverage / completeness** ("is my lineage complete?"): Use `get_lineage_stats` to see node/edge counts, coverage percentages, and confidence distribution.
-- **Observability coverage** ("how well monitored am I?", "what's my coverage?", "any gaps?"): Use `get_coverage_report` to score every data asset across 7 dimensions (freshness, volume, schema, quality, lineage, ownership, documentation). This is the first tool to use for any monitoring/coverage question.
-- **Coverage gaps** ("where should I add monitoring?", "what's missing?"): Use `get_coverage_gaps` to get prioritized gaps sorted by severity. Filter by severity or category.
-- **Per-asset coverage** ("how well covered is orders?"): Use `get_node_coverage` with the node name/FQN to see the full coverage breakdown for a specific table or asset.
-- **Monitor recommendations** ("what monitors should I add?"): Use `get_monitor_recommendations` to get actionable monitor configs with SQL templates, prioritized by impact.
-- **Run a monitor** ("check freshness of X", "any anomalies in Y?"): Use `run_coverage_monitor` to execute a freshness, volume, schema_change, or anomaly monitor directly against the warehouse. Use this instead of writing manual diagnostic SQL when checking data health.
+- **Data health / anomalies / freshness / monitoring** ("is my data healthy?", "any anomalies?", "check freshness", "how's my coverage?", "what needs monitoring?"): **ALWAYS use coverage tools instead of writing raw SQL.** These tools run purpose-built monitors with statistical analysis:
+  - `get_coverage_report`: Overall health score across 7 dimensions (freshness, volume, schema, quality, lineage, ownership, documentation). Start here for any health/monitoring question.
+  - `get_coverage_gaps`: Prioritized gaps sorted by severity — use for "what's missing?" or "where should I add monitoring?"
+  - `get_node_coverage`: Per-asset breakdown — use for "how well covered is orders?"
+  - `get_monitor_recommendations`: Actionable monitor configs with SQL templates — use for "what monitors should I add?"
+  - `run_coverage_monitor`: Execute a freshness/volume/schema_change/anomaly monitor against the warehouse. **Use this instead of manual diagnostic SQL** — it has built-in thresholds, Z-score anomaly detection, and time-series analysis.
 - **Verifying lineage edges** ("why does X connect to Y?"): Use `explain_edge` with the edge ID from upstream/downstream results.
 - **dbt questions** ("show me the model SQL", "did my run pass?"): Use `get_dbt_model`, `get_dbt_run_history`, or `get_dbt_test_results`.
 - **Pipeline failures** ("why did my DAG fail?", "what happened last night?"): Use orchestration tools to get the DAG status, then get task logs for the failing task. Read the actual error message. If it's a data issue, run follow-up SQL queries to investigate. If you encounter errors accessing Airflow, use GitHub tools to inspect the infrastructure config.
