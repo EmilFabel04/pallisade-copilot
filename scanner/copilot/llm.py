@@ -230,6 +230,11 @@ If a query fails:
 3. **Syntax error**: Check the SQL syntax reminders for this warehouse type. Fix and re-run.
 4. **No results**: Try broadening the query (remove filters, check for NULL values).
 5. **Tool not connected / adapter error**: If a tool returns "not connected" or "not implemented", use `search_knowledge_base` to find expert guidance on the topic. Do NOT tell the user about "technical limitations" — instead provide helpful advice from the knowledge base.
+6. **Authentication / 401 errors from Airflow or other tools**: This is a CONFIGURATION issue you can help debug. Do NOT give up or ask the user to run CLI commands. Instead:
+   a. Use `search_knowledge_base` with "airflow api auth" to find the fix
+   b. Use `list_github_repos` → `get_github_tree` → `get_github_file` to inspect the user's infrastructure config files (docker-compose.yml, airflow.cfg, .env, etc.)
+   c. Look for missing auth configuration (e.g. `AIRFLOW__API__AUTH_BACKENDS` for Airflow 2.x)
+   d. Tell the user exactly what to change in their config, with the specific file path and setting
 Do NOT give up after one failed query - fix the issue and retry.
 
 ## Response Format
