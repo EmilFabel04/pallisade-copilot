@@ -148,6 +148,15 @@ model Organization {
   debugSessions   DebugSession[]
   artifacts       Artifact[]
 
+  // Coverage & Monitoring
+  monitors          Monitor[]
+  coverageSnapshots CoverageSnapshot[]
+
+  // Fix Patterns (Learning Loop)
+  issueFingerprints IssueFingerprint[]
+  fixPatterns       FixPattern[]
+  fixOutcomes       FixOutcome[]
+
   @@index([domain])
 }
 
@@ -1820,6 +1829,9 @@ model Integration {
   // User feedback on ML suppressions for this integration
   suppressionOverrides SuppressionOverride[]
 
+  // Universal monitors
+  monitors Monitor[]
+
   @@unique([organizationId, type, name]) // Prevent duplicate connections
   @@index([organizationId])
   @@index([type])
@@ -2738,4 +2750,143 @@ enum ArtifactType {
   INSIGHT // Analysis, explanations
   CODE    // Code snippets
   PLAN    // Implementation plans
+}
+
+// ==========================================
+// Universal Monitor Definitions
+// ==========================================
+
+model Monitor {
+  id   String @id @default(cuid())
+  name String
+
+  // Monitor configuration
+  monitorType MonitorKind
+  targetFqn   String       // database.schema.table
+  targetDatabase String?
+  targetSchema   String?
+  targetTable    String?
+  config         Json       // Monitor-specific config (thresholds, columns, etc.)
+
+  // Scheduling
+  enabled     Boolean  @default(true)
+  schedule    String?  // Cron expression
+  lastRunAt   DateTime?
+  lastStatus  MonitorRunStatus?
+  nextRunAt   DateTime?
+
+  // Baseline data (for anomaly detection)
+  baselineMean   Float?
+  baselineStddev Float?
+  baselineCount  Int?
+  baselineUpdatedAt DateTime?
+
+  // Metadata
+  createdBy  String?
+  source     String?  // "pallisade", "elementary", "monte_carlo", etc.
+  externalId String?  // ID in the external system
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+  integration    Integration? @relation(fields: [integrationId], references: [id])
+  integrationId  String?
+  runs           MonitorRun[]
+
+  @@unique([organizationId, targetFqn, monitorType])
+  @@index([organizationId])
+  @@index([targetFqn])
+  @@index([monitorType])
+  @@index([enabled])
+}
+
+model MonitorRun {
+  id String @id @default(cuid())
+
+  // Result
+  status     MonitorRunStatus
+  value      Float?
+  threshold  Float?
+  message    String?
+  details    Json?
+  sqlExecuted String?
+
+  // Timing
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+  durationMs  Int?
+
+  // Relations
+  monitor   Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  monitorId String
+
+  @@index([monitorId])
+  @@index([startedAt])
+  @@index([status])
+}
+
+model CoverageSnapshot {
+  id String @id @default(cuid())
+
+  // Aggregate scores
+  overallScore             Float
+  totalNodes               Int
+  nodesWithFullCoverage    Int
+  nodesWithPartialCoverage Int
+  nodesWithNoCoverage      Int
+
+  // Per-category scores
+  freshnessScore     Float?
+  volumeScore        Float?
+  schemaScore        Float?
+  qualityScore       Float?
+  lineageScore       Float?
+  ownershipScore     Float?
+  documentationScore Float?
+
+  // Gap counts
+  criticalGaps Int @default(0)
+  highGaps     Int @default(0)
+  mediumGaps   Int @default(0)
+  lowGaps      Int @default(0)
+
+  // Detailed data
+  nodeScores      Json?  // Array of per-node coverage scores
+  gaps            Json?  // Array of coverage gaps
+  recommendations Json?  // Array of monitor recommendations
+
+  // Metadata
+  source    String?  // What triggered this snapshot (e.g., "scan", "manual", "scheduled")
+  createdAt DateTime @default(now())
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+
+  @@index([organizationId])
+  @@index([createdAt])
+}
+
+enum MonitorKind {
+  FRESHNESS
+  VOLUME
+  SCHEMA_CHANGE
+  NULL_RATE
+  UNIQUENESS
+  DISTRIBUTION
+  REFERENTIAL
+  CUSTOM_SQL
+  ANOMALY
+}
+
+enum MonitorRunStatus {
+  PASS
+  WARN
+  FAIL
+  ERROR
+  SKIPPED
+  RUNNING
 }

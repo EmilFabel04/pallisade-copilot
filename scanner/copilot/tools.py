@@ -21,6 +21,7 @@ class ToolCategory(Enum):
     REPORTING = "reporting"
     KNOWLEDGE = "knowledge"
     OBSERVABILITY = "observability"
+    COVERAGE = "coverage"
     CHANGE_PLAN = "change_plan"
     ONBOARDING = "onboarding"
 
@@ -723,6 +724,146 @@ class ToolRegistry:
                 ),
             ],
             alternative_integrations={"MONTE_CARLO", "BIGEYE", "SODA", "ELEMENTARY"},
+        ))
+
+        # ==========================================
+        # COVERAGE TOOLS (Lineage Coverage Analysis)
+        # ==========================================
+
+        self._register(Tool(
+            name="get_coverage_report",
+            description=(
+                "Get a comprehensive coverage analysis for the lineage graph. "
+                "Scores every data asset across 7 dimensions: freshness, volume, "
+                "schema, quality, lineage, ownership, and documentation. "
+                "Returns overall score, per-category breakdowns, and gap counts. "
+                "Use this to understand the overall health of observability coverage."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter(
+                    "node_filter", "string",
+                    "Optional filter: 'all' (default), 'critical' (critical assets only), "
+                    "'uncovered' (assets with no coverage), 'tables' (TABLE nodes only).",
+                    required=False,
+                    default="all",
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_coverage_gaps",
+            description=(
+                "Identify the most impactful coverage gaps across the lineage graph. "
+                "Returns gaps sorted by severity (critical first), with context about "
+                "why each gap matters and what to do about it. "
+                "Use this to prioritize where to add monitoring next."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter(
+                    "severity", "string",
+                    "Filter by severity: 'critical', 'high', 'medium', 'low', 'info', or 'all'.",
+                    required=False,
+                    default="all",
+                    enum=["all", "critical", "high", "medium", "low", "info"],
+                ),
+                ToolParameter(
+                    "category", "string",
+                    "Filter by category: 'freshness', 'volume', 'schema', 'quality', "
+                    "'lineage', 'ownership', 'documentation', or 'all'.",
+                    required=False,
+                    default="all",
+                    enum=[
+                        "all", "freshness", "volume", "schema", "quality",
+                        "lineage", "ownership", "documentation",
+                    ],
+                ),
+                ToolParameter(
+                    "limit", "integer",
+                    "Maximum number of gaps to return (default: 20).",
+                    required=False,
+                    default=20,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_node_coverage",
+            description=(
+                "Get detailed coverage analysis for a specific data asset (node). "
+                "Shows which dimensions are covered vs uncovered, with per-category "
+                "scores and details about what provides each coverage point."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter(
+                    "node_name", "string",
+                    "Name or FQN of the node to analyze (e.g., 'analytics.orders').",
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_monitor_recommendations",
+            description=(
+                "Get actionable monitor recommendations to close coverage gaps. "
+                "Returns tech-agnostic monitor configs with SQL templates that work "
+                "across any connected warehouse (Snowflake, BigQuery, Postgres, etc.). "
+                "Each recommendation includes priority, description, and default config."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter(
+                    "monitor_type", "string",
+                    "Filter by monitor type: 'freshness', 'volume', 'schema_change', "
+                    "'null_rate', 'uniqueness', 'distribution', 'anomaly', or 'all'.",
+                    required=False,
+                    default="all",
+                    enum=[
+                        "all", "freshness", "volume", "schema_change",
+                        "null_rate", "uniqueness", "distribution", "anomaly",
+                    ],
+                ),
+                ToolParameter(
+                    "limit", "integer",
+                    "Maximum number of recommendations to return (default: 10).",
+                    required=False,
+                    default=10,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="run_coverage_monitor",
+            description=(
+                "Execute a specific monitor against a data asset. "
+                "Generates the appropriate SQL for the connected warehouse dialect, "
+                "runs it, and evaluates the result. Supports freshness, volume, "
+                "schema change, and anomaly detection monitors."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter(
+                    "monitor_type", "string",
+                    "Type of monitor to run: 'freshness', 'volume', 'schema_change', 'anomaly'.",
+                    enum=["freshness", "volume", "schema_change", "anomaly"],
+                ),
+                ToolParameter(
+                    "table_fqn", "string",
+                    "Fully qualified table name (database.schema.table).",
+                ),
+                ToolParameter(
+                    "config", "object",
+                    "Monitor-specific config overrides (e.g., "
+                    "{'timestamp_column': 'created_at', 'max_hours': 12} for freshness).",
+                    required=False,
+                ),
+            ],
+            alternative_integrations={
+                "SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT",
+                "SQLSERVER", "AZURE_SQL", "AZURE_SYNAPSE",
+            },
         ))
 
         # ==========================================
