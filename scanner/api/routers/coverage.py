@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 
 import structlog
 
-from ...coverage.models import CoverageReport, GapSeverity, MonitorType
 from ...coverage.scorer import CoverageScorer
 from ...coverage.gap_analyzer import GapAnalyzer
 from ...lineage.graph import LineageGraph
