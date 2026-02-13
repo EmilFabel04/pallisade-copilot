@@ -3,7 +3,15 @@ Pallisade Co-Pilot - FastAPI Application
 """
 
 import os
+import sys
 from datetime import datetime
+
+# Ensure the repo root is on sys.path so `from scanner.X import Y` works
+# when the server is started from inside the scanner/ directory.
+# api/app.py -> api/ -> scanner/ -> repo_root/
+_repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
