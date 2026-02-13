@@ -145,19 +145,19 @@ class MCPClientManager:
             return
 
         # Serialize graph data for the lineage server
-        graph_data = {}
+        graph_json = ""
         if self.engine_store and hasattr(self.engine_store, "graph") and self.engine_store.graph:
-            graph_data = self.engine_store.graph.to_json()
+            graph_json = self.engine_store.graph.to_json()  # Already a JSON string
         elif self.lineage_graph:
-            graph_data = self.lineage_graph.to_json()
+            graph_json = self.lineage_graph.to_json()
 
-        if not graph_data:
+        if not graph_json:
             logger.info("No lineage graph data available, skipping lineage MCP server")
             return
 
-        # Pass graph data via environment variable
+        # Pass graph data via environment variable (to_json() already returns a JSON string)
         env = dict(os.environ)
-        env["PALLISADE_LINEAGE_GRAPH"] = json.dumps(graph_data)
+        env["PALLISADE_LINEAGE_GRAPH"] = graph_json
 
         server_params = StdioServerParameters(
             command=server_cfg.command[0],

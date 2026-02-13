@@ -30,8 +30,8 @@ def _load_graph():
     # Import here to avoid import issues when running as subprocess
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-    from scanner.lineage.graph import LineageGraph
-    from scanner.lineage.engine.store import GraphStore
+    from lineage.graph import LineageGraph
+    from lineage.engine.store import GraphStore
 
     graph_json = os.environ.get("PALLISADE_LINEAGE_GRAPH", "")
     if not graph_json:
@@ -54,8 +54,8 @@ def _load_graph():
 
 def _build_filters(arguments: Dict[str, Any]):
     """Build a Filters object from tool arguments."""
-    from scanner.lineage.engine.store import Filters
-    from scanner.lineage.graph import AssetKind, LineageLevel, LinePlane, PlatformDomain
+    from lineage.engine.store import Filters
+    from lineage.graph import AssetKind, LineageLevel, LinePlane, PlatformDomain
 
     filters = Filters()
 
@@ -378,7 +378,7 @@ async def run_server():
                         continue
                     # Asset kind filter
                     if "asset_kind" in arguments:
-                        from scanner.lineage.graph import AssetKind
+                        from lineage.graph import AssetKind
                         try:
                             if node.asset_kind != AssetKind(arguments["asset_kind"]):
                                 continue
@@ -386,7 +386,7 @@ async def run_server():
                             pass
                     # Platform domain filter
                     if "platform_domain" in arguments:
-                        from scanner.lineage.graph import PlatformDomain
+                        from lineage.graph import PlatformDomain
                         try:
                             if node.platform_domain != PlatformDomain(arguments["platform_domain"]):
                                 continue
@@ -429,7 +429,7 @@ async def run_server():
                 for edge in graph.edges.values():
                     if not hasattr(edge, "lineage_level"):
                         continue
-                    from scanner.lineage.graph import LineageLevel
+                    from lineage.graph import LineageLevel
                     if edge.lineage_level != LineageLevel.COLUMN:
                         continue
 
