@@ -166,6 +166,12 @@ export async function POST(request: Request) {
         delete config.server;
       }
 
+      // host -> base_url (Airflow pipeline nodes use 'host' but MCP/adapters expect 'base_url')
+      if (toolType === 'AIRFLOW' && config.host && !config.base_url) {
+        config.base_url = config.host;
+        delete config.host;
+      }
+
       return {
         id: node.id,
         name: node.name,

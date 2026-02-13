@@ -20,6 +20,9 @@ class MCPServerConfig:
     supported_integration_types: Set[str]
     tool_prefix: str
     env_mapping: Dict[str, str] = field(default_factory=dict)
+    # Fallback keys: if a primary key isn't found, try these alternatives
+    # e.g. pipeline nodes store Airflow URL as "host" but adapters expect "base_url"
+    key_aliases: Dict[str, str] = field(default_factory=dict)
     is_custom: bool = False
 
     def matches_integration(self, integration_type: str) -> bool:
@@ -93,6 +96,7 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
             "password": "AIRFLOW_PASSWORD",
             "api_key": "AIRFLOW_AUTH_TOKEN",
         },
+        key_aliases={"base_url": "host"},  # pipeline nodes store URL as "host"
     ),
     # --- Custom Pallisade servers ---
     "lineage": MCPServerConfig(
