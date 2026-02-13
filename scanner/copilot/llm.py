@@ -638,7 +638,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Start MCP servers and merge their tools
         mcp_manager = None
         try:
-            from scanner.mcp.client import MCPClientManager
+            from scanner.mcp_bridge.client import MCPClientManager
             mcp_manager = MCPClientManager(
                 integrations=context.integrations,
                 engine_store=getattr(context, "engine_store", None),
@@ -816,7 +816,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Start MCP servers and merge their tools
         mcp_manager = None
         try:
-            from scanner.mcp.client import MCPClientManager
+            from scanner.mcp_bridge.client import MCPClientManager
             mcp_manager = MCPClientManager(
                 integrations=context.integrations,
                 engine_store=getattr(context, "engine_store", None),

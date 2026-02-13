@@ -549,7 +549,7 @@ async def run_server():
 
 
 def main():
-    """Entry point when run as python -m scanner.mcp.servers.lineage_server."""
+    """Entry point when run as python -m scanner.mcp_bridge.servers.lineage_server."""
     import asyncio
     asyncio.run(run_server())
 
