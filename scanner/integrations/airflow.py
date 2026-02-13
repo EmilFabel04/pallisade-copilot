@@ -161,7 +161,7 @@ class AirflowIntegration:
             api_key: API key for authentication
         """
         self.config = config
-        self.base_url = config.get('base_url', 'http://localhost:8080').rstrip('/')
+        self.base_url = (config.get('base_url') or config.get('host') or 'http://localhost:8080').rstrip('/')
         self.api_url = f"{self.base_url}/api/v1"
         
         # Setup auth

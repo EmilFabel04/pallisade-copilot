@@ -1866,6 +1866,24 @@ class ToolExecutor:
         except Exception as e:
             return ToolResult(success=False, error=str(e))
     
+    async def _execute_get_airflow_recent_failures(self, args: Dict[str, Any]) -> ToolResult:
+        """Get recent Airflow task failures."""
+        dag_id = args.get("dag_id")
+        limit = args.get("limit", 20)
+
+        airflow = self._adapters.get("AIRFLOW")
+        if not airflow:
+            return ToolResult(
+                success=False,
+                error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
+            )
+
+        try:
+            result = airflow.get_recent_failures(dag_id=dag_id, limit=limit)
+            return ToolResult(success=True, data=result)
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     async def _execute_get_airflow_task_logs(self, args: Dict[str, Any]) -> ToolResult:
         """Get Airflow task logs."""
         dag_id = args["dag_id"]
