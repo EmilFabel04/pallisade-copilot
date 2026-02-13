@@ -1033,11 +1033,24 @@ class ToolRegistry:
     def to_openai_tools(self, user_integrations: Set[str]) -> List[Dict[str, Any]]:
         """
         Convert available tools to OpenAI format.
-        
+
         Only includes tools that are available for the user's integrations.
         """
         available = self.get_available_tools(user_integrations)
         return [tool.to_openai_tool() for tool in available]
+
+    @staticmethod
+    def merge_mcp_tools(
+        static_tools: List[Dict[str, Any]],
+        mcp_tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge MCP-discovered tools with static registry tools.
+
+        MCP tools use prefixed names (e.g. mcp_snowflake__execute_query)
+        so no name collisions occur with legacy tools.
+        """
+        return static_tools + mcp_tools
 
 
 # Global registry instance

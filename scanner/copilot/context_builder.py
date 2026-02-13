@@ -183,6 +183,9 @@ class CopilotContext:
     # Pipeline context from onboarding (learned knowledge about user's setup)
     pipeline_context: Optional[Dict[str, Any]] = None
 
+    # MCP (Model Context Protocol) — set to True when MCP servers are active
+    mcp_enabled: bool = False
+
     def has_integration(self, integration_type: str) -> bool:
         """Check if a specific integration type is connected."""
         return integration_type.upper() in self.integration_types
@@ -297,6 +300,20 @@ class CopilotContext:
         if self.focused_node_ids:
             lines.append(f"### Current Focus")
             lines.append(f"User is looking at: {', '.join(self.focused_node_ids)}")
+            lines.append("")
+
+        # Add MCP dynamic exploration guidance
+        if self.mcp_enabled:
+            lines.append("### Dynamic Exploration (MCP)")
+            lines.append("You have access to MCP tools for on-demand exploration beyond the pre-loaded context above:")
+            lines.append("- **Warehouse tools** (`mcp_snowflake__*`, `mcp_bigquery__*`, `mcp_postgres__*`): Browse schemas, run queries, inspect objects dynamically")
+            lines.append("- **dbt tools** (`mcp_dbt__*`): Explore models, tests, docs, semantic layer, and column-level lineage via the Discovery API")
+            lines.append("- **Orchestration tools** (`mcp_airflow__*`): Inspect DAGs, task logs, and system health")
+            lines.append("- **Lineage tools** (`mcp_lineage__*`): Traverse upstream/downstream, explain edge evidence and confidence, blast radius analysis, column-level tracing")
+            lines.append("")
+            lines.append("Use these MCP tools to explore deeper when the pre-loaded context above is insufficient. "
+                         "For lineage queries, prefer `mcp_lineage__get_upstream` / `mcp_lineage__get_downstream` for interactive traversal "
+                         "and `mcp_lineage__explain_edge` to understand edge provenance and confidence.")
             lines.append("")
 
         return "\n".join(lines)
