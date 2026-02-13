@@ -102,10 +102,22 @@ class MCPClientManager:
         """Start an external MCP server subprocess."""
         # Build environment variables from credentials
         env = dict(os.environ)
+        mapped_vars = []
         for our_key, server_env_var in server_cfg.env_mapping.items():
             value = credentials.get(our_key)
             if value is not None:
                 env[server_env_var] = str(value)
+                mapped_vars.append(server_env_var)
+            else:
+                logger.warning(
+                    f"MCP '{server_name}': credential key '{our_key}' not found "
+                    f"(needed for env var {server_env_var}). "
+                    f"Available keys: {list(credentials.keys())}"
+                )
+        if mapped_vars:
+            logger.info(f"MCP '{server_name}': set env vars {mapped_vars}")
+        else:
+            logger.warning(f"MCP '{server_name}': no credentials mapped — server will use defaults")
 
         # Build command (substitute placeholders from credentials)
         command = []
