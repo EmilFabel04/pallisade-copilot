@@ -403,6 +403,7 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "get_table_stats",
             "search_lineage",
             "search_knowledge_base",
+            "get_coverage_report",
         ],
         auto_detect_patterns=[],  # Default mode, no detection needed
     ),
@@ -423,6 +424,8 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "query_warehouse",
             "get_upstream",
             "get_downstream",
+            "get_coverage_gaps",
+            "run_coverage_monitor",
         ],
         auto_detect_patterns=[
             r"why did .* fail",
@@ -550,6 +553,9 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "get_upstream",
             "get_downstream",
             "query_warehouse",
+            "get_coverage_report",
+            "get_coverage_gaps",
+            "get_monitor_recommendations",
         ],
         auto_detect_patterns=[
             r"what should i improve",
@@ -574,6 +580,7 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "get_upstream",
             "get_downstream",
             "get_active_incidents",
+            "run_coverage_monitor",
             "create_change_plan",
             "validate_change_plan",
         ],
