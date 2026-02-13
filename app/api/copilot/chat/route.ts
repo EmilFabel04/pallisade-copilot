@@ -244,9 +244,9 @@ export async function POST(request: Request) {
       name: i.name,
       type: i.type,
       status: i.status,
-      configKeys: Object.keys(i.config || {}).filter(k => !k.startsWith('_')),
+      configKeys: Object.keys(i.config || {}),
+      configKeyCount: Object.keys(i.config || {}).length,
       hasToken: !!(i.config?.access_token || i.config?.token),
-      hasMetadata: !!i.metadata,
     })));
 
     // Fetch lineage data from database to pass to copilot

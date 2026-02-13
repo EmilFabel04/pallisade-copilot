@@ -144,7 +144,7 @@ async def chat(
                 }
                 for i in request.integrations
             ]
-            logger.info(f"Received integrations: {[{'type': i['type'], 'status': i['status']} for i in integration_data]}")
+            logger.info(f"Received integrations: {[{'type': i['type'], 'status': i['status'], 'config_keys': list((i.get('config') or {}).keys())} for i in integration_data]}")
         else:
             logger.warning("No integrations received in chat request")
 
