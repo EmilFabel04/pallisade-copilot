@@ -57,16 +57,16 @@ export async function POST(
       return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
     }
 
-    // Find extractable nodes (warehouse + transformation layers)
+    // Find extractable nodes (warehouse + transformation + orchestration layers)
     // Valid statuses: CONNECTED (just connected) or HEALTHY (connected and healthy)
     const extractableNodes = stack.nodes.filter(
-      (n) => (n.layer === 'WAREHOUSE' || n.layer === 'TRANSFORMATION')
+      (n) => (n.layer === 'WAREHOUSE' || n.layer === 'TRANSFORMATION' || n.layer === 'ORCHESTRATION')
           && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
     );
 
     if (extractableNodes.length === 0) {
       return NextResponse.json({
-        error: 'No connected warehouse or transformation nodes found'
+        error: 'No connected warehouse, transformation, or orchestration nodes found'
       }, { status: 400 });
     }
 
@@ -114,9 +114,10 @@ export async function POST(
           continue;
         }
 
-        // For TRANSFORMATION nodes, attach GitHub config from any connected VERSION_CONTROL node
+        // For TRANSFORMATION and ORCHESTRATION nodes, attach GitHub config from any connected VERSION_CONTROL node
+        // Airflow needs it for DAG file parsing; dbt needs it for schema enrichment
         const extractConfig = { ...(decryptedConfig || {}) };
-        if (node.layer === 'TRANSFORMATION') {
+        if (node.layer === 'TRANSFORMATION' || node.layer === 'ORCHESTRATION') {
           const githubNode = stack.nodes.find(
             (n) => n.layer === 'VERSION_CONTROL' && n.toolType === 'github' && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
           );
