@@ -14,9 +14,10 @@ from pydantic import BaseModel, Field
 
 import structlog
 
-from ...coverage.scorer import CoverageScorer
-from ...coverage.gap_analyzer import GapAnalyzer
-from ...lineage.graph import LineageGraph
+from scanner.coverage.models import CoverageReport
+from scanner.coverage.scorer import CoverageScorer
+from scanner.coverage.gap_analyzer import GapAnalyzer
+from scanner.lineage.graph import LineageGraph
 
 logger = structlog.get_logger()
 
