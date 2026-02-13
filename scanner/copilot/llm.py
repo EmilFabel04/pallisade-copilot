@@ -611,7 +611,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 content="Anthropic not available. Please configure ANTHROPIC_API_KEY or switch to OpenAI.",
                 model=self.model,
             )
-        
+
         # Create tool executor first (needs adapters for schema fetch)
         executor = ToolExecutor(context)
 
@@ -631,117 +631,151 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Build system prompt (now includes schema info)
         system = self.build_system_prompt(context)
 
-        # Get available tools
+        # Get available tools (legacy)
         registry = get_tool_registry()
         tools = registry.to_anthropic_tools(context.integration_types)
 
-        # Convert messages to Anthropic format
-        anthropic_messages = self._convert_messages(messages)
+        # Start MCP servers and merge their tools
+        mcp_manager = None
+        try:
+            from scanner.mcp.client import MCPClientManager
+            mcp_manager = MCPClientManager(
+                integrations=context.integrations,
+                engine_store=getattr(context, "engine_store", None),
+                lineage_graph=getattr(context, "graph", None),
+            )
+            await mcp_manager.start_servers()
+            if mcp_manager.has_servers:
+                mcp_tools = await mcp_manager.discover_tools(format="anthropic")
+                tools = tools + mcp_tools
+                logger.info(f"[Anthropic] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                context.mcp_enabled = True
+        except Exception as e:
+            logger.warning(f"[Anthropic] MCP initialization failed (continuing without MCP): {e}")
+            mcp_manager = None
 
-        # Track total tokens
-        total_input_tokens = 0
-        total_output_tokens = 0
-        all_tool_calls = []
-        accumulated_text = []  # Accumulate text from ALL iterations, not just final
+        try:
+            # Convert messages to Anthropic format
+            anthropic_messages = self._convert_messages(messages)
 
-        # Iterate until we get a final response
-        for iteration in range(max_tool_iterations):
-            try:
-                # Call Claude
-                response = self.anthropic_client.messages.create(
-                    model=self.model,
-                    system=system,
-                    messages=anthropic_messages,
-                    tools=tools if tools else None,
-                    max_tokens=4096,
-                )
-                
-                # Track tokens
-                total_input_tokens += response.usage.input_tokens
-                total_output_tokens += response.usage.output_tokens
+            # Track total tokens
+            total_input_tokens = 0
+            total_output_tokens = 0
+            all_tool_calls = []
+            accumulated_text = []  # Accumulate text from ALL iterations, not just final
 
-                # Extract text from EVERY response (not just end_turn)
-                # This captures intermediate text like "I will create this now"
-                for block in response.content:
-                    if hasattr(block, "text") and block.text:
-                        accumulated_text.append(block.text)
+            # Iterate until we get a final response
+            for iteration in range(max_tool_iterations):
+                try:
+                    # Call Claude
+                    response = self.anthropic_client.messages.create(
+                        model=self.model,
+                        system=system,
+                        messages=anthropic_messages,
+                        tools=tools if tools else None,
+                        max_tokens=4096,
+                    )
 
-                # Check if we're done
-                if response.stop_reason == "end_turn":
-                    # Return all accumulated text from all iterations
-                    final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
+                    # Track tokens
+                    total_input_tokens += response.usage.input_tokens
+                    total_output_tokens += response.usage.output_tokens
 
+                    # Extract text from EVERY response (not just end_turn)
+                    # This captures intermediate text like "I will create this now"
+                    for block in response.content:
+                        if hasattr(block, "text") and block.text:
+                            accumulated_text.append(block.text)
+
+                    # Check if we're done
+                    if response.stop_reason == "end_turn":
+                        # Return all accumulated text from all iterations
+                        final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
+
+                        return CopilotResponse(
+                            content=final_content,
+                            tool_calls=all_tool_calls,
+                            input_tokens=total_input_tokens,
+                            output_tokens=total_output_tokens,
+                            model=self.model,
+                            stop_reason=response.stop_reason,
+                        )
+
+                    # Handle tool use
+                    if response.stop_reason == "tool_use":
+                        # Process tool calls
+                        tool_results = []
+
+                        for block in response.content:
+                            if block.type == "tool_use":
+                                tool_name = block.name
+                                tool_input = block.input
+                                tool_use_id = block.id
+
+                                logger.info(f"Executing tool: {tool_name}")
+
+                                # Route MCP-prefixed tools to MCP, others to legacy executor
+                                if tool_name.startswith("mcp_") and mcp_manager:
+                                    mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                                    # Convert MCP result to ToolResult-compatible format
+                                    from scanner.copilot.tools import ToolResult
+                                    result = ToolResult(
+                                        success=mcp_result.get("success", False),
+                                        data=mcp_result.get("data"),
+                                        error=mcp_result.get("error"),
+                                    )
+                                else:
+                                    result = await executor.execute(tool_name, tool_input)
+
+                                # Track tool call
+                                all_tool_calls.append({
+                                    "tool": tool_name,
+                                    "input": tool_input,
+                                    "result": result.to_dict(),
+                                })
+
+                                # Format result for Claude
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use_id,
+                                    "content": json.dumps(result.data if result.success else {"error": result.error}),
+                                })
+
+                        # Add assistant message with tool use
+                        anthropic_messages.append({
+                            "role": "assistant",
+                            "content": response.content,
+                        })
+
+                        # Add tool results
+                        anthropic_messages.append({
+                            "role": "user",
+                            "content": tool_results,
+                        })
+
+                        # Continue loop
+                        continue
+
+                    # Unexpected stop reason
+                    logger.warning(f"Unexpected stop reason: {response.stop_reason}")
+                    final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
                     return CopilotResponse(
                         content=final_content,
-                        tool_calls=all_tool_calls,
-                        input_tokens=total_input_tokens,
-                        output_tokens=total_output_tokens,
                         model=self.model,
                         stop_reason=response.stop_reason,
                     )
-                
-                # Handle tool use
-                if response.stop_reason == "tool_use":
-                    # Process tool calls
-                    tool_results = []
-                    
-                    for block in response.content:
-                        if block.type == "tool_use":
-                            tool_name = block.name
-                            tool_input = block.input
-                            tool_use_id = block.id
-                            
-                            logger.info(f"Executing tool: {tool_name}")
-                            
-                            # Execute the tool
-                            result = await executor.execute(tool_name, tool_input)
-                            
-                            # Track tool call
-                            all_tool_calls.append({
-                                "tool": tool_name,
-                                "input": tool_input,
-                                "result": result.to_dict(),
-                            })
-                            
-                            # Format result for Claude
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": json.dumps(result.data if result.success else {"error": result.error}),
-                            })
-                    
-                    # Add assistant message with tool use
-                    anthropic_messages.append({
-                        "role": "assistant",
-                        "content": response.content,
-                    })
-                    
-                    # Add tool results
-                    anthropic_messages.append({
-                        "role": "user",
-                        "content": tool_results,
-                    })
-                    
-                    # Continue loop
-                    continue
-                
-                # Unexpected stop reason
-                logger.warning(f"Unexpected stop reason: {response.stop_reason}")
-                final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
-                return CopilotResponse(
-                    content=final_content,
-                    model=self.model,
-                    stop_reason=response.stop_reason,
-                )
-                
-            except Exception as e:
-                logger.exception("Error in Anthropic chat")
-                return CopilotResponse(
-                    content=f"Error communicating with AI: {str(e)}",
-                    model=self.model,
-                )
 
-        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+                except Exception as e:
+                    logger.exception("Error in Anthropic chat")
+                    return CopilotResponse(
+                        content=f"Error communicating with AI: {str(e)}",
+                        model=self.model,
+                    )
+
+            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+        finally:
+            # Always shut down MCP servers
+            if mcp_manager:
+                await mcp_manager.shutdown()
 
     async def _chat_openai(
         self,
@@ -775,137 +809,170 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Build system prompt (now includes schema info)
         system = self.build_system_prompt(context)
 
-        # Get available tools in OpenAI format
+        # Get available tools in OpenAI format (legacy)
         registry = get_tool_registry()
         tools = registry.to_openai_tools(context.integration_types)
-        
-        # Convert messages to OpenAI format
-        openai_messages = self._convert_messages_openai(messages, system)
-        
-        # Track total tokens
-        total_input_tokens = 0
-        total_output_tokens = 0
-        all_tool_calls = []
-        accumulated_text = []  # Accumulate text from ALL iterations, not just final
 
-        # Check if this is a reasoning model (o1, o3) that uses different params
-        is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
-        
-        # Iterate until we get a final response
-        for iteration in range(max_tool_iterations):
-            try:
-                # Build API call params - reasoning models use max_completion_tokens
-                api_params = {
-                    "model": self.model,
-                    "messages": openai_messages,
-                }
-                
-                # GPT-5.x and reasoning models use max_completion_tokens
-                is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
-                if is_new_model:
-                    api_params["max_completion_tokens"] = 4096
-                else:
-                    api_params["max_tokens"] = 4096
+        # Start MCP servers and merge their tools
+        mcp_manager = None
+        try:
+            from scanner.mcp.client import MCPClientManager
+            mcp_manager = MCPClientManager(
+                integrations=context.integrations,
+                engine_store=getattr(context, "engine_store", None),
+                lineage_graph=getattr(context, "graph", None),
+            )
+            await mcp_manager.start_servers()
+            if mcp_manager.has_servers:
+                mcp_tools = await mcp_manager.discover_tools(format="openai")
+                tools = tools + mcp_tools
+                logger.info(f"[OpenAI] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                context.mcp_enabled = True
+        except Exception as e:
+            logger.warning(f"[OpenAI] MCP initialization failed (continuing without MCP): {e}")
+            mcp_manager = None
 
-                # Add tools (reasoning models don't support tools yet)
-                if tools and not is_reasoning_model:
-                    api_params["tools"] = tools
-                
-                # Call OpenAI
-                response = self.openai_client.chat.completions.create(**api_params)
-                
-                # Track tokens
-                if response.usage:
-                    total_input_tokens += response.usage.prompt_tokens
-                    total_output_tokens += response.usage.completion_tokens
-                
-                message = response.choices[0].message
-                finish_reason = response.choices[0].finish_reason
+        try:
+            # Convert messages to OpenAI format
+            openai_messages = self._convert_messages_openai(messages, system)
 
-                # Extract text from EVERY response (not just stop)
-                # This captures intermediate text like "I will create this now"
-                if message.content:
-                    accumulated_text.append(message.content)
+            # Track total tokens
+            total_input_tokens = 0
+            total_output_tokens = 0
+            all_tool_calls = []
+            accumulated_text = []  # Accumulate text from ALL iterations, not just final
 
-                # Check if we're done
-                if finish_reason == "stop":
-                    # Return all accumulated text from all iterations
-                    final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
+            # Check if this is a reasoning model (o1, o3) that uses different params
+            is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
+
+            # Iterate until we get a final response
+            for iteration in range(max_tool_iterations):
+                try:
+                    # Build API call params - reasoning models use max_completion_tokens
+                    api_params = {
+                        "model": self.model,
+                        "messages": openai_messages,
+                    }
+
+                    # GPT-5.x and reasoning models use max_completion_tokens
+                    is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
+                    if is_new_model:
+                        api_params["max_completion_tokens"] = 4096
+                    else:
+                        api_params["max_tokens"] = 4096
+
+                    # Add tools (reasoning models don't support tools yet)
+                    if tools and not is_reasoning_model:
+                        api_params["tools"] = tools
+
+                    # Call OpenAI
+                    response = self.openai_client.chat.completions.create(**api_params)
+
+                    # Track tokens
+                    if response.usage:
+                        total_input_tokens += response.usage.prompt_tokens
+                        total_output_tokens += response.usage.completion_tokens
+
+                    message = response.choices[0].message
+                    finish_reason = response.choices[0].finish_reason
+
+                    # Extract text from EVERY response (not just stop)
+                    # This captures intermediate text like "I will create this now"
+                    if message.content:
+                        accumulated_text.append(message.content)
+
+                    # Check if we're done
+                    if finish_reason == "stop":
+                        # Return all accumulated text from all iterations
+                        final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
+                        return CopilotResponse(
+                            content=final_content,
+                            tool_calls=all_tool_calls,
+                            input_tokens=total_input_tokens,
+                            output_tokens=total_output_tokens,
+                            model=self.model,
+                            stop_reason=finish_reason,
+                        )
+
+                    # Handle tool calls
+                    if finish_reason == "tool_calls" and message.tool_calls:
+                        # Add assistant message with tool calls
+                        openai_messages.append({
+                            "role": "assistant",
+                            "content": message.content,
+                            "tool_calls": [
+                                {
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments,
+                                    }
+                                }
+                                for tc in message.tool_calls
+                            ]
+                        })
+
+                        # Execute each tool
+                        for tool_call in message.tool_calls:
+                            tool_name = tool_call.function.name
+                            try:
+                                tool_input = json.loads(tool_call.function.arguments)
+                            except json.JSONDecodeError:
+                                tool_input = {}
+
+                            logger.info(f"Executing tool: {tool_name}")
+
+                            # Route MCP-prefixed tools to MCP, others to legacy executor
+                            if tool_name.startswith("mcp_") and mcp_manager:
+                                mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                                from scanner.copilot.tools import ToolResult
+                                result = ToolResult(
+                                    success=mcp_result.get("success", False),
+                                    data=mcp_result.get("data"),
+                                    error=mcp_result.get("error"),
+                                )
+                            else:
+                                result = await executor.execute(tool_name, tool_input)
+
+                            # Track tool call
+                            all_tool_calls.append({
+                                "tool": tool_name,
+                                "input": tool_input,
+                                "result": result.to_dict(),
+                            })
+
+                            # Add tool result
+                            openai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(result.data if result.success else {"error": result.error}),
+                            })
+
+                        # Continue loop
+                        continue
+
+                    # Unexpected finish reason
+                    logger.warning(f"Unexpected finish reason: {finish_reason}")
+                    final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
                     return CopilotResponse(
                         content=final_content,
-                        tool_calls=all_tool_calls,
-                        input_tokens=total_input_tokens,
-                        output_tokens=total_output_tokens,
                         model=self.model,
-                        stop_reason=finish_reason,
+                        stop_reason=finish_reason or "unknown",
                     )
-                
-                # Handle tool calls
-                if finish_reason == "tool_calls" and message.tool_calls:
-                    # Add assistant message with tool calls
-                    openai_messages.append({
-                        "role": "assistant",
-                        "content": message.content,
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                }
-                            }
-                            for tc in message.tool_calls
-                        ]
-                    })
-                    
-                    # Execute each tool
-                    for tool_call in message.tool_calls:
-                        tool_name = tool_call.function.name
-                        try:
-                            tool_input = json.loads(tool_call.function.arguments)
-                        except json.JSONDecodeError:
-                            tool_input = {}
-                        
-                        logger.info(f"Executing tool: {tool_name}")
-                        
-                        # Execute the tool
-                        result = await executor.execute(tool_name, tool_input)
-                        
-                        # Track tool call
-                        all_tool_calls.append({
-                            "tool": tool_name,
-                            "input": tool_input,
-                            "result": result.to_dict(),
-                        })
-                        
-                        # Add tool result
-                        openai_messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(result.data if result.success else {"error": result.error}),
-                        })
-                    
-                    # Continue loop
-                    continue
-                
-                # Unexpected finish reason
-                logger.warning(f"Unexpected finish reason: {finish_reason}")
-                final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
-                return CopilotResponse(
-                    content=final_content,
-                    model=self.model,
-                    stop_reason=finish_reason or "unknown",
-                )
 
-            except Exception as e:
-                logger.exception("Error in OpenAI chat")
-                return CopilotResponse(
-                    content=f"Error communicating with AI: {str(e)}",
-                    model=self.model,
-                )
+                except Exception as e:
+                    logger.exception("Error in OpenAI chat")
+                    return CopilotResponse(
+                        content=f"Error communicating with AI: {str(e)}",
+                        model=self.model,
+                    )
 
-        return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+        finally:
+            # Always shut down MCP servers
+            if mcp_manager:
+                await mcp_manager.shutdown()
     
     def _build_max_iterations_response(
         self,
