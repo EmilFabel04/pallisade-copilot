@@ -1929,9 +1929,26 @@ class ToolExecutor:
                     break
 
             if not dag_node:
+                # Help the LLM find the right node
+                airflow_nodes = [
+                    {"name": n.name, "fqn": n.fqn, "type": n.node_type.value, "id": n.id}
+                    for n in graph.nodes.values()
+                    if n.platform == "airflow"
+                ]
+                hint = ""
+                if airflow_nodes:
+                    names = [f"{n['name']} ({n['type']})" for n in airflow_nodes[:10]]
+                    hint = f" Found {len(airflow_nodes)} Airflow nodes in the graph: {', '.join(names)}. Try using the exact name from this list."
+                else:
+                    hint = (
+                        f" No Airflow nodes exist in the lineage graph ({len(graph.nodes)} total nodes). "
+                        f"Try: 1) search_lineage with '*{dag_id}*' to check all nodes, "
+                        f"2) get_lineage_stats to check coverage, "
+                        f"3) get_dag_run_history to get DAG info directly from Airflow API."
+                    )
                 return ToolResult(
                     success=False,
-                    error=f"Airflow DAG '{dag_id}' not found in the lineage graph. Ensure Airflow lineage has been extracted."
+                    error=f"Airflow DAG '{dag_id}' not found in the lineage graph.{hint}"
                 )
 
             # Collect downstream subgraph (DAG → tasks → tables)
@@ -2003,7 +2020,12 @@ class ToolExecutor:
 
         return ToolResult(
             success=False,
-            error="No lineage engine graph available. Extract Airflow lineage first via the lineage page."
+            error=(
+                "No lineage engine graph available. "
+                "You can still get Airflow info directly: use get_dag_run_history, get_airflow_dag_status, "
+                "or get_airflow_task_logs to investigate the DAG via the Airflow API. "
+                "Use get_github_tree + get_github_file to inspect DAG source code."
+            )
         )
 
     async def _execute_get_asset_orchestration_context(self, args: Dict[str, Any]) -> ToolResult:
@@ -2021,7 +2043,7 @@ class ToolExecutor:
         if not resolved_id:
             return ToolResult(
                 success=False,
-                error=f"Asset '{asset_name}' not found in the lineage graph."
+                error=f"Asset '{asset_name}' not found in the lineage graph. Try: 1) search_lineage with '*{asset_name.split('.')[-1]}*' to find the node, 2) use the full FQN (project.dataset.table)."
             )
 
         # Get cross-plane edges for this asset
