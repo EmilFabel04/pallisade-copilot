@@ -387,7 +387,7 @@ class CopilotContext:
         total_edges = len(graph.edges)
 
         lines = [f"### Lineage Graph ({total_nodes} nodes, {total_edges} edges)", ""]
-        lines.append("Use node names/FQNs below as `node_id` for get_upstream, get_downstream, get_node_details, and analyze_change_impact.")
+        lines.append("Use node names or FQNs (shown in backticks as `fqn: ...`) below as `node_id` for get_upstream, get_downstream, get_node_details, and analyze_change_impact. Platform tags like {airflow}, {dbt}, {bigquery} show which system owns each node. If a tool returns 'not found', use `search_lineage` with a wildcard pattern to find the correct node ID.")
         lines.append("")
 
         # Classify nodes into sources, intermediates, outputs
@@ -451,10 +451,19 @@ class CopilotContext:
             return " ".join(parts)
 
         def _format_node(node: LineageNode, show_adjacency: bool = True) -> str:
-            """Format a single node line."""
+            """Format a single node line with platform and FQN."""
             type_label = _node_type_label(node)
             name = _short_name(node)
-            line = f"  {name} [{type_label}]"
+            # Show platform/system so LLM knows what produced the node
+            platform_tag = ""
+            if node.platform:
+                platform_tag = f" {{{node.platform}}}"
+            # Show full FQN if different from short name (so LLM can use it in tool calls)
+            fqn_hint = ""
+            full_fqn = node.fqn or node.name
+            if full_fqn != name and len(full_fqn) <= 80:
+                fqn_hint = f" (fqn: `{full_fqn}`)"
+            line = f"  {name} [{type_label}]{platform_tag}{fqn_hint}"
             if show_adjacency:
                 adj = _adjacency_str(node)
                 if adj:

@@ -212,12 +212,16 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 - **Multi-table questions**: Combine into ONE query using UNION ALL or subqueries. Example: To check null counts across 4 tables, use UNION ALL to get all results in one call.
 - **Investigation / debugging**: Start with ONE comprehensive diagnostic query that checks multiple things (row counts, null counts, recent timestamps) together. Only make follow-up queries if the first reveals something that needs deeper investigation.
 - **Cross-warehouse comparison**: If comparing two warehouses, that's 2 queries max (one per warehouse). Combine all checks for each warehouse into a single query.
-- **Lineage questions** ("what feeds into X?", "what depends on Y?"): Use `get_upstream` or `get_downstream`.
+- **Lineage questions** ("what feeds into X?", "what depends on Y?"): Use `get_upstream` or `get_downstream`. If the node isn't found, use `search_lineage` with wildcards to find the correct ID first.
+- **Airflow DAG lineage** ("what tables does my DAG produce?", "show the data flow"): Use `get_airflow_dag_lineage` for the DAG→task→table subgraph. If it returns "not found", use `search_lineage` with `*airflow*` or `*dag*` to find what Airflow nodes exist, then check `get_lineage_stats` for coverage info.
+- **Orchestration context** ("what produces this table?", "why is it stale?"): Use `get_asset_orchestration_context` with the table FQN. This finds the DAG/task that produces a table via cross-plane edges.
 - **Finding tables** ("do I have a users table?"): Check the schema section below first. Only use `search_lineage` or INFORMATION_SCHEMA if the table isn't listed.
 - **Table health** ("is my data fresh?", "how big is X?"): Use `get_table_stats`.
 - **Impact analysis** ("what breaks if I change X?"): Use `get_downstream` to find all dependents.
+- **Lineage coverage / completeness** ("is my lineage complete?"): Use `get_lineage_stats` to see node/edge counts, coverage percentages, and confidence distribution.
+- **Verifying lineage edges** ("why does X connect to Y?"): Use `explain_edge` with the edge ID from upstream/downstream results.
 - **dbt questions** ("show me the model SQL", "did my run pass?"): Use `get_dbt_model`, `get_dbt_run_history`, or `get_dbt_test_results`.
-- **Pipeline failures** ("why did my DAG fail?", "what happened last night?"): Use orchestration tools to get the DAG status, then get task logs for the failing task. Read the actual error message. If it's a data issue, run follow-up SQL queries to investigate.
+- **Pipeline failures** ("why did my DAG fail?", "what happened last night?"): Use orchestration tools to get the DAG status, then get task logs for the failing task. Read the actual error message. If it's a data issue, run follow-up SQL queries to investigate. If you encounter errors accessing Airflow, use GitHub tools to inspect the infrastructure config.
 - **Ingestion status** ("is Fivetran syncing?", "last sync time?"): Use `get_fivetran_connector_status` or `get_airbyte_connection_status`. For failures, also get sync logs.
 - **Code/config suggestions**: FIRST call `get_dbt_model` for relevant models to get their current SQL, schema, database, path, and dependencies. Then give copy-paste ready code using REAL names.
 - **Knowledge/advice questions** ("how does Snowflake differ from BigQuery?", "Kafka best practices"): Use `search_knowledge_base` for curated expert guidance.
@@ -235,6 +239,13 @@ If a query fails:
    b. Use `list_github_repos` → `get_github_tree` → `get_github_file` to inspect the user's infrastructure config files (docker-compose.yml, airflow.cfg, .env, etc.)
    c. Look for missing auth configuration (e.g. `AIRFLOW__API__AUTH_BACKENDS` for Airflow 2.x)
    d. Tell the user exactly what to change in their config, with the specific file path and setting
+7. **Lineage "not found" errors**: When `get_airflow_dag_lineage`, `get_upstream`, `get_downstream`, or `get_asset_orchestration_context` say a node is not found, DO NOT give up. Instead:
+   a. Use `search_lineage` with wildcards (e.g., `*dag_name*`, `*table_name*`) to find what nodes actually exist
+   b. Use `get_lineage_stats` to check if any lineage was extracted at all
+   c. Try the node's full FQN instead of just its name (check the lineage catalog in the prompt for FQNs)
+   d. For Airflow DAGs: also use `get_dag_run_history` and Airflow API tools to get info from Airflow directly — don't assume lineage is the only path to understanding the pipeline
+   e. For tables: use `get_asset_orchestration_context` with the full table FQN to find the producing DAG
+   f. Cross-reference: if you can see the DAG runs but not the lineage, tell the user lineage extraction may need to be re-run, and use the tools you DO have to answer their question
 Do NOT give up after one failed query - fix the issue and retry.
 
 ## Response Format
