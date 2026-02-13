@@ -1202,6 +1202,21 @@ class CopilotContextBuilder:
                 "get_incident_details",
             ])
 
+        # Coverage tools (always available — they use the lineage graph
+        # to compute scores/gaps/recommendations, no extra integration needed)
+        tools.extend([
+            "get_coverage_report",
+            "get_coverage_gaps",
+            "get_node_coverage",
+            "get_monitor_recommendations",
+        ])
+
+        # run_coverage_monitor needs a warehouse to execute SQL
+        warehouse_types = {"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT",
+                          "SQLSERVER", "AZURE_SQL", "AZURE_SYNAPSE"}
+        if integration_types & warehouse_types:
+            tools.append("run_coverage_monitor")
+
         # Change plan tools (always available - core copilot functionality)
         tools.extend([
             "create_change_plan",
