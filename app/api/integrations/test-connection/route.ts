@@ -340,14 +340,14 @@ export async function POST(request: NextRequest) {
       }
 
       case 'elementary': {
-        const apiKey = decryptedConfig.api_key;
-
-        if (!apiKey) {
-          return NextResponse.json({ success: false, message: 'API key is required' });
-        }
-
-        // Elementary Cloud authentication
-        return NextResponse.json({ success: true, message: 'Elementary credentials saved (verify with a sync)' });
+        // Elementary is dbt-native — it stores test results in the warehouse.
+        // No external API key needed; the copilot will use the existing
+        // warehouse connection to query Elementary tables.
+        const schema = decryptedConfig.schema || 'elementary';
+        return NextResponse.json({
+          success: true,
+          message: `Elementary configured (schema: ${schema}). Results will be read from your connected warehouse.`,
+        });
       }
 
       default:

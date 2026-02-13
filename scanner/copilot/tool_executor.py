@@ -2296,7 +2296,22 @@ class ToolExecutor:
         for integration in self.context.integrations:
             if integration.type.upper() in OBSERVABILITY_TYPES:
                 try:
-                    client = create_observability_client(integration.type, integration.config)
+                    config = dict(integration.config or {})
+
+                    # Elementary is dbt-native — it stores results in the
+                    # warehouse.  Inject the first available warehouse adapter
+                    # so the client can run SQL against Elementary tables.
+                    if integration.type.upper() == "ELEMENTARY" and "warehouse_adapter" not in config:
+                        warehouse_adapter = next(iter(self._adapters.values()), None)
+                        if warehouse_adapter:
+                            config["warehouse_adapter"] = warehouse_adapter
+                            # Tag the warehouse type so Elementary can adjust SQL dialect
+                            config.setdefault(
+                                "warehouse_type",
+                                next(iter(self._adapters.keys()), "unknown"),
+                            )
+
+                    client = create_observability_client(integration.type, config)
                     if client and client.connect():
                         clients.append(client)
                 except Exception as e:

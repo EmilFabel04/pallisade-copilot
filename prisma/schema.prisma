@@ -1875,6 +1875,14 @@ enum IntegrationType {
   METABASE // Open-source BI
 
   // ===========================================
+  // DATA OBSERVABILITY (Layer: OBSERVABILITY)
+  // ===========================================
+  ELEMENTARY // dbt-native data observability
+  MONTE_CARLO // Monte Carlo data observability
+  BIGEYE // Bigeye data quality monitoring
+  SODA // Soda data quality checks
+
+  // ===========================================
   // CODE & VERSION CONTROL
   // ===========================================
   GITHUB // For fix PRs

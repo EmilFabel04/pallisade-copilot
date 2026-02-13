@@ -500,10 +500,10 @@ export const INTEGRATIONS: Record<IntegrationType, IntegrationDefinition[]> = {
     {
       id: 'elementary',
       name: 'Elementary',
-      description: 'dbt-native data observability',
+      description: 'dbt-native data observability — queries test results directly in your warehouse',
       category: 'OBSERVABILITY',
       configFields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Elementary Cloud API key' },
+        { name: 'schema', label: 'Elementary Schema', type: 'text', required: false, placeholder: 'elementary (default)' },
       ],
     },
   ],
