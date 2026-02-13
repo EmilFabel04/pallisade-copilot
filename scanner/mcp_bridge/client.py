@@ -105,6 +105,14 @@ class MCPClientManager:
         mapped_vars = []
         for our_key, server_env_var in server_cfg.env_mapping.items():
             value = credentials.get(our_key)
+            # Try alias if primary key not found (e.g. "host" for "base_url")
+            if value is None and server_cfg.key_aliases.get(our_key):
+                alias = server_cfg.key_aliases[our_key]
+                value = credentials.get(alias)
+                if value is not None:
+                    logger.info(
+                        f"MCP '{server_name}': using alias '{alias}' for '{our_key}'"
+                    )
             if value is not None:
                 env[server_env_var] = str(value)
                 mapped_vars.append(server_env_var)
