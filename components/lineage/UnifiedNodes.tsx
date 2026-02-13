@@ -15,6 +15,8 @@ import {
   CheckCircle,
   Clock,
   XCircle,
+  Workflow,
+  Play,
 } from 'lucide-react';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { CATEGORY_VISUALS, type UnifiedNodeCategory } from './types';
@@ -61,6 +63,8 @@ interface DataAssetNodeData {
   issues?: DataAssetIssues;
   owner?: string;
   tags?: string[];
+  // Overlay mode (orchestration overlay on data tab)
+  isOverlay?: boolean;
 }
 
 // Get layer icon component
@@ -75,6 +79,8 @@ function getLayerIcon(category: UnifiedNodeCategory) {
       return <Database {...iconProps} />;
     case 'reporting':
       return <BarChart3 {...iconProps} />;
+    case 'orchestration':
+      return <Workflow {...iconProps} />;
     default:
       return <Database {...iconProps} />;
   }
@@ -92,6 +98,10 @@ function getDataAssetIcon(category: UnifiedNodeCategory) {
       return <ArrowDownToLine {...iconProps} />;
     case 'model':
       return <Cog {...iconProps} />;
+    case 'dag':
+      return <Workflow {...iconProps} />;
+    case 'task':
+      return <Play {...iconProps} />;
     default:
       return <Table {...iconProps} />;
   }
@@ -278,6 +288,8 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
       style={{
         borderColor: borderColor,
         backgroundColor: visuals.bgColor,
+        opacity: data.isOverlay ? 0.5 : 1,
+        borderStyle: data.isOverlay ? 'dashed' : 'solid',
       }}
     >
       {/* Input handle (left side) */}

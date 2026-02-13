@@ -401,7 +401,48 @@ class ToolRegistry:
             ],
             required_integrations={"AIRFLOW"},
         ))
-        
+
+        self._register(Tool(
+            name="get_airflow_dag_lineage",
+            description="Get the lineage subgraph for an Airflow DAG — shows the DAG's tasks, their upstream/downstream table dependencies, and how they connect to warehouse tables. Use when the user asks about what tables a DAG reads/writes, or the data flow through an orchestration pipeline.",
+            category=ToolCategory.ORCHESTRATION,
+            parameters=[
+                ToolParameter("dag_id", "string", "The DAG ID to get lineage for"),
+                ToolParameter("depth", "integer", "How many hops to traverse from the DAG node", required=False, default=3),
+            ],
+            required_integrations={"AIRFLOW"},
+        ))
+
+        self._register(Tool(
+            name="get_asset_orchestration_context",
+            description=(
+                "Get the orchestration context for a data asset (table, view, model). "
+                "Returns producing DAG/task, last run status, success rate, and freshness. "
+                "Use when the user asks 'why is my_table stale?', 'what produces this table?', "
+                "or 'when did this table last update?'."
+            ),
+            category=ToolCategory.LINEAGE,
+            parameters=[
+                ToolParameter("asset_name", "string", "The fully qualified name of the data asset (e.g., 'project.dataset.table')"),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_dag_run_history",
+            description=(
+                "Get recent DAG run history with task-level details. "
+                "Returns run states, durations, task success/failure breakdown. "
+                "Use when the user asks about DAG run history, failure patterns, "
+                "or wants to investigate a specific run."
+            ),
+            category=ToolCategory.ORCHESTRATION,
+            parameters=[
+                ToolParameter("dag_id", "string", "The DAG ID"),
+                ToolParameter("limit", "integer", "Maximum runs to return", required=False, default=10),
+            ],
+            required_integrations={"AIRFLOW"},
+        ))
+
         # ==========================================
         # ORCHESTRATION TOOLS (Dagster)
         # ==========================================

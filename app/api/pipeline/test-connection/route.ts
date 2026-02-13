@@ -328,6 +328,50 @@ export async function POST(request: NextRequest) {
         };
         break;
 
+      // Orchestration tools - test directly
+      case 'airflow': {
+        try {
+          const host = config.host;
+          if (!host) {
+            // GitHub-only mode (static DAG parsing) — no API to test
+            return NextResponse.json({
+              success: true,
+              message: 'Airflow configured for GitHub DAG parsing (no API connection needed)'
+            });
+          }
+
+          // API mode — ping the Airflow health endpoint
+          const username = config.username;
+          const password = config.password;
+          const headers: Record<string, string> = { 'Accept': 'application/json' };
+          if (username && password) {
+            headers['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+          }
+
+          const healthUrl = `${host.replace(/\/$/, '')}/api/v1/health`;
+          const afResponse = await fetch(healthUrl, {
+            headers,
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (afResponse.ok) {
+            const data = await afResponse.json();
+            const status = data?.metadatabase?.status || 'unknown';
+            return NextResponse.json({
+              success: true,
+              message: `Connected to Airflow (metadb: ${status})`
+            });
+          } else if (afResponse.status === 401 || afResponse.status === 403) {
+            return NextResponse.json({ success: false, message: 'Invalid Airflow credentials' });
+          } else {
+            return NextResponse.json({ success: false, message: `Airflow API error: ${afResponse.status}` });
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : 'Unknown error';
+          return NextResponse.json({ success: false, message: `Failed to connect to Airflow: ${msg}` });
+        }
+      }
+
       // Version Control tools - test directly without scanner API
       case 'github': {
         try {

@@ -116,6 +116,7 @@ def create_default_registry() -> AdapterRegistry:
     from .adapters.bi_query import BIQueryAdapter
     from .adapters.live_warehouse import LiveWarehouseAdapter
     from .adapters.live_dbt import LiveDbtAdapter
+    from .adapters.live_airflow import LiveAirflowAdapter
 
     registry = AdapterRegistry()
     # Reference adapters (JSON fixture-based)
@@ -125,4 +126,5 @@ def create_default_registry() -> AdapterRegistry:
     # Live adapters (connect to real infrastructure)
     registry.register_type("live_warehouse", LiveWarehouseAdapter)
     registry.register_type("live_dbt", LiveDbtAdapter)
+    registry.register_type("live_airflow", LiveAirflowAdapter)
     return registry

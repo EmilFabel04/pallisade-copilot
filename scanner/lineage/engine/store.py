@@ -18,7 +18,9 @@ from ..graph import (
     LineageEdge,
     LineageGraph,
     LineageLevel,
+    LinePlane,
     LineageNode,
+    NodeType,
     PlatformDomain,
     TimeWindow,
 )
@@ -40,6 +42,7 @@ class Filters:
     adapter_ids: Optional[Set[str]] = None
     time_window: Optional[TimeWindow] = None
     include_unresolved: bool = False
+    planes: Optional[Set[LinePlane]] = None
 
 
 @dataclass
@@ -48,6 +51,7 @@ class CoverageStats:
     total_nodes: int = 0
     total_edges: int = 0
     edges_by_level: Dict[str, int] = field(default_factory=dict)
+    edges_by_plane: Dict[str, int] = field(default_factory=dict)
     edges_by_system: Dict[str, int] = field(default_factory=dict)
     nodes_by_domain: Dict[str, int] = field(default_factory=dict)
     nodes_by_kind: Dict[str, int] = field(default_factory=dict)
@@ -64,6 +68,7 @@ class CoverageStats:
             "total_nodes": self.total_nodes,
             "total_edges": self.total_edges,
             "edges_by_level": self.edges_by_level,
+            "edges_by_plane": self.edges_by_plane,
             "edges_by_system": self.edges_by_system,
             "nodes_by_domain": self.nodes_by_domain,
             "nodes_by_kind": self.nodes_by_kind,
@@ -276,6 +281,10 @@ class GraphStore:
         for level, edge_ids in self.graph._by_lineage_level.items():
             stats.edges_by_level[level.value] = len(edge_ids)
 
+        # Edges by plane
+        for plane, edge_ids in self.graph._by_plane.items():
+            stats.edges_by_plane[plane.value] = len(edge_ids)
+
         # Edges by discovered_from (system)
         for edge in self.graph.edges.values():
             src = edge.discovered_from or "unknown"
@@ -326,6 +335,61 @@ class GraphStore:
 
         return stats
 
+    # ---- Cross-plane queries ----
+
+    def get_cross_links(self, asset_id: str) -> List[LineageEdge]:
+        """Return all CROSS-plane edges where asset_id is source or target."""
+        if not self.graph:
+            return []
+        cross_ids = self.graph._by_plane.get(LinePlane.CROSS, set())
+        return [
+            self.graph.edges[eid] for eid in cross_ids
+            if eid in self.graph.edges
+            and (self.graph.edges[eid].source_id == asset_id
+                 or self.graph.edges[eid].target_id == asset_id)
+        ]
+
+    def get_control_plane_subgraph(
+        self, dag_id: Optional[str] = None,
+    ) -> LineageGraph:
+        """Return a subgraph containing orchestration nodes and their cross-links.
+
+        If dag_id is given, restrict to that DAG and its tasks.
+        Otherwise return all orchestration nodes.
+        """
+        if not self.graph:
+            return LineageGraph()
+
+        sub = LineageGraph()
+
+        # Collect orchestration nodes
+        for node in self.graph.nodes.values():
+            if node.platform_domain != PlatformDomain.ORCHESTRATION:
+                continue
+            if dag_id:
+                # Match the DAG itself or tasks belonging to it
+                is_dag = node.node_type == NodeType.DAG and node.name == dag_id
+                is_task = (node.node_type == NodeType.TASK
+                           and node.raw_metadata.get("dag_id") == dag_id)
+                if not is_dag and not is_task:
+                    continue
+            sub.add_node(node)
+
+        # Add CONTROL and CROSS edges that touch these nodes
+        for edge in self.graph.edges.values():
+            if edge.plane in (LinePlane.CONTROL, LinePlane.CROSS):
+                src_in = edge.source_id in sub.nodes
+                tgt_in = edge.target_id in sub.nodes
+                if src_in or tgt_in:
+                    # For cross-links, also add the data-plane node
+                    if edge.source_id not in sub.nodes and edge.source_id in self.graph.nodes:
+                        sub.add_node(self.graph.nodes[edge.source_id])
+                    if edge.target_id not in sub.nodes and edge.target_id in self.graph.nodes:
+                        sub.add_node(self.graph.nodes[edge.target_id])
+                    sub.add_edge(edge)
+
+        return sub
+
     # ---- Filter helpers ----
 
     def _filter_nodes(
@@ -357,6 +421,8 @@ class GraphStore:
         if filters.lineage_levels and edge.lineage_level not in filters.lineage_levels:
             return False
         if edge.confidence < filters.min_confidence:
+            return False
+        if filters.planes and edge.plane not in filters.planes:
             return False
         if filters.adapter_ids:
             edge_adapters = {e.adapter_id for e in edge.evidence}

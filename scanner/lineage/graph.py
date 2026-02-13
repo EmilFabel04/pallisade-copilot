@@ -60,6 +60,17 @@ class EdgeType(Enum):
     WRITES_TO = "writes_to"             # Pipeline writes to target
     TESTS = "tests"                     # dbt test on model
 
+    # Cross-plane (asset ↔ orchestration)
+    PRODUCED_BY = "produced_by"         # Asset produced by a task/DAG
+    MATERIALIZES = "materializes"       # Task materializes an asset
+
+
+class LinePlane(Enum):
+    """Which lineage plane an edge belongs to."""
+    DATA = "data"           # Asset dependency graph (tables, models, views)
+    CONTROL = "control"     # Orchestration graph (DAGs, tasks, runs)
+    CROSS = "cross"         # Links between data-plane and control-plane
+
 
 class HealthStatus(Enum):
     """Health status of a node."""
@@ -321,6 +332,7 @@ class LineageEdge:
     evidence: List[Evidence] = field(default_factory=list)
     column_mappings: List[ColumnMapping] = field(default_factory=list)
     time_window: Optional[TimeWindow] = None
+    plane: LinePlane = LinePlane.DATA
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -337,6 +349,7 @@ class LineageEdge:
             "evidence": [e.to_dict() for e in self.evidence],
             "column_mappings": [m.to_dict() for m in self.column_mappings],
             "time_window": self.time_window.to_dict() if self.time_window else None,
+            "plane": self.plane.value,
         }
 
 
@@ -373,6 +386,7 @@ class LineageGraph:
             "medium": set(), # 0.5 - 0.8
             "high": set(),   # > 0.8
         }
+        self._by_plane: Dict[LinePlane, Set[str]] = {}  # edge_id sets by plane
 
         # Metadata
         self.built_at: Optional[datetime] = None
@@ -444,6 +458,11 @@ class LineageGraph:
             self._by_confidence_bucket["medium"].add(edge.id)
         else:
             self._by_confidence_bucket["high"].add(edge.id)
+
+        # Plane index
+        if edge.plane not in self._by_plane:
+            self._by_plane[edge.plane] = set()
+        self._by_plane[edge.plane].add(edge.id)
     
     def get_upstream(self, node_id: str, depth: int = -1) -> List[LineageNode]:
         """
@@ -708,7 +727,8 @@ class LineageGraph:
                 evidence=[Evidence.from_dict(e) for e in edge_data.get("evidence", [])],
                 column_mappings=[ColumnMapping.from_dict(m) for m in edge_data.get("column_mappings", [])],
                 time_window=TimeWindow.from_dict(tw_data) if tw_data else None,
+                plane=LinePlane(edge_data.get("plane", "data")),
             )
             graph.add_edge(edge)
-        
+
         return graph

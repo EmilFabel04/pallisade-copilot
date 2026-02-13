@@ -13,7 +13,7 @@ import asyncio
 from .tools import Tool, ToolResult, get_tool_registry
 from .context_builder import CopilotContext, IntegrationInfo, TableSchema
 from lineage.engine.store import Filters
-from lineage.graph import LineageLevel, PlatformDomain, AssetKind
+from lineage.graph import LineageLevel, LinePlane, PlatformDomain, AssetKind
 
 logger = logging.getLogger(__name__)
 
@@ -1893,6 +1893,241 @@ class ToolExecutor:
         except Exception as e:
             return ToolResult(success=False, error=str(e))
     
+    async def _execute_get_airflow_dag_lineage(self, args: Dict[str, Any]) -> ToolResult:
+        """Get the lineage subgraph for an Airflow DAG."""
+        dag_id = args["dag_id"]
+        depth = args.get("depth", 3)
+
+        # Try engine store first (has DAG/task/table nodes with evidence)
+        if self.context.engine_store and self.context.engine_store.graph:
+            graph = self.context.engine_store.graph
+            # Find the DAG node by name match
+            dag_node = None
+            for node in graph.nodes.values():
+                if (node.name == dag_id
+                    and node.platform == "airflow"
+                    and node.node_type.value == "dag"):
+                    dag_node = node
+                    break
+
+            if not dag_node:
+                return ToolResult(
+                    success=False,
+                    error=f"Airflow DAG '{dag_id}' not found in the lineage graph. Ensure Airflow lineage has been extracted."
+                )
+
+            # Collect downstream subgraph (DAG → tasks → tables)
+            downstream = self.context.engine_store.get_downstream(
+                dag_node.id, depth=depth
+            )
+            # Also get upstream tables (tables that feed into tasks)
+            upstream = self.context.engine_store.get_upstream(
+                dag_node.id, depth=depth
+            )
+
+            # Combine all nodes
+            all_nodes = {dag_node.id: dag_node}
+            for n in downstream + upstream:
+                all_nodes[n.id] = n
+
+            # Collect relevant edges
+            node_ids = set(all_nodes.keys())
+            edges = []
+            for edge in graph.edges.values():
+                if edge.source_id in node_ids and edge.target_id in node_ids:
+                    edges.append({
+                        "id": edge.id,
+                        "from": edge.source_id,
+                        "to": edge.target_id,
+                        "edge_type": edge.edge_type.value,
+                        "confidence": edge.confidence,
+                        "level": edge.lineage_level.value,
+                    })
+
+            tasks = []
+            tables_read = []
+            tables_written = []
+
+            for n in all_nodes.values():
+                if n.node_type.value == "task":
+                    tasks.append({
+                        "task_id": n.name,
+                        "operator": n.raw_metadata.get("operator", "unknown"),
+                        "is_opaque": n.raw_metadata.get("is_opaque", False),
+                    })
+                elif n.node_type.value == "table":
+                    # Check if it's read or written by looking at edges
+                    is_written = any(
+                        e["edge_type"] == "writes_to" and e["to"] == n.id
+                        for e in edges
+                    )
+                    entry = {"table": n.fqn, "id": n.id}
+                    if is_written:
+                        tables_written.append(entry)
+                    else:
+                        tables_read.append(entry)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dag_id": dag_id,
+                    "dag_node_id": dag_node.id,
+                    "schedule": dag_node.raw_metadata.get("schedule"),
+                    "task_count": len(tasks),
+                    "tasks": tasks,
+                    "tables_read": tables_read,
+                    "tables_written": tables_written,
+                    "total_nodes": len(all_nodes),
+                    "total_edges": len(edges),
+                    "edges": edges[:50],  # Limit for LLM context
+                },
+            )
+
+        return ToolResult(
+            success=False,
+            error="No lineage engine graph available. Extract Airflow lineage first via the lineage page."
+        )
+
+    async def _execute_get_asset_orchestration_context(self, args: Dict[str, Any]) -> ToolResult:
+        """Get orchestration context for a data asset via cross-plane edges."""
+        asset_name = args["asset_name"]
+
+        if not self.context.engine_store or not self.context.engine_store.graph:
+            return ToolResult(
+                success=False,
+                error="No lineage engine graph available. Extract lineage first."
+            )
+
+        # Resolve asset name to a node ID
+        resolved_id = self._resolve_node_id(asset_name)
+        if not resolved_id:
+            return ToolResult(
+                success=False,
+                error=f"Asset '{asset_name}' not found in the lineage graph."
+            )
+
+        # Get cross-plane edges for this asset
+        cross_edges = self.context.engine_store.get_cross_links(resolved_id)
+        if not cross_edges:
+            return ToolResult(
+                success=True,
+                data={
+                    "asset": asset_name,
+                    "has_orchestration": False,
+                    "message": "No orchestration context found. This asset has no cross-linked DAGs or tasks."
+                }
+            )
+
+        graph = self.context.engine_store.graph
+        contexts = []
+        for edge in cross_edges:
+            # Find the orchestration node on the other side
+            orch_id = edge.target_id if edge.source_id == resolved_id else edge.source_id
+            orch_node = graph.nodes.get(orch_id)
+            if not orch_node:
+                continue
+
+            ctx: Dict[str, Any] = {
+                "edge_type": edge.edge_type.value,
+                "confidence": edge.confidence,
+                "node_type": orch_node.node_type.value,
+                "node_name": orch_node.name,
+                "node_id": orch_node.id,
+            }
+
+            # Include run summary if available
+            run_summary = orch_node.raw_metadata.get("run_summary")
+            if run_summary:
+                ctx["run_summary"] = run_summary
+
+            # If this is a task, also find the parent DAG
+            if orch_node.node_type.value == "task":
+                container = orch_node.raw_metadata.get("dag_id") or orch_node.container
+                if container:
+                    ctx["parent_dag"] = container
+
+            contexts.append(ctx)
+
+        return ToolResult(
+            success=True,
+            data={
+                "asset": asset_name,
+                "asset_id": resolved_id,
+                "has_orchestration": True,
+                "cross_links": contexts,
+            }
+        )
+
+    async def _execute_get_dag_run_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get recent DAG run history with task details."""
+        dag_id = args["dag_id"]
+        limit = args.get("limit", 10)
+
+        airflow = self._adapters.get("AIRFLOW")
+        if not airflow:
+            # Fallback: try engine graph for static run_summary
+            if self.context.engine_store and self.context.engine_store.graph:
+                graph = self.context.engine_store.graph
+                for node in graph.nodes.values():
+                    if (node.name == dag_id
+                            and node.platform == "airflow"
+                            and node.node_type.value == "dag"):
+                        run_summary = node.raw_metadata.get("run_summary")
+                        if run_summary:
+                            return ToolResult(
+                                success=True,
+                                data={
+                                    "dag_id": dag_id,
+                                    "source": "engine_graph",
+                                    "run_summary": run_summary,
+                                    "note": "Live run history unavailable (Airflow not connected). Showing cached summary."
+                                }
+                            )
+
+            return ToolResult(
+                success=False,
+                error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
+            )
+
+        try:
+            runs = airflow.get_dag_runs(dag_id, limit=limit)
+            run_data = []
+            for run in runs:
+                run_entry: Dict[str, Any] = {
+                    "run_id": run.run_id,
+                    "state": run.state,
+                    "execution_date": run.execution_date.isoformat() if run.execution_date else None,
+                    "duration_seconds": run.duration_seconds,
+                }
+                # Get task instances for this run
+                try:
+                    tasks = airflow.get_task_instances(dag_id, run.run_id)
+                    run_entry["tasks"] = [
+                        {
+                            "task_id": t.task_id,
+                            "state": t.state,
+                            "duration": t.duration,
+                            "operator": getattr(t, "operator", None),
+                            "try_number": getattr(t, "try_number", None),
+                        }
+                        for t in tasks
+                    ]
+                except Exception:
+                    run_entry["tasks"] = []
+                run_data.append(run_entry)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dag_id": dag_id,
+                    "source": "airflow_api",
+                    "total_runs": len(run_data),
+                    "runs": run_data,
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     # ==========================================
     # FIVETRAN TOOL IMPLEMENTATIONS
     # ==========================================

@@ -13,8 +13,11 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
  *   ?action=downstream&id= → /api/v1/lineage/engine/downstream/{id}
  *   ?action=explain-edge&id= → /api/v1/lineage/engine/explain-edge/{id}
  *   ?action=blast-radius&id= → /api/v1/lineage/engine/blast-radius/{id}
+ *   ?action=control-plane&id= → /api/v1/lineage/engine/control-plane/{id} (optional id for specific DAG)
+ *   ?action=cross-links&id= → /api/v1/lineage/engine/cross-links/{id}
+ *   ?action=run-history&id= → /api/v1/lineage/engine/run-history/{id}
  *
- * Passes through filter params: level, system, domain, kind, min_confidence, depth
+ * Passes through filter params: level, system, domain, kind, min_confidence, depth, plane
  */
 export async function GET(
   request: NextRequest,
@@ -33,7 +36,7 @@ export async function GET(
 
     // Build query params to forward
     const forwardParams = new URLSearchParams();
-    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt']) {
+    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane']) {
       const val = searchParams.get(key);
       if (val) forwardParams.set(key, val);
     }
@@ -62,6 +65,19 @@ export async function GET(
         break;
       case 'export':
         endpoint = `/api/v1/lineage/engine/export${qs}`;
+        break;
+      case 'control-plane':
+        endpoint = assetId
+          ? `/api/v1/lineage/engine/control-plane/${encodeURIComponent(assetId)}${qs}`
+          : `/api/v1/lineage/engine/control-plane${qs}`;
+        break;
+      case 'cross-links':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
+        endpoint = `/api/v1/lineage/engine/cross-links/${encodeURIComponent(assetId)}${qs}`;
+        break;
+      case 'run-history':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
+        endpoint = `/api/v1/lineage/engine/run-history/${encodeURIComponent(assetId)}${qs}`;
         break;
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

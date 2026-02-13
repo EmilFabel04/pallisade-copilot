@@ -8,6 +8,7 @@ import type {
   UnifiedLineageEdge,
   UnifiedNodeCategory,
   UnifiedLineageResponse,
+  LinePlane,
 } from '@/components/lineage/types';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
@@ -16,12 +17,15 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
  * Fetch the engine graph (nodes + edges with confidence/evidence).
  * Returns null if engine is not available or has no data.
  */
-async function fetchEngineGraph(): Promise<{
+async function fetchEngineGraph(plane?: string): Promise<{
   nodes: any[];
   edges: any[];
 } | null> {
   try {
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/graph`, {
+    const url = plane
+      ? `${SCANNER_API_URL}/api/v1/lineage/engine/graph?plane=${plane}`
+      : `${SCANNER_API_URL}/api/v1/lineage/engine/graph`;
+    const res = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
@@ -125,7 +129,13 @@ function engineNodeToUnified(
   const dbtResourceType = eNode.dbt_resource_type;
   const isDbtModel = dbtResourceType === 'model' || dbtResourceType === 'seed' || dbtResourceType === 'snapshot';
 
-  if (nodeType === 'model' || isDbtModel) {
+  if (nodeType === 'dag') {
+    category = 'dag';
+    layer = 'ORCHESTRATION';
+  } else if (nodeType === 'task') {
+    category = 'task';
+    layer = 'ORCHESTRATION';
+  } else if (nodeType === 'model' || isDbtModel) {
     // Nodes that are dbt models (including merged warehouse+dbt nodes)
     category = 'model';
     layer = 'TRANSFORMATION';
@@ -142,6 +152,15 @@ function engineNodeToUnified(
       layer = 'INGESTION';
     }
   }
+
+  // Extract run summary from raw_metadata (for DAG/task nodes)
+  const rawRunSummary = eNode.raw_metadata?.run_summary;
+  const runSummary = rawRunSummary ? {
+    lastRunState: rawRunSummary.last_run_state,
+    lastRunDate: rawRunSummary.last_run_date,
+    successRate: rawRunSummary.success_rate,
+    avgDurationMinutes: rawRunSummary.avg_duration_minutes,
+  } : undefined;
 
   // Match findings by FQN
   const tableFindings = findingsByFqn.get(eNode.fqn) || [];
@@ -172,6 +191,7 @@ function engineNodeToUnified(
     rowCount: eNode.row_count || undefined,
     upstreamCount: eNode.upstream_count || 0,
     downstreamCount: eNode.downstream_count || 0,
+    runSummary,
     description: eNode.description || undefined,
     owner: eNode.owner || undefined,
     tags: eNode.tags || undefined,
@@ -203,6 +223,7 @@ function engineEdgeToUnified(
     animated: true,
     confidence: eEdge.confidence,
     lineageLevel: eEdge.lineage_level,
+    plane: eEdge.plane as LinePlane | undefined,
     evidence: eEdge.evidence?.map((ev: any) => ({
       adapterId: ev.adapter_id,
       sourceRef: ev.source_ref,
@@ -242,6 +263,7 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const layersParam = searchParams.get('layers');
     const searchParam = searchParams.get('search')?.toLowerCase() || '';
+    const planeParam = searchParams.get('plane') || 'data'; // 'data' | 'control' | 'all'
 
     // Parse layer filter
     const layerFilter: Set<PipelineLayer> | null = layersParam
@@ -269,18 +291,31 @@ export async function GET(
       .map((n) => n.integrationId)
       .filter((id): id is string => id !== null);
 
+    // Map plane param to engine API filter
+    // data → data,cross (show data assets + their orchestration cross-links)
+    // control → control,cross (show orchestration + their data cross-links)
+    // all → no filter (everything)
+    const enginePlaneFilter = planeParam === 'all'
+      ? undefined
+      : planeParam === 'control'
+        ? 'control,cross'
+        : 'data,cross';
+
     // Fetch engine graph and stats in parallel
     let [engineGraph, engineStats] = await Promise.all([
-      fetchEngineGraph(),
+      fetchEngineGraph(enginePlaneFilter),
       fetchEngineStats(),
     ]);
 
     // If engine graph is empty (e.g., after server restart), try restoring from DB snapshot
     if (!engineGraph) {
-      engineGraph = await tryRestoreEngineFromSnapshot(organizationId, integrationIds);
-      if (engineGraph) {
-        // Re-fetch stats now that the graph is restored
-        engineStats = await fetchEngineStats();
+      const restored = await tryRestoreEngineFromSnapshot(organizationId, integrationIds);
+      if (restored) {
+        // Re-fetch with plane filter now that the graph is restored
+        [engineGraph, engineStats] = await Promise.all([
+          fetchEngineGraph(enginePlaneFilter),
+          fetchEngineStats(),
+        ]);
       }
     }
 
@@ -365,10 +400,48 @@ export async function GET(
     if (engineGraph) {
       // --- ENGINE PATH: Use engine nodes/edges with confidence/evidence ---
 
-      // Build engine node ID → unified node ID lookup
-      const engineIdToUnifiedId = new Map<string, string>();
+      // Step 1: Deduplicate Airflow table reference nodes with warehouse table nodes.
+      // Airflow adapter creates table ref nodes (platform="airflow", node_type="table")
+      // for tables referenced in SQL. These represent the SAME physical tables as
+      // warehouse adapter nodes but have different IDs (different system/namespace).
+      // We bridge them by FQN matching: Airflow edges get remapped to warehouse nodes
+      // so the orchestration graph connects to the main lineage graph.
+      const warehouseFqnMap = new Map<string, string>(); // FQN → engine node ID
+      const airflowTableRefs = new Map<string, string>(); // FQN → engine node ID
 
-      dataAssetNodes = engineGraph.nodes.map((eNode: any) => {
+      for (const eNode of engineGraph.nodes) {
+        const fqn = eNode.fqn;
+        if (!fqn) continue;
+        const nodeType = eNode.node_type?.toLowerCase();
+        if (nodeType !== 'table' && nodeType !== 'view' && nodeType !== 'materialized_view') continue;
+
+        if (eNode.platform === 'airflow') {
+          airflowTableRefs.set(fqn, eNode.id);
+        } else if (!warehouseFqnMap.has(fqn)) {
+          warehouseFqnMap.set(fqn, eNode.id);
+        }
+      }
+
+      // Build remap: Airflow table ref engine ID → warehouse engine ID
+      const airflowToWarehouseRemap = new Map<string, string>();
+      for (const [fqn, airflowId] of airflowTableRefs) {
+        const warehouseId = warehouseFqnMap.get(fqn);
+        if (warehouseId) {
+          airflowToWarehouseRemap.set(airflowId, warehouseId);
+        }
+      }
+
+      // Step 2: Convert engine nodes to unified nodes, skipping remapped Airflow table refs
+      const engineIdToUnifiedId = new Map<string, string>();
+      dataAssetNodes = [];
+
+      for (const eNode of engineGraph.nodes) {
+        if (airflowToWarehouseRemap.has(eNode.id)) {
+          // This Airflow table ref has a matching warehouse node — skip it,
+          // its edges will be remapped to the warehouse node below
+          continue;
+        }
+
         const unified = engineNodeToUnified(eNode, findingsByFqn);
         engineIdToUnifiedId.set(eNode.id, unified.id);
 
@@ -379,10 +452,24 @@ export async function GET(
           unified.integrationId = intId;
         }
 
-        return unified;
-      });
+        dataAssetNodes.push(unified);
+      }
 
-      // Convert engine edges
+      // Step 3: Populate remap entries so Airflow edges → warehouse unified IDs
+      for (const [airflowId, warehouseEngineId] of airflowToWarehouseRemap) {
+        const warehouseUnifiedId = engineIdToUnifiedId.get(warehouseEngineId);
+        if (warehouseUnifiedId) {
+          engineIdToUnifiedId.set(airflowId, warehouseUnifiedId);
+        }
+      }
+
+      if (airflowToWarehouseRemap.size > 0) {
+        console.log(
+          `[UNIFIED LINEAGE] Bridged ${airflowToWarehouseRemap.size} Airflow table refs to warehouse nodes`
+        );
+      }
+
+      // Step 4: Convert engine edges (Airflow→table edges now point to warehouse nodes)
       tableEdges = engineGraph.edges
         .map((eEdge: any) => engineEdgeToUnified(eEdge, engineIdToUnifiedId))
         .filter((e: UnifiedLineageEdge | null): e is UnifiedLineageEdge => e !== null);
@@ -560,9 +647,31 @@ export async function GET(
       }
     }
 
-    // Combine all nodes and edges
-    let allNodes = [...toolNodes, ...dataAssetNodes];
-    let allEdges = [...pipelineEdges, ...tableEdges, ...syntheticEdges];
+    // Combine all nodes and edges.
+    // For the control-plane view (orchestration tab), only include engine graph
+    // nodes/edges — skip pipeline tool nodes and synthetic edges which are
+    // data-plane concepts and would appear as disconnected islands.
+    let allNodes: UnifiedLineageNode[];
+    let allEdges: UnifiedLineageEdge[];
+
+    if (planeParam === 'control') {
+      // Orchestration view: only engine nodes + engine edges
+      allNodes = [...dataAssetNodes];
+      allEdges = [...tableEdges];
+
+      // Prune nodes that have no edges (the engine returns all nodes but
+      // only plane-filtered edges, so tables with only data-plane connections
+      // would otherwise appear as isolated nodes)
+      const connectedNodeIds = new Set<string>();
+      for (const edge of allEdges) {
+        connectedNodeIds.add(edge.source);
+        connectedNodeIds.add(edge.target);
+      }
+      allNodes = allNodes.filter((n) => connectedNodeIds.has(n.id));
+    } else {
+      allNodes = [...toolNodes, ...dataAssetNodes];
+      allEdges = [...pipelineEdges, ...tableEdges, ...syntheticEdges];
+    }
 
     // Compute real upstream/downstream counts from edges
     const upstreamCounts = new Map<string, number>();
@@ -613,7 +722,7 @@ export async function GET(
       totalNodes: allNodes.length,
       totalEdges: allEdges.length,
       toolNodes: allNodes.filter((n) =>
-        ['ingestion', 'transformation', 'warehouse', 'reporting'].includes(n.category)
+        ['ingestion', 'transformation', 'warehouse', 'reporting', 'orchestration'].includes(n.category)
       ).length,
       tableNodes: allNodes.filter((n) => n.category === 'table').length,
       viewNodes: allNodes.filter((n) => n.category === 'view').length,
@@ -621,15 +730,22 @@ export async function GET(
         .length,
     };
 
-    // Get available layers and tools
-    const availableLayers = [...new Set(stack.nodes.map((n) => n.layer as PipelineLayer))];
-    if (dataAssetNodes.length > 0 && !availableLayers.includes('WAREHOUSE')) {
-      availableLayers.push('WAREHOUSE');
-    }
-    // Add INGESTION if any source nodes exist (dbt sources act as ingestion layer)
-    if (allNodes.some((n) => n.category === 'source') && !availableLayers.includes('INGESTION')) {
-      availableLayers.push('INGESTION');
-    }
+    // Get available layers — for control-plane, derive only from actual nodes in the response
+    const availableLayers: PipelineLayer[] = planeParam === 'control'
+      ? [...new Set(allNodes.map((n) => n.layer))]
+      : (() => {
+          const layers = [...new Set(stack.nodes.map((n) => n.layer as PipelineLayer))];
+          if (dataAssetNodes.length > 0 && !layers.includes('WAREHOUSE')) {
+            layers.push('WAREHOUSE');
+          }
+          if (allNodes.some((n) => n.category === 'source') && !layers.includes('INGESTION')) {
+            layers.push('INGESTION');
+          }
+          if (allNodes.some((n) => n.category === 'dag' || n.category === 'task') && !layers.includes('ORCHESTRATION')) {
+            layers.push('ORCHESTRATION');
+          }
+          return layers;
+        })();
     const availableTools = [...new Set(stack.nodes.map((n) => n.toolType))];
 
     const response: UnifiedLineageResponse = {

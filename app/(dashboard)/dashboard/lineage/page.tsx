@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactFlow, {
   Node,
   Edge,
@@ -26,9 +26,11 @@ import {
   type UnifiedLineageEdge,
   type UnifiedLineageResponse,
   type LineageFilterState,
+  type LineageViewTab,
   type EngineCoverageStats,
   getDefaultFilterState,
   isToolCategory,
+  isDataAssetCategory,
   nodePassesFilter,
   edgePassesFilter,
   getConfidenceColor,
@@ -38,14 +40,15 @@ import {
 // Dagre layout with layer-aware sizing
 const getLayoutedElements = (
   nodes: Node[],
-  edges: Edge[]
+  edges: Edge[],
+  direction: 'LR' | 'TB' = 'LR'
 ): { nodes: Node[]; edges: Edge[] } => {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
   dagreGraph.setGraph({
-    rankdir: 'LR',
+    rankdir: direction,
     nodesep: 60,
-    ranksep: 180,
+    ranksep: direction === 'TB' ? 120 : 180,
     align: 'UL',
   });
 
@@ -63,6 +66,7 @@ const getLayoutedElements = (
 
   dagre.layout(dagreGraph);
 
+  const isHorizontal = direction === 'LR';
   const layoutedNodes = nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
     const isToolNode = node.type === 'toolNode';
@@ -70,8 +74,8 @@ const getLayoutedElements = (
     const height = isToolNode ? 90 : 65;
     return {
       ...node,
-      targetPosition: Position.Left,
-      sourcePosition: Position.Right,
+      targetPosition: isHorizontal ? Position.Left : Position.Top,
+      sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
       position: {
         x: nodeWithPosition.x - width / 2,
         y: nodeWithPosition.y - height / 2,
@@ -82,9 +86,29 @@ const getLayoutedElements = (
   return { nodes: layoutedNodes, edges };
 };
 
-// Get edge style based on type
+// Get edge style based on type and plane
 function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode) {
   const edgeType = edge.edgeType;
+
+  // Cross-plane edges (task ↔ table): dashed, orange-tinted
+  if (edge.plane === 'cross') {
+    return {
+      stroke: '#F9731680',
+      strokeWidth: 2,
+      strokeDasharray: '6,4',
+      animated: false,
+    };
+  }
+
+  // Control-plane edges (DAG → task, task → task)
+  if (edge.plane === 'control') {
+    const layerColor = LAYER_COLORS.ORCHESTRATION;
+    return {
+      stroke: layerColor,
+      strokeWidth: edgeType === 'depends_on' ? 3 : 2,
+      animated: edgeType === 'depends_on',
+    };
+  }
 
   // Tool-to-tool pipeline edges
   if (edgeType === 'pipeline_flow') {
@@ -125,20 +149,35 @@ export default function LineagePage() {
   const [selectedNode, setSelectedNode] = useState<UnifiedLineageNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<UnifiedLineageEdge | null>(null);
   const [filters, setFilters] = useState<LineageFilterState>(getDefaultFilterState());
+  const [activeTab, setActiveTab] = useState<LineageViewTab>('data');
+  const [showOrchOverlay, setShowOrchOverlay] = useState(false);
+
+  // Track fetch version to ignore stale responses on rapid tab switches
+  const fetchVersionRef = useRef(0);
 
   // Fetch unified lineage data
   const fetchLineage = useCallback(async () => {
     if (!stackId) return;
 
+    const thisVersion = ++fetchVersionRef.current;
     setLoading(true);
     setError(null);
 
     try {
-      const params = new URLSearchParams();
-      // Note: We apply filters client-side for faster UX, but could pass to server
-      const res = await fetch(`/api/pipeline/${stackId}/lineage/unified`);
+      const plane = activeTab === 'orchestration'
+        ? 'control'
+        : showOrchOverlay
+        ? 'all'
+        : 'data';
+      const res = await fetch(`/api/pipeline/${stackId}/lineage/unified?plane=${plane}`);
+
+      // Ignore stale response if a newer fetch has started
+      if (fetchVersionRef.current !== thisVersion) return;
+
       if (res.ok) {
         const data: UnifiedLineageResponse = await res.json();
+        if (fetchVersionRef.current !== thisVersion) return;
+
         setLineageData(data);
 
         // Update filter with available layers
@@ -153,17 +192,28 @@ export default function LineagePage() {
         setError(errorData.error || 'Failed to fetch lineage');
       }
     } catch (err) {
+      if (fetchVersionRef.current !== thisVersion) return;
       setError('Failed to connect to server');
     } finally {
-      setLoading(false);
+      if (fetchVersionRef.current === thisVersion) {
+        setLoading(false);
+      }
     }
-  }, [stackId]);
+  }, [stackId, activeTab, showOrchOverlay]);
 
   useEffect(() => {
     if (stackId) {
       fetchLineage();
     }
   }, [stackId, fetchLineage]);
+
+  // Clear selection when switching tabs
+  const handleTabChange = useCallback((tab: LineageViewTab) => {
+    setActiveTab(tab);
+    setSelectedNode(null);
+    setSelectedEdge(null);
+    setLineageData(null); // Clear stale data to prevent wrong-layout flash
+  }, []);
 
   // Extract lineage from warehouse (uses original endpoint)
   const extractLineage = async () => {
@@ -190,7 +240,8 @@ export default function LineagePage() {
       if (res.ok) {
         const result = await res.json();
         if (result.success) {
-          // Refresh unified lineage data
+          // Clear stale data before re-fetch to prevent jumpy transition
+          setLineageData(null);
           await fetchLineage();
         } else {
           setError(result.results?.[0]?.error || 'Extraction failed');
@@ -227,6 +278,8 @@ export default function LineagePage() {
       viewNodes: filteredNodes.filter((n) => n.category === 'view').length,
       modelNodes: filteredNodes.filter((n) => n.category === 'model' || n.category === 'source')
         .length,
+      dagNodes: filteredNodes.filter((n) => n.category === 'dag').length,
+      taskNodes: filteredNodes.filter((n) => n.category === 'task').length,
     };
   }, [filteredNodes]);
 
@@ -236,6 +289,11 @@ export default function LineagePage() {
 
     const nodeIds = new Set(filteredNodes.map((n) => n.id));
     const nodeMap = new Map(filteredNodes.map((n) => [n.id, n]));
+
+    // Determine if node is an overlay orchestration node (data tab + overlay on)
+    const isOverlayNode = (n: UnifiedLineageNode) =>
+      activeTab === 'data' && showOrchOverlay &&
+      (n.category === 'dag' || n.category === 'task');
 
     // Convert to ReactFlow nodes
     const nodes: Node[] = filteredNodes.map((node) => ({
@@ -268,6 +326,8 @@ export default function LineagePage() {
         issues: node.issues,
         owner: node.owner,
         tags: node.tags,
+        // Overlay flag for orchestration nodes on data tab
+        isOverlay: isOverlayNode(node),
       },
     }));
 
@@ -300,9 +360,10 @@ export default function LineagePage() {
 
     if (nodes.length === 0) return { flowNodes: [], flowEdges: [] };
 
-    const layouted = getLayoutedElements(nodes, edges);
+    const direction = activeTab === 'orchestration' ? 'TB' : 'LR';
+    const layouted = getLayoutedElements(nodes, edges, direction);
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges, filters]);
+  }, [filteredNodes, lineageData?.edges, filters, activeTab, showOrchOverlay]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
@@ -407,32 +468,96 @@ export default function LineagePage() {
           </div>
         </div>
 
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 mb-4">
+          <button
+            onClick={() => handleTabChange('data')}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all border
+              ${activeTab === 'data'
+                ? 'bg-indigo-500/15 border-indigo-500/30 text-indigo-300'
+                : 'border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]'}
+            `}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            Data Lineage
+          </button>
+          <button
+            onClick={() => handleTabChange('orchestration')}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all border
+              ${activeTab === 'orchestration'
+                ? 'bg-orange-500/15 border-orange-500/30 text-orange-300'
+                : 'border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]'}
+            `}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            Orchestration
+          </button>
+        </div>
+
         {/* Filter bar */}
         <LineageFilterBar
           filters={filters}
           onChange={setFilters}
           availableLayers={lineageData?.availableLayers || []}
           stats={filteredStats}
+          activeTab={activeTab}
+          showOrchOverlay={showOrchOverlay}
+          onOrchOverlayToggle={() => setShowOrchOverlay((prev) => !prev)}
         />
 
         {/* Stats */}
         <div className="flex items-center gap-6 mt-4 pt-4 border-t border-white/[0.04]">
-          <div className="text-center">
-            <div className="text-xl font-semibold text-white">{filteredStats.toolNodes}</div>
-            <div className="text-[11px] text-white/40">Tools</div>
-          </div>
-          <div className="text-center">
-            <div className="text-xl font-semibold text-white">{filteredStats.tableNodes}</div>
-            <div className="text-[11px] text-white/40">Tables</div>
-          </div>
-          <div className="text-center">
-            <div className="text-xl font-semibold text-white">{filteredStats.viewNodes}</div>
-            <div className="text-[11px] text-white/40">Views</div>
-          </div>
-          <div className="text-center">
-            <div className="text-xl font-semibold text-white">{filteredStats.modelNodes}</div>
-            <div className="text-[11px] text-white/40">Models</div>
-          </div>
+          {activeTab === 'data' ? (
+            <>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-white">{filteredStats.toolNodes}</div>
+                <div className="text-[11px] text-white/40">Tools</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-white">{filteredStats.tableNodes}</div>
+                <div className="text-[11px] text-white/40">Tables</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-white">{filteredStats.viewNodes}</div>
+                <div className="text-[11px] text-white/40">Views</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-white">{filteredStats.modelNodes}</div>
+                <div className="text-[11px] text-white/40">Models</div>
+              </div>
+              {(filteredStats.dagNodes + filteredStats.taskNodes) > 0 && (
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-white">
+                    {filteredStats.dagNodes + filteredStats.taskNodes}
+                  </div>
+                  <div className="text-[11px] text-white/40">Orchestration</div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-orange-400">{filteredStats.dagNodes}</div>
+                <div className="text-[11px] text-white/40">DAGs</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-orange-300">{filteredStats.taskNodes}</div>
+                <div className="text-[11px] text-white/40">Tasks</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-white">
+                  {filteredStats.tableNodes + filteredStats.viewNodes}
+                </div>
+                <div className="text-[11px] text-white/40">Linked Assets</div>
+              </div>
+            </>
+          )}
           <div className="text-center">
             <div className="text-xl font-semibold text-white">
               {lineageData?.stats?.totalEdges || 0}
@@ -440,8 +565,8 @@ export default function LineagePage() {
             <div className="text-[11px] text-white/40">Dependencies</div>
           </div>
 
-          {/* Engine coverage stats (when available) */}
-          {lineageData?.engineStats && (
+          {/* Engine coverage stats (when available, data tab only) */}
+          {activeTab === 'data' && lineageData?.engineStats && (
             <>
               <div className="w-px h-8 bg-white/10" />
               <div className="text-center">
@@ -497,22 +622,30 @@ export default function LineagePage() {
                 <>
                   <p className="text-white/50 text-[15px] mb-2">No nodes match current filters</p>
                   <p className="text-white/30 text-[13px]">
-                    Try adjusting the layer or node type filters
+                    {activeTab === 'orchestration'
+                      ? 'No orchestration data available. Connect Airflow to see DAGs and tasks.'
+                      : 'Try adjusting the layer or node type filters'}
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-white/50 text-[15px] mb-2">No lineage data yet</p>
-                  <p className="text-white/30 text-[13px] mb-4">
-                    Configure your pipeline and click "Extract Lineage" to discover dependencies
+                  <p className="text-white/50 text-[15px] mb-2">
+                    {activeTab === 'orchestration' ? 'No orchestration data' : 'No lineage data yet'}
                   </p>
-                  <button
-                    onClick={extractLineage}
-                    disabled={extracting || !stackId}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium"
-                  >
-                    {extracting ? 'Extracting...' : 'Extract Lineage'}
-                  </button>
+                  <p className="text-white/30 text-[13px] mb-4">
+                    {activeTab === 'orchestration'
+                      ? 'Connect an Airflow instance to your pipeline to see DAG and task graphs'
+                      : 'Configure your pipeline and click "Extract Lineage" to discover dependencies'}
+                  </p>
+                  {activeTab === 'data' && (
+                    <button
+                      onClick={extractLineage}
+                      disabled={extracting || !stackId}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium"
+                    >
+                      {extracting ? 'Extracting...' : 'Extract Lineage'}
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -558,53 +691,63 @@ export default function LineagePage() {
           {/* Legend */}
           {nodes.length > 0 && (
             <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] max-w-md">
-              {/* Layer colors */}
-              <div className="flex items-center gap-1">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: LAYER_COLORS.INGESTION }}
-                />
-                <span className="text-white/50">Ingestion</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: LAYER_COLORS.TRANSFORMATION }}
-                />
-                <span className="text-white/50">Transform</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: LAYER_COLORS.WAREHOUSE }}
-                />
-                <span className="text-white/50">Warehouse</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: LAYER_COLORS.REPORTING }}
-                />
-                <span className="text-white/50">Reporting</span>
-              </div>
-              <div className="w-px h-3 bg-white/20" />
-              {/* Data asset types */}
-              <div className="flex items-center gap-1">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: CATEGORY_VISUALS.table.color }}
-                />
-                <span className="text-white/50">Table</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span
-                  className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: CATEGORY_VISUALS.view.color }}
-                />
-                <span className="text-white/50">View</span>
-              </div>
-              {/* Confidence legend (shows when engine data present) */}
-              {lineageData?.engineStats && (
+              {activeTab === 'data' ? (
+                <>
+                  {/* Layer colors */}
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.INGESTION }} />
+                    <span className="text-white/50">Ingestion</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.TRANSFORMATION }} />
+                    <span className="text-white/50">Transform</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.WAREHOUSE }} />
+                    <span className="text-white/50">Warehouse</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.REPORTING }} />
+                    <span className="text-white/50">Reporting</span>
+                  </div>
+                  <div className="w-px h-3 bg-white/20" />
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.table.color }} />
+                    <span className="text-white/50">Table</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.view.color }} />
+                    <span className="text-white/50">View</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Orchestration legend */}
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.dag.color }} />
+                    <span className="text-white/50">DAG</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
+                    <span className="text-white/50">Task</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.table.color }} />
+                    <span className="text-white/50">Linked Table</span>
+                  </div>
+                  <div className="w-px h-3 bg-white/20" />
+                  <div className="flex items-center gap-1">
+                    <span className="w-4 h-0.5 rounded" style={{ backgroundColor: LAYER_COLORS.ORCHESTRATION }} />
+                    <span className="text-white/50">Control</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-4 h-0.5 rounded border border-dashed border-orange-400/50" />
+                    <span className="text-white/50">Cross-link</span>
+                  </div>
+                </>
+              )}
+              {/* Confidence legend (shows when engine data present, data tab) */}
+              {activeTab === 'data' && lineageData?.engineStats && (
                 <>
                   <div className="w-px h-3 bg-white/20" />
                   <div className="flex items-center gap-1">
@@ -636,7 +779,262 @@ export default function LineagePage() {
 
         {/* Side panel - Node details */}
         {selectedNode && !selectedEdge && (
-          isToolCategory(selectedNode.category) ? (
+          (selectedNode.category === 'dag' || selectedNode.category === 'task') ? (
+            <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[15px] font-medium text-white">
+                  {selectedNode.category === 'dag' ? 'DAG Details' : 'Task Details'}
+                </h3>
+                <button
+                  onClick={() => setSelectedNode(null)}
+                  className="p-1 hover:bg-white/[0.05] rounded"
+                >
+                  <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
+                  <p className="text-[13px] text-white font-mono mt-1 break-all">{selectedNode.name}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
+                    <p className="text-[13px] text-white mt-1 capitalize">{selectedNode.category}</p>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Layer</label>
+                    <p className="text-[13px] text-white mt-1">{selectedNode.layer}</p>
+                  </div>
+                </div>
+
+                {/* Run summary */}
+                {selectedNode.runSummary && (
+                  <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06] space-y-3">
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Run Summary</label>
+                    {selectedNode.runSummary.lastRunState && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={`
+                          px-2 py-0.5 text-[11px] font-medium rounded
+                          ${selectedNode.runSummary.lastRunState === 'success'
+                            ? 'bg-emerald-500/20 text-emerald-300'
+                            : selectedNode.runSummary.lastRunState === 'failed'
+                            ? 'bg-red-500/20 text-red-300'
+                            : 'bg-blue-500/20 text-blue-300'}
+                        `}>
+                          {selectedNode.runSummary.lastRunState}
+                        </span>
+                        {selectedNode.runSummary.lastRunDate && (
+                          <span className="text-[11px] text-white/40">
+                            {new Date(selectedNode.runSummary.lastRunDate).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {selectedNode.runSummary.successRate !== undefined && (
+                      <div>
+                        <div className="flex items-center justify-between text-[11px] text-white/50 mb-1">
+                          <span>Success Rate</span>
+                          <span>{Math.round(selectedNode.runSummary.successRate)}%</span>
+                        </div>
+                        <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full rounded-full"
+                            style={{
+                              width: `${selectedNode.runSummary.successRate}%`,
+                              backgroundColor: selectedNode.runSummary.successRate >= 80 ? '#10B981' : selectedNode.runSummary.successRate >= 60 ? '#F59E0B' : '#EF4444',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {selectedNode.runSummary.avgDurationMinutes !== undefined && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-white/40">Avg Duration</span>
+                        <span className="text-[11px] text-white">{selectedNode.runSummary.avgDurationMinutes.toFixed(1)} min</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Orchestration dependencies (control-plane edges) */}
+                {(() => {
+                  const allEdges = lineageData?.edges || [];
+                  const nodeMap = new Map((lineageData?.nodes || []).map(n => [n.id, n]));
+
+                  // For DAGs: tasks contained in this DAG
+                  // For Tasks: upstream deps (what this depends on) + downstream deps (what depends on this)
+                  const controlEdges = allEdges.filter(
+                    e => e.plane === 'control' && (e.source === selectedNode.id || e.target === selectedNode.id)
+                  );
+
+                  if (selectedNode.category === 'dag') {
+                    // DAG → show contained tasks
+                    const tasks = controlEdges
+                      .filter(e => e.source === selectedNode.id)
+                      .map(e => nodeMap.get(e.target))
+                      .filter((n): n is UnifiedLineageNode => !!n && n.category === 'task');
+
+                    if (tasks.length === 0) return null;
+                    return (
+                      <div>
+                        <label className="text-[11px] text-white/40 uppercase tracking-wide">Tasks ({tasks.length})</label>
+                        <div className="mt-2 space-y-1.5">
+                          {tasks.map(task => (
+                            <button
+                              key={task.id}
+                              onClick={() => handleNavigateToNode(task.id)}
+                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
+                              <span className="text-[12px] text-white font-mono truncate flex-1">{task.name}</span>
+                              {task.runSummary?.lastRunState && (
+                                <span className={`
+                                  px-1.5 py-0.5 text-[10px] font-medium rounded
+                                  ${task.runSummary.lastRunState === 'success' ? 'bg-emerald-500/20 text-emerald-300'
+                                    : task.runSummary.lastRunState === 'failed' ? 'bg-red-500/20 text-red-300'
+                                    : 'bg-blue-500/20 text-blue-300'}
+                                `}>
+                                  {task.runSummary.lastRunState}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Task: show parent DAG, upstream tasks, downstream tasks
+                  const parentDag = controlEdges
+                    .filter(e => e.target === selectedNode.id)
+                    .map(e => nodeMap.get(e.source))
+                    .find(n => n?.category === 'dag');
+
+                  const upstreamTasks = controlEdges
+                    .filter(e => e.target === selectedNode.id)
+                    .map(e => nodeMap.get(e.source))
+                    .filter((n): n is UnifiedLineageNode => !!n && n.category === 'task');
+
+                  const downstreamTasks = controlEdges
+                    .filter(e => e.source === selectedNode.id)
+                    .map(e => nodeMap.get(e.target))
+                    .filter((n): n is UnifiedLineageNode => !!n && n.category === 'task');
+
+                  const hasAny = parentDag || upstreamTasks.length > 0 || downstreamTasks.length > 0;
+                  if (!hasAny) return null;
+
+                  return (
+                    <div className="space-y-3">
+                      {parentDag && (
+                        <div>
+                          <label className="text-[11px] text-white/40 uppercase tracking-wide">Parent DAG</label>
+                          <button
+                            onClick={() => handleNavigateToNode(parentDag.id)}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 mt-1 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.dag.color }} />
+                            <span className="text-[12px] text-white font-mono truncate flex-1">{parentDag.name}</span>
+                          </button>
+                        </div>
+                      )}
+                      {upstreamTasks.length > 0 && (
+                        <div>
+                          <label className="text-[11px] text-white/40 uppercase tracking-wide">Depends On ({upstreamTasks.length})</label>
+                          <div className="mt-2 space-y-1.5">
+                            {upstreamTasks.map(task => (
+                              <button
+                                key={task.id}
+                                onClick={() => handleNavigateToNode(task.id)}
+                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
+                                <span className="text-[12px] text-white font-mono truncate flex-1">{task.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {downstreamTasks.length > 0 && (
+                        <div>
+                          <label className="text-[11px] text-white/40 uppercase tracking-wide">Required By ({downstreamTasks.length})</label>
+                          <div className="mt-2 space-y-1.5">
+                            {downstreamTasks.map(task => (
+                              <button
+                                key={task.id}
+                                onClick={() => handleNavigateToNode(task.id)}
+                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
+                                <span className="text-[12px] text-white font-mono truncate flex-1">{task.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Cross-linked data assets */}
+                {(() => {
+                  const crossEdges = (lineageData?.edges || []).filter(
+                    e => e.plane === 'cross' && (e.source === selectedNode.id || e.target === selectedNode.id)
+                  );
+                  if (crossEdges.length === 0) return null;
+                  const nodeMap = new Map((lineageData?.nodes || []).map(n => [n.id, n]));
+                  return (
+                    <div>
+                      <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Assets ({crossEdges.length})</label>
+                      <div className="mt-2 space-y-1.5">
+                        {crossEdges.map(edge => {
+                          const linkedId = edge.source === selectedNode.id ? edge.target : edge.source;
+                          const linked = nodeMap.get(linkedId);
+                          if (!linked) return null;
+                          return (
+                            <button
+                              key={edge.id}
+                              onClick={() => handleNavigateToNode(linkedId)}
+                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS[linked.category]?.color || '#6366F1' }} />
+                              <span className="text-[12px] text-white font-mono truncate flex-1">{linked.name}</span>
+                              <span className="text-[10px] text-white/30 capitalize">{edge.edgeType.replace(/_/g, ' ')}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {selectedNode.description && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Description</label>
+                    <p className="text-[13px] text-white/70 mt-1">{selectedNode.description}</p>
+                  </div>
+                )}
+                {selectedNode.owner && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Owner</label>
+                    <p className="text-[13px] text-white mt-1">{selectedNode.owner}</p>
+                  </div>
+                )}
+                {selectedNode.tags && selectedNode.tags.length > 0 && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Tags</label>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {selectedNode.tags.map(tag => (
+                        <span key={tag} className="px-2 py-0.5 text-[10px] bg-white/10 text-white/60 rounded">{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : isToolCategory(selectedNode.category) ? (
             <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-[15px] font-medium text-white">Tool Details</h3>

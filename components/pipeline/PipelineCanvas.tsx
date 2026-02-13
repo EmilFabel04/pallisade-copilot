@@ -42,6 +42,7 @@ interface PipelineCanvasProps {
 const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
   INGESTION: 100,
   VERSION_CONTROL: 250,
+  ORCHESTRATION: 250,
   TRANSFORMATION: 400,
   WAREHOUSE: 700,
   REPORTING: 1000,

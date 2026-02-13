@@ -99,6 +99,7 @@ const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
   WAREHOUSE: 700,
   REPORTING: 1000,
   VERSION_CONTROL: 250,  // Between Ingestion and Transformation (connects to dbt)
+  ORCHESTRATION: 250,    // Between Ingestion and Transformation (Airflow)
 };
 
 // Category icons for integrations

@@ -8,16 +8,73 @@
 
 import { PipelineLayer, LAYER_COLORS } from '@/components/pipeline/types';
 
+// Which lineage plane an edge belongs to
+export type LinePlane = 'data' | 'control' | 'cross';
+
+// Active view tab on the lineage page
+export type LineageViewTab = 'data' | 'orchestration';
+
+// Run summary for DAG/task nodes (from raw_metadata)
+export interface RunSummary {
+  lastRunState?: string;       // 'success' | 'failed' | 'running'
+  lastRunDate?: string;        // ISO timestamp
+  successRate?: number;        // 0–100
+  avgDurationMinutes?: number;
+}
+
+// A single DAG run (from Airflow API)
+export interface DagRun {
+  runId: string;
+  state: string;               // 'success' | 'failed' | 'running' | 'queued'
+  executionDate?: string;
+  startDate?: string;
+  endDate?: string;
+  durationMinutes?: number;
+}
+
+// A single task instance within a DAG run
+export interface TaskInstance {
+  taskId: string;
+  state: string;
+  duration?: number;
+  operator?: string;
+  tryNumber?: number;
+}
+
+// Orchestration context for a data asset (cross-link info)
+export interface OrchestrationContext {
+  dagNode?: UnifiedLineageNode;
+  taskNode?: UnifiedLineageNode;
+  edgeType: string;            // 'writes_to', 'produced_by', etc.
+  runSummary?: RunSummary;
+}
+
+// Response from control-plane API
+export interface ControlPlaneResponse {
+  dagId: string;
+  nodes: UnifiedLineageNode[];
+  edges: UnifiedLineageEdge[];
+  stats: {
+    totalNodes: number;
+    totalEdges: number;
+    taskCount: number;
+    crossLinkCount: number;
+  };
+}
+
 // All possible node categories in the unified lineage
 export type UnifiedNodeCategory =
   | 'ingestion'       // Fivetran, Airbyte, Stitch connectors
-  | 'transformation'  // dbt, Airflow, Dagster jobs
+  | 'transformation'  // dbt, Dagster jobs
   | 'warehouse'       // Snowflake, BigQuery tools (the platform node)
   | 'reporting'       // Tableau, Looker, Power BI dashboards
+  | 'orchestration'   // Airflow (tool-level, from pipeline nodes)
   | 'table'           // Database table
   | 'view'            // Database view
   | 'source'          // dbt source
-  | 'model';          // dbt model
+  | 'model'           // dbt model
+  | 'dag'             // Airflow DAG (orchestration job)
+  | 'task';           // Airflow task (orchestration step)
 
 // Issue summary for data assets
 export interface DataAssetIssues {
@@ -62,6 +119,9 @@ export interface UnifiedLineageNode {
   freshnessHours?: number;        // Hours since last update
   issues?: DataAssetIssues;       // Issue summary
 
+  // Orchestration context (for DAG/task nodes or cross-linked assets)
+  runSummary?: RunSummary;
+
   // Common
   integrationId?: string;
   description?: string;
@@ -97,6 +157,7 @@ export interface UnifiedLineageEdge {
   // Engine fields (when available)
   confidence?: number;          // 0.0–1.0 from evidence weighting
   lineageLevel?: string;        // "tool" | "table" | "column"
+  plane?: LinePlane;            // "data" | "control" | "cross"
   evidence?: EdgeEvidence[];    // provenance records from adapters
 }
 
@@ -166,10 +227,13 @@ export const CATEGORY_LAYER_MAP: Record<UnifiedNodeCategory, PipelineLayer> = {
   transformation: 'TRANSFORMATION',
   warehouse: 'WAREHOUSE',
   reporting: 'REPORTING',
+  orchestration: 'ORCHESTRATION',
   table: 'WAREHOUSE',
   view: 'WAREHOUSE',
   source: 'INGESTION',  // dbt sources are upstream
   model: 'TRANSFORMATION',
+  dag: 'ORCHESTRATION',
+  task: 'ORCHESTRATION',
 };
 
 // Visual config per category
@@ -208,6 +272,13 @@ export const CATEGORY_VISUALS: Record<UnifiedNodeCategory, {
     bgColor: 'rgba(6,182,212,0.15)',
     label: 'Reporting',
   },
+  orchestration: {
+    icon: 'workflow',
+    color: LAYER_COLORS.ORCHESTRATION,
+    borderColor: LAYER_COLORS.ORCHESTRATION,
+    bgColor: 'rgba(249,115,22,0.15)',
+    label: 'Orchestration',
+  },
   table: {
     icon: 'table',
     color: '#3B82F6',
@@ -236,6 +307,20 @@ export const CATEGORY_VISUALS: Record<UnifiedNodeCategory, {
     bgColor: 'rgba(245,158,11,0.1)',
     label: 'Model',
   },
+  dag: {
+    icon: 'workflow',
+    color: '#F97316',
+    borderColor: '#F97316',
+    bgColor: 'rgba(249,115,22,0.12)',
+    label: 'DAG',
+  },
+  task: {
+    icon: 'play',
+    color: '#FB923C',
+    borderColor: '#FB923C',
+    bgColor: 'rgba(251,146,60,0.1)',
+    label: 'Task',
+  },
 };
 
 // Preset filter configurations
@@ -249,7 +334,7 @@ export const FILTER_PRESETS: Record<LineageFilterPreset, {
   'full': {
     label: 'Full Pipeline',
     description: 'Show all tools and data assets',
-    layers: ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'],
+    layers: ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION'],
     showToolNodes: true,
     showTableNodes: true,
   },
@@ -276,20 +361,20 @@ export const FILTER_PRESETS: Record<LineageFilterPreset, {
   },
 };
 
-// Check if a category is a tool category
+// Check if a category is a tool category (pipeline tool nodes)
 export function isToolCategory(category: UnifiedNodeCategory): boolean {
-  return ['ingestion', 'transformation', 'warehouse', 'reporting'].includes(category);
+  return ['ingestion', 'transformation', 'warehouse', 'reporting', 'orchestration'].includes(category);
 }
 
 // Check if a category is a data asset category
 export function isDataAssetCategory(category: UnifiedNodeCategory): boolean {
-  return ['table', 'view', 'source', 'model'].includes(category);
+  return ['table', 'view', 'source', 'model', 'dag', 'task'].includes(category);
 }
 
 // Get the default filter state
 export function getDefaultFilterState(): LineageFilterState {
   return {
-    layers: new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING']),
+    layers: new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION']),
     showToolNodes: true,
     showTableNodes: true,
     searchQuery: '',
@@ -333,6 +418,42 @@ export function edgePassesFilter(
     return false;
   }
   return true;
+}
+
+// Find orchestration nodes cross-linked to a data asset
+export function getCrossLinkedOrchestration(
+  nodeId: string,
+  allEdges: UnifiedLineageEdge[],
+  allNodes: UnifiedLineageNode[],
+): OrchestrationContext[] {
+  const nodeMap = new Map(allNodes.map(n => [n.id, n]));
+  const contexts: OrchestrationContext[] = [];
+
+  for (const edge of allEdges) {
+    if (edge.plane !== 'cross') continue;
+
+    // Edge connects this node to an orchestration entity
+    let orchNodeId: string | null = null;
+    if (edge.source === nodeId) orchNodeId = edge.target;
+    else if (edge.target === nodeId) orchNodeId = edge.source;
+    else continue;
+
+    const orchNode = nodeMap.get(orchNodeId);
+    if (!orchNode) continue;
+
+    const isTask = orchNode.category === 'task';
+    const isDag = orchNode.category === 'dag';
+    if (!isTask && !isDag) continue;
+
+    contexts.push({
+      dagNode: isDag ? orchNode : undefined,
+      taskNode: isTask ? orchNode : undefined,
+      edgeType: edge.edgeType,
+      runSummary: orchNode.runSummary,
+    });
+  }
+
+  return contexts;
 }
 
 // Check if a node passes the current filters

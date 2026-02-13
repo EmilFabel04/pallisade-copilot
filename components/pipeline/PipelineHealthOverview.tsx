@@ -61,14 +61,14 @@ interface PipelineHealthOverviewProps {
   onViewDetails?: () => void;
 }
 
-const LAYER_ICONS: Record<PipelineLayer, React.ReactNode> = {
+const LAYER_ICONS: Partial<Record<PipelineLayer, React.ReactNode>> = {
   INGESTION: <ArrowDownToLine className="w-5 h-5" />,
   TRANSFORMATION: <Wand2 className="w-5 h-5" />,
   WAREHOUSE: <Database className="w-5 h-5" />,
   REPORTING: <BarChart3 className="w-5 h-5" />,
 };
 
-const LAYER_NAMES: Record<PipelineLayer, string> = {
+const LAYER_NAMES: Partial<Record<PipelineLayer, string>> = {
   INGESTION: 'Ingestion',
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',

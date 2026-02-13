@@ -101,8 +101,9 @@ export async function POST(
         console.log(`[LINEAGE] Extracting lineage from ${node.name} (${node.toolType})`);
 
         // Decrypt the config before sending to scanner
+        // Airflow nodes may have empty config (GitHub-only mode) — that's OK
         const decryptedConfig = decryptNodeConfig(node.config);
-        if (!decryptedConfig) {
+        if (!decryptedConfig && node.toolType?.toLowerCase() !== 'airflow') {
           console.error(`[LINEAGE] Failed to decrypt config for ${node.name}`);
           results.push({
             nodeId: node.id,
@@ -113,8 +114,8 @@ export async function POST(
           continue;
         }
 
-        // For TRANSFORMATION (dbt) nodes, attach GitHub config from any connected VERSION_CONTROL node
-        const extractConfig = { ...decryptedConfig };
+        // For TRANSFORMATION nodes, attach GitHub config from any connected VERSION_CONTROL node
+        const extractConfig = { ...(decryptedConfig || {}) };
         if (node.layer === 'TRANSFORMATION') {
           const githubNode = stack.nodes.find(
             (n) => n.layer === 'VERSION_CONTROL' && n.toolType === 'github' && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
@@ -122,15 +123,19 @@ export async function POST(
           if (githubNode) {
             const ghConfig = decryptNodeConfig(githubNode.config);
             if (ghConfig?.access_token && ghConfig?.owner) {
+              const isAirflow = node.toolType?.toLowerCase() === 'airflow';
               extractConfig.github = {
                 repo: ghConfig.repo
                   ? `${ghConfig.owner}/${ghConfig.repo}`
                   : ghConfig.owner,
                 token: ghConfig.access_token,
                 branch: ghConfig.branch || 'main',
-                dbt_root: ghConfig.dbt_root || '',
+                // Airflow needs dag_directory; dbt needs dbt_root
+                ...(isAirflow
+                  ? { dag_directory: extractConfig.dag_directory || 'dags' }
+                  : { dbt_root: ghConfig.dbt_root || '' }),
               };
-              console.log(`[LINEAGE] Attached GitHub config from ${githubNode.name} for dbt schema enrichment`);
+              console.log(`[LINEAGE] Attached GitHub config from ${githubNode.name} for ${isAirflow ? 'Airflow DAG parsing' : 'dbt schema enrichment'}`);
             }
           }
         }
@@ -300,6 +305,70 @@ export async function POST(
           success: false,
           error: err instanceof Error ? err.message : 'Unknown error',
         });
+      }
+    }
+
+    // Auto-detect Airflow DAGs from connected GitHub repo
+    // If no explicit Airflow node exists but a GitHub node does, check for DAG files
+    const hasExplicitAirflow = nodesToProcess.some(n => n.toolType?.toLowerCase() === 'airflow');
+    if (!hasExplicitAirflow) {
+      const githubNode = stack.nodes.find(
+        (n) => n.layer === 'VERSION_CONTROL' && n.toolType === 'github'
+            && (n.status === 'CONNECTED' || n.status === 'HEALTHY')
+      );
+      if (githubNode) {
+        const ghConfig = decryptNodeConfig(githubNode.config);
+        if (ghConfig?.access_token && ghConfig?.owner) {
+          try {
+            const repo = ghConfig.repo
+              ? `${ghConfig.owner}/${ghConfig.repo}`
+              : ghConfig.owner;
+            const airflowConfig = {
+              dag_directory: 'dags',
+              github: {
+                repo,
+                token: ghConfig.access_token,
+                branch: ghConfig.branch || 'main',
+                dag_directory: 'dags',
+              },
+            };
+
+            console.log(`[LINEAGE] Auto-detecting Airflow DAGs from GitHub repo ${repo}`);
+            const afResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                integration_type: 'AIRFLOW',
+                config: airflowConfig,
+              }),
+              signal: AbortSignal.timeout(60000),
+            });
+
+            if (afResponse.ok) {
+              const afData = await afResponse.json();
+              if (afData.success && (afData.nodes?.length > 0 || afData.stats?.node_count > 0)) {
+                const nodeCount = afData.nodes?.length || afData.stats?.node_count || 0;
+                const edgeCount = afData.edges?.length || afData.stats?.edge_count || 0;
+                console.log(`[LINEAGE] Auto-detected Airflow: ${nodeCount} nodes, ${edgeCount} edges from ${repo}`);
+                results.push({
+                  nodeId: githubNode.id,
+                  nodeName: `${githubNode.name} (Airflow DAGs)`,
+                  success: true,
+                  nodesExtracted: nodeCount,
+                  edgesExtracted: edgeCount,
+                });
+                totalNodes += nodeCount;
+                totalEdges += edgeCount;
+              } else if (!afData.success) {
+                // No DAG files found — this is not an error, just means no Airflow in this repo
+                console.log(`[LINEAGE] No Airflow DAGs found in ${repo}: ${afData.errors?.join(', ') || 'no files'}`);
+              }
+            }
+          } catch (e) {
+            // Auto-detection failure is non-fatal — the repo might not have DAGs
+            console.log(`[LINEAGE] Airflow auto-detection skipped: ${e instanceof Error ? e.message : 'unknown error'}`);
+          }
+        }
       }
     }
 

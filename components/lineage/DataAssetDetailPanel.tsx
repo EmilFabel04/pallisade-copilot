@@ -12,15 +12,19 @@ import {
   Clock,
   Zap,
   ArrowRight,
+  Workflow,
+  Play,
 } from 'lucide-react';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,
   type BlastRadiusResult,
+  type OrchestrationContext,
   type UnifiedNodeCategory,
   CATEGORY_VISUALS,
   getConfidenceColor,
   formatColumnMapping,
+  getCrossLinkedOrchestration,
 } from './types';
 
 interface DataAssetDetailPanelProps {
@@ -270,6 +274,12 @@ export function DataAssetDetailPanel({
       setBlastLoading(false);
     }
   }, [stackId, node.id, blastLoading]);
+
+  // Orchestration context — find cross-linked DAGs/tasks
+  const orchContexts = useMemo(
+    () => getCrossLinkedOrchestration(node.id, allEdges, allNodes),
+    [node.id, allEdges, allNodes]
+  );
 
   const VISIBLE_LIMIT = 6;
 
@@ -572,6 +582,76 @@ export function DataAssetDetailPanel({
             </div>
           )}
         </Section>
+
+        {/* ─── Orchestration Context ────────────────────────── */}
+        {orchContexts.length > 0 && (
+          <Section title="Orchestration" count={orchContexts.length} defaultOpen={true}>
+            <div className="space-y-2">
+              {orchContexts.map((ctx, i) => {
+                const orchNode = ctx.taskNode || ctx.dagNode;
+                if (!orchNode) return null;
+                const isTask = !!ctx.taskNode;
+                return (
+                  <div
+                    key={i}
+                    className="p-2.5 rounded-lg bg-orange-500/[0.06] border border-orange-500/[0.12]"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      {isTask ? (
+                        <Play className="w-3.5 h-3.5 text-orange-300" />
+                      ) : (
+                        <Workflow className="w-3.5 h-3.5 text-orange-300" />
+                      )}
+                      <span className="text-[12px] text-white font-mono truncate flex-1">
+                        {orchNode.name}
+                      </span>
+                      <span className="text-[10px] text-orange-300/60 capitalize">
+                        {ctx.edgeType.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+
+                    {/* Run summary */}
+                    {ctx.runSummary && (
+                      <div className="space-y-1.5 mt-2 pt-2 border-t border-orange-500/[0.08]">
+                        {ctx.runSummary.lastRunState && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-white/40">Last Run</span>
+                            <span className={`
+                              px-1.5 py-0.5 text-[10px] font-medium rounded
+                              ${ctx.runSummary.lastRunState === 'success'
+                                ? 'bg-emerald-500/20 text-emerald-300'
+                                : ctx.runSummary.lastRunState === 'failed'
+                                ? 'bg-red-500/20 text-red-300'
+                                : 'bg-blue-500/20 text-blue-300'}
+                            `}>
+                              {ctx.runSummary.lastRunState}
+                            </span>
+                          </div>
+                        )}
+                        {ctx.runSummary.lastRunDate && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-white/40">When</span>
+                            <span className="text-[10px] text-white/60">
+                              {new Date(ctx.runSummary.lastRunDate).toLocaleString()}
+                            </span>
+                          </div>
+                        )}
+                        {ctx.runSummary.successRate !== undefined && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-white/40">Success Rate</span>
+                            <span className="text-[10px] text-white/60">
+                              {Math.round(ctx.runSummary.successRate)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Section>
+        )}
 
         {/* ─── Location ──────────────────────────────────────── */}
         <div className="space-y-3 border-t border-white/[0.06] pt-3">

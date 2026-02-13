@@ -120,6 +120,8 @@ async def extract_lineage(request: LineageRequest):
             return await extract_postgres_lineage(config, options)
         elif integration_type in ("DBT_CLOUD", "DBT_CORE"):
             return await extract_dbt_lineage(config, options, integration_type, integration_id)
+        elif integration_type == "AIRFLOW":
+            return await extract_airflow_lineage(config, options, integration_id)
         else:
             raise HTTPException(
                 status_code=400,
@@ -441,6 +443,173 @@ async def extract_dbt_lineage(
     )
 
 
+async def extract_airflow_lineage(
+    config: Dict[str, Any], options: Dict[str, Any], integration_id: Optional[str] = None
+) -> LineageResponse:
+    """Extract lineage from Airflow (static DAG parsing or API mode)."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.engine.adapters.live_airflow import LiveAirflowAdapter
+        except ImportError:
+            from scanner.lineage.engine.adapters.live_airflow import LiveAirflowAdapter
+    except ImportError:
+        return LineageResponse(
+            success=False,
+            errors=["LiveAirflowAdapter not available"]
+        )
+
+    # Determine mode: API if base_url present, otherwise static (DAG file parsing)
+    base_url = config.get("base_url") or config.get("host")
+    dag_files: Dict[str, str] = {}
+
+    if base_url:
+        mode = "api"
+    else:
+        mode = "static"
+        # If GitHub config is attached, fetch DAG .py files from repo
+        github_config = config.get("github")
+        if github_config and github_config.get("repo") and github_config.get("token"):
+            dag_directory = config.get("dag_directory") or github_config.get("dag_directory", "dags")
+            try:
+                dag_files = await _fetch_dag_files_from_github(
+                    repo=github_config["repo"],
+                    token=github_config["token"],
+                    branch=github_config.get("branch", "main"),
+                    dag_directory=dag_directory,
+                )
+                logger.info(f"[Airflow] Fetched {len(dag_files)} DAG files from GitHub ({dag_directory}/)")
+            except Exception as gh_err:
+                logger.warning(f"[Airflow] GitHub DAG fetch failed: {gh_err}")
+
+        # Also check for inline dag_files in config (e.g. from local upload)
+        if not dag_files and config.get("dag_files"):
+            dag_files = config["dag_files"]
+
+        if not dag_files:
+            return LineageResponse(
+                success=False,
+                errors=["No DAG files available. Connect a GitHub repo with DAG files or provide an Airflow API URL."]
+            )
+
+    namespace = config.get("namespace") or config.get("instance_name") or "airflow"
+    adapter_id = f"airflow_{namespace}"
+
+    adapter = LiveAirflowAdapter(adapter_id=adapter_id)
+    adapter_config: Dict[str, Any] = {
+        "mode": mode,
+        "namespace": namespace,
+        "integration_id": integration_id,
+    }
+
+    if mode == "api":
+        adapter_config["base_url"] = base_url
+        adapter_config["username"] = config.get("username") or config.get("user")
+        adapter_config["password"] = config.get("password")
+    else:
+        adapter_config["dag_files"] = dag_files
+
+    try:
+        engine_nodes = adapter.discover_assets(adapter_config)
+        engine_edges = adapter.extract_lineage(adapter_config)
+
+        _engine_collected_results["nodes"].extend(engine_nodes)
+        _engine_collected_results["edges"].extend(engine_edges)
+        _rebuild_engine_from_cache()
+
+        logger.info(
+            f"[Airflow] Extracted {len(engine_nodes)} nodes, {len(engine_edges)} edges "
+            f"(mode={mode}, namespace={namespace})"
+        )
+
+        # Convert to response format
+        nodes_resp = []
+        for node in engine_nodes:
+            nodes_resp.append(LineageNodeResponse(
+                id=node.id,
+                name=node.name,
+                fqn=node.fqn,
+                node_type=node.node_type.value,
+                database=node.database,
+                schema=node.schema,
+                platform=node.platform,
+                description=node.description,
+            ))
+
+        edges_resp = []
+        for edge in engine_edges:
+            edges_resp.append(LineageEdgeResponse(
+                id=edge.id,
+                source_id=edge.source_id,
+                target_id=edge.target_id,
+                edge_type=edge.edge_type.value,
+                discovered_from=edge.discovered_from,
+            ))
+
+        return LineageResponse(
+            success=True,
+            nodes=nodes_resp,
+            edges=edges_resp,
+            stats={
+                "node_count": len(nodes_resp),
+                "edge_count": len(edges_resp),
+                "mode": mode,
+                "dag_files_parsed": len(dag_files) if mode == "static" else 0,
+            },
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return LineageResponse(success=False, errors=[str(e)])
+
+
+async def _fetch_dag_files_from_github(
+    repo: str, token: str, branch: str, dag_directory: str
+) -> Dict[str, str]:
+    """Fetch .py DAG files from a GitHub repo directory."""
+    import aiohttp
+    import base64
+
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    api_base = "https://api.github.com"
+
+    dag_files: Dict[str, str] = {}
+
+    async with aiohttp.ClientSession() as session:
+        # List files in the DAG directory
+        list_url = f"{api_base}/repos/{repo}/contents/{dag_directory}?ref={branch}"
+        async with session.get(list_url, headers=headers) as resp:
+            if resp.status == 404:
+                # Directory doesn't exist — no DAGs in this repo
+                return {}
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise RuntimeError(f"GitHub API error listing {dag_directory}: {resp.status} {error_text}")
+            items = await resp.json()
+
+        # Filter to .py files
+        py_files = [item for item in items if item.get("name", "").endswith(".py") and item.get("type") == "file"]
+
+        # Fetch each file's content
+        for item in py_files:
+            file_url = f"{api_base}/repos/{repo}/contents/{item['path']}?ref={branch}"
+            async with session.get(file_url, headers=headers) as resp:
+                if resp.status != 200:
+                    continue
+                file_data = await resp.json()
+                content_b64 = file_data.get("content", "")
+                content = base64.b64decode(content_b64).decode("utf-8")
+                dag_files[item["name"]] = content
+
+    return dag_files
+
+
 @router.get("/lineage/node/{node_id}")
 async def get_node_lineage(
     node_id: str,
@@ -690,6 +859,7 @@ class EngineEdgeResponse(BaseModel):
     edge_type: str
     lineage_level: str = "table"
     confidence: float = 1.0
+    plane: str = "data"
     discovered_from: Optional[str] = None
     evidence: List[EngineEvidenceResponse] = []
     column_mappings: List[EngineColumnMappingResponse] = []
@@ -714,6 +884,7 @@ class CoverageStatsResponse(BaseModel):
     total_nodes: int = 0
     total_edges: int = 0
     edges_by_level: Dict[str, int] = {}
+    edges_by_plane: Dict[str, int] = {}
     edges_by_system: Dict[str, int] = {}
     nodes_by_domain: Dict[str, int] = {}
     nodes_by_kind: Dict[str, int] = {}
@@ -755,6 +926,7 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
         edge_type=edge.edge_type.value,
         lineage_level=edge.lineage_level.value,
         confidence=edge.confidence,
+        plane=edge.plane.value,
         discovered_from=edge.discovered_from,
         evidence=[
             EngineEvidenceResponse(
@@ -899,14 +1071,15 @@ def _parse_filters(
     domain: Optional[str] = None,
     kind: Optional[str] = None,
     min_confidence: float = 0.0,
+    plane: Optional[str] = None,
 ):
     """Parse query params into a Filters object."""
     try:
         from lineage.engine.store import Filters
-        from lineage.graph import LineageLevel, PlatformDomain, AssetKind
+        from lineage.graph import LineageLevel, LinePlane, PlatformDomain, AssetKind
     except ImportError:
         from scanner.lineage.engine.store import Filters
-        from scanner.lineage.graph import LineageLevel, PlatformDomain, AssetKind
+        from scanner.lineage.graph import LineageLevel, LinePlane, PlatformDomain, AssetKind
 
     filters = Filters(min_confidence=min_confidence)
     if level:
@@ -917,6 +1090,8 @@ def _parse_filters(
         filters.platform_domains = {PlatformDomain(d.strip()) for d in domain.split(",")}
     if kind:
         filters.asset_kinds = {AssetKind(k.strip()) for k in kind.split(",")}
+    if plane:
+        filters.planes = {LinePlane(p.strip()) for p in plane.split(",")}
     return filters
 
 
@@ -1027,14 +1202,26 @@ async def engine_explain_edge(edge_id: str):
 
 
 @router.get("/lineage/engine/graph")
-async def engine_full_graph():
+async def engine_full_graph(
+    plane: Optional[str] = Query(None, description="Filter edges by plane: data,control,cross"),
+):
     """Return the full engine graph (nodes + edges with confidence/evidence)."""
     store = _get_engine_store()
     if not store.graph:
         return {"nodes": [], "edges": []}
+
+    edges = store.graph.edges.values()
+    if plane:
+        try:
+            from lineage.graph import LinePlane
+        except ImportError:
+            from scanner.lineage.graph import LinePlane
+        allowed = {LinePlane(p.strip()) for p in plane.split(",")}
+        edges = [e for e in edges if e.plane in allowed]
+
     return {
         "nodes": [_node_to_engine_response(n).dict(by_alias=True) for n in store.graph.nodes.values()],
-        "edges": [_edge_to_engine_response(e).dict() for e in store.graph.edges.values()],
+        "edges": [_edge_to_engine_response(e).dict() for e in edges],
     }
 
 
@@ -1090,6 +1277,103 @@ async def engine_restore(request: EngineRestoreRequest):
         traceback.print_exc()
         _logger.error(f"[Engine] Failed to restore graph: {e}")
         return {"success": False, "error": str(e)}
+
+
+@router.get("/lineage/engine/control-plane/{dag_id}")
+async def engine_control_plane(dag_id: str):
+    """Return the control-plane subgraph for a specific DAG.
+
+    Returns the DAG node, its tasks, internal dependency edges, and
+    cross-link edges to data-plane assets.
+    """
+    store = _get_engine_store()
+    if not store.graph:
+        raise HTTPException(status_code=404, detail="No graph built.")
+
+    sub = store.get_control_plane_subgraph(dag_id)
+    if not sub.nodes:
+        raise HTTPException(status_code=404, detail=f"DAG '{dag_id}' not found in graph.")
+
+    return {
+        "dag_id": dag_id,
+        "nodes": [_node_to_engine_response(n).dict(by_alias=True) for n in sub.nodes.values()],
+        "edges": [_edge_to_engine_response(e).dict() for e in sub.edges.values()],
+        "stats": {
+            "total_nodes": len(sub.nodes),
+            "total_edges": len(sub.edges),
+            "task_count": sum(1 for n in sub.nodes.values() if n.node_type.value == "task"),
+            "cross_link_count": sum(1 for e in sub.edges.values() if e.plane.value == "cross"),
+        },
+    }
+
+
+@router.get("/lineage/engine/control-plane")
+async def engine_control_plane_all():
+    """Return the full control-plane subgraph (all DAGs and tasks)."""
+    store = _get_engine_store()
+    if not store.graph:
+        return {"nodes": [], "edges": [], "stats": {}}
+
+    sub = store.get_control_plane_subgraph()
+    return {
+        "nodes": [_node_to_engine_response(n).dict(by_alias=True) for n in sub.nodes.values()],
+        "edges": [_edge_to_engine_response(e).dict() for e in sub.edges.values()],
+        "stats": {
+            "total_nodes": len(sub.nodes),
+            "total_edges": len(sub.edges),
+        },
+    }
+
+
+@router.get("/lineage/engine/cross-links/{asset_id}")
+async def engine_cross_links(asset_id: str):
+    """Return cross-plane edges for a data asset (links to orchestration)."""
+    store = _get_engine_store()
+    if not store.graph:
+        raise HTTPException(status_code=404, detail="No graph built.")
+
+    cross_edges = store.get_cross_links(asset_id)
+    # Also return the connected orchestration nodes
+    connected_nodes = {}
+    for edge in cross_edges:
+        other_id = edge.target_id if edge.source_id == asset_id else edge.source_id
+        if other_id in store.graph.nodes:
+            connected_nodes[other_id] = store.graph.nodes[other_id]
+
+    return {
+        "asset_id": asset_id,
+        "cross_links": [_edge_to_engine_response(e).dict() for e in cross_edges],
+        "connected_nodes": [_node_to_engine_response(n).dict(by_alias=True) for n in connected_nodes.values()],
+    }
+
+
+@router.get("/lineage/engine/run-history/{dag_id}")
+async def engine_run_history(
+    dag_id: str,
+    limit: int = Query(10, ge=1, le=100),
+):
+    """Get recent run history for an Airflow DAG.
+
+    Delegates to AirflowIntegration if an adapter is available. Otherwise
+    returns whatever run_summary data is stored on the DAG node.
+    """
+    store = _get_engine_store()
+
+    # Try to find run_summary from the DAG node's raw_metadata
+    dag_node = None
+    if store.graph:
+        for node in store.graph.nodes.values():
+            if node.node_type.value == "dag" and node.name == dag_id:
+                dag_node = node
+                break
+
+    run_summary = dag_node.raw_metadata.get("run_summary") if dag_node else None
+
+    return {
+        "dag_id": dag_id,
+        "run_summary": run_summary,
+        "dag_found": dag_node is not None,
+    }
 
 
 @router.get("/lineage/engine/stats", response_model=CoverageStatsResponse)

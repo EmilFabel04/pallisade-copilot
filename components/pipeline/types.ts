@@ -5,7 +5,7 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'VERSION_CONTROL';
+export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'VERSION_CONTROL' | 'ORCHESTRATION';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
 export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
@@ -20,6 +20,7 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   WAREHOUSE: '#6366F1',      // Indigo
   REPORTING: '#06B6D4',      // Cyan
   VERSION_CONTROL: '#8B5CF6', // Purple
+  ORCHESTRATION: '#F97316',  // Orange
 };
 
 // Integration type colors
@@ -45,6 +46,7 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',
   VERSION_CONTROL: 'Version Control',
+  ORCHESTRATION: 'Orchestration',
 };
 
 // Integration type labels
@@ -146,15 +148,16 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'project_name', label: 'Project Name', type: 'text', required: false, placeholder: 'Name to identify this dbt project' },
       ],
     },
-    { 
-      id: 'airflow', 
-      name: 'Airflow', 
-      description: 'Apache Airflow orchestration', 
+    {
+      id: 'airflow',
+      name: 'Airflow',
+      description: 'Apache Airflow orchestration',
       layer: 'TRANSFORMATION',
       configFields: [
-        { name: 'host', label: 'Airflow Host', type: 'text', required: true, placeholder: 'https://your-airflow.com' },
-        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'Airflow username' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Airflow password' },
+        { name: 'host', label: 'Airflow Host', type: 'text', required: false, placeholder: 'https://your-airflow.com', helperText: 'Leave empty to parse DAGs from connected GitHub repo instead' },
+        { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'Airflow username' },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'Airflow password' },
+        { name: 'dag_directory', label: 'DAG Directory', type: 'text', required: false, placeholder: 'dags', helperText: 'Path to DAGs folder in the repo (default: dags)' },
       ],
     },
     { 
@@ -328,6 +331,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       ],
     },
   ],
+  ORCHESTRATION: [],
   VERSION_CONTROL: [
     {
       id: 'github',

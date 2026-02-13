@@ -212,7 +212,14 @@ function MultiSelectField({
 
 export default function NodeConfigModal({ node, stackId, onSave, onClose }: NodeConfigModalProps) {
   const tool = getToolById(node.toolType);
-  const [config, setConfig] = useState<Record<string, any>>(node.config || {});
+  const [config, setConfig] = useState<Record<string, any>>(() => {
+    const initial = node.config || {};
+    // Ensure Airflow always has a dag_directory default so config is never empty
+    if (node.toolType === 'airflow' && !initial.dag_directory) {
+      return { ...initial, dag_directory: 'dags' };
+    }
+    return initial;
+  });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
