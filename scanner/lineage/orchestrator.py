@@ -382,17 +382,19 @@ class CrossToolLineageOrchestrator:
             return None
 
     async def _extract_orchestrator(self, integration: Dict) -> ExtractionResult:
-        """Extract lineage from orchestrator (Airflow, etc.)."""
+        """Extract lineage from orchestrator (Airflow, Dagster, Prefect)."""
         start_time = datetime.utcnow()
         int_id = integration.get("id", "unknown")
         int_type = integration.get("type", "").upper()
+        config = integration.get("config", {})
 
         logger.info(f"Extracting lineage from {int_type} ({int_id})")
 
-        # TODO: Implement OpenLineage event consumption
-        # For now, return empty graph
-        duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+        if int_type == "AIRFLOW":
+            return await self._extract_airflow(integration, start_time)
 
+        # Dagster, Prefect — not yet implemented
+        duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
         return ExtractionResult(
             integration_id=int_id,
             integration_type=int_type,
@@ -402,6 +404,166 @@ class CrossToolLineageOrchestrator:
             edge_count=0,
             duration_ms=duration_ms,
         )
+
+    async def _extract_airflow(self, integration: Dict, start_time: datetime) -> ExtractionResult:
+        """Extract lineage from Airflow via LiveAirflowAdapter."""
+        int_id = integration.get("id", "unknown")
+        config = integration.get("config", {})
+
+        try:
+            from .engine.adapters.live_airflow import LiveAirflowAdapter
+        except ImportError:
+            logger.warning("LiveAirflowAdapter not available")
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            return ExtractionResult(
+                integration_id=int_id,
+                integration_type="AIRFLOW",
+                success=False,
+                error="LiveAirflowAdapter not available",
+                duration_ms=duration_ms,
+            )
+
+        # Determine mode: API if base_url present, otherwise static (DAG file parsing)
+        base_url = config.get("base_url") or config.get("host")
+        dag_files: Dict[str, str] = {}
+
+        if base_url:
+            mode = "api"
+        else:
+            mode = "static"
+            # If GitHub config is attached, fetch DAG .py files from repo
+            github_config = config.get("github")
+            if github_config and github_config.get("repo") and github_config.get("token"):
+                dag_directory = config.get("dag_directory") or github_config.get("dag_directory", "dags")
+                try:
+                    dag_files = await self._fetch_dag_files_from_github(
+                        repo=github_config["repo"],
+                        token=github_config["token"],
+                        branch=github_config.get("branch", "main"),
+                        dag_directory=dag_directory,
+                    )
+                    logger.info(f"[Airflow] Fetched {len(dag_files)} DAG files from GitHub ({dag_directory}/)")
+                except Exception as gh_err:
+                    logger.warning(f"[Airflow] GitHub DAG fetch failed: {gh_err}")
+
+            # Also check for inline dag_files in config (e.g. from local upload)
+            if not dag_files and config.get("dag_files"):
+                dag_files = config["dag_files"]
+
+            if not dag_files:
+                duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                return ExtractionResult(
+                    integration_id=int_id,
+                    integration_type="AIRFLOW",
+                    success=False,
+                    error="No DAG files available. Connect a GitHub repo with DAG files or provide an Airflow API URL.",
+                    duration_ms=duration_ms,
+                )
+
+        namespace = config.get("namespace") or config.get("instance_name") or "airflow"
+        adapter_id = f"airflow_{namespace}"
+
+        adapter = LiveAirflowAdapter(adapter_id=adapter_id)
+        adapter_config: Dict[str, Any] = {
+            "mode": mode,
+            "namespace": namespace,
+            "integration_id": int_id,
+        }
+
+        if mode == "api":
+            adapter_config["base_url"] = base_url
+            adapter_config["username"] = config.get("username") or config.get("user")
+            adapter_config["password"] = config.get("password")
+        else:
+            adapter_config["dag_files"] = dag_files
+
+        try:
+            engine_nodes = adapter.discover_assets(adapter_config)
+            engine_edges = adapter.extract_lineage(adapter_config)
+
+            # Build a graph from the adapter results
+            graph = LineageGraph()
+            for node in engine_nodes:
+                graph.add_node(node)
+            for edge in engine_edges:
+                if edge.source_id in graph.nodes and edge.target_id in graph.nodes:
+                    graph.add_edge(edge)
+
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+            logger.info(
+                f"[Airflow] Extracted {len(engine_nodes)} nodes, {len(engine_edges)} edges "
+                f"(mode={mode}, namespace={namespace}) in {duration_ms}ms"
+            )
+
+            return ExtractionResult(
+                integration_id=int_id,
+                integration_type="AIRFLOW",
+                success=True,
+                graph=graph,
+                node_count=len(engine_nodes),
+                edge_count=len(engine_edges),
+                duration_ms=duration_ms,
+            )
+
+        except Exception as e:
+            logger.exception(f"Airflow lineage extraction failed for {int_id}")
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            return ExtractionResult(
+                integration_id=int_id,
+                integration_type="AIRFLOW",
+                success=False,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
+
+    @staticmethod
+    async def _fetch_dag_files_from_github(
+        repo: str, token: str, branch: str, dag_directory: str
+    ) -> Dict[str, str]:
+        """Fetch .py DAG files from a GitHub repo directory."""
+        import aiohttp
+        import base64
+
+        headers = {
+            "Authorization": f"token {token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        api_base = "https://api.github.com"
+
+        dag_files: Dict[str, str] = {}
+
+        async with aiohttp.ClientSession() as session:
+            # List files in the DAG directory
+            list_url = f"{api_base}/repos/{repo}/contents/{dag_directory}?ref={branch}"
+            async with session.get(list_url, headers=headers) as resp:
+                if resp.status == 404:
+                    return {}
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    raise RuntimeError(
+                        f"GitHub API error listing {dag_directory}: {resp.status} {error_text}"
+                    )
+                items = await resp.json()
+
+            # Filter to .py files
+            py_files = [
+                item for item in items
+                if item.get("name", "").endswith(".py") and item.get("type") == "file"
+            ]
+
+            # Fetch each file's content
+            for item in py_files:
+                file_url = f"{api_base}/repos/{repo}/contents/{item['path']}?ref={branch}"
+                async with session.get(file_url, headers=headers) as resp:
+                    if resp.status != 200:
+                        continue
+                    file_data = await resp.json()
+                    content_b64 = file_data.get("content", "")
+                    content = base64.b64decode(content_b64).decode("utf-8")
+                    dag_files[item["name"]] = content
+
+        return dag_files
 
     async def _extract_bi_tool(self, integration: Dict) -> ExtractionResult:
         """Extract lineage from BI tool (Looker, etc.)."""
