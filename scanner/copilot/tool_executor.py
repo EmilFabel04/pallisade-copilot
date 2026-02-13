@@ -2282,6 +2282,221 @@ class ToolExecutor:
         )
 
     # ==========================================
+    # COVERAGE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    def _run_coverage_analysis(self) -> Any:
+        """Run the coverage scorer + gap analyzer on the current lineage graph."""
+        try:
+            from scanner.coverage.scorer import CoverageScorer
+            from scanner.coverage.gap_analyzer import GapAnalyzer
+        except ImportError:
+            from ..coverage.scorer import CoverageScorer
+            from ..coverage.gap_analyzer import GapAnalyzer
+
+        graph = self.context.graph
+        if not graph or not graph.nodes:
+            return None
+
+        scorer = CoverageScorer(graph=graph)
+        report = scorer.score()
+        analyzer = GapAnalyzer(graph)
+        report = analyzer.analyze(report)
+        return report
+
+    async def _execute_get_coverage_report(self, args: Dict[str, Any]) -> ToolResult:
+        """Get a comprehensive coverage analysis for the lineage graph."""
+        report = self._run_coverage_analysis()
+        if report is None:
+            return ToolResult(
+                success=False,
+                error="No lineage graph available. Extract lineage first.",
+            )
+
+        node_filter = args.get("node_filter", "all")
+
+        if node_filter == "all":
+            return ToolResult(success=True, data=report.to_dict())
+
+        # Apply filter on node_coverages for filtered summary
+        filtered = report.node_coverages
+        if node_filter == "critical":
+            filtered = [nc for nc in filtered if nc.criticality == "critical"]
+        elif node_filter == "uncovered":
+            filtered = [nc for nc in filtered if nc.coverage_percent == 0.0]
+        elif node_filter == "tables":
+            filtered = [nc for nc in filtered if nc.node_type.upper() == "TABLE"]
+
+        data = report.to_dict()
+        data["filter"] = node_filter
+        data["filtered_node_count"] = len(filtered)
+        data["filtered_nodes"] = [nc.to_dict() for nc in filtered[:30]]
+        return ToolResult(success=True, data=data)
+
+    async def _execute_get_coverage_gaps(self, args: Dict[str, Any]) -> ToolResult:
+        """Identify the most impactful coverage gaps."""
+        report = self._run_coverage_analysis()
+        if report is None:
+            return ToolResult(
+                success=False,
+                error="No lineage graph available. Extract lineage first.",
+            )
+
+        severity = args.get("severity", "all")
+        category = args.get("category", "all")
+        limit = args.get("limit", 20)
+
+        gaps = report.gaps
+        if severity != "all":
+            gaps = [g for g in gaps if g.severity.value == severity.lower()]
+        if category != "all":
+            gaps = [g for g in gaps if g.category.value == category.lower()]
+
+        return ToolResult(
+            success=True,
+            data={
+                "total_gaps": len(report.gaps),
+                "filtered_count": len(gaps),
+                "gaps": [g.to_dict() for g in gaps[:limit]],
+            },
+        )
+
+    async def _execute_get_node_coverage(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed coverage analysis for a specific node."""
+        node_name = args.get("node_name", "")
+        if not node_name:
+            return ToolResult(success=False, error="node_name is required.")
+
+        report = self._run_coverage_analysis()
+        if report is None:
+            return ToolResult(
+                success=False,
+                error="No lineage graph available. Extract lineage first.",
+            )
+
+        # Resolve node by name/FQN (case-insensitive, suffix match)
+        lower = node_name.lower()
+        for nc in report.node_coverages:
+            nc_name = nc.node_name.lower()
+            nc_id = nc.node_id.lower()
+            if nc_name == lower or nc_id == lower or nc_name.endswith("." + lower):
+                return ToolResult(success=True, data=nc.to_dict())
+
+        # Try partial match
+        for nc in report.node_coverages:
+            if lower in nc.node_name.lower() or lower in nc.node_id.lower():
+                return ToolResult(success=True, data=nc.to_dict())
+
+        return ToolResult(
+            success=False,
+            error=f"Node '{node_name}' not found. Available nodes: "
+            + ", ".join(nc.node_name for nc in report.node_coverages[:20]),
+        )
+
+    async def _execute_get_monitor_recommendations(self, args: Dict[str, Any]) -> ToolResult:
+        """Get actionable monitor recommendations to close coverage gaps."""
+        report = self._run_coverage_analysis()
+        if report is None:
+            return ToolResult(
+                success=False,
+                error="No lineage graph available. Extract lineage first.",
+            )
+
+        monitor_type = args.get("monitor_type", "all")
+        limit = args.get("limit", 10)
+
+        recs = report.recommendations
+        if monitor_type != "all":
+            recs = [r for r in recs if r.monitor_type.value == monitor_type.lower()]
+
+        return ToolResult(
+            success=True,
+            data={
+                "total_recommendations": len(report.recommendations),
+                "filtered_count": len(recs),
+                "recommendations": [r.to_dict() for r in recs[:limit]],
+            },
+        )
+
+    async def _execute_run_coverage_monitor(self, args: Dict[str, Any]) -> ToolResult:
+        """Execute a specific monitor against a data asset."""
+        import asyncio
+
+        try:
+            from scanner.monitors.executor import MonitorExecutor
+        except ImportError:
+            from ..monitors.executor import MonitorExecutor
+
+        monitor_type = args.get("monitor_type")
+        table_fqn = args.get("table_fqn", "")
+        config = args.get("config") or {}
+
+        if not monitor_type or not table_fqn:
+            return ToolResult(
+                success=False,
+                error="Both monitor_type and table_fqn are required.",
+            )
+
+        # Parse FQN into parts
+        parts = table_fqn.split(".")
+        if len(parts) < 2:
+            return ToolResult(
+                success=False,
+                error=f"table_fqn must be at least schema.table (got '{table_fqn}').",
+            )
+        if len(parts) == 2:
+            database, schema, table = "", parts[0], parts[1]
+        else:
+            database, schema, table = parts[0], parts[1], ".".join(parts[2:])
+
+        # Find a warehouse adapter
+        warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
+        adapter = None
+        adapter_type = None
+        for wh in warehouse_types:
+            if wh in self._adapters:
+                adapter = self._adapters[wh]
+                adapter_type = wh
+                break
+
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error="No warehouse connected. Connect a warehouse to run monitors.",
+            )
+
+        if not adapter.is_connected:
+            adapter.connect()
+
+        # Map warehouse type to sqlglot dialect
+        dialect_map = {
+            "BIGQUERY": "bigquery",
+            "SNOWFLAKE": "snowflake",
+            "POSTGRES": "postgres",
+            "REDSHIFT": "redshift",
+        }
+        dialect = dialect_map.get(adapter_type, "postgres")
+
+        # Create and run the monitor
+        monitor = MonitorExecutor.create_monitor(monitor_type, config)
+        if not monitor:
+            return ToolResult(
+                success=False,
+                error=f"Unknown monitor type: {monitor_type}. "
+                "Supported: freshness, volume, schema_change, anomaly.",
+            )
+
+        def _query_func(sql: str):
+            return adapter.execute_query(sql)
+
+        executor = MonitorExecutor(query_func=_query_func, dialect=dialect)
+        result = await asyncio.to_thread(
+            executor.run_monitor, monitor, database, schema, table
+        )
+
+        return ToolResult(success=True, data=result.to_dict())
+
+    # ==========================================
     # OBSERVABILITY TOOL IMPLEMENTATIONS
     # ==========================================
 
