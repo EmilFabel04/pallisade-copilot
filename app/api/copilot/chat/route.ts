@@ -149,15 +149,19 @@ export async function POST(request: Request) {
 
       // Map frontend field names to adapter field names
       const config = { ...credentials };
+      const toolType = node.toolType.toUpperCase();
 
-      // username -> user (Snowflake, Postgres, Redshift)
-      if (config.username && !config.user) {
+      // username -> user (Snowflake, Postgres, Redshift only — other integrations
+      // like Airflow need 'username' kept as-is for their MCP env mappings)
+      const usernameToUserTypes = ['SNOWFLAKE', 'POSTGRES', 'REDSHIFT'];
+      if (usernameToUserTypes.includes(toolType) && config.username && !config.user) {
         config.user = config.username;
         delete config.username;
       }
 
-      // server -> host (SQL Server)
-      if (config.server && !config.host) {
+      // server -> host (SQL Server variants only)
+      const serverToHostTypes = ['SQLSERVER', 'AZURE_SQL', 'AZURE_SYNAPSE'];
+      if (serverToHostTypes.includes(toolType) && config.server && !config.host) {
         config.host = config.server;
         delete config.server;
       }
