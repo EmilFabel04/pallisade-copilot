@@ -85,21 +85,35 @@ class AnomalyMonitor(BaseMonitor):
         dialect: str = "postgres",
     ) -> str:
         fqn = self._fqn(database, schema, table)
-        metric_expr = self._metric_expression()
+        metric_expr = self._metric_expression(dialect)
 
         if self.timestamp_column and self.lookback_days:
             ts = self.timestamp_column
+
+            if dialect == "bigquery":
+                # BigQuery uses EXTRACT(DAYOFWEEK FROM ...) (not DOW)
+                # and DATE_SUB / INTERVAL n DAY (not INTERVAL 'n days').
+                dow_expr = f"EXTRACT(DAYOFWEEK FROM CAST({ts} AS DATE))"
+                where = (
+                    f"WHERE {ts} >= DATE_SUB(CURRENT_DATE(), "
+                    f"INTERVAL {self.lookback_days} DAY)"
+                )
+            else:
+                dow_expr = f"EXTRACT(DOW FROM CAST({ts} AS DATE))"
+                where = (
+                    f"WHERE {ts} >= CURRENT_DATE "
+                    f"- INTERVAL '{self.lookback_days} days'"
+                )
+
             if self.seasonality == "day_of_week":
-                # Bucket by day, include day-of-week for seasonal filtering.
                 sql = (
                     f"SELECT "
                     f"CAST({ts} AS DATE) AS bucket_date, "
-                    f"EXTRACT(DOW FROM CAST({ts} AS DATE)) AS day_of_week, "
+                    f"{dow_expr} AS day_of_week, "
                     f"{metric_expr} AS metric_value "
                     f"FROM {fqn} "
-                    f"WHERE {ts} >= CURRENT_DATE "
-                    f"- INTERVAL '{self.lookback_days} days' "
-                    f"GROUP BY CAST({ts} AS DATE) "
+                    f"{where} "
+                    f"GROUP BY bucket_date, day_of_week "
                     f"ORDER BY bucket_date"
                 )
             else:
@@ -108,11 +122,14 @@ class AnomalyMonitor(BaseMonitor):
                     f"CAST({ts} AS DATE) AS bucket_date, "
                     f"{metric_expr} AS metric_value "
                     f"FROM {fqn} "
-                    f"WHERE {ts} >= CURRENT_DATE "
-                    f"- INTERVAL '{self.lookback_days} days' "
-                    f"GROUP BY CAST({ts} AS DATE) "
+                    f"{where} "
+                    f"GROUP BY bucket_date "
                     f"ORDER BY bucket_date"
                 )
+
+            # Skip sqlglot transpilation for BigQuery — already native.
+            if dialect == "bigquery":
+                return sql
         else:
             # Single snapshot — current metric value only.
             sql = (
@@ -263,12 +280,16 @@ class AnomalyMonitor(BaseMonitor):
             },
         )
 
-    def _metric_expression(self) -> str:
+    def _metric_expression(self, dialect: str = "postgres") -> str:
         template = self.METRIC_SQL.get(self.metric)
         if not template:
             # Fall back to a raw column select.
             return self.column
-        return template.format(col=self.column)
+        expr = template.format(col=self.column)
+        # BigQuery uses FLOAT64 instead of FLOAT.
+        if dialect == "bigquery":
+            expr = expr.replace("AS FLOAT)", "AS FLOAT64)")
+        return expr
 
     def _extract_current_value(
         self, query_results: List[Dict[str, Any]]
