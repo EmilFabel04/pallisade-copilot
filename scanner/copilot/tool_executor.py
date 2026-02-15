@@ -2626,6 +2626,13 @@ class ToolExecutor:
             executor.run_monitor, monitor, database, schema, table
         )
 
+        logger.info(
+            f"[Monitor] {monitor_type} result for {table_fqn}: "
+            f"status={result.status.value}, "
+            f"value={result.value}, "
+            f"data_points={result.details.get('data_points') if result.details else 'n/a'}"
+        )
+
         return ToolResult(success=True, data=result.to_dict())
 
     # BigQuery / warehouse numeric types used to auto-pick anomaly columns.

@@ -198,8 +198,32 @@ class AnomalyMonitor(BaseMonitor):
 
                 return self._zscore_evaluate(current, baseline, target_fqn)
 
-        # Not enough data — report the current value without judgement.
+        # Not enough data for Z-score — report the current value as a
+        # baseline observation instead of skipping entirely.
         current_value = self._extract_current_value(query_results)
+        label = f"{self.column}.{self.metric}"
+        n = len(query_results)
+
+        if current_value is not None:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target_fqn,
+                status=MonitorStatus.PASS,
+                value=current_value,
+                message=(
+                    f"{label}: current value is {current_value:.4f} "
+                    f"(based on {n} data point{'s' if n != 1 else ''} — "
+                    f"anomaly detection requires ≥ 3; "
+                    f"reporting as baseline observation)."
+                ),
+                details={
+                    "data_points": n,
+                    "column": self.column,
+                    "metric": self.metric,
+                    "baseline_observation": True,
+                },
+            )
+
         return MonitorResult(
             monitor_type=self.monitor_type,
             target_fqn=target_fqn,
@@ -207,11 +231,11 @@ class AnomalyMonitor(BaseMonitor):
             value=current_value,
             message=(
                 f"Insufficient historical data for anomaly detection on "
-                f"'{self.column}.{self.metric}'. "
+                f"'{label}' and could not extract current value. "
                 f"Need at least 3 data points."
             ),
             details={
-                "data_points": len(query_results),
+                "data_points": n,
                 "column": self.column,
                 "metric": self.metric,
             },
