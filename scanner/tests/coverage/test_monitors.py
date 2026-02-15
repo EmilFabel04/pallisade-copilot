@@ -288,10 +288,23 @@ class TestAnomalyMonitor:
         result = monitor.evaluate(rows, "db.schema.table")
         assert result.status == MonitorStatus.FAIL
 
-    def test_insufficient_data(self):
+    def test_insufficient_data_with_value(self):
+        """With < 3 data points but a valid value, report as PASS baseline observation."""
         monitor = AnomalyMonitor({"column": "x", "metric": "avg"})
         result = monitor.evaluate(
             [{"metric_value": 42.0}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.PASS
+        assert result.value == 42.0
+        assert result.details["baseline_observation"] is True
+        assert "baseline observation" in result.message
+
+    def test_insufficient_data_no_value(self):
+        """With < 3 data points and no extractable value, fall back to SKIPPED."""
+        monitor = AnomalyMonitor({"column": "x", "metric": "avg"})
+        result = monitor.evaluate(
+            [{"metric_value": None}],
             "db.schema.table",
         )
         assert result.status == MonitorStatus.SKIPPED
