@@ -855,8 +855,15 @@ class ToolRegistry:
                 ),
                 ToolParameter(
                     "config", "object",
-                    "Monitor-specific config overrides (e.g., "
-                    "{'timestamp_column': 'created_at', 'max_hours': 12} for freshness).",
+                    "Monitor-specific config. "
+                    "freshness: {timestamp_column, max_hours?, warn_hours?}. "
+                    "volume: {min_rows?, max_rows?, time_bucket_column?, lookback_days?}. "
+                    "anomaly (REQUIRED keys): {column, metric} where metric is one of "
+                    "null_rate, distinct_count, distinct_rate, min, max, avg, sum, "
+                    "stddev, zero_rate; optional: {timestamp_column, lookback_days, "
+                    "anomaly_threshold, seasonality}. "
+                    "schema_change: {baseline_columns?, fail_on_column_removed?, "
+                    "fail_on_column_added?, fail_on_type_change?}.",
                     required=False,
                 ),
             ],
