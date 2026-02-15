@@ -2570,6 +2570,25 @@ class ToolExecutor:
         }
         dialect = dialect_map.get(adapter_type, "postgres")
 
+        # Auto-infer anomaly monitor config from table schema when column
+        # is not specified.  This prevents the empty-column SQL syntax error
+        # and lets the LLM call run_coverage_monitor(type=anomaly, fqn=...)
+        # without needing to know specific column names upfront.
+        if monitor_type == "anomaly" and not config.get("column"):
+            inferred = self._infer_anomaly_config(table_fqn, table)
+            if inferred is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Cannot run anomaly monitor on '{table_fqn}': "
+                        "no numeric columns found in the pre-fetched schema. "
+                        "Pass an explicit config with 'column' and 'metric'."
+                    ),
+                )
+            # Merge: explicit config keys take precedence over inferred ones.
+            merged = {**inferred, **{k: v for k, v in config.items() if v}}
+            config = merged
+
         # Create and run the monitor
         monitor = MonitorExecutor.create_monitor(monitor_type, config)
         if not monitor:
@@ -2588,6 +2607,84 @@ class ToolExecutor:
         )
 
         return ToolResult(success=True, data=result.to_dict())
+
+    # BigQuery / warehouse numeric types used to auto-pick anomaly columns.
+    _NUMERIC_TYPE_KEYWORDS = frozenset({
+        "int", "integer", "int64", "bigint", "smallint", "tinyint",
+        "float", "float64", "double", "real", "numeric", "decimal",
+        "number", "bignumeric",
+    })
+
+    # Common timestamp column name patterns (lowercase).
+    _TIMESTAMP_PATTERNS = (
+        "created_at", "updated_at", "event_timestamp", "timestamp",
+        "event_time", "created_date", "date", "event_date", "loaded_at",
+        "_loaded_at", "ingested_at", "_batched_at",
+    )
+
+    def _infer_anomaly_config(
+        self, table_fqn: str, table_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Infer a sensible anomaly-monitor config from the pre-fetched schema.
+
+        Returns a dict with at least ``column`` and ``metric``, plus
+        ``timestamp_column`` if a timestamp-like column is found.
+        Returns ``None`` when no numeric column can be identified.
+        """
+        if not self.context.warehouse_schema:
+            return None
+
+        # Locate the TableSchema for this table.
+        table_schema = None
+        fqn_lower = table_fqn.lower()
+        tbl_lower = table_name.lower()
+        for _key, tables in self.context.warehouse_schema.items():
+            for ts in tables:
+                # Match by full FQN or by bare table name.
+                full = f"{ts.project}.{ts.dataset}.{ts.name}".lower() if ts.project else f"{ts.dataset}.{ts.name}".lower()
+                if full == fqn_lower or ts.name.lower() == tbl_lower:
+                    table_schema = ts
+                    break
+            if table_schema:
+                break
+
+        if not table_schema or not table_schema.columns:
+            return None
+
+        # Find first numeric column.
+        numeric_col = None
+        for col in table_schema.columns:
+            col_type = col.get("type", "").lower().split("(")[0].strip()
+            if col_type in self._NUMERIC_TYPE_KEYWORDS:
+                numeric_col = col["name"]
+                break
+
+        if not numeric_col:
+            return None
+
+        # Find a timestamp column for time-series analysis.
+        ts_col = None
+        col_names = {c["name"].lower(): c["name"] for c in table_schema.columns}
+        for pattern in self._TIMESTAMP_PATTERNS:
+            if pattern in col_names:
+                ts_col = col_names[pattern]
+                break
+        # Fallback: first column with "timestamp" or "date" in its type.
+        if ts_col is None:
+            for col in table_schema.columns:
+                col_type = col.get("type", "").lower()
+                if "timestamp" in col_type or "date" in col_type:
+                    ts_col = col["name"]
+                    break
+
+        result: Dict[str, Any] = {
+            "column": numeric_col,
+            "metric": "null_rate",
+        }
+        if ts_col:
+            result["timestamp_column"] = ts_col
+        return result
 
     # ==========================================
     # OBSERVABILITY TOOL IMPLEMENTATIONS
