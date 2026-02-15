@@ -2570,21 +2570,41 @@ class ToolExecutor:
         }
         dialect = dialect_map.get(adapter_type, "postgres")
 
-        # Auto-infer anomaly monitor config from table schema when column
-        # is not specified.  This prevents the empty-column SQL syntax error
-        # and lets the LLM call run_coverage_monitor(type=anomaly, fqn=...)
-        # without needing to know specific column names upfront.
-        if monitor_type == "anomaly" and not config.get("column"):
+        # ------------------------------------------------------------------
+        # Anomaly monitors REQUIRE a column.  The LLM often omits it, which
+        # produces invalid SQL (empty column → ``CASE WHEN  IS NULL``).
+        # Resolve a column from schema before creating the monitor.
+        # ------------------------------------------------------------------
+        if monitor_type == "anomaly" and not (config.get("column") or "").strip():
+            logger.info(
+                f"[Monitor] Anomaly monitor for {table_fqn}: no column in config, "
+                f"attempting auto-infer (schema populated: "
+                f"{bool(self.context.warehouse_schema)})"
+            )
             inferred = self._infer_anomaly_config(table_fqn, table)
+
+            # Fallback: query the warehouse directly for column metadata.
             if inferred is None:
+                logger.info(
+                    f"[Monitor] Schema-based inference failed for {table_fqn}, "
+                    "querying warehouse INFORMATION_SCHEMA directly"
+                )
+                inferred = await self._infer_anomaly_config_from_warehouse(
+                    adapter, adapter_type, database, schema, table
+                )
+
+            if inferred is None or not inferred.get("column"):
                 return ToolResult(
                     success=False,
                     error=(
                         f"Cannot run anomaly monitor on '{table_fqn}': "
-                        "no numeric columns found in the pre-fetched schema. "
-                        "Pass an explicit config with 'column' and 'metric'."
+                        "could not find a numeric column to monitor. "
+                        "Pass config with 'column' and 'metric', e.g.: "
+                        "config={\"column\": \"revenue\", \"metric\": \"avg\"}"
                     ),
                 )
+
+            logger.info(f"[Monitor] Inferred anomaly config for {table_fqn}: {inferred}")
             # Merge: explicit config keys take precedence over inferred ones.
             merged = {**inferred, **{k: v for k, v in config.items() if v}}
             config = merged
@@ -2685,6 +2705,73 @@ class ToolExecutor:
         if ts_col:
             result["timestamp_column"] = ts_col
         return result
+
+    async def _infer_anomaly_config_from_warehouse(
+        self,
+        adapter,
+        adapter_type: str,
+        database: str,
+        schema: str,
+        table: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fallback: query INFORMATION_SCHEMA directly to find numeric and
+        timestamp columns when the pre-fetched schema is unavailable.
+        """
+        import asyncio
+
+        try:
+            if adapter_type == "BIGQUERY":
+                project = getattr(adapter, "project", database)
+                sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM `{project}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+                    f"WHERE table_name = '{table}' "
+                    f"ORDER BY ordinal_position"
+                )
+            else:
+                sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM information_schema.columns "
+                    f"WHERE table_schema = '{schema}' "
+                    f"AND table_name = '{table}' "
+                    f"ORDER BY ordinal_position"
+                )
+
+            rows = await asyncio.to_thread(adapter.execute_query, sql)
+            if not rows:
+                return None
+
+            # Find first numeric column.
+            numeric_col = None
+            ts_col = None
+            for row in rows:
+                col_name = row.get("column_name", "")
+                col_type = row.get("data_type", "").lower().split("(")[0].strip()
+
+                if not numeric_col and col_type in self._NUMERIC_TYPE_KEYWORDS:
+                    numeric_col = col_name
+
+                if not ts_col:
+                    if col_name.lower() in self._TIMESTAMP_PATTERNS:
+                        ts_col = col_name
+                    elif "timestamp" in col_type or "date" in col_type:
+                        ts_col = col_name
+
+            if not numeric_col:
+                return None
+
+            result: Dict[str, Any] = {
+                "column": numeric_col,
+                "metric": "null_rate",
+            }
+            if ts_col:
+                result["timestamp_column"] = ts_col
+            return result
+
+        except Exception as e:
+            logger.warning(f"[Monitor] Direct schema query failed for {schema}.{table}: {e}")
+            return None
 
     # ==========================================
     # OBSERVABILITY TOOL IMPLEMENTATIONS
