@@ -98,9 +98,11 @@ class AnomalyMonitor(BaseMonitor):
             if dialect == "bigquery":
                 # BigQuery uses EXTRACT(DAYOFWEEK FROM ...) (not DOW)
                 # and DATE_SUB / INTERVAL n DAY (not INTERVAL 'n days').
+                # CAST to DATE so the comparison works regardless of
+                # whether the source column is STRING, TIMESTAMP, or DATE.
                 dow_expr = f"EXTRACT(DAYOFWEEK FROM CAST({ts} AS DATE))"
                 where = (
-                    f"WHERE {ts} >= DATE_SUB(CURRENT_DATE(), "
+                    f"WHERE CAST({ts} AS DATE) >= DATE_SUB(CURRENT_DATE(), "
                     f"INTERVAL {self.lookback_days} DAY)"
                 )
             else:
