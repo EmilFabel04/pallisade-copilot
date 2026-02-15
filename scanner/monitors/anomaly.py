@@ -98,11 +98,13 @@ class AnomalyMonitor(BaseMonitor):
             if dialect == "bigquery":
                 # BigQuery uses EXTRACT(DAYOFWEEK FROM ...) (not DOW)
                 # and DATE_SUB / INTERVAL n DAY (not INTERVAL 'n days').
-                # CAST to DATE so the comparison works regardless of
-                # whether the source column is STRING, TIMESTAMP, or DATE.
-                dow_expr = f"EXTRACT(DAYOFWEEK FROM CAST({ts} AS DATE))"
+                # Double-cast via TIMESTAMP so STRING columns containing
+                # ISO timestamps ('2024-04-21T06:54:03Z') are handled
+                # correctly — CAST(string AS DATE) cannot parse them.
+                ts_date = f"CAST(CAST({ts} AS TIMESTAMP) AS DATE)"
+                dow_expr = f"EXTRACT(DAYOFWEEK FROM {ts_date})"
                 where = (
-                    f"WHERE CAST({ts} AS DATE) >= DATE_SUB(CURRENT_DATE(), "
+                    f"WHERE {ts_date} >= DATE_SUB(CURRENT_DATE(), "
                     f"INTERVAL {self.lookback_days} DAY)"
                 )
             else:
@@ -115,7 +117,7 @@ class AnomalyMonitor(BaseMonitor):
             if self.seasonality == "day_of_week":
                 sql = (
                     f"SELECT "
-                    f"CAST({ts} AS DATE) AS bucket_date, "
+                    f"{ts_date if dialect == 'bigquery' else f'CAST({ts} AS DATE)'} AS bucket_date, "
                     f"{dow_expr} AS day_of_week, "
                     f"{metric_expr} AS metric_value "
                     f"FROM {fqn} "
@@ -126,7 +128,7 @@ class AnomalyMonitor(BaseMonitor):
             else:
                 sql = (
                     f"SELECT "
-                    f"CAST({ts} AS DATE) AS bucket_date, "
+                    f"{ts_date if dialect == 'bigquery' else f'CAST({ts} AS DATE)'} AS bucket_date, "
                     f"{metric_expr} AS metric_value "
                     f"FROM {fqn} "
                     f"{where} "
