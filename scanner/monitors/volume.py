@@ -69,6 +69,20 @@ class VolumeMonitor(BaseMonitor):
         if self.time_bucket_column:
             # Time-series volume: count rows per day for the lookback window.
             col = self.time_bucket_column
+
+            if dialect == "bigquery":
+                sql = (
+                    f"SELECT "
+                    f"CAST({col} AS DATE) AS bucket_date, "
+                    f"COUNT(*) AS row_count "
+                    f"FROM {fqn} "
+                    f"WHERE {col} >= DATE_SUB(CURRENT_DATE(), "
+                    f"INTERVAL {self.lookback_days} DAY) "
+                    f"GROUP BY bucket_date "
+                    f"ORDER BY bucket_date"
+                )
+                return sql
+
             sql = (
                 f"SELECT "
                 f"CAST({col} AS DATE) AS bucket_date, "

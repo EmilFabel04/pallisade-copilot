@@ -48,6 +48,21 @@ class FreshnessMonitor(BaseMonitor):
         fqn = self._fqn(database, schema, table)
         col = self.timestamp_column
 
+        if dialect == "bigquery":
+            # BigQuery has no EXTRACT(EPOCH FROM ...).
+            # Use TIMESTAMP_DIFF instead.
+            sql = (
+                f"SELECT "
+                f"MAX({col}) AS last_value, "
+                f"TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), "
+                f"CAST(MAX({col}) AS TIMESTAMP), SECOND) / 3600.0 "
+                f"AS hours_since_update, "
+                f"COUNT(*) AS total_rows "
+                f"FROM {fqn} "
+                f"WHERE {col} IS NOT NULL"
+            )
+            return sql
+
         # Generic SQL using EXTRACT(EPOCH ...) — transpiled per dialect.
         sql = (
             f"SELECT "
