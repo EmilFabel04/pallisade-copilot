@@ -84,6 +84,11 @@ class AnomalyMonitor(BaseMonitor):
         table: str,
         dialect: str = "postgres",
     ) -> str:
+        if not self.column:
+            raise ValueError(
+                "AnomalyMonitor requires a 'column' in its config. "
+                "Example: config={'column': 'revenue', 'metric': 'null_rate'}"
+            )
         fqn = self._fqn(database, schema, table)
         metric_expr = self._metric_expression(dialect)
 
