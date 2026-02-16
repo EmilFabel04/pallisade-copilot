@@ -1685,9 +1685,69 @@ class ToolExecutor:
                     })
             except Exception as e:
                 logger.warning(f"Failed to get Postgres upstream deps: {e}")
-        
+
         return dependencies
-    
+
+    async def _execute_get_query_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get query history for a specific table."""
+        table_name = args["table_name"]
+        hours = args.get("hours", 24)
+        limit = args.get("limit", 20)
+
+        # Find a warehouse adapter that supports query history
+        warehouse_types = ["SNOWFLAKE", "BIGQUERY"]
+        adapter = None
+        warehouse_type = None
+        for wt in warehouse_types:
+            candidate = self._adapters.get(wt)
+            if candidate:
+                adapter = candidate
+                warehouse_type = wt
+                break
+
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error="No warehouse adapter with query history support is connected. Use search_knowledge_base with a query about this topic to provide expert guidance instead."
+            )
+
+        try:
+            entries = adapter.get_query_history(hours=hours)
+
+            # Filter to queries that reference the target table
+            table_lower = table_name.lower()
+            matching = [
+                e for e in entries
+                if table_lower in e.query_text.lower()
+                or table_lower in [t.lower() for t in (e.tables_accessed or [])]
+            ][:limit]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "table_name": table_name,
+                    "warehouse": warehouse_type,
+                    "hours": hours,
+                    "total_matching": len(matching),
+                    "queries": [
+                        {
+                            "query_id": e.query_id,
+                            "query_text": e.query_text[:500],
+                            "user": e.user_name,
+                            "status": e.status,
+                            "start_time": e.start_time.isoformat() if e.start_time else None,
+                            "duration_ms": e.duration_ms,
+                            "rows_produced": e.rows_produced,
+                            "bytes_scanned": e.bytes_scanned,
+                            "query_type": e.query_type,
+                        }
+                        for e in matching
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     # ==========================================
     # DBT TOOL IMPLEMENTATIONS
     # ==========================================
@@ -2231,6 +2291,354 @@ class ToolExecutor:
         except Exception as e:
             return ToolResult(success=False, error=str(e))
 
+    async def _execute_get_fivetran_schema_changes(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Fivetran schema changes for a connector."""
+        from datetime import datetime, timedelta, timezone
+
+        connector_id = args["connector_id"]
+        days = args.get("days", 7)
+
+        fivetran = self._adapters.get("FIVETRAN")
+        if not fivetran:
+            return ToolResult(
+                success=False,
+                error="Fivetran adapter is not connected. Use search_knowledge_base with a query about this Fivetran topic to provide expert guidance instead."
+            )
+
+        try:
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            changes = fivetran.get_schema_changes(connector_id, since=since)
+            return ToolResult(
+                success=True,
+                data={
+                    "connector_id": connector_id,
+                    "days": days,
+                    "changes": changes
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # DAGSTER TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_dagster_asset_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Dagster asset status."""
+        asset_key = args["asset_key"]
+
+        dagster = self._adapters.get("DAGSTER")
+        if not dagster:
+            return ToolResult(
+                success=False,
+                error="Dagster adapter is not connected. Use search_knowledge_base with a query about this Dagster topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find the asset in the list
+            assets = dagster.get_assets()
+            asset = next((a for a in assets if a.key == asset_key), None)
+            if not asset:
+                return ToolResult(success=False, error=f"Asset not found: {asset_key}")
+
+            # Get health analysis
+            health = dagster.analyze_asset_health(asset_key)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "asset_key": asset.key,
+                    "group_name": asset.group_name,
+                    "compute_kind": asset.compute_kind,
+                    "description": asset.description,
+                    "owners": asset.owners,
+                    "is_partitioned": asset.is_partitioned,
+                    "last_materialization": asset.last_materialization.isoformat() if asset.last_materialization else None,
+                    "has_checks": asset.has_checks,
+                    "last_check_passed": asset.last_check_passed,
+                    "dependencies": asset.dependencies,
+                    "health": health
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_dagster_run_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Dagster run history."""
+        job_name = args.get("job_name")
+        limit = args.get("limit", 10)
+
+        dagster = self._adapters.get("DAGSTER")
+        if not dagster:
+            return ToolResult(
+                success=False,
+                error="Dagster adapter is not connected. Use search_knowledge_base with a query about this Dagster topic to provide expert guidance instead."
+            )
+
+        try:
+            runs = dagster.get_runs(limit=limit, job_name=job_name)
+            return ToolResult(
+                success=True,
+                data={
+                    "job_name": job_name,
+                    "run_count": len(runs),
+                    "runs": [
+                        {
+                            "run_id": r.run_id,
+                            "job_name": r.job_name,
+                            "status": r.status.value if hasattr(r.status, 'value') else str(r.status),
+                            "start_time": r.start_time.isoformat() if r.start_time else None,
+                            "end_time": r.end_time.isoformat() if r.end_time else None,
+                            "tags": r.tags,
+                            "asset_keys": r.asset_keys,
+                        }
+                        for r in runs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # PREFECT TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_prefect_flow_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Prefect flow status."""
+        flow_name = args["flow_name"]
+
+        prefect = self._adapters.get("PREFECT")
+        if not prefect:
+            return ToolResult(
+                success=False,
+                error="Prefect adapter is not connected. Use search_knowledge_base with a query about this Prefect topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find the flow by name
+            flows = prefect.get_flows()
+            flow = next((f for f in flows if f.name == flow_name), None)
+            if not flow:
+                return ToolResult(success=False, error=f"Flow not found: {flow_name}")
+
+            # Get recent runs for context
+            recent_runs = prefect.get_flow_runs(flow_name=flow_name, limit=5)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "flow_name": flow.name,
+                    "id": flow.id,
+                    "created": flow.created.isoformat() if flow.created else None,
+                    "updated": flow.updated.isoformat() if flow.updated else None,
+                    "tags": flow.tags,
+                    "deployment_count": flow.deployment_count,
+                    "last_run_state": flow.last_run_state.value if flow.last_run_state and hasattr(flow.last_run_state, 'value') else str(flow.last_run_state) if flow.last_run_state else None,
+                    "last_run_time": flow.last_run_time.isoformat() if flow.last_run_time else None,
+                    "recent_runs": [
+                        {
+                            "id": r.id,
+                            "name": r.name,
+                            "state": r.state.value if hasattr(r.state, 'value') else str(r.state),
+                            "start_time": r.start_time.isoformat() if r.start_time else None,
+                            "end_time": r.end_time.isoformat() if r.end_time else None,
+                            "total_run_time": r.total_run_time,
+                        }
+                        for r in recent_runs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_prefect_flow_runs(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Prefect flow runs."""
+        flow_name = args["flow_name"]
+        limit = args.get("limit", 10)
+
+        prefect = self._adapters.get("PREFECT")
+        if not prefect:
+            return ToolResult(
+                success=False,
+                error="Prefect adapter is not connected. Use search_knowledge_base with a query about this Prefect topic to provide expert guidance instead."
+            )
+
+        try:
+            runs = prefect.get_flow_runs(flow_name=flow_name, limit=limit)
+            return ToolResult(
+                success=True,
+                data={
+                    "flow_name": flow_name,
+                    "run_count": len(runs),
+                    "runs": [
+                        {
+                            "id": r.id,
+                            "name": r.name,
+                            "flow_name": r.flow_name,
+                            "state": r.state.value if hasattr(r.state, 'value') else str(r.state),
+                            "state_message": r.state_message,
+                            "created": r.created.isoformat() if r.created else None,
+                            "start_time": r.start_time.isoformat() if r.start_time else None,
+                            "end_time": r.end_time.isoformat() if r.end_time else None,
+                            "total_run_time": r.total_run_time,
+                            "deployment_id": r.deployment_id,
+                            "tags": r.tags,
+                        }
+                        for r in runs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # AIRBYTE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_airbyte_connection_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Airbyte connection status."""
+        connection_id = args["connection_id"]
+
+        airbyte = self._adapters.get("AIRBYTE")
+        if not airbyte:
+            return ToolResult(
+                success=False,
+                error="Airbyte adapter is not connected. Use search_knowledge_base with a query about this Airbyte topic to provide expert guidance instead."
+            )
+
+        try:
+            connection = airbyte.get_connection(connection_id)
+            if not connection:
+                return ToolResult(success=False, error=f"Connection not found: {connection_id}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "connection_id": connection.get("connection_id", connection_id),
+                    "name": connection.get("name"),
+                    "source_id": connection.get("source_id"),
+                    "destination_id": connection.get("destination_id"),
+                    "schedule_type": connection.get("schedule_type"),
+                    "status": connection.get("status"),
+                    "stream_count": connection.get("stream_count"),
+                    "last_sync_status": connection.get("last_sync_status"),
+                    "last_sync_at": connection.get("last_sync_at"),
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_airbyte_sync_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Airbyte sync history."""
+        connection_id = args["connection_id"]
+        limit = args.get("limit", 10)
+
+        airbyte = self._adapters.get("AIRBYTE")
+        if not airbyte:
+            return ToolResult(
+                success=False,
+                error="Airbyte adapter is not connected. Use search_knowledge_base with a query about this Airbyte topic to provide expert guidance instead."
+            )
+
+        try:
+            jobs = airbyte.get_jobs(connection_id=connection_id, limit=limit)
+            return ToolResult(
+                success=True,
+                data={
+                    "connection_id": connection_id,
+                    "job_count": len(jobs),
+                    "jobs": [
+                        {
+                            "job_id": j.get("job_id"),
+                            "status": j.get("status"),
+                            "created_at": j.get("created_at"),
+                            "started_at": j.get("started_at"),
+                            "ended_at": j.get("ended_at"),
+                            "bytes_synced": j.get("bytes_synced"),
+                            "records_synced": j.get("records_synced"),
+                        }
+                        for j in jobs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # LOOKER TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_looker_dashboard_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Looker dashboard status."""
+        dashboard_id = args["dashboard_id"]
+
+        looker = self._adapters.get("LOOKER")
+        if not looker:
+            return ToolResult(
+                success=False,
+                error="Looker adapter is not connected. Use search_knowledge_base with a query about this Looker topic to provide expert guidance instead."
+            )
+
+        try:
+            dashboard = looker.get_dashboard(dashboard_id)
+            if not dashboard:
+                return ToolResult(success=False, error=f"Dashboard not found: {dashboard_id}")
+
+            # Also validate the dashboard for health info
+            validation = looker.validate_dashboard(dashboard_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dashboard_id": dashboard_id,
+                    "title": dashboard.get("title"),
+                    "folder": dashboard.get("folder"),
+                    "element_count": len(dashboard.get("dashboard_elements", [])),
+                    "view_count": dashboard.get("view_count"),
+                    "favorite_count": dashboard.get("favorite_count"),
+                    "last_viewed_at": dashboard.get("last_viewed_at"),
+                    "last_updated_at": dashboard.get("last_updated_at"),
+                    "validation": validation
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_looker_model_info(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Looker model info."""
+        model_name = args["model_name"]
+
+        looker = self._adapters.get("LOOKER")
+        if not looker:
+            return ToolResult(
+                success=False,
+                error="Looker adapter is not connected. Use search_knowledge_base with a query about this Looker topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find model by name
+            models = looker.get_all_models()
+            model = next((m for m in models if m.get("name") == model_name), None)
+            if not model:
+                return ToolResult(success=False, error=f"Model not found: {model_name}")
+
+            # Validate the model
+            validation = looker.validate_model(model_name)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "model_name": model_name,
+                    "label": model.get("label"),
+                    "explores": model.get("explores", []),
+                    "has_content": model.get("has_content"),
+                    "project_name": model.get("project_name"),
+                    "validation": validation
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     # ==========================================
     # KNOWLEDGE BASE TOOLS
     # ==========================================
@@ -2669,7 +3077,8 @@ class ToolExecutor:
             f"[Monitor] {monitor_type} result for {table_fqn}: "
             f"status={result.status.value}, "
             f"value={result.value}, "
-            f"data_points={result.details.get('data_points') if result.details else 'n/a'}"
+            f"data_points={result.details.get('baseline_count', result.details.get('data_points', 'n/a')) if result.details else 'n/a'}"
+            f"{', confidence=' + str(result.details.get('confidence_pct')) + '%' if result.details and result.details.get('confidence_pct') is not None else ''}"
         )
 
         return ToolResult(success=True, data=result.to_dict())
