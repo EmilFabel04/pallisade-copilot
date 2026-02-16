@@ -117,6 +117,11 @@ def create_default_registry() -> AdapterRegistry:
     from .adapters.live_warehouse import LiveWarehouseAdapter
     from .adapters.live_dbt import LiveDbtAdapter
     from .adapters.live_airflow import LiveAirflowAdapter
+    from .adapters.live_dagster import LiveDagsterAdapter
+    from .adapters.live_prefect import LivePrefectAdapter
+    from .adapters.live_fivetran import LiveFivetranAdapter
+    from .adapters.live_airbyte import LiveAirbyteAdapter
+    from .adapters.live_looker import LiveLookerAdapter
 
     registry = AdapterRegistry()
     # Reference adapters (JSON fixture-based)
@@ -127,4 +132,12 @@ def create_default_registry() -> AdapterRegistry:
     registry.register_type("live_warehouse", LiveWarehouseAdapter)
     registry.register_type("live_dbt", LiveDbtAdapter)
     registry.register_type("live_airflow", LiveAirflowAdapter)
+    # Orchestration adapters
+    registry.register_type("live_dagster", LiveDagsterAdapter)
+    registry.register_type("live_prefect", LivePrefectAdapter)
+    # Ingestion adapters
+    registry.register_type("live_fivetran", LiveFivetranAdapter)
+    registry.register_type("live_airbyte", LiveAirbyteAdapter)
+    # BI adapters
+    registry.register_type("live_looker", LiveLookerAdapter)
     return registry

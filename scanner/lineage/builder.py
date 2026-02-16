@@ -93,50 +93,65 @@ class LineageBuilder:
         except Exception as e:
             self.errors.append(f"dbt parsing failed: {e}")
     
+    # Integration types that use engine live adapters
+    _LIVE_ADAPTER_MAP = {
+        "dagster": ("live_dagster", "dagster_config"),
+        "prefect": ("live_prefect", "prefect_config"),
+        "fivetran": ("live_fivetran", "fivetran_config"),
+        "airbyte": ("live_airbyte", "airbyte_config"),
+        "looker": ("live_looker", "looker_config"),
+    }
+
     def _add_from_integration(self, integration: Dict[str, Any]) -> None:
         """Add lineage from a data integration."""
         int_type = integration.get("type", "").lower()
         connection = integration.get("connection")
-        
+
+        # Check if this integration type uses a live adapter
+        if int_type in self._LIVE_ADAPTER_MAP:
+            adapter_type, config_key = self._LIVE_ADAPTER_MAP[int_type]
+            self._add_from_live_adapter(adapter_type, int_type, integration, config_key)
+            return
+
         if not connection:
             return
-        
+
         try:
             if int_type == "snowflake":
                 parser = SnowflakeQueryParser(connection)
                 graph = parser.parse()
                 self._merge_graph(graph, "snowflake")
                 self.sources_used.append("snowflake")
-                
+
             elif int_type in ("sqlserver", "azure_sql", "azure_synapse"):
                 parser = SQLServerParser(connection)
                 graph = parser.parse()
                 self._merge_graph(graph, "sqlserver")
                 self.sources_used.append("sqlserver")
-                
+
             elif int_type == "bigquery":
                 config = integration.get("config", {})
                 project_id = config.get("project_id") or config.get("project", "")
                 # Use 'auto' region to try common regions for job history
                 region = config.get("location") or config.get("region") or "auto"
                 days_back = config.get("days_back", 30)
-                
+
                 # BigQueryAdapter wraps the raw client - extract it for the parser
                 raw_client = getattr(connection, '_client', connection)
-                
+
                 # Extract selected datasets from config (multi-dataset support)
                 config = integration.get("config", {})
                 selected_datasets = config.get("datasets")  # Array of selected datasets
                 if not selected_datasets and config.get("dataset"):
                     # Fallback to single dataset if datasets array not provided
                     selected_datasets = [config.get("dataset")]
-                
+
                 print(f"🔗 Building BigQuery lineage: project={project_id}, region={region}")
                 if selected_datasets:
                     print(f"   Selected datasets: {selected_datasets}")
-                
+
                 parser = BigQueryParser(
-                    raw_client, 
+                    raw_client,
                     project_id,
                     region=region,
                     days_back=days_back,
@@ -147,7 +162,7 @@ class LineageBuilder:
                 self._merge_graph(graph, "bigquery")
                 self.sources_used.append("bigquery")
                 print(f"   Found {len(graph.nodes)} nodes, {len(graph.edges)} edges")
-                
+
             elif int_type in ("postgres", "redshift", "mysql"):
                 # Use FK parser for basic lineage
                 from ..utils.connectors import get_connection
@@ -156,9 +171,78 @@ class LineageBuilder:
                 graph = parser.parse()
                 self._merge_graph(graph, int_type)
                 self.sources_used.append(int_type)
-                
+
         except Exception as e:
             self.errors.append(f"{int_type} parsing failed: {e}")
+
+    def _add_from_live_adapter(
+        self,
+        adapter_type: str,
+        int_type: str,
+        integration: Dict[str, Any],
+        config_key: str,
+    ) -> None:
+        """
+        Add lineage using an engine live adapter.
+
+        Creates the adapter instance, runs discover_assets and extract_lineage,
+        and merges the results into the main graph.
+        """
+        from .engine.adapter import create_default_registry
+
+        logger = logging.getLogger(__name__)
+        integration_id = integration.get("id")
+        int_config = integration.get("config", {})
+        namespace = int_config.get("namespace", int_type)
+
+        adapter_config = {
+            "namespace": namespace,
+            "integration_id": integration_id,
+            config_key: int_config,
+            "client": integration.get("connection"),
+        }
+
+        # Propagate workspace/host config for Airbyte
+        if int_type == "airbyte":
+            adapter_config["workspace_id"] = int_config.get("workspace_id")
+
+        registry = create_default_registry()
+        adapter_id = f"{int_type}_{integration_id or 'default'}"
+
+        try:
+            adapter = registry.create(adapter_type, adapter_id)
+        except ValueError as e:
+            self.errors.append(f"Failed to create {adapter_type} adapter: {e}")
+            return
+
+        # Discover assets
+        try:
+            nodes = adapter.discover_assets(adapter_config)
+        except Exception as e:
+            self.errors.append(f"{int_type} discover_assets failed: {e}")
+            nodes = []
+
+        for node in nodes:
+            if node.id not in self.graph.nodes:
+                self.graph.add_node(node)
+            else:
+                self._merge_node_metadata(self.graph.nodes[node.id], node)
+
+        # Extract lineage
+        try:
+            edges = adapter.extract_lineage(adapter_config)
+        except Exception as e:
+            self.errors.append(f"{int_type} extract_lineage failed: {e}")
+            edges = []
+
+        for edge in edges:
+            if edge.id not in self.graph.edges:
+                self.graph.add_edge(edge)
+
+        self.sources_used.append(int_type)
+        logger.info(
+            f"Added {len(nodes)} nodes and {len(edges)} edges from {int_type} adapter"
+        )
     
     def _merge_graph(self, source_graph: LineageGraph, source_name: str) -> None:
         """Merge a source graph into the main graph."""
