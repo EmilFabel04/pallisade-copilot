@@ -840,7 +840,12 @@ class ToolRegistry:
                 "Execute a specific monitor against a data asset. "
                 "Generates the appropriate SQL for the connected warehouse dialect, "
                 "runs it, and evaluates the result. Supports freshness, volume, "
-                "schema change, and anomaly detection monitors."
+                "schema change, and anomaly detection monitors. "
+                "PREFERRED TOOL FOR ANOMALY DETECTION: When the user asks about "
+                "anomalies, outliers, unusual patterns, spikes, or drops, use this "
+                "with monitor_type='anomaly' instead of writing manual SQL. "
+                "It provides Z-score analysis, configurable lookback windows, "
+                "and seasonality support out of the box."
             ),
             category=ToolCategory.COVERAGE,
             parameters=[
