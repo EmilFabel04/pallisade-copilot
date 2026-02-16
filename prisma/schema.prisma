@@ -317,18 +317,18 @@ model PipelineStack {
 
 // Pipeline context - stores learned knowledge from onboarding
 model PipelineContext {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
-  pipelineStackId String   @unique
+  pipelineStackId String        @unique
 
   // Onboarding state
   onboardingStatus      OnboardingStatus @default(NOT_STARTED)
   onboardingCompletedAt DateTime?
 
   // Learned context (JSON for flexibility)
-  environmentContext  Json?  // deployment method, team size, environments
-  integrationContexts Json?  // per-integration learned context (keyed by integration ID)
-  conventionsContext  Json?  // naming conventions, folder structures
+  environmentContext  Json? // deployment method, team size, environments
+  integrationContexts Json? // per-integration learned context (keyed by integration ID)
+  conventionsContext  Json? // naming conventions, folder structures
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -548,8 +548,9 @@ enum PipelineStackStatus {
 enum PipelineLayer {
   INGESTION // Fivetran, Airbyte, Stitch
   TRANSFORMATION // dbt, Airflow, Dagster
-  WAREHOUSE // Snowflake, BigQuery, PostgreSQL, Redshift, Azure SQL
+  WAREHOUSE // Snowflake, BigQuery, PostgreSQL, Redshift, Azure SQL, Databricks
   REPORTING // Tableau, Looker, Power BI, Metabase
+  STORAGE // Amazon S3, Google Cloud Storage, Azure Data Lake Storage
   VERSION_CONTROL // GitHub, GitLab, Bitbucket
 }
 
@@ -1612,6 +1613,7 @@ model FixOutcome {
 
   // Organization
   organizationId String?
+  Organization   Organization? @relation(fields: [organizationId], references: [id])
 
   @@index([outcome])
   @@index([organizationId])
@@ -1683,8 +1685,9 @@ model IssueFingerprint {
   // Organization
   organizationId String?
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  Organization Organization? @relation(fields: [organizationId], references: [id])
 
   @@unique([organizationId, issueType, tablePattern, columnPattern, warehouseType])
   @@index([issueType])
@@ -1742,6 +1745,7 @@ model FixPattern {
 
   // Organization (null = global pattern)
   organizationId String?
+  Organization   Organization? @relation(fields: [organizationId], references: [id])
 
   @@index([issueType])
   @@index([successRate])
@@ -1881,6 +1885,18 @@ enum IntegrationType {
   MONTE_CARLO // Monte Carlo data observability
   BIGEYE // Bigeye data quality monitoring
   SODA // Soda data quality checks
+
+  // ===========================================
+  // DATA WAREHOUSES (Additional)
+  // ===========================================
+  DATABRICKS // Databricks Lakehouse Platform
+
+  // ===========================================
+  // CLOUD STORAGE
+  // ===========================================
+  AMAZON_S3 // Amazon S3 object storage
+  GCS // Google Cloud Storage
+  ADLS // Azure Data Lake Storage
 
   // ===========================================
   // CODE & VERSION CONTROL
@@ -2753,11 +2769,11 @@ model Artifact {
 }
 
 enum ArtifactType {
-  QUERY   // SQL queries
-  FIX     // Bug fixes, config fixes
+  QUERY // SQL queries
+  FIX // Bug fixes, config fixes
   INSIGHT // Analysis, explanations
-  CODE    // Code snippets
-  PLAN    // Implementation plans
+  CODE // Code snippets
+  PLAN // Implementation plans
 }
 
 // ==========================================
@@ -2769,30 +2785,30 @@ model Monitor {
   name String
 
   // Monitor configuration
-  monitorType MonitorKind
-  targetFqn   String       // database.schema.table
+  monitorType    MonitorKind
+  targetFqn      String // database.schema.table
   targetDatabase String?
   targetSchema   String?
   targetTable    String?
-  config         Json       // Monitor-specific config (thresholds, columns, etc.)
+  config         Json // Monitor-specific config (thresholds, columns, etc.)
 
   // Scheduling
-  enabled     Boolean  @default(true)
-  schedule    String?  // Cron expression
-  lastRunAt   DateTime?
-  lastStatus  MonitorRunStatus?
-  nextRunAt   DateTime?
+  enabled    Boolean           @default(true)
+  schedule   String? // Cron expression
+  lastRunAt  DateTime?
+  lastStatus MonitorRunStatus?
+  nextRunAt  DateTime?
 
   // Baseline data (for anomaly detection)
-  baselineMean   Float?
-  baselineStddev Float?
-  baselineCount  Int?
+  baselineMean      Float?
+  baselineStddev    Float?
+  baselineCount     Int?
   baselineUpdatedAt DateTime?
 
   // Metadata
   createdBy  String?
-  source     String?  // "pallisade", "elementary", "monte_carlo", etc.
-  externalId String?  // ID in the external system
+  source     String? // "pallisade", "elementary", "monte_carlo", etc.
+  externalId String? // ID in the external system
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2815,15 +2831,15 @@ model MonitorRun {
   id String @id @default(cuid())
 
   // Result
-  status     MonitorRunStatus
-  value      Float?
-  threshold  Float?
-  message    String?
-  details    Json?
+  status      MonitorRunStatus
+  value       Float?
+  threshold   Float?
+  message     String?
+  details     Json?
   sqlExecuted String?
 
   // Timing
-  startedAt   DateTime @default(now())
+  startedAt   DateTime  @default(now())
   completedAt DateTime?
   durationMs  Int?
 
@@ -2862,12 +2878,12 @@ model CoverageSnapshot {
   lowGaps      Int @default(0)
 
   // Detailed data
-  nodeScores      Json?  // Array of per-node coverage scores
-  gaps            Json?  // Array of coverage gaps
-  recommendations Json?  // Array of monitor recommendations
+  nodeScores      Json? // Array of per-node coverage scores
+  gaps            Json? // Array of coverage gaps
+  recommendations Json? // Array of monitor recommendations
 
   // Metadata
-  source    String?  // What triggered this snapshot (e.g., "scan", "manual", "scheduled")
+  source    String? // What triggered this snapshot (e.g., "scan", "manual", "scheduled")
   createdAt DateTime @default(now())
 
   // Relations

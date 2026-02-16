@@ -5,7 +5,7 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'VERSION_CONTROL' | 'ORCHESTRATION';
+export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
 export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
@@ -19,6 +19,7 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   TRANSFORMATION: '#F59E0B', // Amber
   WAREHOUSE: '#6366F1',      // Indigo
   REPORTING: '#06B6D4',      // Cyan
+  STORAGE: '#A855F7',        // Purple-500
   VERSION_CONTROL: '#8B5CF6', // Purple
   ORCHESTRATION: '#F97316',  // Orange
 };
@@ -45,6 +46,7 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',
+  STORAGE: 'Storage',
   VERSION_CONTROL: 'Version Control',
   ORCHESTRATION: 'Orchestration',
 };
@@ -270,16 +272,29 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
       ],
     },
-    { 
-      id: 'azure_sql', 
-      name: 'Azure SQL', 
-      description: 'Azure SQL Database', 
+    {
+      id: 'azure_sql',
+      name: 'Azure SQL',
+      description: 'Azure SQL Database',
       layer: 'WAREHOUSE',
       configFields: [
         { name: 'server', label: 'Server', type: 'text', required: true, placeholder: 'yourserver.database.windows.net' },
         { name: 'database', label: 'Database', type: 'text', required: true, placeholder: 'yourdb' },
         { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@yourserver' },
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+      ],
+    },
+    {
+      id: 'databricks',
+      name: 'Databricks',
+      description: 'Databricks Lakehouse',
+      layer: 'WAREHOUSE',
+      configFields: [
+        { name: 'host', label: 'Workspace URL', type: 'text', required: true, placeholder: 'https://adb-xxxx.azuredatabricks.net', helperText: 'Your Databricks workspace URL' },
+        { name: 'token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'dapi...' },
+        { name: 'http_path', label: 'SQL Warehouse HTTP Path', type: 'text', required: true, placeholder: '/sql/1.0/warehouses/xxxx', helperText: 'Found in SQL Warehouse connection details' },
+        { name: 'catalog', label: 'Unity Catalog', type: 'text', required: false, placeholder: 'main', helperText: 'Leave empty for hive_metastore' },
+        { name: 'schema', label: 'Schema', type: 'text', required: false, placeholder: 'default' },
       ],
     },
   ],
@@ -328,6 +343,54 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'host', label: 'Metabase URL', type: 'text', required: true, placeholder: 'https://your-metabase.com' },
         { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@example.com' },
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+      ],
+    },
+  ],
+  STORAGE: [
+    {
+      id: 'amazon_s3',
+      name: 'Amazon S3',
+      description: 'AWS object storage',
+      layer: 'STORAGE',
+      configFields: [
+        { name: 'access_key_id', label: 'Access Key ID', type: 'text', required: true, placeholder: 'AKIAIOSFODNN7EXAMPLE' },
+        { name: 'secret_access_key', label: 'Secret Access Key', type: 'password', required: true, placeholder: 'Your AWS secret key' },
+        { name: 'region', label: 'Region', type: 'select', required: true, options: [
+          { value: 'us-east-1', label: 'US East (N. Virginia)' },
+          { value: 'us-east-2', label: 'US East (Ohio)' },
+          { value: 'us-west-1', label: 'US West (N. California)' },
+          { value: 'us-west-2', label: 'US West (Oregon)' },
+          { value: 'eu-west-1', label: 'EU (Ireland)' },
+          { value: 'eu-west-2', label: 'EU (London)' },
+          { value: 'eu-central-1', label: 'EU (Frankfurt)' },
+          { value: 'ap-southeast-1', label: 'Asia Pacific (Singapore)' },
+          { value: 'ap-southeast-2', label: 'Asia Pacific (Sydney)' },
+          { value: 'ap-northeast-1', label: 'Asia Pacific (Tokyo)' },
+        ]},
+        { name: 'bucket', label: 'Bucket Name', type: 'text', required: false, placeholder: 'Optional: specific bucket' },
+      ],
+    },
+    {
+      id: 'gcs',
+      name: 'Google Cloud Storage',
+      description: 'GCP object storage',
+      layer: 'STORAGE',
+      configFields: [
+        { name: 'project_id', label: 'Project ID', type: 'text', required: true, placeholder: 'your-gcp-project-id' },
+        { name: 'credentials', label: 'Service Account Key', type: 'file', required: true, helperText: 'Upload your service account JSON key file' },
+        { name: 'bucket', label: 'Bucket Name', type: 'text', required: false, placeholder: 'Optional: specific bucket' },
+      ],
+    },
+    {
+      id: 'adls',
+      name: 'Azure Data Lake Storage',
+      description: 'Azure ADLS Gen2',
+      layer: 'STORAGE',
+      configFields: [
+        { name: 'account_name', label: 'Storage Account Name', type: 'text', required: true, placeholder: 'yourstorageaccount' },
+        { name: 'account_key', label: 'Account Key', type: 'password', required: false, helperText: 'Use either Account Key or SAS Token' },
+        { name: 'sas_token', label: 'SAS Token', type: 'password', required: false, helperText: 'Shared Access Signature token' },
+        { name: 'container', label: 'Container Name', type: 'text', required: false, placeholder: 'Optional: specific container' },
       ],
     },
   ],

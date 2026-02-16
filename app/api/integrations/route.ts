@@ -134,6 +134,10 @@ function mapToolTypeToIntegrationType(toolType: string): string {
     'monte_carlo': 'MONTE_CARLO',
     'bigeye': 'BIGEYE',
     'soda': 'SODA',
+    'databricks': 'DATABRICKS',
+    'amazon_s3': 'AMAZON_S3',
+    'gcs': 'GCS',
+    'adls': 'ADLS',
   };
   return map[toolType] || toolType.toUpperCase();
 }
@@ -237,7 +241,13 @@ function generateConnectionInfo(type: string, credentials: any, config: any): st
     case 'REDSHIFT':
       return `${credentials?.host || 'cluster'} / ${credentials?.database || 'database'}`;
     case 'DATABRICKS':
-      return `${credentials?.host || 'workspace'} / ${credentials?.catalog || 'catalog'}`;
+      return `${credentials?.host || 'workspace'} / ${credentials?.catalog || 'hive_metastore'}`;
+    case 'AMAZON_S3':
+      return `S3: ${credentials?.bucket || 'all buckets'} (${credentials?.region || 'us-east-1'})`;
+    case 'GCS':
+      return `GCS: ${credentials?.project_id || 'project'} / ${credentials?.bucket || 'all buckets'}`;
+    case 'ADLS':
+      return `ADLS: ${credentials?.account_name || 'account'} / ${credentials?.container || 'all containers'}`;
     case 'POSTGRES':
     case 'MYSQL':
       return `${credentials?.host || 'localhost'}:${credentials?.port || '5432'} / ${credentials?.database || 'database'}`;

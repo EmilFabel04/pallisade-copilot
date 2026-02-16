@@ -1,12 +1,13 @@
 """
 Adapter Factory - Creates the right adapter for each database type.
 
-SUPPORTED DATABASES (Phase 1):
+SUPPORTED DATABASES:
 - Snowflake (primary)
 - BigQuery
 - PostgreSQL
 - Redshift
 - SQL Server / Azure SQL
+- Databricks
 
 Usage:
     from adapters import get_adapter
@@ -52,7 +53,7 @@ class AdapterFactory:
             return
         
         # ===========================================
-        # CORE ADAPTERS (5 supported databases)
+        # CORE ADAPTERS (6 supported databases)
         # ===========================================
         
         # Snowflake - Primary data warehouse
@@ -98,7 +99,15 @@ class AdapterFactory:
             logger.debug("SQL Server adapter loaded")
         except ImportError as e:
             logger.debug(f"SQL Server adapter not available: {e}")
-        
+
+        # Databricks - Lakehouse Platform (Unity Catalog)
+        try:
+            from .databricks import DatabricksAdapter
+            cls._adapters['databricks'] = DatabricksAdapter
+            logger.debug("Databricks adapter loaded")
+        except ImportError as e:
+            logger.debug(f"Databricks adapter not available: {e}")
+
         cls._loaded = True
     
     @classmethod
@@ -228,6 +237,9 @@ INTEGRATION_TYPE_MAP = {
     'MSSQL': 'sqlserver',
     'AZURE_SQL': 'sqlserver',
     'AZURE_SYNAPSE': 'sqlserver',
+
+    # Databricks
+    'DATABRICKS': 'databricks',
 }
 
 
