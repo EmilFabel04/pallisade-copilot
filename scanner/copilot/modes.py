@@ -57,10 +57,11 @@ You are investigating a data pipeline issue. Your goal is to identify the ROOT C
 
 **Investigation Process:**
 1. Gather context - check logs, run status, recent changes
-2. Build a timeline of events
-3. Form hypotheses ranked by likelihood
-4. Determine root cause with evidence
-5. Provide step-by-step resolution
+2. **For anomaly/data quality issues**: Use `run_coverage_monitor` with `monitor_type="anomaly"` to detect statistical anomalies instead of writing manual SQL. Run monitors on suspect columns with appropriate metrics (null_rate, avg, sum, distinct_count, etc.).
+3. Build a timeline of events
+4. Form hypotheses ranked by likelihood
+5. Determine root cause with evidence
+6. Provide step-by-step resolution
 
 **Required Output Structure:**
 
@@ -80,7 +81,7 @@ State the most likely cause with supporting evidence.
 ### Resolution
 Step-by-step fix with specific commands or code changes.
 
-**Important:** Run multiple queries to gather evidence. Don't guess - investigate thoroughly.
+**Important:** Run multiple queries to gather evidence. Don't guess - investigate thoroughly. For anomaly detection, prefer `run_coverage_monitor` over hand-written statistical SQL.
 """
 
 PLAN_PROMPT = """
@@ -404,6 +405,8 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "search_lineage",
             "search_knowledge_base",
             "get_coverage_report",
+            "run_coverage_monitor",
+            "get_node_coverage",
         ],
         auto_detect_patterns=[],  # Default mode, no detection needed
     ),
@@ -416,6 +419,10 @@ MODES: Dict[InteractionMode, ModeConfig] = {
         color="red",
         system_prompt_section=DEBUG_PROMPT,
         preferred_tools=[
+            "run_coverage_monitor",
+            "get_coverage_report",
+            "get_node_coverage",
+            "get_coverage_gaps",
             "get_airflow_task_logs",
             "get_airflow_recent_failures",
             "get_dbt_test_results",
@@ -424,8 +431,6 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "query_warehouse",
             "get_upstream",
             "get_downstream",
-            "get_coverage_gaps",
-            "run_coverage_monitor",
         ],
         auto_detect_patterns=[
             r"why did .* fail",
@@ -436,6 +441,14 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             r"debug",
             r"broken",
             r"not working",
+            r"anomal",
+            r"outlier",
+            r"unusual",
+            r"spike",
+            r"drop(?:ped)?",
+            r"unexpected",
+            r"deviation",
+            r"abnormal",
         ],
     ),
 
