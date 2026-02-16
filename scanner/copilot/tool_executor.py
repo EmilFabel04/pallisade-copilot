@@ -2669,7 +2669,8 @@ class ToolExecutor:
             f"[Monitor] {monitor_type} result for {table_fqn}: "
             f"status={result.status.value}, "
             f"value={result.value}, "
-            f"data_points={result.details.get('data_points') if result.details else 'n/a'}"
+            f"data_points={result.details.get('baseline_count', result.details.get('data_points', 'n/a')) if result.details else 'n/a'}"
+            f"{', confidence=' + str(result.details.get('confidence_pct')) + '%' if result.details and result.details.get('confidence_pct') is not None else ''}"
         )
 
         return ToolResult(success=True, data=result.to_dict())
