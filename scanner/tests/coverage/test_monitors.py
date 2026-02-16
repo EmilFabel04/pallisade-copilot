@@ -298,7 +298,24 @@ class TestAnomalyMonitor:
         assert result.status == MonitorStatus.PASS
         assert result.value == 42.0
         assert result.details["baseline_observation"] is True
-        assert "baseline observation" in result.message
+        assert result.details["anomaly_ready"] is False
+        assert "not ready yet" in result.message
+        # Without timestamp_column, message should suggest providing one
+        assert "timestamp_column" in result.message
+
+    def test_insufficient_data_with_timestamp(self):
+        """With < 3 data points but timestamp_column set, hint about needing more history."""
+        monitor = AnomalyMonitor({
+            "column": "x", "metric": "avg",
+            "timestamp_column": "created_at",
+        })
+        result = monitor.evaluate(
+            [{"bucket_date": "2025-01-01", "metric_value": 42.0}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.PASS
+        assert result.details["has_timestamp_column"] is True
+        assert "automatically" in result.message
 
     def test_insufficient_data_no_value(self):
         """With < 3 data points and no extractable value, fall back to SKIPPED."""
@@ -308,6 +325,7 @@ class TestAnomalyMonitor:
             "db.schema.table",
         )
         assert result.status == MonitorStatus.SKIPPED
+        assert result.details["anomaly_ready"] is False
 
 
 # ---------------------------------------------------------------------------
