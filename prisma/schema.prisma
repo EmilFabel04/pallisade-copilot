@@ -987,7 +987,7 @@ model ScanSchedule {
   description String?
 
   // What to scan
-  scanTypes String[] // ['freshness', 'quality', 'volume']
+  scanTypes String[] // ['freshness', 'quality', 'volume', 'anomaly']
   tables    String[] // Empty = all tables, or specific table names
 
   // When to scan (cron expression)

@@ -66,7 +66,7 @@ class AnomalyMonitor(BaseMonitor):
     def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
         self.column: str = self.config.get("column", "")
-        self.metric: str = self.config.get("metric", "null_rate")
+        self.metric: str = self.config.get("metric", "avg")
         self.anomaly_threshold: float = float(
             self.config.get("anomaly_threshold", 3.0)
         )
@@ -208,6 +208,24 @@ class AnomalyMonitor(BaseMonitor):
         label = f"{self.column}.{self.metric}"
         n = len(query_results)
 
+        has_ts = bool(self.timestamp_column)
+        if has_ts:
+            hint = (
+                f"The table has fewer than 3 days of data in the last "
+                f"{self.lookback_days} days for column '{self.timestamp_column}'. "
+                f"Anomaly detection will activate automatically once more "
+                f"historical data is available."
+            )
+        else:
+            hint = (
+                "No timestamp column was detected, so anomaly detection "
+                "cannot backfill from historical data. To fix this, either: "
+                "(1) specify a timestamp_column in the config so the monitor "
+                "can query the last 30 days of history in one shot, or "
+                "(2) set up a scheduled scan so the system collects daily "
+                "snapshots and builds a baseline over time."
+            )
+
         if current_value is not None:
             return MonitorResult(
                 monitor_type=self.monitor_type,
@@ -215,16 +233,17 @@ class AnomalyMonitor(BaseMonitor):
                 status=MonitorStatus.PASS,
                 value=current_value,
                 message=(
-                    f"{label}: current value is {current_value:.4f} "
-                    f"(based on {n} data point{'s' if n != 1 else ''} — "
-                    f"anomaly detection requires ≥ 3; "
-                    f"reporting as baseline observation)."
+                    f"{label}: current value is {current_value:.4f}. "
+                    f"Anomaly detection is not ready yet — have {n} data "
+                    f"point{'s' if n != 1 else ''}, need ≥ 3. {hint}"
                 ),
                 details={
                     "data_points": n,
                     "column": self.column,
                     "metric": self.metric,
                     "baseline_observation": True,
+                    "has_timestamp_column": has_ts,
+                    "anomaly_ready": False,
                 },
             )
 
@@ -236,12 +255,14 @@ class AnomalyMonitor(BaseMonitor):
             message=(
                 f"Insufficient historical data for anomaly detection on "
                 f"'{label}' and could not extract current value. "
-                f"Need at least 3 data points."
+                f"Need at least 3 data points. {hint}"
             ),
             details={
                 "data_points": n,
                 "column": self.column,
                 "metric": self.metric,
+                "has_timestamp_column": has_ts,
+                "anomaly_ready": False,
             },
         )
 

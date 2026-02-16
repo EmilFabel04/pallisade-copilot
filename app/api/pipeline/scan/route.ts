@@ -259,7 +259,7 @@ async function scanWarehouse(node: any): Promise<any[]> {
         customer_id: 'pipeline-scan',
         connection_type: connectionType,
         connection_config: node.config,
-        scan_types: ['quality', 'freshness', 'volume'],
+        scan_types: ['quality', 'freshness', 'volume', 'anomaly'],
       }),
     });
 

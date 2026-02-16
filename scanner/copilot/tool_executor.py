@@ -35,6 +35,9 @@ class ToolExecutor:
         """
         self.context = context
         self._adapters: Dict[str, Any] = {}
+        # In-session cache of anomaly metric values.
+        # Key: "table_fqn.column.metric" → list of floats collected across runs.
+        self._anomaly_baselines: Dict[str, List[float]] = {}
         self._initialize_adapters()
     
     def _initialize_adapters(self):
@@ -2609,6 +2612,17 @@ class ToolExecutor:
             merged = {**inferred, **{k: v for k, v in config.items() if v}}
             config = merged
 
+        # -----------------------------------------------------------------
+        # Inject cached historical values for anomaly monitors that lack
+        # a timestamp column (single-snapshot mode).  This lets repeated
+        # runs within the same session accumulate a baseline.
+        # -----------------------------------------------------------------
+        if monitor_type == "anomaly" and not config.get("timestamp_column"):
+            baseline_key = f"{table_fqn}.{config.get('column', '')}.{config.get('metric', 'avg')}"
+            cached = self._anomaly_baselines.get(baseline_key, [])
+            if cached and not config.get("historical_values"):
+                config["historical_values"] = cached
+
         # Create and run the monitor
         monitor = MonitorExecutor.create_monitor(monitor_type, config)
         if not monitor:
@@ -2625,6 +2639,15 @@ class ToolExecutor:
         result = await asyncio.to_thread(
             executor.run_monitor, monitor, database, schema, table
         )
+
+        # -----------------------------------------------------------------
+        # Cache the current metric value for future anomaly runs.
+        # -----------------------------------------------------------------
+        if monitor_type == "anomaly" and result.value is not None:
+            baseline_key = f"{table_fqn}.{config.get('column', '')}.{config.get('metric', 'avg')}"
+            if baseline_key not in self._anomaly_baselines:
+                self._anomaly_baselines[baseline_key] = []
+            self._anomaly_baselines[baseline_key].append(float(result.value))
 
         logger.info(
             f"[Monitor] {monitor_type} result for {table_fqn}: "
@@ -2643,10 +2666,24 @@ class ToolExecutor:
     })
 
     # Common timestamp column name patterns (lowercase).
+    # Broad coverage so anomaly backfill works out-of-the-box for most tables.
     _TIMESTAMP_PATTERNS = (
+        # Generic
         "created_at", "updated_at", "event_timestamp", "timestamp",
-        "event_time", "created_date", "date", "event_date", "loaded_at",
-        "_loaded_at", "ingested_at", "_batched_at",
+        "event_time", "created_date", "date", "event_date",
+        # ETL / load timestamps
+        "loaded_at", "_loaded_at", "ingested_at", "_batched_at",
+        "inserted_at", "synced_at", "extracted_at",
+        # Domain-specific date columns
+        "order_date", "ordered_at", "purchase_date", "purchased_at",
+        "transaction_date", "transaction_at", "sale_date", "sold_at",
+        "shipped_at", "ship_date", "delivery_date", "delivered_at",
+        "invoice_date", "invoiced_at", "payment_date", "paid_at",
+        "signup_date", "registered_at", "registration_date",
+        "modified_at", "changed_at", "last_modified",
+        "occurred_at", "recorded_at", "processed_at",
+        "start_date", "end_date", "effective_date",
+        "report_date", "run_date", "snapshot_date",
     )
 
     def _infer_anomaly_config(
@@ -2707,7 +2744,7 @@ class ToolExecutor:
 
         result: Dict[str, Any] = {
             "column": numeric_col,
-            "metric": "null_rate",
+            "metric": "avg",
         }
         if ts_col:
             result["timestamp_column"] = ts_col
@@ -2770,7 +2807,7 @@ class ToolExecutor:
 
             result: Dict[str, Any] = {
                 "column": numeric_col,
-                "metric": "null_rate",
+                "metric": "avg",
             }
             if ts_col:
                 result["timestamp_column"] = ts_col
