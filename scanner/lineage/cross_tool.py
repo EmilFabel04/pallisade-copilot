@@ -28,6 +28,7 @@ class SynthesisStats:
     bi_warehouse_edges: int = 0
     view_base_edges: int = 0
     orchestrator_edges: int = 0
+    ingestion_edges: int = 0
     nodes_merged: int = 0
     total_edges_created: int = 0
 
@@ -38,6 +39,7 @@ class SynthesisStats:
             "bi_warehouse_edges": self.bi_warehouse_edges,
             "view_base_edges": self.view_base_edges,
             "orchestrator_edges": self.orchestrator_edges,
+            "ingestion_edges": self.ingestion_edges,
             "nodes_merged": self.nodes_merged,
             "total_edges_created": self.total_edges_created,
         }
@@ -103,7 +105,11 @@ class CrossToolEdgeSynthesizer:
                 self._by_canonical[canonical].append(node_id)
 
     # Platforms that are NOT warehouse types — use raw_metadata to find the real warehouse
-    _NON_WAREHOUSE_PLATFORMS = {"dbt", "looker", "tableau", "powerbi", "airflow", "dagster", "prefect"}
+    _NON_WAREHOUSE_PLATFORMS = {
+        "dbt", "looker", "tableau", "powerbi",
+        "airflow", "dagster", "prefect",
+        "fivetran", "airbyte",
+    }
 
     def _get_canonical_fqn(self, node: LineageNode) -> Optional[str]:
         """Get canonical FQN for a node."""
@@ -500,6 +506,78 @@ class CrossToolEdgeSynthesizer:
         self.stats.orchestrator_edges = edges_created
         return edges_created
 
+    def synthesize_ingestion_edges(self) -> int:
+        """
+        Create edges for ingestion tool nodes (Fivetran, Airbyte).
+
+        When connectors/connections emit destination table nodes that match
+        existing warehouse table nodes (by canonical FQN), the resolver merges
+        them. This method creates POPULATES edges from ingestion connector
+        nodes to the merged warehouse table nodes.
+
+        connector/connection → warehouse_table (POPULATES)
+        """
+        edges_created = 0
+        ingestion_platforms = {"fivetran", "airbyte"}
+
+        # Find ingestion source/pipeline nodes
+        ingestion_node_ids = set()
+        for node_type in (NodeType.SOURCE, NodeType.PIPELINE):
+            for node_id in self._by_type.get(node_type, set()):
+                node = self.graph.nodes.get(node_id)
+                if node and node.platform in ingestion_platforms:
+                    ingestion_node_ids.add(node_id)
+
+        # Find warehouse table nodes (from any platform)
+        warehouse_table_ids = set()
+        for node_type in (NodeType.TABLE, NodeType.VIEW, NodeType.MATERIALIZED_VIEW):
+            for node_id in self._by_type.get(node_type, set()):
+                node = self.graph.nodes.get(node_id)
+                if node and node.platform not in ingestion_platforms:
+                    warehouse_table_ids.add(node_id)
+
+        for ingestion_id in ingestion_node_ids:
+            ingestion_node = self.graph.nodes.get(ingestion_id)
+            if not ingestion_node:
+                continue
+
+            # Get connector name to match against table metadata
+            connector_name = (
+                ingestion_node.raw_metadata.get("connector_name")
+                or ingestion_node.raw_metadata.get("connection_name")
+                or ingestion_node.name
+            )
+            dest_schema = ingestion_node.raw_metadata.get("schema", "")
+
+            # Look for tables that were discovered via this connector
+            for table_id in warehouse_table_ids:
+                table_node = self.graph.nodes.get(table_id)
+                if not table_node:
+                    continue
+
+                # Match: table was discovered via same connector or schema matches
+                discovered_via = table_node.raw_metadata.get("discovered_via", "")
+                table_connector = table_node.raw_metadata.get("connector_name", "")
+
+                if (
+                    discovered_via in ("fivetran_connector", "airbyte_connection")
+                    and table_connector == connector_name
+                ):
+                    edge = self._create_edge(
+                        ingestion_id,
+                        table_id,
+                        EdgeType.POPULATES,
+                        synthesis_source="ingestion_connector",
+                    )
+                    if edge:
+                        edges_created += 1
+                        logger.debug(
+                            f"Synthesized edge: {ingestion_node.fqn} → {table_node.fqn} (ingestion)"
+                        )
+
+        self.stats.ingestion_edges = edges_created
+        return edges_created
+
     def merge_duplicate_nodes(self) -> int:
         """
         Merge nodes that refer to the same physical table.
@@ -616,9 +694,10 @@ class CrossToolEdgeSynthesizer:
         # Run synthesis algorithms
         self.synthesize_dbt_source_edges()
         self.synthesize_dbt_model_materialization_edges()
+        self.synthesize_orchestrator_edges()
+        self.synthesize_ingestion_edges()
         self.synthesize_bi_warehouse_edges()
         self.synthesize_view_base_table_edges()
-        self.synthesize_orchestrator_edges()
 
         logger.info(
             f"Edge synthesis complete: {self.stats.total_edges_created} edges created, "
