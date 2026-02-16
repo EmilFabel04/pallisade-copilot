@@ -67,6 +67,21 @@ class MonitorExecutor:
             results = self.query_func(sql)
             result = monitor.evaluate(results, target_fqn)
             result.sql_executed = sql
+
+            # Adaptive lookback for anomaly monitors: if not enough data
+            # points with the default window, retry with shorter windows
+            # and finally with no date filter (all available data).
+            if (
+                isinstance(monitor, AnomalyMonitor)
+                and result.details
+                and result.details.get("anomaly_ready") is False
+                and monitor.timestamp_column
+            ):
+                adaptive = self._retry_anomaly_adaptive(
+                    monitor, database, schema, table, target_fqn,
+                )
+                if adaptive is not None:
+                    result = adaptive
         except Exception as exc:
             result = MonitorResult(
                 monitor_type=monitor.monitor_type,
@@ -78,6 +93,56 @@ class MonitorExecutor:
         result.executed_at = datetime.now(timezone.utc)
         result.duration_ms = int((time.monotonic() - start) * 1000)
         return result
+
+    def _retry_anomaly_adaptive(
+        self,
+        monitor: AnomalyMonitor,
+        database: str,
+        schema: str,
+        table: str,
+        target_fqn: str,
+    ) -> Optional[MonitorResult]:
+        """Retry anomaly monitor with adaptive lookback windows.
+
+        Tries progressively shorter windows, then falls back to all
+        available data (lookback_days=0).  Returns *None* if no retry
+        produced enough data points for Z-score analysis.
+        """
+        original_lookback = monitor.lookback_days
+        # Try shorter windows per user request (30 → 25 → 20),
+        # then all available data (0 = no date filter).
+        fallback_lookbacks = [25, 20, 0]
+
+        for lookback in fallback_lookbacks:
+            if lookback >= original_lookback:
+                continue
+
+            monitor.lookback_days = lookback
+            try:
+                sql = monitor.build_query(
+                    database, schema, table, self.dialect,
+                )
+                results = self.query_func(sql)
+                result = monitor.evaluate(results, target_fqn)
+                result.sql_executed = sql
+
+                # Check if we now have enough data for Z-score
+                if result.details and result.details.get(
+                    "anomaly_ready", True
+                ):
+                    # Success — annotate with lookback metadata
+                    result.details["original_lookback_days"] = original_lookback
+                    result.details["actual_lookback_days"] = (
+                        lookback if lookback > 0 else "all_available"
+                    )
+                    monitor.lookback_days = original_lookback
+                    return result
+            except Exception:
+                continue
+
+        # Restore original value; caller will use the initial result.
+        monitor.lookback_days = original_lookback
+        return None
 
     def run_all(
         self,

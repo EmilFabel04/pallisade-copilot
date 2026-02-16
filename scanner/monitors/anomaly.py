@@ -92,7 +92,7 @@ class AnomalyMonitor(BaseMonitor):
         fqn = self._fqn(database, schema, table)
         metric_expr = self._metric_expression(dialect)
 
-        if self.timestamp_column and self.lookback_days:
+        if self.timestamp_column:
             ts = self.timestamp_column
 
             if dialect == "bigquery":
@@ -103,16 +103,23 @@ class AnomalyMonitor(BaseMonitor):
                 # correctly — CAST(string AS DATE) cannot parse them.
                 ts_date = f"CAST(CAST({ts} AS TIMESTAMP) AS DATE)"
                 dow_expr = f"EXTRACT(DAYOFWEEK FROM {ts_date})"
-                where = (
-                    f"WHERE {ts_date} >= DATE_SUB(CURRENT_DATE(), "
-                    f"INTERVAL {self.lookback_days} DAY)"
-                )
+                if self.lookback_days and self.lookback_days > 0:
+                    where = (
+                        f"WHERE {ts_date} >= DATE_SUB(CURRENT_DATE(), "
+                        f"INTERVAL {self.lookback_days} DAY)"
+                    )
+                else:
+                    # lookback_days=0: no date filter — use all available data
+                    where = ""
             else:
                 dow_expr = f"EXTRACT(DOW FROM CAST({ts} AS DATE))"
-                where = (
-                    f"WHERE {ts} >= CURRENT_DATE "
-                    f"- INTERVAL '{self.lookback_days} days'"
-                )
+                if self.lookback_days and self.lookback_days > 0:
+                    where = (
+                        f"WHERE {ts} >= CURRENT_DATE "
+                        f"- INTERVAL '{self.lookback_days} days'"
+                    )
+                else:
+                    where = ""
 
             if self.seasonality == "day_of_week":
                 sql = (
@@ -266,6 +273,25 @@ class AnomalyMonitor(BaseMonitor):
             },
         )
 
+    @staticmethod
+    def _baseline_confidence(baseline_count: int, ideal: int = 30) -> int:
+        """Confidence percentage based on available baseline vs ideal.
+
+        With fewer data points the Z-score baseline is less
+        representative, so we report a reduced confidence level.
+        """
+        if baseline_count >= ideal:
+            return 100
+        if baseline_count >= 20:
+            return 85
+        if baseline_count >= 14:
+            return 75
+        if baseline_count >= 7:
+            return 60
+        if baseline_count >= 3:
+            return 40
+        return 0
+
     def _zscore_evaluate(
         self,
         current: float,
@@ -284,6 +310,16 @@ class AnomalyMonitor(BaseMonitor):
             is_anomaly = abs(z_score) > self.anomaly_threshold
 
         label = f"{self.column}.{self.metric}"
+        baseline_count = len(baseline)
+        confidence_pct = self._baseline_confidence(baseline_count)
+
+        # Build confidence note when baseline is shorter than ideal
+        confidence_note = ""
+        if confidence_pct < 100:
+            confidence_note = (
+                f" Based on {baseline_count} days of data "
+                f"(ideal: 30). Confidence: ~{confidence_pct}%."
+            )
 
         if is_anomaly:
             direction = "above" if z_score > 0 else "below"
@@ -303,6 +339,7 @@ class AnomalyMonitor(BaseMonitor):
                     f"Anomaly detected on {label}: "
                     f"value {current:.4f} is {direction} expected range "
                     f"(z-score: {z_score:.2f}, mean: {mean:.4f})."
+                    f"{confidence_note}"
                 ),
                 details={
                     "column": self.column,
@@ -310,8 +347,9 @@ class AnomalyMonitor(BaseMonitor):
                     "z_score": round(z_score, 4),
                     "baseline_mean": round(mean, 4),
                     "baseline_stddev": round(stddev, 4),
-                    "baseline_count": len(baseline),
+                    "baseline_count": baseline_count,
                     "seasonality": self.seasonality,
+                    "confidence_pct": confidence_pct,
                 },
             )
 
@@ -323,6 +361,7 @@ class AnomalyMonitor(BaseMonitor):
             message=(
                 f"{label}: value {current:.4f} is within expected range "
                 f"(z-score: {z_score:.2f}, mean: {mean:.4f})."
+                f"{confidence_note}"
             ),
             details={
                 "column": self.column,
@@ -330,7 +369,8 @@ class AnomalyMonitor(BaseMonitor):
                 "z_score": round(z_score, 4),
                 "baseline_mean": round(mean, 4),
                 "baseline_stddev": round(stddev, 4),
-                "baseline_count": len(baseline),
+                "baseline_count": baseline_count,
+                "confidence_pct": confidence_pct,
             },
         )
 

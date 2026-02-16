@@ -2609,8 +2609,24 @@ class ToolExecutor:
 
             logger.info(f"[Monitor] Inferred anomaly config for {table_fqn}: {inferred}")
             # Merge: explicit config keys take precedence over inferred ones.
+            user_specified_ts = bool(config.get("timestamp_column"))
             merged = {**inferred, **{k: v for k, v in config.items() if v}}
             config = merged
+
+            # If the timestamp column was auto-inferred (user didn't specify
+            # one), pick the column whose MAX value is closest to today.
+            # This avoids using e.g. ``created_at`` (stale domain dates)
+            # when ``_loaded_at`` (recent ETL dates) exists.
+            if config.get("timestamp_column") and not user_specified_ts:
+                better_ts = await self._pick_best_timestamp_column(
+                    adapter, adapter_type, database, schema, table, table_fqn,
+                )
+                if better_ts and better_ts != config["timestamp_column"]:
+                    logger.info(
+                        f"[Monitor] Overriding timestamp column for {table_fqn}: "
+                        f"{config['timestamp_column']} → {better_ts} (closer to today)"
+                    )
+                    config["timestamp_column"] = better_ts
 
         # -----------------------------------------------------------------
         # Inject cached historical values for anomaly monitors that lack
@@ -2815,6 +2831,109 @@ class ToolExecutor:
 
         except Exception as e:
             logger.warning(f"[Monitor] Direct schema query failed for {schema}.{table}: {e}")
+            return None
+
+    async def _pick_best_timestamp_column(
+        self,
+        adapter,
+        adapter_type: str,
+        database: str,
+        schema: str,
+        table: str,
+        table_fqn: str,
+    ) -> Optional[str]:
+        """Find the timestamp/date column whose MAX value is closest to today.
+
+        Queries INFORMATION_SCHEMA for all timestamp/date columns, then
+        runs ``SELECT MAX(col) …`` for each candidate.  Returns the
+        column name whose maximum value is nearest to the current date,
+        which is the best choice for anomaly time-series bucketing.
+        """
+        from datetime import datetime, date, timezone
+
+        # Step 1 — discover all timestamp / date columns.
+        try:
+            if adapter_type == "BIGQUERY":
+                project = getattr(adapter, "project", database)
+                col_sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM `{project}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+                    f"WHERE table_name = '{table}' "
+                    f"AND (data_type LIKE '%TIMESTAMP%' OR data_type LIKE '%DATE%' "
+                    f"OR data_type LIKE '%DATETIME%') "
+                    f"ORDER BY ordinal_position"
+                )
+            else:
+                col_sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM information_schema.columns "
+                    f"WHERE table_schema = '{schema}' "
+                    f"AND table_name = '{table}' "
+                    f"AND (data_type ILIKE '%timestamp%' OR data_type ILIKE '%date%') "
+                    f"ORDER BY ordinal_position"
+                )
+
+            rows = await asyncio.to_thread(adapter.execute_query, col_sql)
+            if not rows or len(rows) <= 1:
+                # 0 or 1 timestamp column — nothing to improve.
+                return rows[0]["column_name"] if rows else None
+
+            candidates = [r["column_name"] for r in rows]
+        except Exception:
+            return None
+
+        # Step 2 — get MAX of each candidate in a single query.
+        try:
+            if adapter_type == "BIGQUERY":
+                max_exprs = ", ".join(
+                    f"MAX(CAST(CAST(`{col}` AS TIMESTAMP) AS DATE)) AS `max_{i}`"
+                    for i, col in enumerate(candidates)
+                )
+            else:
+                max_exprs = ", ".join(
+                    f"MAX(CAST({col} AS DATE)) AS max_{i}"
+                    for i, col in enumerate(candidates)
+                )
+
+            max_sql = f"SELECT {max_exprs} FROM {table_fqn}"
+            max_rows = await asyncio.to_thread(adapter.execute_query, max_sql)
+            if not max_rows:
+                return None
+
+            row = max_rows[0]
+            today = datetime.now(timezone.utc).date()
+
+            best_col: Optional[str] = None
+            best_diff = float("inf")
+
+            for i, col in enumerate(candidates):
+                val = row.get(f"max_{i}")
+                if val is None:
+                    continue
+                try:
+                    if isinstance(val, str):
+                        d = date.fromisoformat(val[:10])
+                    elif hasattr(val, "date") and callable(val.date):
+                        d = val.date()
+                    elif isinstance(val, date):
+                        d = val
+                    else:
+                        continue
+                    diff = abs((today - d).days)
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_col = col
+                except (ValueError, TypeError):
+                    continue
+
+            if best_col:
+                logger.info(
+                    f"[Monitor] Best timestamp column for {table_fqn}: "
+                    f"{best_col} (MAX is {best_diff} day(s) from today)"
+                )
+            return best_col
+        except Exception as e:
+            logger.warning(f"[Monitor] Failed to pick best timestamp column: {e}")
             return None
 
     # ==========================================
