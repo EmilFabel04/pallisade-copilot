@@ -14,6 +14,7 @@ const pageTitles: Record<string, string> = {
   '/dashboard/sources': 'Data Sources',
   '/dashboard/pipeline': 'Pipeline',
   '/dashboard/pipeline/settings': 'Pipeline Settings',
+  '/dashboard/schedule': 'Scheduled Tasks',
   '/dashboard/team': 'Team',
   '/dashboard/settings': 'Settings',
 };

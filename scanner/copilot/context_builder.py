@@ -172,7 +172,8 @@ class CopilotContext:
     # Pipeline context (if discussing specific pipeline)
     pipeline_stack_id: Optional[str] = None
     focused_node_ids: List[str] = field(default_factory=list)
-    
+    referenced_entities: List[str] = field(default_factory=list)
+
     # Pre-fetched warehouse schema (tables and columns)
     warehouse_schema: Dict[str, List[TableSchema]] = field(default_factory=dict)  # dataset -> tables
 
@@ -300,6 +301,14 @@ class CopilotContext:
         if self.focused_node_ids:
             lines.append(f"### Current Focus")
             lines.append(f"User is looking at: {', '.join(self.focused_node_ids)}")
+            lines.append("")
+
+        # Add @mentioned entities for focused context
+        if self.referenced_entities:
+            lines.append("### Referenced Entities (from @mentions)")
+            lines.append("The user specifically referenced these entities. Prioritize them in your response:")
+            for entity in self.referenced_entities:
+                lines.append(f"  - `{entity}`")
             lines.append("")
 
         # Add MCP dynamic exploration guidance
@@ -625,6 +634,7 @@ class CopilotContextBuilder:
         query: str = "",
         pipeline_stack_id: Optional[str] = None,
         node_ids: Optional[List[str]] = None,
+        referenced_entities: Optional[List[str]] = None,
         integrations_data: Optional[List[Dict[str, Any]]] = None,
         mode: str = "ask",
         mode_config: Optional[Any] = None,
@@ -710,6 +720,7 @@ class CopilotContextBuilder:
             available_tools=available_tools,
             pipeline_stack_id=pipeline_stack_id,
             focused_node_ids=node_ids or [],
+            referenced_entities=referenced_entities or [],
             mode=mode,
             mode_config=mode_config,
         )

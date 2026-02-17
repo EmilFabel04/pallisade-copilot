@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { ModeSelector, getModeFromSlashCommand } from '@/components/copilot/ModeSelector';
+import { MentionDropdown, type MentionItem } from '@/components/copilot/MentionDropdown';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -146,6 +147,11 @@ export default function AssistantPage() {
   } | null>(null);
   const [onboardingStatus, setOnboardingStatus] = useState<string>('NOT_STARTED');
   const [onboardingLoading, setOnboardingLoading] = useState(false);
+  const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionStartIndex, setMentionStartIndex] = useState<number | null>(null);
+  const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastPipelineId = useRef<string | null>(null);
@@ -226,6 +232,107 @@ export default function AssistantPage() {
   useEffect(() => {
     if (selectedPipelineId) fetchSources(selectedPipelineId, false);
   }, [selectedPipelineId]);
+
+  // Build @mention autocomplete items from source data
+  useEffect(() => {
+    const items: MentionItem[] = [];
+    const seen = new Set<string>();
+
+    // Full pipeline reference (always first)
+    if (sourceData.nodes.length > 0) {
+      items.push({
+        label: 'Full Pipeline',
+        value: '@pipeline',
+        category: 'integration',
+        nodeId: '__pipeline__',
+        toolType: 'pipeline',
+        detail: `${sourceData.nodes.length} integrations`,
+      });
+    }
+
+    // Integration-level mentions
+    for (const node of sourceData.nodes) {
+      const val = `@${node.name.replace(/\s+/g, '_')}`;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      items.push({
+        label: node.name,
+        value: val,
+        category: 'integration',
+        nodeId: node.id,
+        toolType: node.toolType,
+        detail: node.layer.toLowerCase(),
+      });
+    }
+
+    // Table mentions — use full qualified names as labels for clarity
+    const warehouseNodes = sourceData.nodes.filter(
+      n => ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(n.toolType)
+    );
+    const defaultWarehouse = warehouseNodes[0];
+
+    for (const table of sourceData.tables) {
+      const dataset = table.dataset || table.schema || '';
+      const fqn = dataset ? `${dataset}.${table.name}` : table.name;
+      const parentNode = warehouseNodes.length === 1
+        ? defaultWarehouse
+        : warehouseNodes.find(n => n.toolType === (table.database || '').toLowerCase()) || defaultWarehouse;
+      const prefix = parentNode?.name.replace(/\s+/g, '_') || 'Warehouse';
+      const val = `@${prefix}.${fqn}`;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      items.push({
+        label: fqn,
+        value: val,
+        category: 'table',
+        nodeId: parentNode?.id || '',
+        toolType: parentNode?.toolType || 'unknown',
+        detail: parentNode?.name || 'warehouse',
+      });
+    }
+
+    // dbt model mentions
+    const dbtNode = sourceData.nodes.find(
+      n => n.toolType === 'dbt_cloud' || n.toolType === 'dbt_core'
+    );
+    const dbtPrefix = dbtNode?.name.replace(/\s+/g, '_') || 'dbt';
+
+    for (const model of sourceData.models) {
+      const val = `@${dbtPrefix}.${model.name}`;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      items.push({
+        label: model.name,
+        value: val,
+        category: 'model',
+        nodeId: dbtNode?.id || '',
+        toolType: dbtNode?.toolType || 'dbt_cloud',
+        detail: `${model.schema} (${model.materialization})`,
+      });
+    }
+
+    // Connector mentions (Fivetran, Airbyte connectors)
+    const ingestionNode = sourceData.nodes.find(
+      n => ['fivetran', 'airbyte', 'stitch'].includes(n.toolType)
+    );
+    if (ingestionNode) {
+      for (const connector of sourceData.connectors) {
+        const val = `@${ingestionNode.name.replace(/\s+/g, '_')}.${connector.name.replace(/\s+/g, '_')}`;
+        if (seen.has(val)) continue;
+        seen.add(val);
+        items.push({
+          label: connector.name,
+          value: val,
+          category: 'table',
+          nodeId: ingestionNode.id,
+          toolType: ingestionNode.toolType,
+          detail: `connector (${connector.status})`,
+        });
+      }
+    }
+
+    setMentionItems(items);
+  }, [sourceData]);
 
   // Fetch onboarding status when pipeline changes
   useEffect(() => {
@@ -482,6 +589,9 @@ export default function AssistantPage() {
     abortControllerRef.current = new AbortController();
 
     try {
+      // Parse @mentions for focused context
+      const { nodeIds: mentionNodeIds, entities: mentionEntities } = parseMentions(messageText);
+
       const response = await fetch('/api/copilot/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -491,6 +601,8 @@ export default function AssistantPage() {
           pipelineStackId: selectedPipelineId,
           model: selectedModel,
           mode: modeToUse,
+          ...(mentionNodeIds.length > 0 && { node_ids: mentionNodeIds }),
+          ...(mentionEntities.length > 0 && { referenced_entities: mentionEntities }),
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -604,7 +716,124 @@ export default function AssistantPage() {
     }
   };
 
+  // @mention helpers
+  const getFilteredMentionItems = useCallback((): MentionItem[] => {
+    if (!mentionQuery) return mentionItems.slice(0, 12);
+    const q = mentionQuery.toLowerCase();
+    return mentionItems.filter(item =>
+      item.label.toLowerCase().includes(q) ||
+      item.value.toLowerCase().includes(q) ||
+      (item.detail && item.detail.toLowerCase().includes(q))
+    ).slice(0, 12);
+  }, [mentionQuery, mentionItems]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    const cursorPos = e.target.selectionStart || 0;
+    setInput(value);
+
+    // Detect @mention trigger
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const atIndex = textBeforeCursor.lastIndexOf('@');
+
+    if (atIndex >= 0) {
+      const charBefore = atIndex > 0 ? value[atIndex - 1] : ' ';
+      if (charBefore === ' ' || charBefore === '\n' || atIndex === 0) {
+        const query = textBeforeCursor.slice(atIndex + 1);
+        if (!query.includes(' ')) {
+          setShowMentionDropdown(true);
+          setMentionQuery(query);
+          setMentionStartIndex(atIndex);
+          setSelectedMentionIndex(0);
+          return;
+        }
+      }
+    }
+
+    setShowMentionDropdown(false);
+    setMentionQuery('');
+    setMentionStartIndex(null);
+  };
+
+  const handleMentionSelect = (item: MentionItem) => {
+    if (mentionStartIndex === null) return;
+    const cursorPos = textareaRef.current?.selectionStart || input.length;
+    const before = input.slice(0, mentionStartIndex);
+    const after = input.slice(cursorPos);
+    const newValue = `${before}${item.value} ${after}`;
+    setInput(newValue);
+    setShowMentionDropdown(false);
+    setMentionQuery('');
+    setMentionStartIndex(null);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const newCursorPos = mentionStartIndex + item.value.length + 1;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 0);
+  };
+
+  const parseMentions = (text: string): { nodeIds: string[]; entities: string[] } => {
+    const mentionRegex = /@(\S+)/g;
+    const nodeIds = new Set<string>();
+    const entities: string[] = [];
+    let match;
+
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const mentionValue = `@${match[1]}`;
+
+      // @pipeline → include all node IDs + "pipeline" entity
+      if (mentionValue === '@pipeline') {
+        for (const node of sourceData.nodes) {
+          nodeIds.add(node.id);
+        }
+        entities.push('pipeline');
+        continue;
+      }
+
+      const item = mentionItems.find(m => m.value === mentionValue);
+      if (item) {
+        if (item.nodeId) nodeIds.add(item.nodeId);
+        if (item.category === 'table' || item.category === 'model') {
+          entities.push(match[1]); // Without @ prefix
+        } else {
+          entities.push(match[1]); // Integration name too
+        }
+      }
+    }
+
+    return { nodeIds: Array.from(nodeIds), entities };
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (showMentionDropdown) {
+      const filtered = getFilteredMentionItems();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedMentionIndex(prev => Math.min(prev + 1, filtered.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedMentionIndex(prev => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (filtered.length > 0) {
+          e.preventDefault();
+          handleMentionSelect(filtered[selectedMentionIndex]);
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowMentionDropdown(false);
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
@@ -949,13 +1178,22 @@ export default function AssistantPage() {
             <div className="max-w-2xl mx-auto">
               <form onSubmit={handleSubmit}>
                 <div className="relative bg-[#1a1a24] border border-white/[0.1] rounded-xl focus-within:border-white/[0.2] transition-colors">
+                  {/* @mention autocomplete dropdown */}
+                  {showMentionDropdown && (
+                    <MentionDropdown
+                      items={getFilteredMentionItems()}
+                      selectedIndex={selectedMentionIndex}
+                      onSelect={handleMentionSelect}
+                      onClose={() => setShowMentionDropdown(false)}
+                    />
+                  )}
                   {/* Textarea */}
                   <Textarea
                     ref={textareaRef}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask about your data pipeline..."
+                    placeholder="Ask about your data pipeline... (type @ to reference integrations)"
                     className="w-full min-h-[80px] max-h-[200px] bg-transparent border-0 focus:ring-0 resize-none px-4 pt-3 pb-14 text-sm placeholder:text-white/30 rounded-xl"
                     rows={2}
                   />

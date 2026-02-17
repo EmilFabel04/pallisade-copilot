@@ -1,0 +1,300 @@
+"""
+Scheduler Service.
+
+In-process asyncio background loop that checks for due tasks
+every 60 seconds and dispatches execution.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import structlog
+
+logger = structlog.get_logger()
+
+
+def _parse_database_url(url: str) -> Dict[str, Any]:
+    """Parse a postgres:// or postgresql:// URL into connection params."""
+    from urllib.parse import urlparse, parse_qs
+
+    parsed = urlparse(url)
+    params: Dict[str, Any] = {
+        "host": parsed.hostname or "localhost",
+        "port": parsed.port or 5432,
+        "user": parsed.username or "postgres",
+        "password": parsed.password or "",
+        "dbname": parsed.path.lstrip("/").split("?")[0],
+    }
+    # Handle sslmode from query params
+    qs = parse_qs(parsed.query)
+    if "sslmode" in qs:
+        params["sslmode"] = qs["sslmode"][0]
+    return params
+
+
+def _get_connection():
+    """Get a psycopg2 connection using DATABASE_URL."""
+    import psycopg2
+
+    url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL not set — scheduler cannot query tasks")
+
+    params = _parse_database_url(url)
+    return psycopg2.connect(**params)
+
+
+def _compute_next_run(cron_expr: str, tz_name: str = "UTC") -> Optional[datetime]:
+    """Compute next run time from a cron expression."""
+    try:
+        from croniter import croniter
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(tz_name) if tz_name else ZoneInfo("UTC")
+        now = datetime.now(tz)
+        cron = croniter(cron_expr, now)
+        return cron.get_next(datetime).astimezone(timezone.utc)
+    except ImportError:
+        logger.warning("[Scheduler] croniter not installed — cannot compute next run")
+        return None
+    except Exception as e:
+        logger.warning(f"[Scheduler] Failed to parse cron '{cron_expr}': {e}")
+        return None
+
+
+class SchedulerService:
+    """Background scheduler that executes due monitor tasks."""
+
+    def __init__(self):
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+        self._interval = int(os.environ.get("SCHEDULER_INTERVAL_SECONDS", "60"))
+
+    async def start(self):
+        """Start the scheduler loop."""
+        self._running = True
+        self._task = asyncio.create_task(self._loop())
+        logger.info(
+            "[Scheduler] Started",
+            interval_seconds=self._interval,
+        )
+
+    async def stop(self):
+        """Stop the scheduler loop."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info("[Scheduler] Stopped")
+
+    async def _loop(self):
+        # Small initial delay to let the app fully boot
+        await asyncio.sleep(5)
+
+        while self._running:
+            try:
+                await self._check_due_tasks()
+            except Exception as e:
+                logger.error(f"[Scheduler] Error in loop: {e}")
+            await asyncio.sleep(self._interval)
+
+    async def _check_due_tasks(self):
+        """Find and execute tasks that are due."""
+        now = datetime.now(timezone.utc)
+
+        try:
+            conn = _get_connection()
+        except Exception as e:
+            logger.warning(f"[Scheduler] DB connection failed: {e}")
+            return
+
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, name, "taskMode", prompt, "monitorType",
+                           "targetFqn", config, "alertChannels", "alertConfig",
+                           "alertOnStatus", timezone, "integrationId",
+                           "organizationId"
+                    FROM "Monitor"
+                    WHERE enabled = true
+                      AND "nextRunAt" IS NOT NULL
+                      AND "nextRunAt" <= %s
+                    ORDER BY "nextRunAt" ASC
+                    LIMIT 50
+                    """,
+                    (now,),
+                )
+                rows = cur.fetchall()
+                col_names = [desc[0] for desc in cur.description]
+
+            if not rows:
+                return
+
+            logger.info(f"[Scheduler] Found {len(rows)} due tasks")
+
+            for row in rows:
+                task = dict(zip(col_names, row))
+                await self._execute_task(task, conn)
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Failed to check due tasks: {e}")
+        finally:
+            conn.close()
+
+    async def _execute_task(self, task: Dict[str, Any], conn):
+        """Execute a single task and save the result."""
+        from .executor import TaskExecutor
+
+        task_id = task["id"]
+        task_name = task["name"]
+        logger.info(f"[Scheduler] Executing task: {task_name} ({task_id})")
+
+        start_time = datetime.now(timezone.utc)
+        executor = TaskExecutor()
+
+        try:
+            result = await executor.execute(task)
+
+            # Normalize status to uppercase (Python monitors return lowercase, DB enum is uppercase)
+            status = (result.get("status", "ERROR")).upper()
+
+            # Save the run result
+            end_time = datetime.now(timezone.utc)
+            duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+            with conn.cursor() as cur:
+                # Insert MonitorRun
+                cur.execute(
+                    """
+                    INSERT INTO "MonitorRun" (id, status, value, threshold, message,
+                                              details, "sqlExecuted", "startedAt",
+                                              "completedAt", "durationMs", "monitorId")
+                    VALUES (
+                        gen_random_uuid()::text, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        status,
+                        result.get("value"),
+                        result.get("threshold"),
+                        result.get("message", ""),
+                        json.dumps(result.get("details")) if result.get("details") else None,
+                        result.get("sql_executed"),
+                        start_time,
+                        end_time,
+                        duration_ms,
+                        task_id,
+                    ),
+                )
+
+                # Update Monitor: lastRunAt, lastStatus, nextRunAt
+                next_run = _compute_next_run(
+                    task.get("schedule", "0 * * * *"),
+                    task.get("timezone", "UTC"),
+                )
+
+                cur.execute(
+                    """
+                    UPDATE "Monitor"
+                    SET "lastRunAt" = %s,
+                        "lastStatus" = %s,
+                        "nextRunAt" = %s,
+                        "updatedAt" = %s
+                    WHERE id = %s
+                    """,
+                    (
+                        end_time,
+                        status,
+                        next_run,
+                        end_time,
+                        task_id,
+                    ),
+                )
+
+                conn.commit()
+
+            # Check if we need to send alerts (alertOnStatus uses uppercase)
+            alert_on = task.get("alertOnStatus") or []
+            alert_channels = task.get("alertChannels") or []
+
+            if status in alert_on and alert_channels:
+                await self._dispatch_alert(task, result)
+
+            logger.info(
+                f"[Scheduler] Task completed: {task_name}",
+                status=status,
+                duration_ms=duration_ms,
+            )
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Task execution failed: {task_name}: {e}")
+
+            # Save error run
+            end_time = datetime.now(timezone.utc)
+            duration_ms = int((end_time - start_time).total_seconds() * 1000)
+
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO "MonitorRun" (id, status, message, "startedAt",
+                                                  "completedAt", "durationMs", "monitorId")
+                        VALUES (gen_random_uuid()::text, 'ERROR', %s, %s, %s, %s, %s)
+                        """,
+                        (str(e), start_time, end_time, duration_ms, task_id),
+                    )
+
+                    next_run = _compute_next_run(
+                        task.get("schedule", "0 * * * *"),
+                        task.get("timezone", "UTC"),
+                    )
+
+                    cur.execute(
+                        """
+                        UPDATE "Monitor"
+                        SET "lastRunAt" = %s, "lastStatus" = 'ERROR',
+                            "nextRunAt" = %s, "updatedAt" = %s
+                        WHERE id = %s
+                        """,
+                        (end_time, next_run, end_time, task_id),
+                    )
+                    conn.commit()
+            except Exception as save_err:
+                logger.error(f"[Scheduler] Failed to save error result: {save_err}")
+
+    async def _dispatch_alert(self, task: Dict[str, Any], result: Dict[str, Any]):
+        """Send alert to configured channels via the Next.js alert API."""
+        try:
+            import httpx
+
+            nextjs_url = os.environ.get("NEXTAUTH_URL", "http://localhost:3000")
+            alert_url = f"{nextjs_url}/api/schedule/alert"
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    alert_url,
+                    json={
+                        "taskId": task["id"],
+                        "taskName": task["name"],
+                        "status": result.get("status", "ERROR"),
+                        "message": result.get("message", ""),
+                        "channels": task.get("alertChannels", []),
+                        "config": task.get("alertConfig"),
+                        "organizationId": task.get("organizationId"),
+                    },
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"[Scheduler] Alert dispatch failed: {resp.status_code} {resp.text}"
+                    )
+        except Exception as e:
+            logger.warning(f"[Scheduler] Alert dispatch error: {e}")

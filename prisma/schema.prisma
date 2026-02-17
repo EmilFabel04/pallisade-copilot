@@ -2785,12 +2785,12 @@ model Monitor {
   name String
 
   // Monitor configuration
-  monitorType    MonitorKind
-  targetFqn      String // database.schema.table
+  monitorType    MonitorKind?
+  targetFqn      String?       // database.schema.table (optional for prompt tasks)
   targetDatabase String?
   targetSchema   String?
   targetTable    String?
-  config         Json // Monitor-specific config (thresholds, columns, etc.)
+  config         Json?         // Monitor-specific config (thresholds, columns, etc.)
 
   // Scheduling
   enabled    Boolean           @default(true)
@@ -2804,6 +2804,17 @@ model Monitor {
   baselineStddev    Float?
   baselineCount     Int?
   baselineUpdatedAt DateTime?
+
+  // Task mode
+  taskMode       String?   // "prompt" | "structured"
+  prompt         String?   // Natural-language prompt (for prompt mode)
+  description    String?   // Human-readable description
+
+  // Alert configuration
+  alertChannels  String[]  // ["slack", "email", "pagerduty"]
+  alertConfig    Json?     // Channel-specific config overrides
+  alertOnStatus  String[]  // ["FAIL", "WARN", "ERROR"] — which statuses trigger alerts
+  timezone       String?   @default("UTC")
 
   // Metadata
   createdBy  String?

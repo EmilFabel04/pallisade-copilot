@@ -7,9 +7,111 @@ or warehouse metadata. Works across any SQL warehouse.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import structlog
+from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
+
+logger = structlog.get_logger()
+
+# Priority order for auto-detecting the freshness column.
+# Lower index = higher priority.  Matched case-insensitively.
+_TIMESTAMP_COLUMN_PRIORITY = [
+    "_partitiontime",       # BigQuery partition pseudo-column (load time)
+    "loaded_at",
+    "_loaded_at",
+    "ingested_at",
+    "_ingested_at",
+    "_etl_loaded_at",
+    "_fivetran_synced",     # Fivetran sync timestamp
+    "_airbyte_extracted_at",  # Airbyte extraction timestamp
+    "created_at",
+    "created",
+    "inserted_at",
+    "updated_at",
+    "modified_at",
+    "timestamp",
+    "event_time",
+    "event_timestamp",
+]
+
+
+def _pick_best_column(columns: List[str]) -> Optional[str]:
+    """Pick the best timestamp column from a list of available columns.
+
+    Returns the highest-priority match, or the first column if none match
+    the priority list.
+    """
+    if not columns:
+        return None
+
+    lower_map = {c.lower(): c for c in columns}
+
+    for candidate in _TIMESTAMP_COLUMN_PRIORITY:
+        if candidate in lower_map:
+            return lower_map[candidate]
+
+    # No priority match — return the first timestamp column found
+    return columns[0]
+
+
+def build_discovery_query(
+    database: str,
+    schema: str,
+    table: str,
+    dialect: str = "postgres",
+) -> str:
+    """Query INFORMATION_SCHEMA to find all timestamp/datetime columns."""
+    if dialect == "bigquery":
+        return (
+            f"SELECT column_name, data_type "
+            f"FROM `{database}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+            f"WHERE table_name = '{table}' "
+            f"AND data_type IN ('TIMESTAMP', 'DATETIME', 'DATE')"
+        )
+
+    # Postgres / Snowflake / Redshift
+    return (
+        f"SELECT column_name, data_type "
+        f"FROM information_schema.columns "
+        f"WHERE table_schema = '{schema}' "
+        f"AND table_name = '{table}' "
+        f"AND data_type IN "
+        f"('timestamp with time zone', 'timestamp without time zone', "
+        f"'timestamptz', 'timestamp', 'date', 'datetime', "
+        f"'TIMESTAMP_LTZ', 'TIMESTAMP_NTZ', 'TIMESTAMP_TZ')"
+    )
+
+
+def discover_timestamp_column(
+    query_func: Callable,
+    database: str,
+    schema: str,
+    table: str,
+    dialect: str = "postgres",
+) -> Optional[str]:
+    """Run a discovery query and return the best timestamp column name."""
+    sql = build_discovery_query(database, schema, table, dialect)
+    try:
+        rows = query_func(sql)
+        column_names = [r.get("column_name") for r in rows if r.get("column_name")]
+        best = _pick_best_column(column_names)
+        if best:
+            logger.info(
+                "[Freshness] Auto-detected timestamp column",
+                column=best,
+                candidates=column_names,
+                table=f"{database}.{schema}.{table}",
+            )
+        else:
+            logger.warning(
+                "[Freshness] No timestamp columns found",
+                table=f"{database}.{schema}.{table}",
+            )
+        return best
+    except Exception as e:
+        logger.warning(f"[Freshness] Discovery query failed: {e}")
+        return None
 
 
 class FreshnessMonitor(BaseMonitor):
@@ -17,9 +119,14 @@ class FreshnessMonitor(BaseMonitor):
     Monitors data freshness by measuring the time since the most recent
     row in a timestamp column.
 
+    When no timestamp_column is configured, the caller should use
+    discover_timestamp_column() to find the best column before running
+    the monitor.
+
     Config keys:
-        timestamp_column : str
-            Column to check for recency (default: inferred or "updated_at").
+        timestamp_column : str | None
+            Column to check for recency.  When omitted, the executor
+            auto-discovers the best timestamp column from the table schema.
         max_hours : float
             Maximum acceptable age in hours (default: 24).
         warn_hours : float
@@ -30,13 +137,18 @@ class FreshnessMonitor(BaseMonitor):
 
     def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
-        self.timestamp_column: str = self.config.get(
-            "timestamp_column", "updated_at"
+        # Empty string or None → needs auto-detection before build_query()
+        self.timestamp_column: str = (
+            self.config.get("timestamp_column") or ""
         )
         self.max_hours: float = float(self.config.get("max_hours", 24))
         self.warn_hours: float = float(
             self.config.get("warn_hours", self.max_hours * 0.75)
         )
+
+    @property
+    def needs_column_discovery(self) -> bool:
+        return not self.timestamp_column
 
     def build_query(
         self,
@@ -48,10 +160,12 @@ class FreshnessMonitor(BaseMonitor):
         fqn = self._fqn(database, schema, table)
         col = self.timestamp_column
 
+        if not col:
+            # Fallback if discovery wasn't run — use updated_at
+            col = "updated_at"
+
         if dialect == "bigquery":
-            # BigQuery has no EXTRACT(EPOCH FROM ...).
-            # Use TIMESTAMP_DIFF instead.
-            sql = (
+            return (
                 f"SELECT "
                 f"MAX({col}) AS last_value, "
                 f"TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), "
@@ -61,9 +175,7 @@ class FreshnessMonitor(BaseMonitor):
                 f"FROM {fqn} "
                 f"WHERE {col} IS NOT NULL"
             )
-            return sql
 
-        # Generic SQL using EXTRACT(EPOCH ...) — transpiled per dialect.
         sql = (
             f"SELECT "
             f"MAX({col}) AS last_value, "

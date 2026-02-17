@@ -53,6 +53,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="Existing session ID")
     pipeline_stack_id: Optional[str] = Field(None, description="Pipeline stack to focus on")
     node_ids: Optional[List[str]] = Field(None, description="Specific nodes to focus on")
+    referenced_entities: Optional[List[str]] = Field(None, description="@mentioned entities (e.g., 'BigQuery.analytics.customers')")
     model: str = Field("gpt-4o", description="Model to use: gpt-4o, gpt-4o-mini, gpt-4-turbo, o3-mini, claude-sonnet, claude-opus")
     mode: str = Field("ask", description="Interaction mode: ask, debug, plan, create, bundle, explain, suggest")
     integrations: Optional[List[IntegrationData]] = Field(None, description="User's pipeline integrations")
@@ -168,6 +169,7 @@ async def chat(
             query=message,
             pipeline_stack_id=request.pipeline_stack_id,
             node_ids=request.node_ids,
+            referenced_entities=request.referenced_entities,
             integrations_data=integration_data,
             mode=mode,
             mode_config=mode_config,

@@ -4,6 +4,7 @@ Pallisade Co-Pilot - FastAPI Application
 
 import os
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 
 # Ensure the repo root is on sys.path so `from scanner.X import Y` works
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     from .routers import health_router, database_router, lineage_router, coverage_router
     from .routers.copilot import router as copilot_router
     from .routers.dbt import router as dbt_router
+    from .routers.schedule import router as schedule_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -95,11 +97,30 @@ def create_app() -> FastAPI:
 
     # Coverage analysis API
     app.include_router(coverage_router, prefix="/api/v1", tags=["Coverage"])
-    
+
+    # Schedule/Tasks API
+    app.include_router(schedule_router, prefix="/api/v1", tags=["Schedule"])
+
     logger.info("app_started", version=settings.version, environment=settings.environment)
-    
+
     return app
+
+
+# ---------------------------------------------------------------------------
+# Scheduler lifespan
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """Start/stop the background scheduler with the app."""
+    from scanner.scheduler.service import SchedulerService
+
+    scheduler = SchedulerService()
+    await scheduler.start()
+    yield
+    await scheduler.stop()
 
 
 # Create the app instance
 app = create_app()
+app.router.lifespan_context = lifespan

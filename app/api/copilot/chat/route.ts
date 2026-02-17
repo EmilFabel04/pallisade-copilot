@@ -30,6 +30,7 @@ export async function POST(request: Request) {
       pipeline_stack_id,
       pipelineStackId, // Support both formats
       node_ids,
+      referenced_entities,
       model = 'gpt-5.2',
       mode = 'ask',
     } = body;
@@ -324,6 +325,7 @@ export async function POST(request: Request) {
         session_id: chatSession.id,
         pipeline_stack_id: pipeline_stack_id || pipelineStack?.id,
         node_ids,
+        referenced_entities,
         model,
         mode, // Interaction mode (ask, debug, plan, create, etc.)
         integrations, // Pass integrations from pipeline nodes
