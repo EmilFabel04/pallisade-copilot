@@ -1,123 +1,211 @@
 'use client';
 
-/**
- * Pipeline Canvas Page
- * 
- * Visual builder for mapping your complete data pipeline
- * n8n / Make.com style - add nodes, connect them, then configure
- * Features: Auto-layout, keyboard shortcuts, templates
- */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { Check, CircleAlert, CircleDashed, Search, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import PipelineCanvas from '@/components/pipeline/PipelineCanvas';
-import NodeSidebar from '@/components/pipeline/NodeSidebar';
+import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
 import { IntegrationConfigModal } from '@/components/pipeline/IntegrationConfigModal';
 import {
-  PipelineStack,
-  PipelineNode,
+  INTEGRATIONS,
+  IntegrationDefinition,
   PipelineEdge,
   PipelineLayer,
+  PipelineNode,
+  PipelineStack,
+  TOOLS,
   getToolById,
-  INTEGRATIONS,
-  INTEGRATION_COLORS,
-  INTEGRATION_LABELS,
-  IntegrationType,
-  IntegrationDefinition,
 } from '@/components/pipeline/types';
-import { BookTemplate, ChevronDown, Bell, Ticket, Eye, Plus, Check } from 'lucide-react';
 
-// Pipeline templates for quick start
-const PIPELINE_TEMPLATES = [
+type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
+type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'ALERTS';
+type PlaneFilter = 'all' | 'data' | 'control';
+
+interface ConnectorCard {
+  id: string;
+  name: string;
+  description: string;
+  group: ConnectorGroup;
+  mode: 'pipeline' | 'integration';
+  layer?: PipelineLayer;
+  integration?: IntegrationDefinition;
+}
+
+interface IntegrationRecord {
+  id: string;
+  connectorId: string;
+  status: string;
+  source: 'pipeline' | 'legacy';
+  lastError?: string | null;
+}
+
+const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'BI', 'INGESTION', 'STORAGE', 'ALERTS'];
+const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING'];
+const ENVIRONMENTS = ['Dev', 'Staging', 'Prod'] as const;
+
+const STACK_TEMPLATES = [
   {
-    id: 'modern-stack',
-    name: 'Modern Data Stack',
-    description: 'Fivetran → dbt Cloud → Snowflake → Looker',
-    nodes: [
-      { id: 'tpl-1', name: 'Fivetran', layer: 'INGESTION' as PipelineLayer, toolType: 'fivetran' },
-      { id: 'tpl-2', name: 'dbt Cloud', layer: 'TRANSFORMATION' as PipelineLayer, toolType: 'dbt_cloud' },
-      { id: 'tpl-3', name: 'Snowflake', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'snowflake' },
-      { id: 'tpl-4', name: 'Looker', layer: 'REPORTING' as PipelineLayer, toolType: 'looker' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-      { id: 'tpl-e2', sourceId: 'tpl-2', targetId: 'tpl-3' },
-      { id: 'tpl-e3', sourceId: 'tpl-3', targetId: 'tpl-4' },
-    ],
+    id: 'gcp-analytics-stack',
+    name: 'GCP Analytics Stack',
+    description: 'BigQuery + dbt Cloud + Airflow + Looker',
+    recommendedConnectorIds: ['bigquery', 'dbt_cloud', 'airflow', 'looker'],
   },
   {
-    id: 'azure-stack',
-    name: 'Azure Data Stack',
-    description: 'Airbyte → dbt Core → Azure SQL → Power BI',
-    nodes: [
-      { id: 'tpl-1', name: 'Airbyte', layer: 'INGESTION' as PipelineLayer, toolType: 'airbyte' },
-      { id: 'tpl-2', name: 'dbt Core', layer: 'TRANSFORMATION' as PipelineLayer, toolType: 'dbt_core' },
-      { id: 'tpl-3', name: 'Azure SQL', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'azure_sql' },
-      { id: 'tpl-4', name: 'Power BI', layer: 'REPORTING' as PipelineLayer, toolType: 'powerbi' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-      { id: 'tpl-e2', sourceId: 'tpl-2', targetId: 'tpl-3' },
-      { id: 'tpl-e3', sourceId: 'tpl-3', targetId: 'tpl-4' },
-    ],
+    id: 'snowflake-stack',
+    name: 'Snowflake Stack',
+    description: 'Snowflake + dbt Cloud + Tableau',
+    recommendedConnectorIds: ['snowflake', 'dbt_cloud', 'tableau'],
   },
   {
-    id: 'gcp-stack',
-    name: 'GCP Data Stack',
-    description: 'Stitch → dbt Cloud → BigQuery → Tableau',
-    nodes: [
-      { id: 'tpl-1', name: 'Stitch', layer: 'INGESTION' as PipelineLayer, toolType: 'stitch' },
-      { id: 'tpl-2', name: 'dbt Cloud', layer: 'TRANSFORMATION' as PipelineLayer, toolType: 'dbt_cloud' },
-      { id: 'tpl-3', name: 'BigQuery', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'bigquery' },
-      { id: 'tpl-4', name: 'Tableau', layer: 'REPORTING' as PipelineLayer, toolType: 'tableau' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-      { id: 'tpl-e2', sourceId: 'tpl-2', targetId: 'tpl-3' },
-      { id: 'tpl-e3', sourceId: 'tpl-3', targetId: 'tpl-4' },
-    ],
-  },
-  {
-    id: 'warehouse-only',
-    name: 'Warehouse + BI',
-    description: 'Start with just warehouse and reporting',
-    nodes: [
-      { id: 'tpl-1', name: 'Snowflake', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'snowflake' },
-      { id: 'tpl-2', name: 'Metabase', layer: 'REPORTING' as PipelineLayer, toolType: 'metabase' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-    ],
+    id: 'oss-stack',
+    name: 'OSS Stack',
+    description: 'Airbyte + dbt Core + Apache Airflow + Microsoft Power BI',
+    recommendedConnectorIds: ['airbyte', 'dbt_core', 'airflow', 'powerbi'],
   },
 ];
 
-// Grid positions for each layer (X positions)
-const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
-  INGESTION: 100,
-  TRANSFORMATION: 400,
-  WAREHOUSE: 700,
-  REPORTING: 1000,
-  VERSION_CONTROL: 250,  // Between Ingestion and Transformation (connects to dbt)
-  ORCHESTRATION: 250,    // Between Ingestion and Transformation (Airflow)
-};
+const CHECKLIST_STEPS: Array<{ key: string; label: string; connectorIds: string[]; required: boolean }> = [
+  { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'], required: true },
+  { key: 'transform', label: 'Transform', connectorIds: ['dbt_cloud', 'dbt_core'], required: true },
+  { key: 'orchestration', label: 'Orchestration', connectorIds: ['airflow', 'dagster', 'prefect'], required: false },
+  { key: 'bi', label: 'BI', connectorIds: ['looker', 'tableau', 'powerbi', 'metabase'], required: false },
+  { key: 'alerts', label: 'Alerts', connectorIds: ['slack', 'teams', 'pagerduty', 'opsgenie', 'jira', 'linear', 'asana', 'github_issues', 'monte_carlo', 'bigeye', 'soda', 'elementary'], required: false },
+];
 
-// Category icons for integrations
-const CATEGORY_ICONS: Record<IntegrationType, React.ReactNode> = {
-  NOTIFICATIONS: <Bell className="w-4 h-4" />,
-  TICKETING: <Ticket className="w-4 h-4" />,
-  OBSERVABILITY: <Eye className="w-4 h-4" />,
-};
+function normalizeConnectorId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
 
-// Track how many nodes are in each layer for Y positioning
-function getNextYPosition(nodes: PipelineNode[], layer: PipelineLayer): number {
-  const layerNodes = nodes.filter(n => n.layer === layer);
-  const baseY = 80;
-  const spacing = 200;
-  return baseY + (layerNodes.length * spacing);
+function mapIntegrationTypeToConnectorId(type: string): string {
+  const map: Record<string, string> = {
+    SNOWFLAKE: 'snowflake',
+    BIGQUERY: 'bigquery',
+    REDSHIFT: 'redshift',
+    POSTGRES: 'postgres',
+    SQLSERVER: 'sqlserver',
+    AZURE_SQL: 'azure_sql',
+    DATABRICKS: 'databricks',
+    FIVETRAN: 'fivetran',
+    AIRBYTE: 'airbyte',
+    STITCH: 'stitch',
+    DBT_CLOUD: 'dbt_cloud',
+    DBT_CORE: 'dbt_core',
+    AIRFLOW: 'airflow',
+    DAGSTER: 'dagster',
+    PREFECT: 'prefect',
+    LOOKER: 'looker',
+    TABLEAU: 'tableau',
+    POWERBI: 'powerbi',
+    METABASE: 'metabase',
+    AMAZON_S3: 'amazon_s3',
+    GCS: 'gcs',
+    ADLS: 'adls',
+    SLACK: 'slack',
+    TEAMS: 'teams',
+    PAGERDUTY: 'pagerduty',
+    OPSGENIE: 'opsgenie',
+    JIRA: 'jira',
+    LINEAR: 'linear',
+    ASANA: 'asana',
+    GITHUB_ISSUES: 'github_issues',
+    MONTE_CARLO: 'monte_carlo',
+    BIGEYE: 'bigeye',
+    SODA: 'soda',
+    ELEMENTARY: 'elementary',
+  };
+  return map[type] || normalizeConnectorId(type);
+}
+
+function categoryToGroup(category: string): ConnectorGroup {
+  switch (category) {
+    case 'NOTIFICATIONS':
+    case 'TICKETING':
+    case 'OBSERVABILITY':
+      return 'ALERTS';
+    default:
+      return 'ALERTS';
+  }
+}
+
+function groupLabel(group: ConnectorGroup): string {
+  switch (group) {
+    case 'WAREHOUSE':
+      return 'Warehouse';
+    case 'TRANSFORM':
+      return 'Transform';
+    case 'ORCHESTRATION':
+      return 'Orchestration';
+    case 'BI':
+      return 'BI';
+    case 'INGESTION':
+      return 'Ingestion';
+    case 'STORAGE':
+      return 'Storage';
+    case 'ALERTS':
+      return 'Alerts';
+  }
+}
+
+function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: PipelineNode[]): PipelineNode {
+  const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
+  const layerX: Record<PipelineLayer, number> = {
+    INGESTION: 120,
+    VERSION_CONTROL: 300,
+    ORCHESTRATION: 300,
+    TRANSFORMATION: 480,
+    WAREHOUSE: 760,
+    STORAGE: 880,
+    REPORTING: 1040,
+  };
+
+  return {
+    id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: getToolById(toolId)?.name || toolId,
+    layer,
+    toolType: toolId,
+    positionX: layerX[layer],
+    positionY: 80 + sameLayerCount * 170,
+    status: 'PENDING',
+    config: null,
+    healthScore: null,
+    findingsCount: 0,
+    criticalCount: 0,
+    highCount: 0,
+  };
+}
+
+function buildAutoEdges(nodes: PipelineNode[], existingEdges: PipelineEdge[]): PipelineEdge[] {
+  if (existingEdges.length > 0) {
+    return existingEdges;
+  }
+
+  const nodesByLayer = new Map<PipelineLayer, PipelineNode[]>();
+  LAYER_ORDER.forEach((layer) => nodesByLayer.set(layer, nodes.filter((n) => n.layer === layer)));
+  const generated: PipelineEdge[] = [];
+
+  for (let i = 0; i < LAYER_ORDER.length - 1; i += 1) {
+    const current = nodesByLayer.get(LAYER_ORDER[i]) || [];
+    const next = nodesByLayer.get(LAYER_ORDER[i + 1]) || [];
+    if (current.length === 0 || next.length === 0) continue;
+
+    current.forEach((sourceNode, sourceIndex) => {
+      const target = next[sourceIndex % next.length];
+      generated.push({
+        id: `edge-auto-${sourceNode.id}-${target.id}`,
+        sourceId: sourceNode.id,
+        targetId: target.id,
+      });
+    });
+  }
+
+  return generated;
 }
 
 export default function PipelinePage() {
+  const searchParams = useSearchParams();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [stack, setStack] = useState<PipelineStack>({
     id: 'new',
     name: 'My Data Pipeline',
@@ -126,89 +214,168 @@ export default function PipelinePage() {
     nodes: [],
     edges: [],
   });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [configModal, setConfigModal] = useState<{ integration: IntegrationDefinition } | null>(null);
-  const [connectedIntegrationIds, setConnectedIntegrationIds] = useState<string[]>([]);
-  const searchParams = useSearchParams();
+  const [integrationRecords, setIntegrationRecords] = useState<IntegrationRecord[]>([]);
+  const [search, setSearch] = useState('');
+  const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [environment, setEnvironment] = useState<(typeof ENVIRONMENTS)[number]>('Prod');
+  const [editMode, setEditMode] = useState(false);
+  const [planeFilter, setPlaneFilter] = useState<PlaneFilter>('all');
+  const [onlyImpacted, setOnlyImpacted] = useState(false);
+  const [onlyCriticalPaths, setOnlyCriticalPaths] = useState(false);
+  const [assetSearch, setAssetSearch] = useState('');
+  const [nodeModal, setNodeModal] = useState<PipelineNode | null>(null);
+  const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
 
-  // Fetch connected integrations (for the integration cards)
-  const fetchConnectedIntegrations = useCallback(async () => {
-    try {
-      const res = await fetch('/api/integrations');
-      if (res.ok) {
-        const data = await res.json();
-        const connected = data.integrations
-          ?.filter((i: any) => i.status === 'ACTIVE')
-          .map((i: any) => i.type.toLowerCase()) || [];
-        setConnectedIntegrationIds(connected);
+  const connectorCatalog = useMemo<ConnectorCard[]>(() => {
+    const coreConnectors: ConnectorCard[] = [
+      ...TOOLS.WAREHOUSE.map((tool) => ({ id: tool.id, name: tool.name, description: tool.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: tool.layer })),
+      ...TOOLS.TRANSFORMATION.filter((tool) => ['dbt_cloud', 'dbt_core'].includes(tool.id)).map((tool) => ({ id: tool.id, name: tool.name, description: tool.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: tool.layer })),
+      ...TOOLS.TRANSFORMATION.filter((tool) => ['airflow', 'dagster', 'prefect'].includes(tool.id)).map((tool) => ({ id: tool.id, name: tool.name, description: tool.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),
+      ...TOOLS.REPORTING.map((tool) => ({ id: tool.id, name: tool.name, description: tool.description, group: 'BI' as const, mode: 'pipeline' as const, layer: tool.layer })),
+      ...TOOLS.INGESTION.map((tool) => ({ id: tool.id, name: tool.name, description: tool.description, group: 'INGESTION' as const, mode: 'pipeline' as const, layer: tool.layer })),
+      ...TOOLS.STORAGE.map((tool) => ({ id: tool.id, name: tool.name, description: tool.description, group: 'STORAGE' as const, mode: 'pipeline' as const, layer: tool.layer })),
+    ];
+
+    const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS)
+      .flat()
+      .map((integration) => ({
+        id: integration.id,
+        name: integration.name,
+        description: integration.description,
+        group: categoryToGroup(integration.category),
+        mode: 'integration' as const,
+        integration,
+      }));
+
+    return [...coreConnectors, ...alertConnectors];
+  }, []);
+
+  const connectedFromStack = useMemo(() => {
+    return new Set(
+      stack.nodes
+        .filter((node) => node.config || ['CONNECTED', 'ACTIVE'].includes(node.status))
+        .map((node) => node.toolType)
+    );
+  }, [stack.nodes]);
+
+  const connectorStatusById = useMemo(() => {
+    const statusMap = new Map<string, ConnectorStatus>();
+
+    connectorCatalog.forEach((connector) => statusMap.set(connector.id, 'NOT_CONNECTED'));
+    connectedFromStack.forEach((id) => {
+      if (statusMap.has(id)) statusMap.set(id, 'CONNECTED');
+    });
+
+    integrationRecords.forEach((record) => {
+      if (!statusMap.has(record.connectorId)) return;
+      if (record.status === 'ACTIVE') {
+        statusMap.set(record.connectorId, 'CONNECTED');
+      } else if (record.status === 'ERROR' || !!record.lastError) {
+        statusMap.set(record.connectorId, 'NEEDS_ATTENTION');
       }
+    });
+
+    return statusMap;
+  }, [connectorCatalog, connectedFromStack, integrationRecords]);
+
+  const selectedTemplate = useMemo(() => STACK_TEMPLATES.find((template) => template.id === selectedTemplateId) || null, [selectedTemplateId]);
+
+  const filteredConnectors = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return connectorCatalog.filter((connector) => {
+      if (selectedGroup !== 'ALL' && connector.group !== selectedGroup) return false;
+      if (!q) return true;
+      return (
+        connector.name.toLowerCase().includes(q) ||
+        connector.description.toLowerCase().includes(q) ||
+        connector.id.toLowerCase().includes(q)
+      );
+    });
+  }, [connectorCatalog, search, selectedGroup]);
+
+  const checklistProgress = useMemo(() => {
+    const completed = CHECKLIST_STEPS.filter((step) =>
+      step.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED')
+    ).length;
+    return {
+      completed,
+      total: CHECKLIST_STEPS.length,
+      percent: Math.round((completed / CHECKLIST_STEPS.length) * 100),
+    };
+  }, [connectorStatusById]);
+
+  const filteredMapNodes = useMemo(() => {
+    let visible = [...stack.nodes];
+
+    if (planeFilter === 'data') {
+      visible = visible.filter((node) => ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING'].includes(node.layer));
+    }
+    if (planeFilter === 'control') {
+      visible = visible.filter((node) => ['ORCHESTRATION', 'VERSION_CONTROL'].includes(node.layer));
+    }
+    if (onlyImpacted) {
+      visible = visible.filter((node) => (node.findingsCount || 0) > 0 || (node.highCount || 0) > 0 || (node.criticalCount || 0) > 0);
+    }
+    if (onlyCriticalPaths) {
+      visible = visible.filter((node) => (node.criticalCount || 0) > 0);
+    }
+    if (assetSearch.trim()) {
+      const q = assetSearch.toLowerCase();
+      visible = visible.filter((node) => node.name.toLowerCase().includes(q) || node.toolType.toLowerCase().includes(q));
+    }
+
+    return visible;
+  }, [assetSearch, onlyCriticalPaths, onlyImpacted, planeFilter, stack.nodes]);
+
+  const filteredMapEdges = useMemo(() => {
+    const visibleIds = new Set(filteredMapNodes.map((node) => node.id));
+    return stack.edges.filter((edge) => visibleIds.has(edge.sourceId) && visibleIds.has(edge.targetId));
+  }, [filteredMapNodes, stack.edges]);
+
+  const savePipeline = useCallback(async (nextStack: PipelineStack, silent = false) => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/pipeline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextStack),
+      });
+
+      if (!res.ok) throw new Error('Failed to save pipeline');
+      const data = await res.json();
+      setStack((prev) => ({ ...nextStack, id: data.stack?.id || data.id || prev.id }));
+      if (!silent) toast.success('Pipeline map updated');
     } catch (error) {
-      console.error('Failed to fetch integrations:', error);
+      if (!silent) toast.error('Failed to save pipeline');
+    } finally {
+      setSaving(false);
     }
   }, []);
 
-  // Handle OAuth callback URL parameters
-  useEffect(() => {
-    const success = searchParams.get('success');
-    const error = searchParams.get('error');
-
-    if (success === 'github') {
-      toast.success('GitHub connected successfully!');
-      fetchConnectedIntegrations();
-
-      // Update any GitHub nodes on the canvas to mark as connected and auto-save
-      setStack(prev => {
-        const updatedStack = {
-          ...prev,
-          nodes: prev.nodes.map(node => {
-            if (node.toolType === 'github') {
-              return {
-                ...node,
-                status: 'CONNECTED' as const,
-                config: { ...node.config, _oauth_linked: true },
-              };
-            }
-            return node;
-          }),
-        };
-
-        // Auto-save if there are GitHub nodes
-        if (prev.nodes.some(n => n.toolType === 'github') && prev.id && prev.id !== 'new') {
-          fetch('/api/pipeline', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedStack),
-          }).catch(e => console.error('Failed to save GitHub node status:', e));
-        }
-
-        return updatedStack;
-      });
-
-      // Clean up URL
-      window.history.replaceState({}, '', '/dashboard/pipeline');
-    } else if (error) {
-      const errorMessages: Record<string, string> = {
-        invalid_state: 'GitHub authentication failed: Invalid state',
-        no_code: 'GitHub authentication failed: No authorization code',
-        callback_failed: 'GitHub authentication failed: Callback error',
-      };
-      toast.error(errorMessages[error] || `GitHub authentication failed: ${error}`);
-      window.history.replaceState({}, '', '/dashboard/pipeline');
+  const fetchIntegrations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/integrations');
+      if (!res.ok) return;
+      const data = await res.json();
+      const records: IntegrationRecord[] = (data.integrations || []).map((row: any) => ({
+        id: row.id,
+        connectorId: row.source === 'pipeline' && row.type ? mapIntegrationTypeToConnectorId(row.type) : mapIntegrationTypeToConnectorId(row.type || row.id),
+        status: row.status || 'INACTIVE',
+        source: row.source || 'legacy',
+        lastError: row.lastError,
+      }));
+      setIntegrationRecords(records);
+    } catch (error) {
+      console.error('Failed to fetch integrations', error);
     }
-  }, [searchParams, fetchConnectedIntegrations]);
+  }, []);
 
-  // Load existing pipeline stack and integrations in parallel
   useEffect(() => {
-    const loadData = async () => {
+    const load = async () => {
+      setLoading(true);
       try {
-        // Fetch pipeline and integrations in parallel
-        const [pipelineRes] = await Promise.all([
-          fetch('/api/pipeline'),
-          fetchConnectedIntegrations(),
-        ]);
-
+        const [pipelineRes] = await Promise.all([fetch('/api/pipeline'), fetchIntegrations()]);
         if (pipelineRes.ok) {
           const data = await pipelineRes.json();
           if (data.stack) {
@@ -216,427 +383,397 @@ export default function PipelinePage() {
           }
         }
       } catch (error) {
-        console.error('Failed to load pipeline:', error);
+        console.error('Failed to load pipeline map', error);
       } finally {
         setLoading(false);
       }
     };
+    load();
+  }, [fetchIntegrations]);
 
-    loadData();
-  }, [fetchConnectedIntegrations]);
+  useEffect(() => {
+    const success = searchParams.get('success');
+    const error = searchParams.get('error');
+    if (success === 'github') {
+      toast.success('GitHub connected successfully');
+      fetchIntegrations();
+      window.history.replaceState({}, '', '/dashboard/pipeline');
+    } else if (error) {
+      toast.error(`Authentication error: ${error}`);
+      window.history.replaceState({}, '', '/dashboard/pipeline');
+    }
+  }, [fetchIntegrations, searchParams]);
 
-  // Save pipeline changes
-  const savePipeline = useCallback(async () => {
-    setSaving(true);
-    try {
-      const res = await fetch('/api/pipeline', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(stack),
+  useEffect(() => {
+    const discoveredIds = new Set(
+      integrationRecords
+        .filter((record) => record.status === 'ACTIVE' && !!getToolById(record.connectorId))
+        .map((record) => record.connectorId)
+    );
+    if (discoveredIds.size === 0) return;
+
+    setStack((prev) => {
+      const existing = new Set(prev.nodes.map((node) => node.toolType));
+      const missing = [...discoveredIds].filter((id) => !existing.has(id));
+      if (missing.length === 0) return prev;
+
+      const appended = [...prev.nodes];
+      missing.forEach((toolId) => {
+        const tool = getToolById(toolId);
+        if (!tool) return;
+        appended.push({
+          ...createNodeForTool(toolId, tool.layer, appended),
+          status: 'CONNECTED',
+          config: { _autoDiscovered: true },
+        });
       });
-      
-      if (res.ok) {
-        const data = await res.json();
-        setStack(prev => ({ ...prev, id: data.id }));
-        toast.success('Pipeline saved successfully');
-      } else {
-        throw new Error('Failed to save');
-      }
-    } catch (error) {
-      toast.error('Failed to save pipeline');
-    } finally {
-      setSaving(false);
-    }
-  }, [stack]);
 
-  // Handle node changes from canvas
-  const onNodesChange = useCallback((nodes: PipelineNode[]) => {
-    setStack(prev => ({ ...prev, nodes }));
-  }, []);
-
-  // Handle edge changes from canvas
-  const onEdgesChange = useCallback((edges: PipelineEdge[]) => {
-    setStack(prev => ({ ...prev, edges }));
-  }, []);
-
-  // Handle adding a new node from sidebar - NO MODAL, just add to canvas
-  const onAddNode = useCallback((toolId: string, layer: string) => {
-    const layerKey = layer as PipelineLayer;
-    const tool = getToolById(toolId);
-    
-    // Calculate position in grid
-    const xPos = LAYER_X_POSITIONS[layerKey];
-    const yPos = getNextYPosition(stack.nodes, layerKey);
-    
-    const newNode: PipelineNode = {
-      id: `node-${Date.now()}`,
-      name: tool?.name || toolId,
-      layer: layerKey,
-      toolType: toolId,
-      positionX: xPos,
-      positionY: yPos,
-      status: 'PENDING',
-      config: null,
-      healthScore: null,
-      findingsCount: 0,
-      criticalCount: 0,
-      highCount: 0,
-    };
-
-    // Add node to canvas immediately
-    setStack(prev => ({
-      ...prev,
-      nodes: [...prev.nodes, newNode],
-    }));
-    
-    toast.success(`Added ${tool?.name || toolId} to canvas`);
-  }, [stack.nodes]);
-
-  // Scan the entire pipeline
-  const scanPipeline = useCallback(async () => {
-    if (stack.nodes.length === 0) {
-      toast.error('Add some nodes to your pipeline first');
-      return;
-    }
-
-    const configuredNodes = stack.nodes.filter(n => n.config !== null);
-    if (configuredNodes.length === 0) {
-      toast.error('Configure at least one node before scanning');
-      return;
-    }
-
-    toast.info('Starting pipeline scan...');
-    
-    try {
-      const res = await fetch('/api/pipeline/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stackId: stack.id }),
-      });
-      
-      if (res.ok) {
-        toast.success('Pipeline scan started');
-      } else {
-        throw new Error('Failed to start scan');
-      }
-    } catch (error) {
-      toast.error('Failed to start pipeline scan');
-    }
-  }, [stack]);
-
-  // Apply a template
-  const applyTemplate = useCallback((templateId: string) => {
-    const template = PIPELINE_TEMPLATES.find(t => t.id === templateId);
-    if (!template) return;
-
-    // Generate new IDs and positions
-    const nodeIdMap = new Map<string, string>();
-    const newNodes: PipelineNode[] = template.nodes.map((node, idx) => {
-      const newId = `node-${Date.now()}-${idx}`;
-      nodeIdMap.set(node.id, newId);
-      
-      const xPos = LAYER_X_POSITIONS[node.layer];
-      const yPos = 80 + (idx % 2) * 180; // Stagger vertically
-      
       return {
-        id: newId,
-        name: node.name,
-        layer: node.layer,
-        toolType: node.toolType,
-        positionX: xPos,
-        positionY: yPos,
-        status: 'PENDING' as const,
-        config: null,
-        healthScore: null,
-        findingsCount: 0,
-        criticalCount: 0,
-        highCount: 0,
+        ...prev,
+        nodes: appended,
+        edges: buildAutoEdges(appended, prev.edges),
       };
     });
+  }, [integrationRecords]);
 
-    const newEdges: PipelineEdge[] = template.edges.map((edge, idx) => ({
-      id: `edge-${Date.now()}-${idx}`,
-      sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
-      targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
-    }));
+  const nextSuggestedStep = useMemo(() => {
+    return CHECKLIST_STEPS.find((step) => !step.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED')) || null;
+  }, [connectorStatusById]);
 
-    setStack(prev => ({
-      ...prev,
-      nodes: [...prev.nodes, ...newNodes],
-      edges: [...prev.edges, ...newEdges],
-    }));
+  const handleConnect = useCallback((connector: ConnectorCard) => {
+    if (connector.mode === 'integration' && connector.integration) {
+      setIntegrationModal(connector.integration);
+      return;
+    }
 
-    setShowTemplates(false);
-    toast.success(`Applied "${template.name}" template`);
+    const existingNode = stack.nodes.find((node) => node.toolType === connector.id);
+    if (existingNode) {
+      setNodeModal(existingNode);
+      return;
+    }
+
+    const layer = connector.layer || getToolById(connector.id)?.layer;
+    if (!layer) return;
+    const newNode = createNodeForTool(connector.id, layer, stack.nodes);
+    setStack((prev) => ({ ...prev, nodes: [...prev.nodes, newNode], edges: buildAutoEdges([...prev.nodes, newNode], prev.edges) }));
+    setNodeModal(newNode);
+  }, [stack.nodes]);
+
+  const handleNodeConfigSaved = useCallback((config: Record<string, any>) => {
+    if (!nodeModal) return;
+    setStack((prev) => {
+      const hasNode = prev.nodes.some((node) => node.id === nodeModal.id);
+      const nextNodes = hasNode
+        ? prev.nodes.map((node) => (node.id === nodeModal.id ? { ...node, config, status: 'CONNECTED' as const } : node))
+        : [...prev.nodes, { ...nodeModal, config, status: 'CONNECTED' as const }];
+      const nextStack: PipelineStack = {
+        ...prev,
+        nodes: nextNodes,
+        edges: buildAutoEdges(nextNodes, prev.edges),
+      };
+      void savePipeline(nextStack, true);
+      return nextStack;
+    });
+    setNodeModal(null);
+    toast.success('Connector configured');
+  }, [nodeModal, savePipeline]);
+
+  const onNodesChange = useCallback((nodes: PipelineNode[]) => {
+    setStack((prev) => ({ ...prev, nodes }));
   }, []);
 
-  // These hooks must be before any conditional returns
-  const openConfigModal = useCallback((integration: IntegrationDefinition) => {
-    setConfigModal({ integration });
+  const onEdgesChange = useCallback((edges: PipelineEdge[]) => {
+    setStack((prev) => ({ ...prev, edges }));
   }, []);
-
-  const handleIntegrationSuccess = useCallback(() => {
-    fetchConnectedIntegrations();
-  }, [fetchConnectedIntegrations]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[600px]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="relative w-16 h-16">
-            <div className="absolute inset-0 rounded-full border-2 border-[var(--accent)]/20"></div>
-            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-[var(--accent)] animate-spin"></div>
-          </div>
-          <p className="text-sm text-[var(--muted)]">Loading pipeline...</p>
-        </div>
+      <div className="flex items-center justify-center min-h-[520px]">
+        <div className="text-sm text-[var(--muted)]">Loading pipeline map...</div>
       </div>
     );
   }
 
-  const unconfiguredCount = stack.nodes.filter(n => !n.config).length;
-
   return (
-    <div className="flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4 px-1">
-        <div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
-            Pipeline Canvas
-          </h1>
-          <p className="text-sm text-[var(--muted)] mt-1">
-            Build your data flow • {stack.nodes.length} nodes
-            {unconfiguredCount > 0 && (
-              <span className="ml-2 text-amber-400">• {unconfiguredCount} need configuration</span>
-            )}
-          </p>
+    <div className="space-y-6 pb-8">
+      <section className="dashboard-card p-6 space-y-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">Connectors</h1>
+            <p className="text-sm text-[var(--muted)] mt-1">
+              Connect tools first. Pallisade auto-discovers and renders your pipeline map.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={environment}
+              onChange={(event) => setEnvironment(event.target.value as (typeof ENVIRONMENTS)[number])}
+              className="px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-sm"
+            >
+              {ENVIRONMENTS.map((env) => (
+                <option key={env} value={env}>
+                  {env}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => setEditMode((prev) => !prev)}
+              className={`px-3 py-2 rounded-lg text-sm border transition-colors ${
+                editMode
+                  ? 'bg-[var(--accent)]/15 border-[var(--accent)]/30 text-[var(--accent)]'
+                  : 'bg-white/[0.04] border-white/10 text-white'
+              }`}
+            >
+              {editMode ? 'Edit mode on' : 'Inspect mode (read-only)'}
+            </button>
+            <button
+              onClick={() => savePipeline(stack)}
+              className="btn btn-secondary"
+              disabled={saving}
+            >
+              {saving ? 'Saving...' : 'Save map'}
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* Templates Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowTemplates(!showTemplates)}
-              className="btn btn-secondary flex items-center gap-2"
-            >
-              <BookTemplate className="w-4 h-4" />
-              Templates
-              <ChevronDown className={`w-4 h-4 transition-transform ${showTemplates ? 'rotate-180' : ''}`} />
-            </button>
-
-            {showTemplates && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setShowTemplates(false)} />
-                <div className="absolute right-0 top-full mt-2 w-80 rounded-xl bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] shadow-xl z-20 overflow-hidden">
-                  <div className="p-3 border-b border-[rgba(255,255,255,0.06)]">
-                    <h4 className="text-sm font-medium">Quick Start Templates</h4>
-                    <p className="text-xs text-[var(--muted)] mt-1">Choose a template to get started</p>
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-[var(--accent)]" />
+              <h2 className="text-sm font-medium">Setup progress</h2>
+            </div>
+            <div className="text-xs text-[var(--muted)]">{checklistProgress.completed}/{checklistProgress.total} complete ({checklistProgress.percent}%)</div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+            {CHECKLIST_STEPS.map((step) => {
+              const connected = step.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED');
+              return (
+                <div
+                  key={step.key}
+                  className={`px-3 py-2 rounded-lg border text-xs ${
+                    connected
+                      ? 'border-emerald-500/30 bg-emerald-500/10'
+                      : 'border-white/10 bg-white/[0.02]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {connected ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <CircleDashed className="w-3.5 h-3.5 text-[var(--muted)]" />}
+                    <span>{step.label}</span>
                   </div>
-                  <div className="max-h-[300px] overflow-y-auto">
-                    {PIPELINE_TEMPLATES.map(template => (
-                      <button
-                        key={template.id}
-                        onClick={() => applyTemplate(template.id)}
-                        className="w-full p-3 text-left hover:bg-[rgba(255,255,255,0.03)] transition-colors border-b border-[rgba(255,255,255,0.04)] last:border-b-0"
-                      >
-                        <div className="font-medium text-sm">{template.name}</div>
-                        <div className="text-xs text-[var(--muted)] mt-1">{template.description}</div>
-                        <div className="text-xs text-[var(--accent-2)] mt-1.5">{template.nodes.length} nodes</div>
-                      </button>
-                    ))}
+                  <div className="mt-1 text-[10px] text-[var(--muted)]">
+                    {step.required ? 'Recommended now' : 'Optional'}
                   </div>
                 </div>
-              </>
-            )}
+              );
+            })}
           </div>
-
-          <button
-            onClick={savePipeline}
-            disabled={saving}
-            className="btn btn-secondary"
-          >
-            {saving ? (
-              <>
-                <svg className="w-4 h-4 mr-2 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                </svg>
-                Saving...
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                </svg>
-                Save Pipeline
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={scanPipeline}
-            disabled={stack.nodes.length === 0}
-            className="btn btn-primary"
-          >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content - Pipeline Canvas */}
-      <div className="flex gap-4 h-[600px]">
-        {/* Sidebar */}
-        <NodeSidebar onAddNode={onAddNode} />
-
-        {/* Canvas */}
-        <div className="flex-1 dashboard-card overflow-hidden">
-          <PipelineCanvas
-            nodes={stack.nodes}
-            edges={stack.edges}
-            stackId={stack.id}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onSave={savePipeline}
-          />
-        </div>
-      </div>
-
-      {/* Integrations Section */}
-      <div className="mt-8 pb-8">
-        <div className="mb-4">
-          <h2 className="text-xl font-semibold">Integrations</h2>
-          <p className="text-sm text-[var(--muted)] mt-1">
-            Connect notifications, ticketing, and observability tools
-          </p>
+          {nextSuggestedStep && (
+            <p className="text-xs text-[var(--muted)] mt-3">
+              Next step: connect <span className="text-white">{nextSuggestedStep.label}</span>
+            </p>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {(Object.keys(INTEGRATIONS) as IntegrationType[]).map((category) => (
-            <IntegrationCategory
-              key={category}
-              category={category}
-              integrations={INTEGRATIONS[category]}
-              connectedIds={connectedIntegrationIds}
-              onConfigureIntegration={openConfigModal}
+        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <h3 className="text-sm font-medium">Stack templates</h3>
+            <span className="text-xs text-[var(--muted)]">One-click starter bundles</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {STACK_TEMPLATES.map((template) => (
+              <button
+                key={template.id}
+                onClick={() => setSelectedTemplateId(template.id)}
+                className={`text-left rounded-lg border p-3 transition-colors ${
+                  selectedTemplateId === template.id
+                    ? 'border-[var(--accent)]/40 bg-[var(--accent)]/10'
+                    : 'border-white/10 bg-white/[0.01] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className="text-sm font-medium">{template.name}</div>
+                <div className="text-xs text-[var(--muted)] mt-1">{template.description}</div>
+              </button>
+            ))}
+          </div>
+          {selectedTemplate && (
+            <p className="text-xs text-[var(--muted)] mt-3">
+              Template active: {selectedTemplate.name}. Recommended connectors are highlighted below.
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[240px]">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search connectors"
+              className="w-full pl-9 pr-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-sm"
             />
+          </div>
+          <button
+            onClick={() => setSelectedGroup('ALL')}
+            className={`px-3 py-2 rounded-lg text-xs border ${selectedGroup === 'ALL' ? 'border-[var(--accent)]/40 bg-[var(--accent)]/10' : 'border-white/10 bg-white/[0.02]'}`}
+          >
+            All
+          </button>
+          {CORE_GROUP_ORDER.map((group) => (
+            <button
+              key={group}
+              onClick={() => setSelectedGroup(group)}
+              className={`px-3 py-2 rounded-lg text-xs border ${selectedGroup === group ? 'border-[var(--accent)]/40 bg-[var(--accent)]/10' : 'border-white/10 bg-white/[0.02]'}`}
+            >
+              {groupLabel(group)}
+            </button>
           ))}
         </div>
-      </div>
 
-      {/* Integration Config Modal */}
-      <IntegrationConfigModal
-        integration={configModal?.integration || null}
-        isOpen={configModal !== null}
-        onClose={() => setConfigModal(null)}
-        onSuccess={handleIntegrationSuccess}
-      />
-    </div>
-  );
-}
-
-// Integration Category Component
-function IntegrationCategory({
-  category,
-  integrations,
-  connectedIds,
-  onConfigureIntegration,
-}: {
-  category: IntegrationType;
-  integrations: IntegrationDefinition[];
-  connectedIds: string[];
-  onConfigureIntegration: (integration: IntegrationDefinition) => void;
-}) {
-
-  return (
-    <div
-      className="dashboard-card p-4"
-      style={{
-        borderTop: `3px solid ${INTEGRATION_COLORS[category]}`,
-      }}
-    >
-      <div className="flex items-center gap-2 mb-4">
-        <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center"
-          style={{
-            backgroundColor: `${INTEGRATION_COLORS[category]}20`,
-            color: INTEGRATION_COLORS[category],
-          }}
-        >
-          {CATEGORY_ICONS[category]}
-        </div>
-        <div>
-          <h3 className="font-medium">{INTEGRATION_LABELS[category]}</h3>
-          <p className="text-xs text-[var(--muted)]">{integrations.length} available</p>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        {integrations.map((integration) => {
-          const isConnected = connectedIds.includes(integration.id);
+        {CORE_GROUP_ORDER.map((group) => {
+          const connectors = filteredConnectors.filter((connector) => connector.group === group);
+          if (connectors.length === 0) return null;
           return (
-            <div
-              key={integration.id}
-              className="flex items-center justify-between p-3 rounded-lg bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.04)] transition-colors cursor-pointer"
-              onClick={() => onConfigureIntegration(integration)}
-            >
-              <div className="flex items-center gap-3">
-                <IntegrationIcon id={integration.id} />
-                <div>
-                  <div className="text-sm font-medium">{integration.name}</div>
-                  <div className="text-xs text-[var(--muted)]">{integration.description}</div>
-                </div>
+            <div key={group} className="space-y-2">
+              <h3 className="text-sm font-medium">{groupLabel(group)}</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {connectors.map((connector) => {
+                  const status = connectorStatusById.get(connector.id) || 'NOT_CONNECTED';
+                  const recommended = selectedTemplate?.recommendedConnectorIds.includes(connector.id);
+                  return (
+                    <div key={connector.id} className={`rounded-xl border p-3 bg-white/[0.02] ${recommended ? 'border-[var(--accent)]/40' : 'border-white/10'}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <h4 className="font-medium text-sm">{connector.name}</h4>
+                          <p className="text-xs text-[var(--muted)] mt-1">{connector.description}</p>
+                        </div>
+                        {status === 'CONNECTED' ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                            <Check className="w-3 h-3" />
+                            Connected
+                          </span>
+                        ) : status === 'NEEDS_ATTENTION' ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                            <CircleAlert className="w-3 h-3" />
+                            Needs attention
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-white/[0.04] text-[var(--muted)] border border-white/10">
+                            Not connected
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-[var(--muted)]">Read-only mode supported</span>
+                        <button
+                          onClick={() => handleConnect(connector)}
+                          className="px-3 py-1.5 rounded-lg text-xs border border-white/10 hover:bg-white/[0.05]"
+                        >
+                          Connect
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              {isConnected ? (
-                <div className="flex items-center gap-1 text-xs text-emerald-400">
-                  <Check className="w-3 h-3" />
-                  Connected
-                </div>
-              ) : (
-                <button
-                  className="p-1.5 rounded-lg hover:bg-[rgba(255,255,255,0.06)] transition-colors text-[var(--muted)] hover:text-white"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onConfigureIntegration(integration);
-                  }}
-                >
-                  <Plus className="w-4 h-4" />
-                </button>
-              )}
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
+      </section>
 
-// Integration Icon Component
-function IntegrationIcon({ id }: { id: string }) {
-  const icons: Record<string, { icon: string; color: string }> = {
-    slack: { icon: 'S', color: '#4A154B' },
-    teams: { icon: 'T', color: '#6264A7' },
-    pagerduty: { icon: 'PD', color: '#06AC38' },
-    opsgenie: { icon: 'OG', color: '#2684FF' },
-    jira: { icon: 'J', color: '#0052CC' },
-    linear: { icon: 'L', color: '#5E6AD2' },
-    asana: { icon: 'A', color: '#F06A6A' },
-    github_issues: { icon: 'GH', color: '#24292e' },
-    monte_carlo: { icon: 'MC', color: '#00D4AA' },
-    bigeye: { icon: 'BE', color: '#FF6B35' },
-    soda: { icon: 'SD', color: '#00C7B7' },
-    elementary: { icon: 'EL', color: '#FF914D' },
-  };
+      <section className="dashboard-card p-4">
+        <div className="flex items-center justify-between gap-4 mb-4 px-1">
+          <div>
+            <h2 className="text-xl font-semibold">Pipeline Map</h2>
+            <p className="text-sm text-[var(--muted)] mt-1">
+              Auto-generated from connected integrations
+            </p>
+          </div>
+          <div className="text-xs px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.03]">
+            {editMode ? 'Edit mode enabled' : 'Inspect mode (default)'}
+          </div>
+        </div>
 
-  const config = icons[id] || { icon: id.slice(0, 2).toUpperCase(), color: '#6B7280' };
+        <div className="flex gap-4 h-[620px]">
+          <div className="w-72 flex-shrink-0 rounded-xl border border-white/10 bg-white/[0.02] p-3 space-y-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-[var(--muted)] mb-2">Filters</div>
+              <div className="flex items-center gap-1">
+                {(['all', 'data', 'control'] as PlaneFilter[]).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setPlaneFilter(filter)}
+                    className={`px-2.5 py-1.5 rounded-md text-xs border ${
+                      planeFilter === filter
+                        ? 'border-[var(--accent)]/40 bg-[var(--accent)]/10'
+                        : 'border-white/10 bg-white/[0.02]'
+                    }`}
+                  >
+                    {filter === 'all' ? 'Data + control' : `${filter} plane`}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-  return (
-    <div
-      className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
-      style={{ backgroundColor: config.color }}
-    >
-      {config.icon}
+            <label className="flex items-center justify-between text-xs">
+              <span>Only impacted assets</span>
+              <input type="checkbox" checked={onlyImpacted} onChange={(event) => setOnlyImpacted(event.target.checked)} />
+            </label>
+
+            <label className="flex items-center justify-between text-xs">
+              <span>Only critical paths</span>
+              <input type="checkbox" checked={onlyCriticalPaths} onChange={(event) => setOnlyCriticalPaths(event.target.checked)} />
+            </label>
+
+            <div>
+              <div className="text-xs text-[var(--muted)] mb-1">Search assets</div>
+              <input
+                value={assetSearch}
+                onChange={(event) => setAssetSearch(event.target.value)}
+                placeholder="table / model / dashboard"
+                className="w-full px-3 py-2 rounded-md bg-white/[0.04] border border-white/10 text-xs"
+              />
+            </div>
+
+            <div className="pt-2 border-t border-white/10 text-xs text-[var(--muted)]">
+              Environment: <span className="text-white">{environment}</span>
+            </div>
+
+            {editMode && (
+              <div className="pt-2 border-t border-white/10 text-[11px] text-[var(--muted)]">
+                Edit mode allows manual node positioning and edge overrides on the map.
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 rounded-xl overflow-hidden border border-white/10">
+            <PipelineCanvas
+              nodes={filteredMapNodes}
+              edges={filteredMapEdges}
+              stackId={stack.id}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onSave={() => savePipeline(stack, true)}
+              readOnly={!editMode}
+            />
+          </div>
+        </div>
+      </section>
+
+      {nodeModal && (
+        <NodeConfigModal
+          node={nodeModal}
+          stackId={stack.id === 'new' ? undefined : stack.id}
+          onSave={handleNodeConfigSaved}
+          onClose={() => setNodeModal(null)}
+        />
+      )}
+
+      <IntegrationConfigModal
+        integration={integrationModal}
+        isOpen={integrationModal !== null}
+        onClose={() => setIntegrationModal(null)}
+        onSuccess={fetchIntegrations}
+      />
     </div>
   );
 }
