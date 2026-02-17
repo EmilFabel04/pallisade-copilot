@@ -72,7 +72,7 @@ class ToolExecutor:
             logger.info("[Schema Fetch] Query is about non-warehouse integration (GitHub, etc.) - skipping schema fetch")
             return schema_info
 
-        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
+        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DATABRICKS"]
 
         # Step 1: Detect which warehouse(s) the user is asking about
         target_warehouses = self._detect_warehouses_from_query()
@@ -145,6 +145,7 @@ class ToolExecutor:
             "BIGQUERY": ["bigquery", "big query", "bq", "google bigquery"],
             "POSTGRES": ["postgres", "postgresql", "pg", "psql"],
             "REDSHIFT": ["redshift", "red shift", "aws redshift"],
+            "DATABRICKS": ["databricks", "unity catalog", "delta lake", "lakehouse"],
         }
 
         for wh_type, patterns in warehouse_patterns.items():
@@ -402,6 +403,17 @@ class ToolExecutor:
             except Exception as e:
                 logger.error(f"[Schema Fetch] PostgreSQL schema discovery failed: {e}")
 
+        elif adapter_type == "DATABRICKS":
+            logger.info("[Schema Fetch] Auto-discovering Databricks schemas")
+            try:
+                result = await asyncio.to_thread(
+                    adapter.execute_query,
+                    "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema') LIMIT 10"
+                )
+                return [row['schema_name'] for row in result]
+            except Exception as e:
+                logger.error(f"[Schema Fetch] Databricks schema discovery failed: {e}")
+
         return []
     
     async def _fetch_dataset_schema(
@@ -630,10 +642,60 @@ class ToolExecutor:
                 except ImportError:
                     from scanner.integrations.looker import LookerClient
                 return LookerClient(integration.config)
+
+            elif integration_type == "REDSHIFT":
+                try:
+                    from adapters.redshift import RedshiftAdapter
+                except ImportError:
+                    from scanner.adapters.redshift import RedshiftAdapter
+                return RedshiftAdapter(integration.config)
+
+            elif integration_type == "DATABRICKS":
+                try:
+                    from adapters.databricks import DatabricksAdapter
+                except ImportError:
+                    from scanner.adapters.databricks import DatabricksAdapter
+                return DatabricksAdapter(integration.config)
+
+            elif integration_type == "TABLEAU":
+                try:
+                    from integrations.tableau import TableauClient
+                except ImportError:
+                    from scanner.integrations.tableau import TableauClient
+                return TableauClient(integration.config)
+
+            elif integration_type == "POWERBI":
+                try:
+                    from integrations.powerbi import PowerBIClient
+                except ImportError:
+                    from scanner.integrations.powerbi import PowerBIClient
+                return PowerBIClient(integration.config)
+
+            elif integration_type == "AMAZON_S3":
+                try:
+                    from integrations.storage import S3Client
+                except ImportError:
+                    from scanner.integrations.storage import S3Client
+                return S3Client(integration.config)
+
+            elif integration_type == "GCS":
+                try:
+                    from integrations.storage import GCSClient
+                except ImportError:
+                    from scanner.integrations.storage import GCSClient
+                return GCSClient(integration.config)
+
+            elif integration_type == "ADLS":
+                try:
+                    from integrations.storage import ADLSClient
+                except ImportError:
+                    from scanner.integrations.storage import ADLSClient
+                return ADLSClient(integration.config)
+
         except Exception as e:
             logger.error(f"Import error for {integration_type}: {e}")
             raise
-        
+
         return None
     
     async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:

@@ -19,6 +19,7 @@ class ToolCategory(Enum):
     ORCHESTRATION = "orchestration"
     INGESTION = "ingestion"
     REPORTING = "reporting"
+    STORAGE = "storage"
     KNOWLEDGE = "knowledge"
     OBSERVABILITY = "observability"
     COVERAGE = "coverage"
@@ -177,7 +178,7 @@ class ToolRegistry:
                 ToolParameter("min_confidence", "number", "Minimum edge confidence (0.0-1.0)", required=False),
                 ToolParameter("system", "string", "Filter to a specific system (e.g., 'bigquery', 'dbt', 'looker')", required=False),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DBT_CLOUD", "DBT_CORE"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DATABRICKS", "DBT_CLOUD", "DBT_CORE", "TABLEAU", "POWERBI"},
         ))
 
         self._register(Tool(
@@ -191,7 +192,7 @@ class ToolRegistry:
                 ToolParameter("min_confidence", "number", "Minimum edge confidence (0.0-1.0)", required=False),
                 ToolParameter("system", "string", "Filter to a specific system (e.g., 'bigquery', 'dbt', 'looker')", required=False),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DBT_CLOUD", "DBT_CORE"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DATABRICKS", "DBT_CLOUD", "DBT_CORE", "TABLEAU", "POWERBI"},
         ))
         
         self._register(Tool(
@@ -223,7 +224,7 @@ class ToolRegistry:
                 ToolParameter("node_id", "string", "The fully qualified name of the node"),
                 ToolParameter("column_name", "string", "The column to trace"),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "DBT_CLOUD", "DBT_CORE"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "DATABRICKS", "DBT_CLOUD", "DBT_CORE"},
         ))
 
         self._register(Tool(
@@ -249,7 +250,7 @@ class ToolRegistry:
                     "Specific change details (e.g., 'moving from dbt_dev to analytics dataset')",
                 ),
             ],
-            alternative_integrations={"BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DBT_CLOUD", "DBT_CORE"},
+            alternative_integrations={"BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DATABRICKS", "DBT_CLOUD", "DBT_CORE"},
         ))
 
         self._register(Tool(
@@ -278,13 +279,13 @@ class ToolRegistry:
             category=ToolCategory.WAREHOUSE,
             parameters=[
                 ToolParameter("sql", "string", "The SQL query to execute (SELECT only)"),
-                ToolParameter("warehouse", "string", "Which warehouse to query (e.g. 'bigquery', 'snowflake'). Required when multiple warehouses are connected.", required=False,
-                             enum=["bigquery", "snowflake", "postgres", "redshift"]),
+                ToolParameter("warehouse", "string", "Which warehouse to query (e.g. 'bigquery', 'snowflake', 'databricks'). Required when multiple warehouses are connected.", required=False,
+                             enum=["bigquery", "snowflake", "postgres", "redshift", "databricks"]),
                 ToolParameter("limit", "integer", "Maximum rows to return", required=False, default=100),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "SQLSERVER", "AZURE_SQL"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DATABRICKS", "SQLSERVER", "AZURE_SQL"},
         ))
-        
+
         self._register(Tool(
             name="get_table_stats",
             description="Get statistics about a table including row count, size, last updated time, and column stats.",
@@ -292,9 +293,9 @@ class ToolRegistry:
             parameters=[
                 ToolParameter("table_name", "string", "The fully qualified table name"),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DATABRICKS"},
         ))
-        
+
         self._register(Tool(
             name="get_query_history",
             description="Get recent queries that touched a specific table. Useful for understanding data access patterns.",
@@ -304,9 +305,9 @@ class ToolRegistry:
                 ToolParameter("hours", "integer", "How many hours back to look", required=False, default=24),
                 ToolParameter("limit", "integer", "Maximum queries to return", required=False, default=20),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "DATABRICKS"},
         ))
-        
+
         self._register(Tool(
             name="get_table_dependencies",
             description="Get upstream (source) and downstream (dependent) tables for a specific table. Shows what feeds into this table and what depends on it.",
@@ -316,7 +317,7 @@ class ToolRegistry:
                 ToolParameter("direction", "string", "Which dependencies to get", required=False, 
                              enum=["upstream", "downstream", "both"], default="both"),
             ],
-            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES"},
+            alternative_integrations={"SNOWFLAKE", "BIGQUERY", "POSTGRES", "DATABRICKS"},
         ))
         
         # ==========================================
@@ -577,6 +578,116 @@ class ToolRegistry:
                 ToolParameter("model_name", "string", "The LookML model name"),
             ],
             required_integrations={"LOOKER"},
+        ))
+
+        # ==========================================
+        # REPORTING TOOLS (Tableau)
+        # ==========================================
+
+        self._register(Tool(
+            name="get_tableau_workbook_status",
+            description="Get status of a Tableau workbook including refresh status, data sources, and views. Use this to check workbook health and identify broken data sources.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("workbook_name", "string", "The workbook name or ID"),
+            ],
+            required_integrations={"TABLEAU"},
+        ))
+
+        self._register(Tool(
+            name="get_tableau_datasource_info",
+            description="Get Tableau data source details: connection type, tables used, last refresh, and extract schedule. Useful for understanding how Tableau connects to the warehouse.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("datasource_name", "string", "The data source name or ID"),
+            ],
+            required_integrations={"TABLEAU"},
+        ))
+
+        self._register(Tool(
+            name="get_tableau_refresh_history",
+            description="Get recent extract refresh history for a Tableau datasource or workbook. Shows success/failure status, duration, and error messages.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("datasource_name", "string", "The data source name (optional, omit for all)", required=False),
+                ToolParameter("limit", "integer", "Maximum results to return", required=False, default=10),
+            ],
+            required_integrations={"TABLEAU"},
+        ))
+
+        # ==========================================
+        # REPORTING TOOLS (Power BI)
+        # ==========================================
+
+        self._register(Tool(
+            name="get_powerbi_dataset_status",
+            description="Get Power BI dataset refresh status, last refresh time, and configured data sources. Use to check dataset health and connectivity.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("dataset_name", "string", "The dataset name or ID"),
+            ],
+            required_integrations={"POWERBI"},
+        ))
+
+        self._register(Tool(
+            name="get_powerbi_refresh_history",
+            description="Get recent refresh history for a Power BI dataset. Shows refresh status, duration, and failure reasons.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("dataset_name", "string", "The dataset name or ID"),
+                ToolParameter("limit", "integer", "Maximum results to return", required=False, default=10),
+            ],
+            required_integrations={"POWERBI"},
+        ))
+
+        self._register(Tool(
+            name="get_powerbi_gateway_status",
+            description="Get Power BI gateway health and status for on-premises data connections. Use to diagnose connectivity issues between Power BI and on-prem data sources.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("gateway_name", "string", "Gateway name or ID (optional, omit for all gateways)", required=False),
+            ],
+            required_integrations={"POWERBI"},
+        ))
+
+        # ==========================================
+        # STORAGE TOOLS (S3, GCS, ADLS)
+        # ==========================================
+
+        self._register(Tool(
+            name="list_storage_objects",
+            description=(
+                "List objects/files in a cloud storage bucket or container. Shows paths, sizes, "
+                "and last modified times. Useful for understanding data landing zones and "
+                "tracking raw data files in the lineage."
+            ),
+            category=ToolCategory.LINEAGE,
+            parameters=[
+                ToolParameter("path", "string", "Bucket/container path (e.g., 's3://bucket/prefix/' or 'gs://bucket/path/' or 'abfss://container@account/')"),
+                ToolParameter("limit", "integer", "Maximum objects to return", required=False, default=50),
+            ],
+            alternative_integrations={"AMAZON_S3", "GCS", "ADLS"},
+        ))
+
+        self._register(Tool(
+            name="get_storage_object_metadata",
+            description=(
+                "Get metadata for a specific storage object: size, content type, last modified, "
+                "partitioning info. Useful for understanding data formats and freshness of raw files."
+            ),
+            category=ToolCategory.LINEAGE,
+            parameters=[
+                ToolParameter("path", "string", "Full object path (e.g., 's3://bucket/path/file.parquet')"),
+            ],
+            alternative_integrations={"AMAZON_S3", "GCS", "ADLS"},
+        ))
+
+        self._register(Tool(
+            name="list_storage_buckets",
+            description="List all accessible buckets/containers in the connected cloud storage account. Shows bucket names, regions, and creation dates.",
+            category=ToolCategory.LINEAGE,
+            parameters=[],
+            alternative_integrations={"AMAZON_S3", "GCS", "ADLS"},
         ))
 
         # ==========================================
@@ -873,7 +984,7 @@ class ToolRegistry:
                 ),
             ],
             alternative_integrations={
-                "SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT",
+                "SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DATABRICKS",
                 "SQLSERVER", "AZURE_SQL", "AZURE_SYNAPSE",
             },
         ))
