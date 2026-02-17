@@ -33,7 +33,8 @@ export function ChangePlanCard({ plan, onValidate, onApply, onShare, defaultExpa
 
   const statusConfig = STATUS_CONFIG[plan.status];
   const canValidate = plan.status === 'draft' || plan.status === 'failed';
-  const canApply = plan.status === 'validated';
+  const isDocsOnly = plan.patches.every(p => p.patch_type === 'text_file');
+  const canApply = plan.status === 'validated' || (plan.status === 'draft' && isDocsOnly);
 
   return (
     <div

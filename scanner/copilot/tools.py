@@ -56,6 +56,9 @@ class Tool:
     
     # Alternative integrations (any one of these works)
     alternative_integrations: Set[str] = field(default_factory=set)
+
+    # If True, user must confirm before execution (for destructive/external write tools)
+    requires_confirmation: bool = False
     
     def to_anthropic_tool(self) -> Dict[str, Any]:
         """Convert to Anthropic tool format."""
@@ -1082,6 +1085,7 @@ class ToolRegistry:
                 "Returns the PR URL on success."
             ),
             category=ToolCategory.CHANGE_PLAN,
+            requires_confirmation=True,
             parameters=[
                 ToolParameter(
                     "plan_id", "string",

@@ -39,6 +39,24 @@ export function isChangePlanTool(toolName: string): boolean {
 }
 
 export function ChangePlanToolResult({ toolName, result, onValidate, onApply, onShare, onSaveToArtifacts, associatedPlan }: ChangePlanToolResultProps) {
+  // Guard against undefined/null result (can happen with streaming tool calls)
+  if (!result) {
+    return (
+      <div
+        className="rounded-lg p-3 text-sm"
+        style={{
+          backgroundColor: 'rgba(255, 255, 255, 0.03)',
+          border: '1px solid rgba(255, 255, 255, 0.06)',
+        }}
+      >
+        <div className="flex items-center gap-2 text-white/50">
+          <div className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin" />
+          <span>Executing {toolName}...</span>
+        </div>
+      </div>
+    );
+  }
+
   // Handle error case
   if ('error' in result && result.error) {
     return (

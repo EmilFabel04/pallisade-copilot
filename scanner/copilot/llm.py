@@ -6,7 +6,7 @@ Supports tool calling for executing actions against integrations.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Union
+from typing import AsyncGenerator, Dict, List, Optional, Any, Set, Union
 import logging
 import json
 import os
@@ -48,6 +48,27 @@ class CopilotResponse:
     output_tokens: int = 0
     model: str = ""
     stop_reason: str = ""
+
+
+@dataclass
+class StreamEvent:
+    """A single SSE event from the streaming chat.
+
+    Event types:
+        text_delta              — Incremental text from the LLM
+        tool_call_start         — LLM wants to call a tool
+        tool_call_result        — Tool execution finished
+        tool_confirmation_required — Destructive tool needs user approval
+        iteration_start         — New LLM iteration beginning
+        done                    — Stream complete
+        error                   — Error occurred
+    """
+    event_type: str
+    data: Dict[str, Any]
+
+    def to_sse(self) -> str:
+        """Format as Server-Sent Events wire format."""
+        return f"event: {self.event_type}\ndata: {json.dumps(self.data)}\n\n"
 
 
 class CopilotLLM:
@@ -120,7 +141,7 @@ class CopilotLLM:
 
 ## CRITICAL RULES - FOLLOW THESE EXACTLY
 
-1. **NEVER ASK FOR PERMISSION** - Just run queries and give answers. Don't say "Do you want me to run this?" or "Should I execute this?" - JUST DO IT.
+1. **EXECUTE READ QUERIES IMMEDIATELY** - For read-only operations (query_warehouse, get_upstream, get_dbt_model, etc.), just run them and give answers. Don't say "Do you want me to run this?" - JUST DO IT. Note: Some tools that modify external systems (like apply_change_plan) will automatically pause for user confirmation. You don't need to ask for permission yourself — the system handles it.
 
 2. **ALWAYS RUN THE QUERY** - When you know what query to run, execute it immediately using `query_warehouse`. Don't show the SQL and ask if they want you to run it.
 
@@ -142,13 +163,13 @@ class CopilotLLM:
 
 9. **ANSWERS MUST BE PIPELINE-SPECIFIC** - When giving code suggestions, config changes, or architecture advice, base it on the user's ACTUAL connected integrations and current configuration. Call `get_dbt_model` or other tools to get the real state before suggesting changes. Your answer should be copy-paste ready with the user's real project names, file paths, table names, and schema names — not generic examples.
 
-10. **MANDATORY IMPACT ANALYSIS FOR CHANGES** - Before creating ANY code change, plan, or fix:
+10. **IMPACT ANALYSIS FOR DATA PIPELINE CHANGES** - Before creating changes to SQL models, dbt models, DAGs, orchestration configs, or schema definitions:
    - ✅ Call `get_downstream` on every table/model being modified
    - ✅ Call `get_upstream` to understand data sources
    - ✅ Identify ALL breaking changes (column renames, table moves, schema changes)
    - ✅ Report an Impact Analysis table showing what will break
    - ✅ Include fixes for EVERYTHING that breaks, not just the original request
-   - **If you skip impact analysis for a change request, your response is INCOMPLETE and potentially dangerous.**
+   - **Skip impact analysis for documentation files (.md, .txt, .gitignore, README), config-only changes, and non-pipeline code.**
 
 11. **SYNTHESIZE TOOL RESULTS - NEVER DUMP RAW DATA** - After calling a tool:
    - ✅ Interpret the results and explain what they mean
@@ -156,11 +177,12 @@ class CopilotLLM:
    - ✅ For query results: Summarize the key findings, don't just show the raw table
    - ❌ NEVER paste raw JSON or tool output without interpretation
    - ❌ NEVER say "Here's what I found:" followed by a raw data dump
+   - ❌ NEVER output the full file content in the chat when you are also creating a change plan — the plan already contains the patches. Instead, briefly describe what the plan does and let the ChangePlanCard UI show the details.
    - **If the user asks you to "go ahead" with an action, EXECUTE the action and report the result - don't show previous query results.**
 
 ## Impact Analysis Requirements (For PLAN, FIX, CREATE Modes)
 
-When the user asks you to make changes (modify code, change datasets, rename models, etc.), you MUST:
+When the user asks you to make changes to **data pipeline objects** (SQL models, dbt models, DAGs, orchestration configs, warehouse tables, schema definitions), you MUST:
 
 1. **Check Lineage First** - Run `get_downstream` on all objects being changed
 2. **Report Breaking Changes** - Include an Impact Analysis section:
@@ -175,6 +197,8 @@ When the user asks you to make changes (modify code, change datasets, rename mod
    **Breaking Changes:** X items need attention
 
 3. **Include All Fixes** - Your implementation must address ALL breaking changes, not just the original request
+
+**Exception:** Skip impact analysis entirely when creating documentation files (.md, .txt, README), config-only files (.gitignore, requirements.txt), or other non-pipeline artifacts. These have no downstream data dependencies.
 
 ## How to Answer Simple Data Questions
 
@@ -673,7 +697,611 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 content=f"Unknown provider: {self.provider}",
                 model=self.model,
             )
-    
+
+    async def chat_stream(
+        self,
+        messages: List[Message],
+        context: CopilotContext,
+        max_tool_iterations: int = 15,
+        confirmed_tool_ids: Optional[Set[str]] = None,
+        pending_tool_call: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """
+        Stream a chat response as SSE events.
+
+        Yields StreamEvent objects as the LLM generates text and executes tools.
+        Tools marked with requires_confirmation=True will pause the stream
+        and yield a tool_confirmation_required event.
+
+        Args:
+            messages: Conversation history
+            context: User's co-pilot context
+            max_tool_iterations: Maximum tool call iterations
+            confirmed_tool_ids: Tool use IDs or names the user has already approved
+            pending_tool_call: Tool call to execute directly (from confirmation flow)
+        """
+        if self.provider == "anthropic":
+            async for event in self._chat_anthropic_stream(
+                messages, context, max_tool_iterations, confirmed_tool_ids,
+                pending_tool_call=pending_tool_call,
+            ):
+                yield event
+        elif self.provider == "openai":
+            async for event in self._chat_openai_stream(
+                messages, context, max_tool_iterations, confirmed_tool_ids,
+                pending_tool_call=pending_tool_call,
+            ):
+                yield event
+        else:
+            yield StreamEvent("error", {"message": f"Unknown provider: {self.provider}"})
+
+    async def _chat_anthropic_stream(
+        self,
+        messages: List[Message],
+        context: CopilotContext,
+        max_tool_iterations: int,
+        confirmed_tool_ids: Optional[Set[str]] = None,
+        pending_tool_call: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream chat with Anthropic Claude via SSE events."""
+        if not self.anthropic_client:
+            yield StreamEvent("error", {"message": "Anthropic not available. Configure ANTHROPIC_API_KEY."})
+            return
+
+        confirmed_tool_ids = confirmed_tool_ids or set()
+
+        # Create tool executor (same setup as _chat_anthropic)
+        executor = ToolExecutor(context)
+
+        # Pre-fetch warehouse schema
+        if not context.warehouse_schema and context.has_warehouse():
+            try:
+                logger.info("[Stream/Anthropic] Pre-fetching warehouse schema...")
+                context.warehouse_schema = await executor.fetch_warehouse_schema()
+                if context.warehouse_schema:
+                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
+                    logger.info(f"[Stream/Anthropic] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
+            except Exception as e:
+                logger.error(f"[Stream/Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
+
+        system = self.build_system_prompt(context)
+        registry = get_tool_registry()
+        tools = registry.to_anthropic_tools(context.integration_types)
+
+        # Start MCP servers
+        mcp_manager = None
+        try:
+            from scanner.mcp_bridge.client import MCPClientManager
+            mcp_manager = MCPClientManager(
+                integrations=context.integrations,
+                engine_store=getattr(context, "engine_store", None),
+                lineage_graph=getattr(context, "graph", None),
+            )
+            await mcp_manager.start_servers()
+            if mcp_manager.has_servers:
+                mcp_tools = await mcp_manager.discover_tools(format="anthropic")
+                tools = tools + mcp_tools
+                logger.info(f"[Stream/Anthropic] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                context.mcp_enabled = True
+        except Exception as e:
+            logger.warning(f"[Stream/Anthropic] MCP init failed: {e}")
+            mcp_manager = None
+
+        try:
+            anthropic_messages = self._convert_messages(messages)
+            total_input_tokens = 0
+            total_output_tokens = 0
+            all_tool_calls: List[Dict[str, Any]] = []
+
+            # If we have a pending tool call from confirmation flow,
+            # execute it directly and inject result into messages
+            if pending_tool_call:
+                ptc_name = pending_tool_call["tool_name"]
+                ptc_args = pending_tool_call.get("arguments", {})
+                ptc_id = pending_tool_call.get("tool_use_id", f"toolu_confirmed_{ptc_name}")
+
+                logger.info(f"[Stream/Anthropic] Pre-executing confirmed tool: {ptc_name}")
+                yield StreamEvent("tool_call_start", {
+                    "tool_use_id": ptc_id,
+                    "tool_name": ptc_name,
+                    "arguments": ptc_args,
+                })
+
+                try:
+                    if ptc_name.startswith("mcp_") and mcp_manager:
+                        mcp_result = await mcp_manager.call_tool(ptc_name, ptc_args)
+                        result = ToolResult(
+                            success=mcp_result.get("success", False),
+                            data=mcp_result.get("data"),
+                            error=mcp_result.get("error"),
+                        )
+                    else:
+                        result = await executor.execute(ptc_name, ptc_args)
+                except Exception as e:
+                    result = ToolResult(success=False, error=str(e))
+
+                yield StreamEvent("tool_call_result", {
+                    "tool_use_id": ptc_id,
+                    "tool_name": ptc_name,
+                    "result": result.to_dict(),
+                })
+
+                all_tool_calls.append({
+                    "tool": ptc_name,
+                    "input": ptc_args,
+                    "result": result.to_dict(),
+                })
+
+                # Inject tool call + result into Anthropic messages
+                anthropic_messages.append({
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": ptc_id,
+                        "name": ptc_name,
+                        "input": ptc_args,
+                    }],
+                })
+                anthropic_messages.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": ptc_id,
+                        "content": json.dumps(result.to_dict()),
+                    }],
+                })
+
+            for iteration in range(max_tool_iterations):
+                yield StreamEvent("iteration_start", {
+                    "iteration": iteration + 1,
+                    "reason": "tool_use" if iteration > 0 else ("confirmed_tool" if pending_tool_call else "initial"),
+                })
+
+                try:
+                    # Use the streaming API
+                    with self.anthropic_client.messages.stream(
+                        model=self.model,
+                        system=system,
+                        messages=anthropic_messages,
+                        tools=tools if tools else anthropic.NOT_GIVEN,
+                        max_tokens=4096,
+                    ) as stream:
+                        for event in stream:
+                            if event.type == "content_block_delta":
+                                if hasattr(event.delta, "text"):
+                                    yield StreamEvent("text_delta", {"content": event.delta.text})
+
+                        # Get final message after stream completes
+                        final_message = stream.get_final_message()
+
+                    total_input_tokens += final_message.usage.input_tokens
+                    total_output_tokens += final_message.usage.output_tokens
+
+                except Exception as e:
+                    logger.exception("[Stream/Anthropic] Error in streaming call")
+                    yield StreamEvent("error", {"message": f"Error communicating with AI: {str(e)}"})
+                    return
+
+                # Check stop reason
+                if final_message.stop_reason == "end_turn":
+                    yield StreamEvent("done", {
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "model": self.model,
+                        "stop_reason": "end_turn",
+                        "tool_calls": all_tool_calls,
+                    })
+                    return
+
+                if final_message.stop_reason == "tool_use":
+                    tool_results = []
+
+                    for block in final_message.content:
+                        if block.type != "tool_use":
+                            continue
+
+                        tool_name = block.name
+                        tool_input = block.input
+                        tool_use_id = block.id
+
+                        yield StreamEvent("tool_call_start", {
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "arguments": tool_input,
+                        })
+
+                        # Check if this tool needs user confirmation
+                        # confirmed_tool_ids may contain tool use IDs or tool names
+                        tool_def = registry.get_tool(tool_name)
+                        if tool_def and tool_def.requires_confirmation and tool_use_id not in confirmed_tool_ids and tool_name not in confirmed_tool_ids:
+                            logger.info(f"[Stream/Anthropic] Tool '{tool_name}' requires confirmation")
+                            yield StreamEvent("tool_confirmation_required", {
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "arguments": tool_input,
+                                "description": f"The AI wants to execute '{tool_name}' which may modify external systems.",
+                            })
+                            yield StreamEvent("done", {
+                                "input_tokens": total_input_tokens,
+                                "output_tokens": total_output_tokens,
+                                "model": self.model,
+                                "stop_reason": "confirmation_required",
+                                "tool_calls": all_tool_calls,
+                            })
+                            return
+
+                        # Auto-execute safe tool
+                        logger.info(f"[Stream/Anthropic] Executing tool: {tool_name}")
+                        if tool_name.startswith("mcp_") and mcp_manager:
+                            mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                            from scanner.copilot.tools import ToolResult
+                            result = ToolResult(
+                                success=mcp_result.get("success", False),
+                                data=mcp_result.get("data"),
+                                error=mcp_result.get("error"),
+                            )
+                        else:
+                            result = await executor.execute(tool_name, tool_input)
+
+                        all_tool_calls.append({
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "result": result.to_dict(),
+                        })
+
+                        yield StreamEvent("tool_call_result", {
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "result": result.to_dict(),
+                        })
+
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": json.dumps(result.data if result.success else {"error": result.error}),
+                        })
+
+                    # Append to conversation and continue loop
+                    anthropic_messages.append({
+                        "role": "assistant",
+                        "content": final_message.content,
+                    })
+                    anthropic_messages.append({
+                        "role": "user",
+                        "content": tool_results,
+                    })
+                    continue
+
+                # Unexpected stop reason
+                logger.warning(f"[Stream/Anthropic] Unexpected stop reason: {final_message.stop_reason}")
+                yield StreamEvent("done", {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "model": self.model,
+                    "stop_reason": final_message.stop_reason or "unknown",
+                    "tool_calls": all_tool_calls,
+                })
+                return
+
+            # Max iterations reached
+            yield StreamEvent("done", {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "model": self.model,
+                "stop_reason": "max_iterations",
+                "tool_calls": all_tool_calls,
+            })
+        finally:
+            if mcp_manager:
+                await mcp_manager.shutdown()
+
+    async def _chat_openai_stream(
+        self,
+        messages: List[Message],
+        context: CopilotContext,
+        max_tool_iterations: int,
+        confirmed_tool_ids: Optional[Set[str]] = None,
+        pending_tool_call: Optional[Dict[str, Any]] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Stream chat with OpenAI GPT via SSE events."""
+        if not self.openai_client:
+            yield StreamEvent("error", {"message": "OpenAI not available. Configure OPENAI_API_KEY."})
+            return
+
+        confirmed_tool_ids = confirmed_tool_ids or set()
+
+        # Create tool executor (same setup as _chat_openai)
+        executor = ToolExecutor(context)
+
+        # Pre-fetch warehouse schema
+        if not context.warehouse_schema and context.has_warehouse():
+            try:
+                logger.info("[Stream/OpenAI] Pre-fetching warehouse schema...")
+                context.warehouse_schema = await executor.fetch_warehouse_schema()
+                if context.warehouse_schema:
+                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
+                    logger.info(f"[Stream/OpenAI] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
+            except Exception as e:
+                logger.error(f"[Stream/OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
+
+        system = self.build_system_prompt(context)
+        registry = get_tool_registry()
+        tools = registry.to_openai_tools(context.integration_types)
+
+        # Start MCP servers
+        mcp_manager = None
+        try:
+            from scanner.mcp_bridge.client import MCPClientManager
+            mcp_manager = MCPClientManager(
+                integrations=context.integrations,
+                engine_store=getattr(context, "engine_store", None),
+                lineage_graph=getattr(context, "graph", None),
+            )
+            await mcp_manager.start_servers()
+            if mcp_manager.has_servers:
+                mcp_tools = await mcp_manager.discover_tools(format="openai")
+                tools = tools + mcp_tools
+                logger.info(f"[Stream/OpenAI] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                context.mcp_enabled = True
+        except Exception as e:
+            logger.warning(f"[Stream/OpenAI] MCP init failed: {e}")
+            mcp_manager = None
+
+        try:
+            openai_messages = self._convert_messages_openai(messages, system)
+            total_input_tokens = 0
+            total_output_tokens = 0
+            all_tool_calls: List[Dict[str, Any]] = []
+            is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
+
+            # If we have a pending tool call from confirmation flow,
+            # execute it directly and inject result into messages
+            if pending_tool_call:
+                ptc_name = pending_tool_call["tool_name"]
+                ptc_args = pending_tool_call.get("arguments", {})
+                ptc_id = pending_tool_call.get("tool_use_id", f"call_confirmed_{ptc_name}")
+
+                logger.info(f"[Stream/OpenAI] Pre-executing confirmed tool: {ptc_name}")
+                yield StreamEvent("tool_call_start", {
+                    "tool_use_id": ptc_id,
+                    "tool_name": ptc_name,
+                    "arguments": ptc_args,
+                })
+
+                try:
+                    if ptc_name.startswith("mcp_") and mcp_manager:
+                        mcp_result = await mcp_manager.call_tool(ptc_name, ptc_args)
+                        result = ToolResult(
+                            success=mcp_result.get("success", False),
+                            data=mcp_result.get("data"),
+                            error=mcp_result.get("error"),
+                        )
+                    else:
+                        result = await executor.execute(ptc_name, ptc_args)
+                except Exception as e:
+                    result = ToolResult(success=False, error=str(e))
+
+                yield StreamEvent("tool_call_result", {
+                    "tool_use_id": ptc_id,
+                    "tool_name": ptc_name,
+                    "result": result.to_dict(),
+                })
+
+                all_tool_calls.append({
+                    "tool": ptc_name,
+                    "input": ptc_args,
+                    "result": result.to_dict(),
+                })
+
+                # Inject the tool call + result into OpenAI messages
+                # so the LLM sees it was already executed
+                openai_messages.append({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": ptc_id,
+                        "type": "function",
+                        "function": {
+                            "name": ptc_name,
+                            "arguments": json.dumps(ptc_args),
+                        },
+                    }],
+                })
+                openai_messages.append({
+                    "role": "tool",
+                    "tool_call_id": ptc_id,
+                    "content": json.dumps(result.to_dict()),
+                })
+
+            for iteration in range(max_tool_iterations):
+                yield StreamEvent("iteration_start", {
+                    "iteration": iteration + 1,
+                    "reason": "tool_use" if iteration > 0 else "initial",
+                })
+
+                try:
+                    api_params: Dict[str, Any] = {
+                        "model": self.model,
+                        "messages": openai_messages,
+                        "stream": True,
+                    }
+
+                    is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
+                    if is_new_model:
+                        api_params["max_completion_tokens"] = 4096
+                    else:
+                        api_params["max_tokens"] = 4096
+
+                    if tools and not is_reasoning_model:
+                        api_params["tools"] = tools
+
+                    response_stream = self.openai_client.chat.completions.create(**api_params)
+
+                    # Accumulate chunks
+                    accumulated_text = ""
+                    tool_calls_acc: Dict[int, Dict[str, Any]] = {}
+                    finish_reason = None
+
+                    for chunk in response_stream:
+                        choice = chunk.choices[0] if chunk.choices else None
+                        if not choice:
+                            continue
+
+                        delta = choice.delta
+                        finish_reason = choice.finish_reason or finish_reason
+
+                        # Stream text deltas
+                        if delta and delta.content:
+                            accumulated_text += delta.content
+                            yield StreamEvent("text_delta", {"content": delta.content})
+
+                        # Accumulate tool call deltas
+                        if delta and delta.tool_calls:
+                            for tc_delta in delta.tool_calls:
+                                idx = tc_delta.index
+                                if idx not in tool_calls_acc:
+                                    tool_calls_acc[idx] = {
+                                        "id": tc_delta.id or "",
+                                        "name": (tc_delta.function.name if tc_delta.function else "") or "",
+                                        "arguments": "",
+                                    }
+                                else:
+                                    if tc_delta.id:
+                                        tool_calls_acc[idx]["id"] = tc_delta.id
+                                    if tc_delta.function and tc_delta.function.name:
+                                        tool_calls_acc[idx]["name"] = tc_delta.function.name
+                                if tc_delta.function and tc_delta.function.arguments:
+                                    tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
+
+                        # Track usage from stream
+                        if hasattr(chunk, "usage") and chunk.usage:
+                            total_input_tokens += chunk.usage.prompt_tokens or 0
+                            total_output_tokens += chunk.usage.completion_tokens or 0
+
+                except Exception as e:
+                    logger.exception("[Stream/OpenAI] Error in streaming call")
+                    yield StreamEvent("error", {"message": f"Error communicating with AI: {str(e)}"})
+                    return
+
+                # Process finish reason
+                if finish_reason == "stop":
+                    yield StreamEvent("done", {
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "model": self.model,
+                        "stop_reason": "end_turn",
+                        "tool_calls": all_tool_calls,
+                    })
+                    return
+
+                if finish_reason == "tool_calls" and tool_calls_acc:
+                    # Build assistant message with tool calls for context
+                    assistant_tool_calls = [
+                        {
+                            "id": tc_data["id"],
+                            "type": "function",
+                            "function": {
+                                "name": tc_data["name"],
+                                "arguments": tc_data["arguments"],
+                            }
+                        }
+                        for tc_data in tool_calls_acc.values()
+                    ]
+                    openai_messages.append({
+                        "role": "assistant",
+                        "content": accumulated_text or None,
+                        "tool_calls": assistant_tool_calls,
+                    })
+
+                    # Execute each tool call
+                    for tc_data in tool_calls_acc.values():
+                        tool_name = tc_data["name"]
+                        tool_use_id = tc_data["id"]
+                        try:
+                            tool_input = json.loads(tc_data["arguments"])
+                        except json.JSONDecodeError:
+                            tool_input = {}
+
+                        yield StreamEvent("tool_call_start", {
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "arguments": tool_input,
+                        })
+
+                        # Check confirmation
+                        # confirmed_tool_ids may contain tool use IDs or tool names
+                        tool_def = registry.get_tool(tool_name)
+                        if tool_def and tool_def.requires_confirmation and tool_use_id not in confirmed_tool_ids and tool_name not in confirmed_tool_ids:
+                            logger.info(f"[Stream/OpenAI] Tool '{tool_name}' requires confirmation")
+                            yield StreamEvent("tool_confirmation_required", {
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "arguments": tool_input,
+                                "description": f"The AI wants to execute '{tool_name}' which may modify external systems.",
+                            })
+                            yield StreamEvent("done", {
+                                "input_tokens": total_input_tokens,
+                                "output_tokens": total_output_tokens,
+                                "model": self.model,
+                                "stop_reason": "confirmation_required",
+                                "tool_calls": all_tool_calls,
+                            })
+                            return
+
+                        logger.info(f"[Stream/OpenAI] Executing tool: {tool_name}")
+                        if tool_name.startswith("mcp_") and mcp_manager:
+                            mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                            from scanner.copilot.tools import ToolResult
+                            result = ToolResult(
+                                success=mcp_result.get("success", False),
+                                data=mcp_result.get("data"),
+                                error=mcp_result.get("error"),
+                            )
+                        else:
+                            result = await executor.execute(tool_name, tool_input)
+
+                        all_tool_calls.append({
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "result": result.to_dict(),
+                        })
+
+                        yield StreamEvent("tool_call_result", {
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "result": result.to_dict(),
+                        })
+
+                        openai_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_use_id,
+                            "content": json.dumps(result.data if result.success else {"error": result.error}),
+                        })
+
+                    continue
+
+                # Unexpected finish reason
+                logger.warning(f"[Stream/OpenAI] Unexpected finish reason: {finish_reason}")
+                yield StreamEvent("done", {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "model": self.model,
+                    "stop_reason": finish_reason or "unknown",
+                    "tool_calls": all_tool_calls,
+                })
+                return
+
+            # Max iterations reached
+            yield StreamEvent("done", {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "model": self.model,
+                "stop_reason": "max_iterations",
+                "tool_calls": all_tool_calls,
+            })
+        finally:
+            if mcp_manager:
+                await mcp_manager.shutdown()
+
     async def _chat_anthropic(
         self,
         messages: List[Message],

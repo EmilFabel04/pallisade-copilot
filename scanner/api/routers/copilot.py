@@ -5,6 +5,7 @@ API endpoints for the data pipeline co-pilot.
 """
 
 from fastapi import APIRouter, HTTPException, Header, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -12,7 +13,7 @@ import logging
 
 from copilot.context_builder import CopilotContextBuilder, CopilotContext
 from copilot.tools import get_tool_registry
-from copilot.llm import CopilotLLM, Message, CopilotResponse
+from copilot.llm import CopilotLLM, Message, CopilotResponse, StreamEvent
 from copilot.openlineage_consumer import OpenLineageConsumer
 from copilot.modes import get_mode_config, detect_mode, parse_slash_command, get_available_modes
 
@@ -58,6 +59,19 @@ class ChatRequest(BaseModel):
     mode: str = Field("ask", description="Interaction mode: ask, debug, plan, create, bundle, explain, suggest")
     integrations: Optional[List[IntegrationData]] = Field(None, description="User's pipeline integrations")
     lineage: Optional[LineageData] = Field(None, description="Pre-fetched lineage data from database")
+
+
+class PendingToolCall(BaseModel):
+    """A tool call that was paused for confirmation and is now approved."""
+    tool_use_id: str = Field(..., description="Original tool use ID")
+    tool_name: str = Field(..., description="Tool name to execute")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
+
+
+class ChatStreamRequest(ChatRequest):
+    """Extended request for streaming chat."""
+    confirmed_tool_ids: Optional[List[str]] = Field(None, description="Tool use IDs the user has already confirmed")
+    pending_tool_call: Optional[PendingToolCall] = Field(None, description="Tool call to execute directly (from confirmation)")
 
 
 class ChatResponse(BaseModel):
@@ -213,6 +227,121 @@ async def chat(
         
     except Exception as e:
         logger.exception("Error in chat endpoint")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatStreamRequest,
+    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+):
+    """
+    Stream a chat response via Server-Sent Events (SSE).
+
+    Returns a stream of SSE events: text_delta, tool_call_start,
+    tool_call_result, tool_confirmation_required, iteration_start, done, error.
+    """
+    try:
+        # --- Same context-building as /chat ---
+        message = request.message
+        mode = request.mode
+
+        slash_mode, remaining_message = parse_slash_command(message)
+        if slash_mode:
+            mode = slash_mode.value
+            message = remaining_message
+
+        if mode == "ask":
+            detected = detect_mode(message)
+            if detected:
+                mode = detected.value
+
+        mode_config = get_mode_config(mode)
+        logger.info(f"[Stream] Using mode: {mode} ({mode_config.display_name})")
+
+        integration_data = None
+        if request.integrations:
+            integration_data = [
+                {
+                    "id": i.id,
+                    "name": i.name,
+                    "type": i.type,
+                    "layer": i.layer,
+                    "status": i.status,
+                    "config": i.config,
+                }
+                for i in request.integrations
+            ]
+
+        engine_graph = None
+        try:
+            from api.routers.lineage import _get_engine_store
+            _store = _get_engine_store()
+            if _store and _store.graph and _store.graph.nodes:
+                engine_graph = _store.graph
+        except Exception:
+            pass
+
+        context_builder = CopilotContextBuilder()
+        context = await context_builder.build_context(
+            org_id=x_organization_id,
+            query=message,
+            pipeline_stack_id=request.pipeline_stack_id,
+            node_ids=request.node_ids,
+            referenced_entities=request.referenced_entities,
+            integrations_data=integration_data,
+            mode=mode,
+            mode_config=mode_config,
+            lineage_data=request.lineage.model_dump() if request.lineage else None,
+            engine_graph=engine_graph,
+        )
+
+        llm = CopilotLLM(model=request.model)
+
+        if request.messages and len(request.messages) > 0:
+            messages = [
+                Message(role=m.role, content=m.content)
+                for m in request.messages
+            ]
+        else:
+            messages = [Message(role="user", content=request.message)]
+
+        confirmed_ids = set(request.confirmed_tool_ids or [])
+
+        # If a pending tool call was provided (from confirmation flow),
+        # pass it so the backend can execute it directly
+        pending_tc = None
+        if request.pending_tool_call:
+            pending_tc = {
+                "tool_use_id": request.pending_tool_call.tool_use_id,
+                "tool_name": request.pending_tool_call.tool_name,
+                "arguments": request.pending_tool_call.arguments,
+            }
+
+        async def event_generator():
+            try:
+                async for event in llm.chat_stream(
+                    messages, context,
+                    confirmed_tool_ids=confirmed_ids,
+                    pending_tool_call=pending_tc,
+                ):
+                    yield event.to_sse()
+            except Exception as e:
+                logger.exception("[Stream] Error in event generator")
+                yield StreamEvent("error", {"message": str(e)}).to_sse()
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    except Exception as e:
+        logger.exception("Error in chat stream endpoint")
         raise HTTPException(status_code=500, detail=str(e))
 
 

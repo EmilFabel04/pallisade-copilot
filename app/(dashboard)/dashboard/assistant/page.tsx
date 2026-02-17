@@ -15,6 +15,8 @@ import { ChangePlanToolResult, isChangePlanTool, SharePlanModal } from '@/compon
 import type { ChangePlan } from '@/types/change-plan';
 import { MessageActionMenu, MessageActionButton, SaveArtifactModal } from '@/components/artifacts';
 import { OnboardingBanner } from '@/components/copilot';
+import { useStreamingChat } from '@/hooks/useStreamingChat';
+import { ToolConfirmation } from '@/components/copilot/ToolConfirmation';
 
 type ToolCall = {
   id?: string;
@@ -63,6 +65,9 @@ const THINKING_STEPS = [
   'Querying data sources...',
   'Formulating response...',
 ];
+
+// Braille animation frames for streaming pulse
+const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 // Max characters before collapsing user messages
 const MAX_MESSAGE_LENGTH = 200;
@@ -131,6 +136,7 @@ export default function AssistantPage() {
   const [selectedMode, setSelectedMode] = useState('ask');
   const [selectedModel, setSelectedModel] = useState('gpt-5.2');
   const [thinkingStep, setThinkingStep] = useState(0);
+  const [brailleFrame, setBrailleFrame] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
   const [loadingSources, setLoadingSources] = useState(false);
@@ -158,6 +164,15 @@ export default function AssistantPage() {
   const modelLoadedRef = useRef(false);
   const initialLoadDone = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const [confirmationLoading, setConfirmationLoading] = useState(false);
+
+  // Streaming chat hook
+  const {
+    streamingMessage,
+    clearStreamingMessage,
+    sendMessage: sendStreamingMessage,
+    abort: abortStreaming,
+  } = useStreamingChat();
 
   // Sidebar resize constants
   const minSidebarWidth = 200;
@@ -542,6 +557,13 @@ export default function AssistantPage() {
     scrollToBottom();
   }, [messages]);
 
+  // Auto-scroll during streaming
+  useEffect(() => {
+    if (streamingMessage?.isStreaming) {
+      scrollToBottom();
+    }
+  }, [streamingMessage?.content, streamingMessage?.toolCalls.length]);
+
   // Cycle through thinking steps while loading
   useEffect(() => {
     if (!isLoading) {
@@ -551,6 +573,18 @@ export default function AssistantPage() {
     const interval = setInterval(() => {
       setThinkingStep(prev => prev + 1);
     }, 2000);
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
+  // Braille animation frame cycling (fast, smooth rotation)
+  useEffect(() => {
+    if (!isLoading) {
+      setBrailleFrame(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setBrailleFrame(prev => prev + 1);
+    }, 80);
     return () => clearInterval(interval);
   }, [isLoading]);
 
@@ -585,89 +619,83 @@ export default function AssistantPage() {
     if (!customMessage) setInput('');
     setIsLoading(true);
 
-    // Create abort controller for this request
-    abortControllerRef.current = new AbortController();
-
     try {
-      // Parse @mentions for focused context
       const { nodeIds: mentionNodeIds, entities: mentionEntities } = parseMentions(messageText);
 
-      const response = await fetch('/api/copilot/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: messageText,
-          sessionId,
-          pipelineStackId: selectedPipelineId,
-          model: selectedModel,
-          mode: modeToUse,
-          ...(mentionNodeIds.length > 0 && { node_ids: mentionNodeIds }),
-          ...(mentionEntities.length > 0 && { referenced_entities: mentionEntities }),
-        }),
-        signal: abortControllerRef.current.signal,
+      const result = await sendStreamingMessage(messageText, {
+        sessionId: sessionId || undefined,
+        pipelineStackId: selectedPipelineId || undefined,
+        model: selectedModel,
+        mode: modeToUse,
+        nodeIds: mentionNodeIds.length > 0 ? mentionNodeIds : undefined,
+        referencedEntities: mentionEntities.length > 0 ? mentionEntities : undefined,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMsg = errorData.error || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-        console.error('[Assistant] API error:', errorMsg, errorData);
-        throw new Error(errorMsg);
-      }
-
-      const data = await response.json();
-
-      if (data.sessionId && data.sessionId !== sessionId) {
-        setSessionId(data.sessionId);
+      if (result.sessionId && result.sessionId !== sessionId) {
+        setSessionId(result.sessionId);
         const sessionsRes = await fetch('/api/copilot/sessions?limit=50');
         if (sessionsRes.ok) {
           const sessionsData = await sessionsRes.json();
           setSessions(sessionsData.sessions || []);
         }
       }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Request aborted by user');
+        return;
+      }
+      console.error('Chat error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-      // Map backend tool_calls format to frontend format
-      // Backend returns { success, data: {...}, error } but frontend expects { success, ...data, error }
-      const mappedToolCalls: ToolCall[] = (data.tool_calls || []).map((tc: { tool?: string; name?: string; input?: Record<string, unknown>; arguments?: Record<string, unknown>; result?: { success?: boolean; data?: Record<string, unknown>; error?: string } }) => {
-        const result = tc.result || {};
-        // Flatten the result: merge success/error with the contents of data
+  // Finalize streaming message into the messages array
+  useEffect(() => {
+    if (streamingMessage && !streamingMessage.isStreaming && (streamingMessage.content || streamingMessage.toolCalls.length > 0)) {
+      // Don't finalize if waiting for confirmation
+      if (streamingMessage.pendingConfirmation) return;
+
+      // Map streaming tool calls to frontend format
+      const mappedToolCalls: ToolCall[] = streamingMessage.toolCalls.map(tc => {
+        const result = (tc.result || {}) as Record<string, any>;
         const flattenedResult = {
           success: result.success,
           error: result.error,
           ...(result.data || {}),
         };
         return {
-          name: tc.tool || tc.name || '',
-          arguments: tc.input || tc.arguments,
+          id: tc.id,
+          name: tc.name,
+          arguments: tc.arguments,
           result: flattenedResult,
         };
       });
 
       const aiMessage: Message = {
-        id: data.messageId || (Date.now() + 1).toString(),
+        id: streamingMessage.id,
         role: 'assistant',
-        content: data.message || 'Sorry, I encountered an error.',
+        content: streamingMessage.content,
         timestamp: new Date(),
         toolCalls: mappedToolCalls,
       };
 
-      // Handle onboarding tool calls - persist to database
+      setMessages(prev => [...prev, aiMessage]);
+      clearStreamingMessage();
+
+      // Handle onboarding tool calls
       if (selectedPipelineId && mappedToolCalls.length > 0) {
         for (const tc of mappedToolCalls) {
           try {
             if (tc.name === 'complete_onboarding' && (tc.result as Record<string, unknown>)?.completed) {
-              // Mark onboarding as complete in database
-              const completeRes = await fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+              fetch(`/api/pipeline/${selectedPipelineId}/context`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'complete' }),
-              });
-              if (completeRes.ok) {
-                setOnboardingStatus('COMPLETED');
-              }
+              }).then(res => { if (res.ok) setOnboardingStatus('COMPLETED'); });
             } else if (tc.name === 'save_onboarding_context' && (tc.result as Record<string, unknown>)?.saved) {
-              // Save onboarding answer to database
               const result = tc.result as Record<string, unknown>;
-              await fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+              fetch(`/api/pipeline/${selectedPipelineId}/context`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -677,43 +705,132 @@ export default function AssistantPage() {
                   integrationTтype: result.integration_type,
                 }),
               });
-              // Set to IN_PROGRESS if not already
-              if (onboardingStatus === 'NOT_STARTED') {
-                setOnboardingStatus('IN_PROGRESS');
-              }
+              if (onboardingStatus === 'NOT_STARTED') setOnboardingStatus('IN_PROGRESS');
             }
           } catch (err) {
-            console.error(`Failed to persist ${tc.name} to database:`, err);
+            console.error(`Failed to persist ${tc.name}:`, err);
           }
         }
       }
+    }
+  }, [streamingMessage, selectedPipelineId, onboardingStatus, clearStreamingMessage]);
 
-      setMessages(prev => [...prev, aiMessage]);
-    } catch (error) {
-      // Don't show error message if request was aborted
-      if (error instanceof Error && error.name === 'AbortError') {
-        console.log('Request aborted by user');
-        return;
-      }
-      console.error('Chat error:', error);
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
+  const handleConfirmTool = async () => {
+    if (!streamingMessage?.pendingConfirmation) return;
+    setConfirmationLoading(true);
+
+    // Capture pending tool details before clearing streaming message
+    const pending = streamingMessage.pendingConfirmation;
+
+    // Finalize current streaming message (partial) into messages
+    const partialMessage: Message = {
+      id: streamingMessage.id,
+      role: 'assistant',
+      content: streamingMessage.content,
+      timestamp: new Date(),
+      toolCalls: streamingMessage.toolCalls.map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+        result: tc.result ? { success: tc.result.success, error: tc.result.error, ...(tc.result.data || {}) } : undefined,
+      })),
+    };
+    setMessages(prev => [...prev, partialMessage]);
+    clearStreamingMessage();
+
+    // Re-send with the pending tool call details so the backend
+    // can execute it directly instead of re-calling the LLM from scratch
+    try {
+      await sendStreamingMessage(
+        `[SYSTEM] User confirmed execution of tool ${pending.toolName}. Execute it now.`,
+        {
+          sessionId: sessionId || undefined,
+          pipelineStackId: selectedPipelineId || undefined,
+          model: selectedModel,
+          mode: selectedMode,
+          confirmedToolIds: [pending.toolName],
+          pendingToolCall: {
+            toolUseId: pending.toolUseId,
+            toolName: pending.toolName,
+            arguments: pending.arguments,
+          },
+        },
+      );
+    } catch (err) {
+      console.error('Confirm tool error:', err);
     } finally {
+      setConfirmationLoading(false);
       setIsLoading(false);
-      abortControllerRef.current = null;
     }
   };
 
-  const handleStop = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+  const handleDenyTool = async () => {
+    if (!streamingMessage?.pendingConfirmation) return;
+    const toolName = streamingMessage.pendingConfirmation.toolName;
+
+    // Finalize partial message
+    const partialMessage: Message = {
+      id: streamingMessage.id,
+      role: 'assistant',
+      content: streamingMessage.content,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, partialMessage]);
+    clearStreamingMessage();
+
+    // Send denial as new user message
+    handleSubmit(
+      { preventDefault: () => {} } as React.FormEvent,
+      `I declined to execute ${toolName}. Please explain what would have happened and suggest alternatives.`,
+    );
+  };
+
+  // Direct "Create PR" — execute apply_change_plan without going through the LLM
+  const handleApplyPlan = async (planId: string) => {
+    if (isLoading) return;
+    setIsLoading(true);
+
+    try {
+      await sendStreamingMessage(
+        `[SYSTEM] User clicked "Create PR" for plan ${planId}. Executing apply_change_plan directly.`,
+        {
+          sessionId: sessionId || undefined,
+          pipelineStackId: selectedPipelineId || undefined,
+          model: selectedModel,
+          mode: selectedMode,
+          confirmedToolIds: ['apply_change_plan'],
+          pendingToolCall: {
+            toolUseId: `direct_apply_${Date.now()}`,
+            toolName: 'apply_change_plan',
+            arguments: { plan_id: planId },
+          },
+        },
+      );
+    } catch (err) {
+      console.error('Apply plan error:', err);
+    } finally {
       setIsLoading(false);
     }
+  };
+
+  // Auto-open PR URL when apply_change_plan completes
+  useEffect(() => {
+    if (!streamingMessage || streamingMessage.isStreaming) return;
+
+    for (const tc of streamingMessage.toolCalls) {
+      if (tc.name === 'apply_change_plan' && tc.result && !tc.isExecuting) {
+        const prUrl = tc.result.data?.pr_url || (tc.result as any)?.pr_url;
+        if (prUrl) {
+          window.open(prUrl, '_blank', 'noopener,noreferrer');
+          break;
+        }
+      }
+    }
+  }, [streamingMessage?.isStreaming, streamingMessage?.toolCalls]);
+
+  const handleStop = () => {
+    abortStreaming();
+    setIsLoading(false);
   };
 
   // @mention helpers
@@ -1040,11 +1157,11 @@ export default function AssistantPage() {
                     )}>
                       {message.role === 'assistant' ? (
                         <div className="relative group min-w-0">
-                          <div className="px-3 py-2 bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm">
+                          <div className="px-1 py-1">
                             <MessageContent content={message.content} />
                           </div>
                           {/* Three-dot menu button */}
-                          <div className="absolute top-1 right-1">
+                          <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity">
                             <MessageActionButton
                               onClick={() => setActiveMenuId(activeMenuId === message.id ? null : message.id)}
                             />
@@ -1114,12 +1231,7 @@ export default function AssistantPage() {
                                     `Validate change plan ${planId} at ${level} level`
                                   );
                                 }}
-                                onApply={(planId) => {
-                                  handleSubmit(
-                                    { preventDefault: () => {} } as React.FormEvent,
-                                    `Apply change plan ${planId} to create a GitHub PR`
-                                  );
-                                }}
+                                onApply={(planId) => handleApplyPlan(planId)}
                                 onShare={(planId, targetType) => {
                                   // Extract plan from tool result
                                   const result = toolCall.result as any;
@@ -1148,20 +1260,112 @@ export default function AssistantPage() {
                   </div>
                 ))}
 
-                {isLoading && (
+                {/* Streaming message display */}
+                {streamingMessage && (
+                  <div className="flex gap-2">
+                    <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
+                      <AvatarImage src="/pallisade_scout.svg" alt="AI" />
+                      <AvatarFallback className="text-[10px]">AI</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <div className="px-1 py-1">
+                        {streamingMessage.content ? (
+                          <div>
+                            <MessageContent content={streamingMessage.content} />
+                            {streamingMessage.isStreaming && (
+                              <span className="inline-block w-1.5 h-4 bg-violet-400 animate-pulse ml-0.5 align-text-bottom" />
+                            )}
+                          </div>
+                        ) : streamingMessage.isStreaming ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-violet-400 text-sm font-mono">
+                              {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
+                            </span>
+                            <span className="text-[12px] text-[var(--muted)]">
+                              {THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Tool calls in progress */}
+                      {streamingMessage.toolCalls.length > 0 && (
+                        <div className="mt-2 space-y-1.5">
+                          {streamingMessage.toolCalls.map((tc) => {
+                            // For completed change plan tools, show the full card
+                            if (isChangePlanTool(tc.name) && tc.result && !tc.isExecuting) {
+                              const flatResult = {
+                                success: tc.result.success,
+                                error: tc.result.error,
+                                ...(tc.result.data || {}),
+                              };
+                              return (
+                                <ChangePlanToolResult
+                                  key={tc.id}
+                                  toolName={tc.name}
+                                  result={flatResult as any}
+                                  onValidate={(planId, level) => {
+                                    handleSubmit(
+                                      { preventDefault: () => {} } as React.FormEvent,
+                                      `Validate change plan ${planId} at ${level} level`
+                                    );
+                                  }}
+                                  onApply={(planId) => handleApplyPlan(planId)}
+                                />
+                              );
+                            }
+                            return (
+                              <div
+                                key={tc.id}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.02] border border-white/[0.05] rounded-lg text-[11px]"
+                              >
+                                {tc.isExecuting ? (
+                                  <div className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                                ) : tc.result?.success ? (
+                                  <svg className="w-3 h-3 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                ) : tc.result?.error ? (
+                                  <svg className="w-3 h-3 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                ) : null}
+                                <span className="text-white/60 truncate">
+                                  {tc.name}
+                                  {tc.isExecuting && <span className="text-white/30 ml-1">running...</span>}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Tool confirmation UI */}
+                      {streamingMessage.pendingConfirmation && (
+                        <ToolConfirmation
+                          confirmation={streamingMessage.pendingConfirmation}
+                          onConfirm={handleConfirmTool}
+                          onDeny={handleDenyTool}
+                          isLoading={confirmationLoading}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Fallback: show old spinner if loading but no streaming message yet */}
+                {isLoading && !streamingMessage && (
                   <div className="flex gap-2">
                     <Avatar className="w-6 h-6 flex-shrink-0">
                       <AvatarImage src="/pallisade_scout.svg" alt="AI" />
                       <AvatarFallback className="text-[10px]">AI</AvatarFallback>
                     </Avatar>
-                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm px-3 py-2.5">
+                    <div className="px-1 py-1">
                       <div className="flex items-center gap-2">
-                        <div className="flex gap-1">
-                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" style={{ animationDelay: '0.4s' }} />
-                        </div>
-                        <span className="text-[12px] text-[var(--muted)] animate-pulse">
+                        <span className="text-violet-400 text-sm font-mono">
+                          {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
+                        </span>
+                        <span className="text-[12px] text-[var(--muted)]">
                           {THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
                         </span>
                       </div>
