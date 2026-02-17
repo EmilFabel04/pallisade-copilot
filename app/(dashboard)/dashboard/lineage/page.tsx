@@ -263,13 +263,6 @@ export default function LineagePage() {
     return lineageData.nodes.filter((node) => nodePassesFilter(node, filters));
   }, [lineageData?.nodes, filters]);
 
-  // Filter edges to only include those between visible nodes
-  const filteredEdges = useMemo(() => {
-    if (!lineageData?.edges) return [];
-    const nodeIds = new Set(filteredNodes.map((n) => n.id));
-    return lineageData.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
-  }, [filteredNodes, lineageData?.edges]);
-
   // Build filtered stats
   const filteredStats = useMemo(() => {
     return {
@@ -331,9 +324,21 @@ export default function LineagePage() {
       },
     }));
 
-    // Filter and convert edges (apply node membership + engine-level filters)
+    // Only render edges matching the active plane in the graph.
+    // All edges (including other planes) remain in lineageData for the detail panel.
+    const isDisplayPlane = (e: UnifiedLineageEdge): boolean => {
+      if (activeTab === 'orchestration') {
+        // Orchestration graph: control + cross edges only
+        return e.plane === 'control' || e.plane === 'cross';
+      }
+      // Data graph: everything except pure control-plane edges
+      // (pipeline/synthetic edges have no plane field — always show them)
+      return e.plane !== 'control';
+    };
+
+    // Filter and convert edges (apply node membership + plane + engine-level filters)
     const edges: Edge[] = (lineageData?.edges || [])
-      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target) && edgePassesFilter(e, filters))
+      .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target) && isDisplayPlane(e) && edgePassesFilter(e, filters))
       .map((edge) => {
         const sourceNode = nodeMap.get(edge.source);
         const style = getEdgeStyle(edge, sourceNode);
@@ -978,9 +983,10 @@ export default function LineagePage() {
                   );
                 })()}
 
-                {/* Cross-linked data assets */}
+                {/* Cross-linked data assets with data-plane lineage context */}
                 {(() => {
-                  const crossEdges = (lineageData?.edges || []).filter(
+                  const allEdges = lineageData?.edges || [];
+                  const crossEdges = allEdges.filter(
                     e => e.plane === 'cross' && (e.source === selectedNode.id || e.target === selectedNode.id)
                   );
                   if (crossEdges.length === 0) return null;
@@ -988,21 +994,70 @@ export default function LineagePage() {
                   return (
                     <div>
                       <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Assets ({crossEdges.length})</label>
-                      <div className="mt-2 space-y-1.5">
+                      <div className="mt-2 space-y-2">
                         {crossEdges.map(edge => {
                           const linkedId = edge.source === selectedNode.id ? edge.target : edge.source;
                           const linked = nodeMap.get(linkedId);
                           if (!linked) return null;
+
+                          // Find data-plane neighbors of this linked table
+                          const dataUpstream = allEdges
+                            .filter(e => e.plane === 'data' && e.target === linkedId)
+                            .map(e => nodeMap.get(e.source))
+                            .filter((n): n is UnifiedLineageNode => !!n);
+                          const dataDownstream = allEdges
+                            .filter(e => e.plane === 'data' && e.source === linkedId)
+                            .map(e => nodeMap.get(e.target))
+                            .filter((n): n is UnifiedLineageNode => !!n);
+
                           return (
-                            <button
-                              key={edge.id}
-                              onClick={() => handleNavigateToNode(linkedId)}
-                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
-                            >
-                              <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS[linked.category]?.color || '#6366F1' }} />
-                              <span className="text-[12px] text-white font-mono truncate flex-1">{linked.name}</span>
-                              <span className="text-[10px] text-white/30 capitalize">{edge.edgeType.replace(/_/g, ' ')}</span>
-                            </button>
+                            <div key={edge.id} className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+                              <button
+                                onClick={() => handleNavigateToNode(linkedId)}
+                                className="w-full flex items-center gap-2 text-left"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS[linked.category]?.color || '#6366F1' }} />
+                                <span className="text-[12px] text-white font-mono truncate flex-1">{linked.name}</span>
+                                <span className="text-[10px] text-white/30 capitalize">{edge.edgeType.replace(/_/g, ' ')}</span>
+                              </button>
+                              {/* Data-plane lineage for this asset */}
+                              {(dataUpstream.length > 0 || dataDownstream.length > 0) && (
+                                <div className="mt-1.5 pt-1.5 border-t border-white/[0.04] space-y-1">
+                                  {dataUpstream.length > 0 && (
+                                    <div className="flex items-start gap-1.5">
+                                      <span className="text-[10px] text-white/30 shrink-0 mt-0.5">from</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {dataUpstream.map(n => (
+                                          <button
+                                            key={n.id}
+                                            onClick={() => handleNavigateToNode(n.id)}
+                                            className="px-1.5 py-0.5 text-[10px] text-blue-300/70 bg-blue-500/10 rounded hover:bg-blue-500/20 transition-colors font-mono truncate max-w-[120px]"
+                                          >
+                                            {n.name}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {dataDownstream.length > 0 && (
+                                    <div className="flex items-start gap-1.5">
+                                      <span className="text-[10px] text-white/30 shrink-0 mt-0.5">to</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {dataDownstream.map(n => (
+                                          <button
+                                            key={n.id}
+                                            onClick={() => handleNavigateToNode(n.id)}
+                                            className="px-1.5 py-0.5 text-[10px] text-emerald-300/70 bg-emerald-500/10 rounded hover:bg-emerald-500/20 transition-colors font-mono truncate max-w-[120px]"
+                                          >
+                                            {n.name}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           );
                         })}
                       </div>
@@ -1116,8 +1171,8 @@ export default function LineagePage() {
             <DataAssetDetailPanel
               key={selectedNode.id}
               node={selectedNode}
-              allNodes={filteredNodes}
-              allEdges={filteredEdges}
+              allNodes={lineageData?.nodes || []}
+              allEdges={lineageData?.edges || []}
               stackId={stackId || ''}
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}

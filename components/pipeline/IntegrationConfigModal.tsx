@@ -200,10 +200,10 @@ export function IntegrationConfigModal({
         onClick={onClose}
       />
 
-      {/* Modal */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Drawer */}
+      <div className="fixed inset-0 z-50 flex items-stretch justify-end">
         <div
-          className="w-full max-w-lg bg-[#13131a] border border-[rgba(255,255,255,0.1)] rounded-2xl shadow-2xl overflow-hidden"
+          className="h-full w-full max-w-xl bg-[#13131a] border-l border-[rgba(255,255,255,0.1)] shadow-2xl overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}

@@ -342,11 +342,11 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div 
-        className="w-full max-w-lg bg-[#0A0A0F] rounded-2xl border border-[rgba(255,255,255,0.08)] shadow-2xl overflow-hidden"
+        className="h-full w-full max-w-xl bg-[#0A0A0F] border-l border-[rgba(255,255,255,0.08)] shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

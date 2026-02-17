@@ -2,7 +2,7 @@
 
 /**
  * Pipeline Canvas
- * 
+ *
  * Interactive n8n-style canvas for building data pipelines
  * Features: Auto-layout, keyboard shortcuts, templates
  */
@@ -15,6 +15,7 @@ import ReactFlow, {
   Background,
   BackgroundVariant,
   Connection,
+  ConnectionLineType,
   Handle,
   Position,
   MarkerType,
@@ -36,6 +37,7 @@ interface PipelineCanvasProps {
   onNodesChange: (nodes: PipelineNode[]) => void;
   onEdgesChange: (edges: PipelineEdge[]) => void;
   onSave?: () => void;
+  readOnly?: boolean;
 }
 
 // Layer positions for auto-layout
@@ -45,6 +47,7 @@ const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
   ORCHESTRATION: 250,
   TRANSFORMATION: 400,
   WAREHOUSE: 700,
+  STORAGE: 850,
   REPORTING: 1000,
 };
 
@@ -53,15 +56,15 @@ function calculateAutoLayout(nodes: PipelineNode[]): PipelineNode[] {
   const layerCounts: Record<string, number> = {};
   const baseY = 80;
   const spacing = 180;
-  
+
   return nodes.map(node => {
     const layer = node.layer;
     const xPos = LAYER_X_POSITIONS[layer] || 400;
     const count = layerCounts[layer] || 0;
     const yPos = baseY + (count * spacing);
-    
+
     layerCounts[layer] = count + 1;
-    
+
     return {
       ...node,
       positionX: xPos,
@@ -73,7 +76,8 @@ function calculateAutoLayout(nodes: PipelineNode[]): PipelineNode[] {
 // Custom node component with proper React Flow Handles
 function CustomNode({ data }: { data: any }) {
   const layerColor = LAYER_COLORS[data.layer as keyof typeof LAYER_COLORS] || '#6366f1';
-  
+  const readOnly = !!data.readOnly;
+
   return (
     <div
       style={{
@@ -138,7 +142,7 @@ function CustomNode({ data }: { data: any }) {
           </div>
         </div>
       </div>
-      
+
       {/* Body */}
       <div style={{ padding: '12px 16px' }}>
         {!data.config ? (
@@ -153,7 +157,7 @@ function CustomNode({ data }: { data: any }) {
               gap: '8px',
             }}
           >
-            <span style={{ color: '#f59e0b', fontSize: '12px' }}>⚠ Click to configure</span>
+            <span style={{ color: '#f59e0b', fontSize: '12px' }}>{readOnly ? '⚠ Not configured' : '⚠ Click to configure'}</span>
           </div>
         ) : (
           <div
@@ -170,44 +174,45 @@ function CustomNode({ data }: { data: any }) {
             <span style={{ color: '#10b981', fontSize: '12px' }}>✓ Connected</span>
           </div>
         )}
-        
-        {/* Buttons */}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              data.onConfigure?.();
-            }}
-            style={{
-              flex: 1,
-              padding: '8px 12px',
-              borderRadius: '8px',
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: 'white',
-              fontSize: '12px',
-              cursor: 'pointer',
-            }}
-          >
-            Configure
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              data.onDelete?.();
-            }}
-            style={{
-              padding: '8px',
-              borderRadius: '8px',
-              background: 'rgba(255,255,255,0.05)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: '#888',
-              cursor: 'pointer',
-            }}
-          >
-            🗑
-          </button>
-        </div>
+
+        {!readOnly && (
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                data.onConfigure?.();
+              }}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: '8px',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                color: 'white',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+            >
+              Configure
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                data.onDelete?.();
+              }}
+              style={{
+                padding: '8px',
+                borderRadius: '8px',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                color: '#888',
+                cursor: 'pointer',
+              }}
+            >
+              🗑
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Output Handle - Right side (except for Reporting) */}
@@ -253,6 +258,7 @@ function PipelineCanvasInner({
   onEdgesChange,
   onSave,
   stackId,
+  readOnly = false,
 }: PipelineCanvasProps) {
   const [configNode, setConfigNode] = useState<PipelineNode | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -268,12 +274,14 @@ function PipelineCanvasInner({
         ...node,
         onConfigure: () => setConfigNode(node),
         onDelete: () => {
+          if (readOnly) return;
           onNodesChange(nodes.filter(n => n.id !== node.id));
           onEdgesChange(edges.filter(e => e.sourceId !== node.id && e.targetId !== node.id));
         },
+        readOnly,
       },
     }));
-  }, [nodes, edges, onNodesChange, onEdgesChange]);
+  }, [nodes, edges, onNodesChange, onEdgesChange, readOnly]);
 
   // Convert pipeline edges to ReactFlow format
   const initialEdges: Edge[] = useMemo(() => {
@@ -299,13 +307,15 @@ function PipelineCanvasInner({
         ...node,
         onConfigure: () => setConfigNode(node),
         onDelete: () => {
+          if (readOnly) return;
           onNodesChange(nodes.filter(n => n.id !== node.id));
           onEdgesChange(edges.filter(e => e.sourceId !== node.id && e.targetId !== node.id));
         },
+        readOnly,
       },
     }));
     setFlowNodes(newNodes);
-  }, [nodes]);
+  }, [nodes, onNodesChange, onEdgesChange, edges, readOnly]);
 
   // Sync external edges to internal state
   useEffect(() => {
@@ -322,25 +332,25 @@ function PipelineCanvasInner({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Delete selected node
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId && !configNode) {
+      if (!readOnly && (e.key === 'Delete' || e.key === 'Backspace') && selectedNodeId && !configNode) {
         e.preventDefault();
         onNodesChange(nodes.filter(n => n.id !== selectedNodeId));
         onEdgesChange(edges.filter(e => e.sourceId !== selectedNodeId && e.targetId !== selectedNodeId));
         setSelectedNodeId(null);
       }
-      
+
       // Cmd/Ctrl + S to save
-      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      if (!readOnly && (e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
         onSave?.();
       }
-      
+
       // Cmd/Ctrl + L for auto-layout
-      if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
+      if (!readOnly && (e.metaKey || e.ctrlKey) && e.key === 'l') {
         e.preventDefault();
         handleAutoLayout();
       }
-      
+
       // Escape to deselect/close modal
       if (e.key === 'Escape') {
         if (configNode) {
@@ -353,13 +363,13 @@ function PipelineCanvasInner({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeId, configNode, nodes, edges, onNodesChange, onEdgesChange, onSave]);
+  }, [selectedNodeId, configNode, nodes, edges, onNodesChange, onEdgesChange, onSave, readOnly]);
 
   // Auto-layout handler
   const handleAutoLayout = useCallback(() => {
     const layoutedNodes = calculateAutoLayout(nodes);
     onNodesChange(layoutedNodes);
-    
+
     // Fit view after layout
     setTimeout(() => {
       reactFlowInstance.fitView({ padding: 0.2, duration: 300 });
@@ -383,6 +393,7 @@ function PipelineCanvasInner({
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
+        if (readOnly) return;
         // Check if connection already exists
         const exists = edges.some(
           e => e.sourceId === connection.source && e.targetId === connection.target
@@ -397,7 +408,7 @@ function PipelineCanvasInner({
         }
       }
     },
-    [edges, onEdgesChange]
+    [edges, onEdgesChange, readOnly]
   );
 
   // Handle config save
@@ -424,10 +435,10 @@ function PipelineCanvasInner({
         edges={flowEdges}
         onNodesChange={onFlowNodesChange}
         onEdgesChange={onFlowEdgesChange}
-        onNodeDragStop={handleNodeDragStop}
+        onNodeDragStop={readOnly ? undefined : handleNodeDragStop}
         onNodeClick={(_, node) => setSelectedNodeId(node.id)}
         onPaneClick={() => setSelectedNodeId(null)}
-        onConnect={handleConnect}
+        onConnect={readOnly ? undefined : handleConnect}
         nodeTypes={nodeTypes}
         defaultEdgeOptions={defaultEdgeOptions}
         fitView
@@ -436,8 +447,11 @@ function PipelineCanvasInner({
         proOptions={{ hideAttribution: true }}
         minZoom={0.3}
         maxZoom={2}
+        nodesDraggable={!readOnly}
+        nodesConnectable={!readOnly}
+        elementsSelectable
         connectionLineStyle={{ stroke: '#6366f1', strokeWidth: 2 }}
-        connectionLineType="smoothstep"
+        connectionLineType={ConnectionLineType.SmoothStep}
         style={{ background: '#0a0a0f' }}
       >
         <Background
@@ -447,40 +461,46 @@ function PipelineCanvasInner({
           color="rgba(255,255,255,0.15)"
         />
         <Controls className="!bg-[#141419] !border-[rgba(255,255,255,0.1)] !rounded-xl" />
-        
+
         {/* Canvas Actions Panel */}
         <Panel position="top-right">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleAutoLayout}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#141419]/90 backdrop-blur-md border border-[rgba(255,255,255,0.1)] text-white/80 hover:bg-[rgba(255,255,255,0.1)] transition-colors text-xs"
-              title="Auto-layout (Cmd+L)"
-            >
-              <LayoutGrid className="w-4 h-4" />
-              Auto-Layout
-            </button>
-            
-            {selectedNodeId && (
+          {readOnly ? (
+            <div className="px-3 py-2 rounded-lg bg-[#141419]/90 backdrop-blur-md border border-[rgba(255,255,255,0.1)] text-white/70 text-xs">
+              Auto-generated from connected integrations
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
               <button
-                onClick={() => {
-                  onNodesChange(nodes.filter(n => n.id !== selectedNodeId));
-                  onEdgesChange(edges.filter(e => e.sourceId !== selectedNodeId && e.targetId !== selectedNodeId));
-                  setSelectedNodeId(null);
-                }}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 backdrop-blur-md border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-xs"
-                title="Delete selected (Del)"
+                onClick={handleAutoLayout}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#141419]/90 backdrop-blur-md border border-[rgba(255,255,255,0.1)] text-white/80 hover:bg-[rgba(255,255,255,0.1)] transition-colors text-xs"
+                title="Auto-layout (Cmd+L)"
               >
-                <Trash2 className="w-4 h-4" />
-                Delete
+                <LayoutGrid className="w-4 h-4" />
+                Auto-Layout
               </button>
-            )}
-          </div>
+
+              {selectedNodeId && (
+                <button
+                  onClick={() => {
+                    onNodesChange(nodes.filter(n => n.id !== selectedNodeId));
+                    onEdgesChange(edges.filter(e => e.sourceId !== selectedNodeId && e.targetId !== selectedNodeId));
+                    setSelectedNodeId(null);
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 backdrop-blur-md border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-xs"
+                  title="Delete selected (Del)"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              )}
+            </div>
+          )}
         </Panel>
-        
+
         {/* Layer Headers */}
         <Panel position="top-center">
           <div className="flex items-center gap-4 px-5 py-2.5 rounded-full bg-[#141419]/90 backdrop-blur-md border border-[rgba(255,255,255,0.1)]">
-            {(['INGESTION', 'VERSION_CONTROL', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'] as const).map((layer, i) => (
+            {(['INGESTION', 'VERSION_CONTROL', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING'] as const).map((layer, i, arr) => (
               <div key={layer} className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS[layer] }} />
                 <span className="text-xs font-medium text-white/80">
@@ -488,24 +508,26 @@ function PipelineCanvasInner({
                    layer === 'VERSION_CONTROL' ? 'VCS' :
                    layer.charAt(0) + layer.slice(1).toLowerCase()}
                 </span>
-                {i < 4 && <span className="text-white/30 ml-1">→</span>}
+                {i < arr.length - 1 && <span className="text-white/30 ml-1">→</span>}
               </div>
             ))}
           </div>
         </Panel>
 
         {/* Connection Instructions & Keyboard Shortcuts */}
-        <Panel position="bottom-center">
-          <div className="px-4 py-2 rounded-lg bg-[#141419]/80 border border-[rgba(255,255,255,0.08)] text-xs text-white/60">
-            <span className="text-white/40">Drag handles to connect</span>
-            <span className="mx-2 text-white/20">|</span>
-            <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-[10px]">⌘S</kbd> Save
-            <span className="mx-1.5 text-white/20">·</span>
-            <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-[10px]">⌘L</kbd> Layout
-            <span className="mx-1.5 text-white/20">·</span>
-            <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-[10px]">Del</kbd> Delete
-          </div>
-        </Panel>
+        {!readOnly && (
+          <Panel position="bottom-center">
+            <div className="px-4 py-2 rounded-lg bg-[#141419]/80 border border-[rgba(255,255,255,0.08)] text-xs text-white/60">
+              <span className="text-white/40">Drag handles to connect</span>
+              <span className="mx-2 text-white/20">|</span>
+              <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-[10px]">⌘S</kbd> Save
+              <span className="mx-1.5 text-white/20">·</span>
+              <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-[10px]">⌘L</kbd> Layout
+              <span className="mx-1.5 text-white/20">·</span>
+              <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-[10px]">Del</kbd> Delete
+            </div>
+          </Panel>
+        )}
       </ReactFlow>
 
       {/* Empty State */}
@@ -515,14 +537,14 @@ function PipelineCanvasInner({
             <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-indigo-500/20 flex items-center justify-center border border-indigo-500/30">
               <LayoutGrid className="w-8 h-8 text-indigo-400" />
             </div>
-            <h3 className="text-lg font-semibold text-white mb-2">Build Your Pipeline</h3>
-            <p className="text-sm text-gray-400">Click tools from the sidebar to add them</p>
+            <h3 className="text-lg font-semibold text-white mb-2">{readOnly ? 'No connected tools yet' : 'Build Your Pipeline'}</h3>
+            <p className="text-sm text-gray-400">{readOnly ? 'Connect tools to auto-generate the map' : 'Click tools from the sidebar to add them'}</p>
           </div>
         </div>
       )}
 
       {/* Config Modal */}
-      {configNode && (
+      {!readOnly && configNode && (
         <NodeConfigModal
           node={configNode}
           stackId={stackId}
