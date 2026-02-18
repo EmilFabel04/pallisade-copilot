@@ -24,6 +24,7 @@ interface ChangePlanToolResultProps {
   onShare?: (planId: string, target: ShareTargetType) => void;
   onSaveToArtifacts?: (content: string) => void;
   associatedPlan?: ChangePlan;
+  isApplying?: boolean;
 }
 
 const CHANGE_PLAN_TOOLS = [
@@ -38,7 +39,7 @@ export function isChangePlanTool(toolName: string): boolean {
   return CHANGE_PLAN_TOOLS.includes(toolName);
 }
 
-export function ChangePlanToolResult({ toolName, result, onValidate, onApply, onShare, onSaveToArtifacts, associatedPlan }: ChangePlanToolResultProps) {
+export function ChangePlanToolResult({ toolName, result, onValidate, onApply, onShare, onSaveToArtifacts, associatedPlan, isApplying }: ChangePlanToolResultProps) {
   // Guard against undefined/null result (can happen with streaming tool calls)
   if (!result) {
     return (
@@ -119,6 +120,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
             onValidate={onValidate}
             onApply={onApply}
             onShare={onShare}
+            isApplying={isApplying}
           />
         );
       }
@@ -245,6 +247,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
             onValidate={onValidate}
             onApply={onApply}
             onShare={onShare}
+            isApplying={isApplying}
           />
         );
       }

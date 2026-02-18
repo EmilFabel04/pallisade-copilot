@@ -40,8 +40,14 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
     ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(i.type)
   );
 
+  const isAnomalyNoColumn = ['ANOMALY', 'anomaly'].includes(monitorType)
+    && (!config.metric || config.metric === 'row_count' || config.column === '*');
+  const needsColumn = ['ANOMALY', 'anomaly', 'NULL_RATE', 'UNIQUENESS'].includes(monitorType)
+    && !isAnomalyNoColumn;
   const canProceedStep1 = name.trim() && (
-    taskMode === 'prompt' ? prompt.trim() : (monitorType && targetFqn.trim())
+    taskMode === 'prompt'
+      ? prompt.trim()
+      : (monitorType && targetFqn.trim() && (!needsColumn || config.column?.trim()))
   );
   const canProceedStep2 = schedule.trim();
 

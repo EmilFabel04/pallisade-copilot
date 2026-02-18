@@ -43,6 +43,7 @@ class AnomalyMonitor(BaseMonitor):
 
     monitor_type = "anomaly"
 
+    # Metrics that require a column
     METRIC_SQL = {
         "null_rate": (
             "CAST(SUM(CASE WHEN {col} IS NULL THEN 1 ELSE 0 END) AS FLOAT) "
@@ -63,10 +64,18 @@ class AnomalyMonitor(BaseMonitor):
         ),
     }
 
+    # Table-level metrics (no column required)
+    TABLE_METRIC_SQL = {
+        "row_count": "COUNT(*)",
+    }
+
     def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
         self.column: str = self.config.get("column", "")
-        self.metric: str = self.config.get("metric", "avg")
+        # Default to row_count (table-level) when no column is specified,
+        # avg (column-level) when a column is provided.
+        default_metric = "row_count" if not self.column else "avg"
+        self.metric: str = self.config.get("metric", default_metric)
         self.anomaly_threshold: float = float(
             self.config.get("anomaly_threshold", 3.0)
         )
@@ -84,10 +93,12 @@ class AnomalyMonitor(BaseMonitor):
         table: str,
         dialect: str = "postgres",
     ) -> str:
-        if not self.column:
+        is_table_metric = self.metric in self.TABLE_METRIC_SQL
+        if not self.column and not is_table_metric:
             raise ValueError(
-                "AnomalyMonitor requires a 'column' in its config. "
-                "Example: config={'column': 'revenue', 'metric': 'null_rate'}"
+                "AnomalyMonitor requires a 'column' in its config for column-level metrics. "
+                "Example: config={'column': 'revenue', 'metric': 'null_rate'}. "
+                "For table-level metrics (row_count), column is not required."
             )
         fqn = self._fqn(database, schema, table)
         metric_expr = self._metric_expression(dialect)
@@ -212,7 +223,7 @@ class AnomalyMonitor(BaseMonitor):
         # Not enough data for Z-score — report the current value as a
         # baseline observation instead of skipping entirely.
         current_value = self._extract_current_value(query_results)
-        label = f"{self.column}.{self.metric}"
+        label = f"{self.column}.{self.metric}" if self.column else self.metric
         n = len(query_results)
 
         has_ts = bool(self.timestamp_column)
@@ -309,7 +320,7 @@ class AnomalyMonitor(BaseMonitor):
             z_score = (current - mean) / stddev
             is_anomaly = abs(z_score) > self.anomaly_threshold
 
-        label = f"{self.column}.{self.metric}"
+        label = f"{self.column}.{self.metric}" if self.column else self.metric
         baseline_count = len(baseline)
         confidence_pct = self._baseline_confidence(baseline_count)
 
@@ -375,6 +386,12 @@ class AnomalyMonitor(BaseMonitor):
         )
 
     def _metric_expression(self, dialect: str = "postgres") -> str:
+        # Table-level metrics (no column needed)
+        table_template = self.TABLE_METRIC_SQL.get(self.metric)
+        if table_template:
+            return table_template
+
+        # Column-level metrics
         template = self.METRIC_SQL.get(self.metric)
         if not template:
             # Fall back to a raw column select.

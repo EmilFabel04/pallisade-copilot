@@ -722,6 +722,40 @@ export default function AssistantPage() {
     // Capture pending tool details before clearing streaming message
     const pending = streamingMessage.pendingConfirmation;
 
+    // For apply_change_plan, use the direct endpoint (no LLM round-trip)
+    if (pending.toolName === 'apply_change_plan') {
+      const planId = pending.arguments?.plan_id as string;
+      if (planId) {
+        // Finalize partial message WITHOUT the pending apply_change_plan tool call
+        // (it would render as a stuck "Executing..." spinner otherwise)
+        const partialMessage: Message = {
+          id: streamingMessage.id,
+          role: 'assistant',
+          content: streamingMessage.content,
+          timestamp: new Date(),
+          toolCalls: streamingMessage.toolCalls
+            .filter(tc => tc.name !== 'apply_change_plan' || tc.result != null)
+            .map(tc => ({
+              id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments,
+              result: tc.result ? { success: tc.result.success, error: tc.result.error, ...(tc.result.data || {}) } : undefined,
+            })),
+        };
+        setMessages(prev => [...prev, partialMessage]);
+        clearStreamingMessage();
+        setConfirmationLoading(false);
+        setIsLoading(false);
+        // Pass repo args from the LLM's original tool call if available
+        await handleApplyPlan(planId, {
+          repoOwner: pending.arguments?.repo_owner as string | undefined,
+          repoName: pending.arguments?.repo_name as string | undefined,
+          baseBranch: pending.arguments?.base_branch as string | undefined,
+        });
+        return;
+      }
+    }
+
     // Finalize current streaming message (partial) into messages
     const partialMessage: Message = {
       id: streamingMessage.id,
@@ -738,8 +772,7 @@ export default function AssistantPage() {
     setMessages(prev => [...prev, partialMessage]);
     clearStreamingMessage();
 
-    // Re-send with the pending tool call details so the backend
-    // can execute it directly instead of re-calling the LLM from scratch
+    // For all other tools, re-send with the pending tool call details
     try {
       await sendStreamingMessage(
         `[SYSTEM] User confirmed execution of tool ${pending.toolName}. Execute it now.`,
@@ -785,48 +818,65 @@ export default function AssistantPage() {
     );
   };
 
-  // Direct "Create PR" — execute apply_change_plan without going through the LLM
-  const handleApplyPlan = async (planId: string) => {
-    if (isLoading) return;
-    setIsLoading(true);
+  // "Create PR" — direct call, no LLM round-trip
+  const [applyingPlanId, setApplyingPlanId] = useState<string | null>(null);
+
+  const handleApplyPlan = async (
+    planId: string,
+    repoArgs?: { repoOwner?: string; repoName?: string; baseBranch?: string },
+  ) => {
+    if (applyingPlanId) return;
+    setApplyingPlanId(planId);
 
     try {
-      await sendStreamingMessage(
-        `[SYSTEM] User clicked "Create PR" for plan ${planId}. Executing apply_change_plan directly.`,
-        {
-          sessionId: sessionId || undefined,
-          pipelineStackId: selectedPipelineId || undefined,
-          model: selectedModel,
-          mode: selectedMode,
-          confirmedToolIds: ['apply_change_plan'],
-          pendingToolCall: {
-            toolUseId: `direct_apply_${Date.now()}`,
-            toolName: 'apply_change_plan',
-            arguments: { plan_id: planId },
-          },
-        },
-      );
-    } catch (err) {
+      const res = await fetch('/api/copilot/apply-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan_id: planId,
+          repo_owner: repoArgs?.repoOwner,
+          repo_name: repoArgs?.repoName,
+          base_branch: repoArgs?.baseBranch,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        // Show error as an assistant message
+        setMessages(prev => [...prev, {
+          id: `apply_err_${Date.now()}`,
+          role: 'assistant',
+          content: `Failed to create PR: ${data.error || 'Unknown error'}`,
+          timestamp: new Date(),
+        }]);
+        return;
+      }
+
+      // Success — add a message with the PR link and auto-open
+      const prUrl = data.pr_url;
+      setMessages(prev => [...prev, {
+        id: `apply_ok_${Date.now()}`,
+        role: 'assistant',
+        content: `Pull Request created: [#${data.pr_number} — ${data.branch}](${prUrl})\n\n${data.files_changed || 0} file(s) changed.`,
+        timestamp: new Date(),
+      }]);
+
+      if (prUrl) {
+        window.open(prUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err: any) {
       console.error('Apply plan error:', err);
+      setMessages(prev => [...prev, {
+        id: `apply_err_${Date.now()}`,
+        role: 'assistant',
+        content: `Failed to create PR: ${err.message || 'Network error'}`,
+        timestamp: new Date(),
+      }]);
     } finally {
-      setIsLoading(false);
+      setApplyingPlanId(null);
     }
   };
-
-  // Auto-open PR URL when apply_change_plan completes
-  useEffect(() => {
-    if (!streamingMessage || streamingMessage.isStreaming) return;
-
-    for (const tc of streamingMessage.toolCalls) {
-      if (tc.name === 'apply_change_plan' && tc.result && !tc.isExecuting) {
-        const prUrl = tc.result.data?.pr_url || (tc.result as any)?.pr_url;
-        if (prUrl) {
-          window.open(prUrl, '_blank', 'noopener,noreferrer');
-          break;
-        }
-      }
-    }
-  }, [streamingMessage?.isStreaming, streamingMessage?.toolCalls]);
 
   const handleStop = () => {
     abortStreaming();
@@ -1232,6 +1282,7 @@ export default function AssistantPage() {
                                   );
                                 }}
                                 onApply={(planId) => handleApplyPlan(planId)}
+                                isApplying={!!applyingPlanId}
                                 onShare={(planId, targetType) => {
                                   // Extract plan from tool result
                                   const result = toolCall.result as any;
@@ -1311,6 +1362,7 @@ export default function AssistantPage() {
                                     );
                                   }}
                                   onApply={(planId) => handleApplyPlan(planId)}
+                                  isApplying={!!applyingPlanId}
                                 />
                               );
                             }

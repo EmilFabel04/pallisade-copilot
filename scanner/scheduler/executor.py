@@ -88,6 +88,48 @@ def _detect_dialect(integration_type: str) -> str:
     return mapping.get(integration_type.lower(), "postgres")
 
 
+def _discover_numeric_columns(
+    query_func, database: str, schema: str, table: str, dialect: str
+) -> list[str]:
+    """Query INFORMATION_SCHEMA to find numeric columns in a table."""
+    if dialect == "bigquery":
+        sql = (
+            f"SELECT column_name FROM `{database}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+            f"WHERE table_name = '{table}' "
+            f"AND data_type IN ('INT64', 'FLOAT64', 'NUMERIC', 'BIGNUMERIC', 'INTEGER', 'FLOAT') "
+            f"ORDER BY ordinal_position"
+        )
+    elif dialect == "snowflake":
+        sql = (
+            f"SELECT COLUMN_NAME FROM {database}.INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_SCHEMA = '{schema.upper()}' AND TABLE_NAME = '{table.upper()}' "
+            f"AND DATA_TYPE IN ('NUMBER', 'DECIMAL', 'NUMERIC', 'INT', 'INTEGER', "
+            f"'BIGINT', 'SMALLINT', 'TINYINT', 'BYTEINT', 'FLOAT', 'FLOAT4', "
+            f"'FLOAT8', 'DOUBLE', 'DOUBLE PRECISION', 'REAL') "
+            f"ORDER BY ORDINAL_POSITION"
+        )
+    else:
+        # Postgres / Redshift
+        sql = (
+            f"SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = '{table}' "
+            f"AND data_type IN ('integer', 'bigint', 'smallint', 'numeric', "
+            f"'decimal', 'real', 'double precision', 'float') "
+            f"ORDER BY ordinal_position"
+        )
+
+    try:
+        rows = query_func(sql)
+        return [
+            row.get("column_name") or row.get("COLUMN_NAME", "")
+            for row in rows
+            if row.get("column_name") or row.get("COLUMN_NAME")
+        ]
+    except Exception as e:
+        logger.warning(f"[Executor] Failed to discover columns: {e}")
+        return []
+
+
 class TaskExecutor:
     """Executes a scheduled task (structured monitor or LLM prompt)."""
 
@@ -127,16 +169,27 @@ class TaskExecutor:
                 "message": "Missing monitorType or targetFqn for structured task",
             }
 
-        # Parse FQN: database.schema.table
+        # Parse FQN: database.schema.table or schema.table (2-part)
         parts = target_fqn.split(".")
-        if len(parts) < 3:
+        if len(parts) >= 3:
+            database, schema, table = parts[0], parts[1], ".".join(parts[2:])
+        elif len(parts) == 2:
+            # 2-part FQN: infer database/project from integration config
+            integration_config = task.get("integrationConfig") or {}
+            database = (
+                integration_config.get("project_id")
+                or integration_config.get("project")
+                or integration_config.get("database")
+                or ""
+            )
+            schema, table = parts[0], parts[1]
+            logger.info(f"[Executor] 2-part FQN '{target_fqn}', inferred database='{database}'")
+        else:
             logger.warning(f"[Executor] Invalid FQN: {target_fqn}")
             return {
                 "status": "ERROR",
-                "message": f"Invalid target FQN format: {target_fqn} (expected database.schema.table)",
+                "message": f"Invalid target FQN format: {target_fqn} (expected database.schema.table or schema.table)",
             }
-
-        database, schema, table = parts[0], parts[1], ".".join(parts[2:])
 
         # Get the monitor class
         monitor_cls = MONITOR_REGISTRY.get(monitor_type)
@@ -187,6 +240,17 @@ class TaskExecutor:
                     }
 
             executor = MonitorExecutor(query_func=query_func, dialect=sql_dialect)
+
+            # Multi-column anomaly: if column is "*", discover all numeric
+            # columns and run the anomaly monitor on each one.
+            if (
+                monitor_type == "anomaly"
+                and getattr(monitor, "column", "") == "*"
+            ):
+                return self._run_multi_column_anomaly(
+                    executor, config, database, schema, table, sql_dialect
+                )
+
             result: MonitorResult = executor.run_monitor(
                 monitor, database, schema, table
             )
@@ -197,6 +261,75 @@ class TaskExecutor:
                 "status": "ERROR",
                 "message": f"Execution failed: {str(e)}",
             }
+
+    def _run_multi_column_anomaly(
+        self,
+        executor: "MonitorExecutor",
+        config: Dict[str, Any],
+        database: str,
+        schema: str,
+        table: str,
+        dialect: str,
+    ) -> Dict[str, Any]:
+        """Discover numeric columns and run anomaly check on each one.
+
+        Returns an aggregated result with per-column details.
+        """
+        from scanner.monitors.anomaly import AnomalyMonitor
+        from scanner.monitors.base import MonitorStatus
+
+        columns = _discover_numeric_columns(
+            executor.query_func, database, schema, table, dialect
+        )
+
+        if not columns:
+            return {
+                "status": "WARN",
+                "message": f"No numeric columns found in {database}.{schema}.{table}",
+            }
+
+        logger.info(
+            f"[Executor] Multi-column anomaly: checking {len(columns)} columns",
+            columns=columns,
+        )
+
+        metric = config.get("metric", "avg")
+        per_column: list[dict] = []
+        anomalies: list[str] = []
+
+        for col in columns:
+            col_config = {**config, "column": col, "metric": metric}
+            col_monitor = AnomalyMonitor(config=col_config)
+
+            try:
+                result = executor.run_monitor(col_monitor, database, schema, table)
+                entry = result.to_dict()
+                entry["column"] = col
+                per_column.append(entry)
+
+                if result.status == MonitorStatus.FAIL:
+                    anomalies.append(f"{col}: {result.message}")
+            except Exception as e:
+                logger.warning(f"[Executor] Column {col} failed: {e}")
+                per_column.append({
+                    "column": col,
+                    "status": "ERROR",
+                    "message": str(e),
+                })
+
+        # Aggregate status: FAIL if any anomaly, PASS if all pass
+        if anomalies:
+            return {
+                "status": "FAIL",
+                "message": f"Anomalies detected in {len(anomalies)}/{len(columns)} columns: {'; '.join(anomalies[:5])}",
+                "details": {"columns_checked": len(columns), "anomalies": len(anomalies), "per_column": per_column},
+            }
+
+        return {
+            "status": "PASS",
+            "message": f"All {len(columns)} numeric columns within normal range ({metric})",
+            "details": {"columns_checked": len(columns), "anomalies": 0, "per_column": per_column},
+        }
 
     async def _execute_prompt(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """Run an LLM prompt-based check."""

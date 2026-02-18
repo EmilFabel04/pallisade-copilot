@@ -441,6 +441,116 @@ async def get_available_tools(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ApplyPlanRequest(BaseModel):
+    """Request to apply a change plan directly (no LLM round-trip)."""
+    plan_id: str = Field(..., description="ID of the change plan to apply")
+    repo_owner: Optional[str] = Field(None, description="GitHub repo owner")
+    repo_name: Optional[str] = Field(None, description="GitHub repo name")
+    base_branch: str = Field("main", description="Base branch for the PR")
+    integrations: Optional[List[IntegrationData]] = Field(None, description="User's integrations (for GitHub token)")
+
+
+@router.post("/apply-plan")
+async def apply_plan(
+    request: ApplyPlanRequest,
+    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+):
+    """
+    Apply a change plan by creating a GitHub PR — directly, no LLM.
+
+    This is the fast path for "Create PR": it skips the LLM loop entirely
+    and just executes the GitHub applier.
+    """
+    from copilot.change_plan import ChangePlanApplier, get_change_plan_store
+    from copilot.change_plan.models import PatchType
+
+    store = get_change_plan_store()
+    plan = store.get(request.plan_id)
+
+    if not plan:
+        raise HTTPException(status_code=404, detail=f"Change plan '{request.plan_id}' not found.")
+
+    # Allow unvalidated plans when ALL patches are text files (docs, READMEs, etc.)
+    is_docs_only = all(p.patch_type == PatchType.TEXT_FILE for p in plan.patches)
+    if not plan.is_validated() and not is_docs_only:
+        raise HTTPException(
+            status_code=400,
+            detail="Plan has not passed required validations. Run validation first.",
+        )
+
+    # Extract GitHub token from integrations
+    github_token = None
+    repo_owner = request.repo_owner
+    repo_name = request.repo_name
+
+    for integration in (request.integrations or []):
+        if integration.type.upper() == "GITHUB":
+            config = integration.config or {}
+            github_token = config.get("access_token") or config.get("token")
+
+            # Auto-detect repo if not explicitly provided
+            if not repo_owner or not repo_name:
+                # 1. Check config.repo (format: "owner/repo")
+                if config.get("repo"):
+                    parts = config["repo"].split("/")
+                    if len(parts) == 2:
+                        repo_owner = repo_owner or parts[0]
+                        repo_name = repo_name or parts[1]
+
+                # 2. Check metadata.repos list
+                if not repo_owner or not repo_name:
+                    metadata = config.get("metadata", {})
+                    repos = metadata.get("repos", [])
+                    if repos:
+                        # Use first repo (for single-repo users this is the only one;
+                        # for multi-repo users this is a reasonable default)
+                        full_name = repos[0].get("name", "")
+                        parts = full_name.split("/")
+                        if len(parts) == 2:
+                            repo_owner = repo_owner or parts[0]
+                            repo_name = repo_name or parts[1]
+                        if len(repos) > 1:
+                            logger.info(f"[ApplyPlan] Auto-selected repo {full_name} from {len(repos)} available repos")
+            break
+
+    if not github_token:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub is not connected. Please connect GitHub in your integrations.",
+        )
+
+    if not repo_owner or not repo_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not determine target repository. Please specify repo_owner and repo_name.",
+        )
+
+    # Apply the plan
+    applier = ChangePlanApplier(github_token)
+    try:
+        result = await applier.apply(plan, repo_owner, repo_name, request.base_branch)
+
+        if result.success:
+            store.save(plan)
+            return {
+                "success": True,
+                "plan_id": plan.id,
+                "pr_url": result.pr_url,
+                "pr_number": result.pr_number,
+                "branch": result.branch_name,
+                "files_changed": result.files_changed,
+            }
+        else:
+            raise HTTPException(status_code=500, detail=result.error or "Failed to create Pull Request")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error applying change plan")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await applier.close()
+
+
 @router.get("/modes")
 async def get_modes():
     """
