@@ -36,14 +36,18 @@ export interface TaskRun {
 }
 
 export const MONITOR_TYPES = [
-  { value: 'FRESHNESS', label: 'Freshness', description: 'Check data is up to date' },
-  { value: 'VOLUME', label: 'Volume', description: 'Check row count changes' },
+  { value: 'FRESHNESS', label: 'Freshness', description: 'Auto-detects timestamp column & alert threshold' },
+  { value: 'VOLUME', label: 'Volume', description: 'Auto-computes expected row count range from history' },
   { value: 'SCHEMA_CHANGE', label: 'Schema Change', description: 'Detect column additions/removals' },
-  { value: 'NULL_RATE', label: 'Null Rate', description: 'Monitor null percentage' },
-  { value: 'UNIQUENESS', label: 'Uniqueness', description: 'Check for duplicate values' },
-  { value: 'DISTRIBUTION', label: 'Distribution', description: 'Detect distribution shifts' },
+  { value: 'NULL_RATE', label: 'Null Rate', description: 'Scans all columns for unexpected null spikes' },
+  { value: 'UNIQUENESS', label: 'Uniqueness', description: 'Detects drops in column uniqueness' },
+  { value: 'DISTRIBUTION', label: 'Distribution', description: 'Detects shifts in numeric column averages' },
   { value: 'CUSTOM_SQL', label: 'Custom SQL', description: 'Run a custom SQL check' },
-  { value: 'ANOMALY', label: 'Anomaly', description: 'Detect anomalous patterns' },
+  { value: 'ANOMALY', label: 'Anomaly', description: 'Z-score detection on row count or all columns' },
+  // Infrastructure monitors (require Linux Server integration)
+  { value: 'CERTIFICATE', label: 'Certificate', description: 'Detects expiring or missing TLS/SSL certificates' },
+  { value: 'SERVER_HEALTH', label: 'Server Health', description: 'Monitors CPU, memory, disk usage' },
+  { value: 'LOG_ANALYSIS', label: 'Log Analysis', description: 'Scans server logs for error patterns' },
 ] as const;
 
 export const SCHEDULE_PRESETS = [

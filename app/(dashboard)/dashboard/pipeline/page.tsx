@@ -20,7 +20,7 @@ import {
 } from '@/components/pipeline/types';
 
 type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
-type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'ALERTS';
+type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'INFRASTRUCTURE' | 'ALERTS';
 type PlaneFilter = 'all' | 'data' | 'control';
 
 interface ConnectorCard {
@@ -41,8 +41,8 @@ interface IntegrationRecord {
   lastError?: string | null;
 }
 
-const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'BI', 'INGESTION', 'STORAGE', 'ALERTS'];
-const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING'];
+const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
+const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
 const ENVIRONMENTS = ['Dev', 'Staging', 'Prod'] as const;
 
 const STACK_TEMPLATES = [
@@ -81,6 +81,7 @@ const GROUP_COLORS: Record<ConnectorGroup, string> = {
   BI: LAYER_COLORS.REPORTING,
   INGESTION: LAYER_COLORS.INGESTION,
   STORAGE: LAYER_COLORS.STORAGE,
+  INFRASTRUCTURE: LAYER_COLORS.INFRASTRUCTURE,
   ALERTS: '#EF4444',
 };
 
@@ -97,6 +98,7 @@ function mapIntegrationTypeToConnectorId(type: string): string {
     AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect',
     LOOKER: 'looker', TABLEAU: 'tableau', POWERBI: 'powerbi', METABASE: 'metabase',
     AMAZON_S3: 'amazon_s3', GCS: 'gcs', ADLS: 'adls',
+    LINUX_SERVER: 'linux_server',
     SLACK: 'slack', TEAMS: 'teams', PAGERDUTY: 'pagerduty', OPSGENIE: 'opsgenie',
     JIRA: 'jira', LINEAR: 'linear', ASANA: 'asana', GITHUB_ISSUES: 'github_issues',
     MONTE_CARLO: 'monte_carlo', BIGEYE: 'bigeye', SODA: 'soda', ELEMENTARY: 'elementary',
@@ -114,7 +116,7 @@ function categoryToGroup(category: string): ConnectorGroup {
 function groupLabel(group: ConnectorGroup): string {
   const labels: Record<ConnectorGroup, string> = {
     WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration',
-    BI: 'BI / Reporting', INGESTION: 'Ingestion', STORAGE: 'Storage', ALERTS: 'Alerts & Integrations',
+    BI: 'BI / Reporting', INGESTION: 'Ingestion', STORAGE: 'Storage', INFRASTRUCTURE: 'Infrastructure', ALERTS: 'Alerts & Integrations',
   };
   return labels[group];
 }
@@ -123,7 +125,7 @@ function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: 
   const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
   const layerX: Record<PipelineLayer, number> = {
     INGESTION: 120, VERSION_CONTROL: 300, ORCHESTRATION: 300, TRANSFORMATION: 480,
-    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040,
+    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040, INFRASTRUCTURE: 1160,
   };
   return {
     id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -181,6 +183,7 @@ export default function PipelinePage() {
       ...TOOLS.REPORTING.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'BI' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.INGESTION.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INGESTION' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.STORAGE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'STORAGE' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.INFRASTRUCTURE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INFRASTRUCTURE' as const, mode: 'pipeline' as const, layer: t.layer })),
     ];
     const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS).flat().map((i) => ({
       id: i.id, name: i.name, description: i.description, group: categoryToGroup(i.category), mode: 'integration' as const, integration: i,
@@ -714,7 +717,7 @@ export default function PipelinePage() {
             <div className="pt-2 border-t border-white/10">
               <div className="text-xs text-[var(--muted)] mb-2">Legend</div>
               <div className="space-y-1.5">
-                {(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING'] as PipelineLayer[]).map((layer) => (
+                {(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'] as PipelineLayer[]).map((layer) => (
                   <div key={layer} className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS[layer] }} />
                     <span className="text-[11px] text-[var(--muted)]">{layer.charAt(0) + layer.slice(1).toLowerCase()}</span>

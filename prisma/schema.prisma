@@ -1914,6 +1914,11 @@ enum IntegrationType {
   TEAMS // Microsoft Teams
 
   // ===========================================
+  // INFRASTRUCTURE
+  // ===========================================
+  LINUX_SERVER // Linux/Unix server (SSH)
+
+  // ===========================================
   // OTHER
   // ===========================================
   JIRA // Issue tracking

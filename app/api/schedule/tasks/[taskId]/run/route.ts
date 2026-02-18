@@ -100,6 +100,17 @@ export async function POST(
       console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
     }
 
+    // Inject stored baseline into config (so monitors can use it when
+    // warehouse history is insufficient for Z-score computation)
+    const monitorConfig = { ...(task.config as Record<string, any> || {}) };
+    if (task.baselineMean !== null && task.baselineMean !== undefined) {
+      monitorConfig.stored_baseline = {
+        mean: task.baselineMean,
+        stddev: task.baselineStddev,
+        count: task.baselineCount,
+      };
+    }
+
     // Call the Python backend to execute
     const startedAt = new Date();
 
@@ -113,7 +124,7 @@ export async function POST(
         prompt: task.prompt,
         monitor_type: task.monitorType,
         target_fqn: task.targetFqn,
-        config: task.config,
+        config: monitorConfig,
         integration_config: integrationConfig,
       }),
     });
@@ -151,13 +162,23 @@ export async function POST(
       },
     });
 
-    // Update the monitor's last run info
+    // Update the monitor's last run info + persist baseline stats
+    const updateData: Record<string, any> = {
+      lastRunAt: completedAt,
+      lastStatus: status,
+    };
+
+    // Save baseline from result details (used on subsequent runs)
+    const details = result.details || {};
+    if (details.baseline_mean !== undefined) {
+      updateData.baselineMean = details.baseline_mean;
+      updateData.baselineStddev = details.baseline_stddev ?? 0;
+      updateData.baselineCount = details.baseline_count ?? details.data_points ?? 0;
+    }
+
     await prisma.monitor.update({
       where: { id: task.id },
-      data: {
-        lastRunAt: completedAt,
-        lastStatus: status,
-      },
+      data: updateData,
     });
 
     return NextResponse.json({ run, result });

@@ -39,15 +39,23 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
   const warehouseIntegrations = integrations.filter((i) =>
     ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(i.type)
   );
+  const serverIntegrations = integrations.filter((i) =>
+    ['linux_server'].includes(i.type)
+  );
 
-  const isAnomalyNoColumn = ['ANOMALY', 'anomaly'].includes(monitorType)
-    && (!config.metric || config.metric === 'row_count' || config.column === '*');
-  const needsColumn = ['ANOMALY', 'anomaly', 'NULL_RATE', 'UNIQUENESS'].includes(monitorType)
-    && !isAnomalyNoColumn;
+  // Only require monitor type + target table. Advanced config is auto-detected.
+  // Exception: CUSTOM_SQL needs SQL, single-column anomaly metrics need a column name.
+  // Infrastructure monitors (CERTIFICATE, SERVER_HEALTH, LOG_ANALYSIS) don't need a target table.
+  const isInfraMonitor = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType);
+  const needsColumn = ['ANOMALY', 'anomaly'].includes(monitorType)
+    && config.metric && config.metric !== 'row_count' && config.column !== '*'
+    && !config.column?.trim();
+  const needsSql = monitorType === 'CUSTOM_SQL' && !config.sql?.trim();
+  const needsLogPaths = monitorType === 'LOG_ANALYSIS' && !(config.log_paths?.length > 0);
   const canProceedStep1 = name.trim() && (
     taskMode === 'prompt'
       ? prompt.trim()
-      : (monitorType && targetFqn.trim() && (!needsColumn || config.column?.trim()))
+      : (monitorType && (isInfraMonitor || targetFqn.trim()) && !needsColumn && !needsSql && !needsLogPaths)
   );
   const canProceedStep2 = schedule.trim();
 
@@ -57,7 +65,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
       taskMode,
       prompt: taskMode === 'prompt' ? prompt : undefined,
       monitorType: taskMode === 'structured' ? monitorType : undefined,
-      targetFqn: taskMode === 'structured' ? targetFqn : undefined,
+      targetFqn: taskMode === 'structured' ? (targetFqn || (isInfraMonitor ? 'server' : undefined)) : undefined,
       config: taskMode === 'structured' ? config : undefined,
       schedule,
       timezone,
@@ -195,25 +203,47 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
                 />
               )}
 
-              {/* Warehouse selection */}
-              {warehouseIntegrations.length > 0 && (
-                <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
-                    Run against warehouse
-                  </label>
-                  <select
-                    value={integrationId}
-                    onChange={(e) => setIntegrationId(e.target.value)}
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white focus:outline-none focus:border-white/[0.2] appearance-none"
-                  >
-                    <option value="">Auto-detect</option>
-                    {warehouseIntegrations.map((i) => (
-                      <option key={i.id} value={i.id}>
-                        {i.name} ({i.type})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              {/* Integration selection — warehouse for data monitors, server for infra monitors */}
+              {isInfraMonitor ? (
+                serverIntegrations.length > 0 && (
+                  <div>
+                    <label className="block text-[12px] font-medium text-white/50 mb-2">
+                      Run against server
+                    </label>
+                    <select
+                      value={integrationId}
+                      onChange={(e) => setIntegrationId(e.target.value)}
+                      className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white focus:outline-none focus:border-white/[0.2] appearance-none"
+                    >
+                      <option value="">Auto-detect</option>
+                      {serverIntegrations.map((i) => (
+                        <option key={i.id} value={i.id}>
+                          {i.name} ({i.type})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )
+              ) : (
+                warehouseIntegrations.length > 0 && (
+                  <div>
+                    <label className="block text-[12px] font-medium text-white/50 mb-2">
+                      Run against warehouse
+                    </label>
+                    <select
+                      value={integrationId}
+                      onChange={(e) => setIntegrationId(e.target.value)}
+                      className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white focus:outline-none focus:border-white/[0.2] appearance-none"
+                    >
+                      <option value="">Auto-detect</option>
+                      {warehouseIntegrations.map((i) => (
+                        <option key={i.id} value={i.id}>
+                          {i.name} ({i.type})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )
               )}
             </>
           )}

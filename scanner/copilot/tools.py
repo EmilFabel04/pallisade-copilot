@@ -25,6 +25,7 @@ class ToolCategory(Enum):
     COVERAGE = "coverage"
     CHANGE_PLAN = "change_plan"
     ONBOARDING = "onboarding"
+    INFRASTRUCTURE = "infrastructure"
 
 
 @dataclass
@@ -1254,6 +1255,100 @@ class ToolRegistry:
                     "string",
                     "Summary of what was learned during onboarding",
                     required=False,
+                ),
+            ],
+        ))
+
+        # ── Infrastructure tools (require linux_server integration) ──
+
+        self._register(Tool(
+            name="check_server_health",
+            description=(
+                "Get CPU, memory, disk usage, and load average for a connected Linux server. "
+                "Returns system health metrics including hostname, OS info, and uptime."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            alternative_integrations={"linux_server"},
+            parameters=[
+                ToolParameter(
+                    "server",
+                    "string",
+                    "Name of the server integration to check (as shown in the pipeline)",
+                    required=True,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="check_certificates",
+            description=(
+                "Check TLS/SSL certificate expiry and client cert presence on a server. "
+                "Detects missing client certs, expired certs, and certs expiring soon. "
+                "Scans common cert locations if no paths specified."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            alternative_integrations={"linux_server"},
+            parameters=[
+                ToolParameter(
+                    "server",
+                    "string",
+                    "Name of the server integration to check",
+                    required=True,
+                ),
+                ToolParameter(
+                    "paths",
+                    "array",
+                    "Optional: specific certificate file paths to check (auto-discovers if empty)",
+                    required=False,
+                    items={"type": "string"},
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="analyze_server_logs",
+            description=(
+                "Tail and analyze recent log entries on a server for error patterns. "
+                "Searches for ERROR, FATAL, CRITICAL and other patterns in log files."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            alternative_integrations={"linux_server"},
+            parameters=[
+                ToolParameter(
+                    "server",
+                    "string",
+                    "Name of the server integration",
+                    required=True,
+                ),
+                ToolParameter(
+                    "log_path",
+                    "string",
+                    "Path to the log file on the server (e.g. /var/log/syslog)",
+                    required=True,
+                ),
+                ToolParameter(
+                    "lines",
+                    "integer",
+                    "Number of lines to tail (default: 200)",
+                    required=False,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="list_server_services",
+            description=(
+                "List systemd service status on a connected Linux server. "
+                "Shows which services are running, stopped, or failed."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            alternative_integrations={"linux_server"},
+            parameters=[
+                ToolParameter(
+                    "server",
+                    "string",
+                    "Name of the server integration",
+                    required=True,
                 ),
             ],
         ))

@@ -75,7 +75,7 @@ def create_app() -> FastAPI:
         )
     
     # Register Routers
-    from .routers import health_router, database_router, lineage_router, coverage_router
+    from .routers import health_router, database_router, lineage_router, coverage_router, server_router
     from .routers.copilot import router as copilot_router
     from .routers.dbt import router as dbt_router
     from .routers.schedule import router as schedule_router
@@ -100,6 +100,9 @@ def create_app() -> FastAPI:
 
     # Schedule/Tasks API
     app.include_router(schedule_router, prefix="/api/v1", tags=["Schedule"])
+
+    # Server/Infrastructure API
+    app.include_router(server_router, prefix="/api/v1", tags=["Server"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

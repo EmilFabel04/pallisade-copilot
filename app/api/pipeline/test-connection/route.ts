@@ -372,6 +372,41 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // Infrastructure tools - test via scanner SSH endpoint
+      case 'linux_server': {
+        try {
+          const serverResponse = await fetch(`${SCANNER_API_URL}/api/v1/server/test-connection`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              host: config.host,
+              port: parseInt(config.port) || 22,
+              username: config.username,
+              auth_method: config.auth_method || 'key',
+              private_key: config.private_key,
+              password: config.password,
+            }),
+            signal: AbortSignal.timeout(15000),
+          });
+
+          const data = await serverResponse.json();
+          if (data.success) {
+            return NextResponse.json({
+              success: true,
+              message: data.message || `Connected to ${data.hostname} (${data.os})`,
+            });
+          } else {
+            return NextResponse.json({
+              success: false,
+              message: data.message || 'SSH connection failed',
+            });
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : 'Unknown error';
+          return NextResponse.json({ success: false, message: `Failed to connect: ${msg}` });
+        }
+      }
+
       // Version Control tools - test directly without scanner API
       case 'github': {
         try {

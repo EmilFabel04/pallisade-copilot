@@ -5,7 +5,7 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION';
+export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
 export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
@@ -22,6 +22,7 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   STORAGE: '#A855F7',        // Purple-500
   VERSION_CONTROL: '#8B5CF6', // Purple
   ORCHESTRATION: '#F97316',  // Orange
+  INFRASTRUCTURE: '#94A3B8', // Slate
 };
 
 // Integration type colors
@@ -49,6 +50,7 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   STORAGE: 'Storage',
   VERSION_CONTROL: 'Version Control',
   ORCHESTRATION: 'Orchestration',
+  INFRASTRUCTURE: 'Infrastructure',
 };
 
 // Integration type labels
@@ -395,6 +397,25 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
     },
   ],
   ORCHESTRATION: [],
+  INFRASTRUCTURE: [
+    {
+      id: 'linux_server',
+      name: 'Linux Server',
+      description: 'SSH-based server monitoring (certificates, health, logs)',
+      layer: 'INFRASTRUCTURE',
+      configFields: [
+        { name: 'host', label: 'Host / IP', type: 'text', required: true, placeholder: '10.0.1.50 or server.example.com' },
+        { name: 'port', label: 'SSH Port', type: 'number', required: false, placeholder: '22' },
+        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'deploy' },
+        { name: 'auth_method', label: 'Auth Method', type: 'select', required: true, options: [
+          { value: 'key', label: 'SSH Private Key' },
+          { value: 'password', label: 'Password' },
+        ]},
+        { name: 'private_key', label: 'Private Key', type: 'textarea', required: false, placeholder: '-----BEGIN RSA PRIVATE KEY-----', helperText: 'Paste your SSH private key (for key-based auth)' },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'SSH password', helperText: 'For password-based auth' },
+      ],
+    },
+  ],
   VERSION_CONTROL: [
     {
       id: 'github',

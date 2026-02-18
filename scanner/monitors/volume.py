@@ -71,12 +71,15 @@ class VolumeMonitor(BaseMonitor):
             col = self.time_bucket_column
 
             if dialect == "bigquery":
+                # Double-cast via TIMESTAMP so STRING/TIMESTAMP columns
+                # can be compared against DATE without type mismatch.
+                ts_date = f"CAST(CAST({col} AS TIMESTAMP) AS DATE)"
                 sql = (
                     f"SELECT "
-                    f"CAST({col} AS DATE) AS bucket_date, "
+                    f"{ts_date} AS bucket_date, "
                     f"COUNT(*) AS row_count "
                     f"FROM {fqn} "
-                    f"WHERE {col} >= DATE_SUB(CURRENT_DATE(), "
+                    f"WHERE {ts_date} >= DATE_SUB(CURRENT_DATE(), "
                     f"INTERVAL {self.lookback_days} DAY) "
                     f"GROUP BY bucket_date "
                     f"ORDER BY bucket_date"

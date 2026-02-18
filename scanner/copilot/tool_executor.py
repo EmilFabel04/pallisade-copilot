@@ -4786,3 +4786,194 @@ class ToolExecutor:
             "reason": f"Change may impact {dep_name}",
             "suggested_fix": f"Review {dep_name} for compatibility with changes",
         }
+
+    # ==========================================
+    # INFRASTRUCTURE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    def _get_server_adapter(self, server_name: str):
+        """Find a linux_server integration by name and return a connected ServerAdapter."""
+        from scanner.adapters.server import ServerAdapter
+
+        # Find the integration matching the server name
+        for integration in self.context.integrations:
+            if integration.type.upper() == "LINUX_SERVER" and (
+                integration.name.lower() == server_name.lower()
+                or server_name.lower() in integration.name.lower()
+            ):
+                adapter = ServerAdapter()
+                adapter.connect(integration.config)
+                return adapter
+
+        # If only one server integration exists, use it regardless of name
+        server_integrations = [
+            i for i in self.context.integrations
+            if i.type.upper() == "LINUX_SERVER" and i.is_active
+        ]
+        if len(server_integrations) == 1:
+            adapter = ServerAdapter()
+            adapter.connect(server_integrations[0].config)
+            return adapter
+
+        return None
+
+    async def _execute_check_server_health(self, args: Dict[str, Any]) -> ToolResult:
+        """Get CPU, memory, disk, and load for a connected server."""
+        server_name = args.get("server", "")
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'. "
+                      f"Connect a Linux Server in your pipeline first."
+            )
+
+        try:
+            health = adapter.get_system_health()
+            return ToolResult(
+                success=True,
+                data={
+                    "hostname": health.hostname,
+                    "os": health.os_info,
+                    "cpu_percent": health.cpu_percent,
+                    "memory_percent": health.memory_percent,
+                    "memory_total_gb": health.memory_total_gb,
+                    "memory_used_gb": health.memory_used_gb,
+                    "load_avg": health.load_avg,
+                    "uptime_seconds": health.uptime_seconds,
+                    "disk_usage": [
+                        {
+                            "mount": d.mount,
+                            "percent": d.percent,
+                            "total_gb": d.total_gb,
+                            "used_gb": d.used_gb,
+                            "available_gb": d.available_gb,
+                        }
+                        for d in health.disk_usage
+                    ],
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Health check failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    async def _execute_check_certificates(self, args: Dict[str, Any]) -> ToolResult:
+        """Check TLS/SSL certificates on a server."""
+        server_name = args.get("server", "")
+        paths = args.get("paths")
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'."
+            )
+
+        try:
+            certs = adapter.check_certificates(paths)
+            cert_data = []
+            for c in certs:
+                entry = {
+                    "path": c.path,
+                    "subject": c.subject,
+                    "issuer": c.issuer,
+                    "not_after": c.not_after,
+                    "days_until_expiry": c.days_until_expiry,
+                    "has_client_cert": c.has_client_cert,
+                }
+                if c.error:
+                    entry["error"] = c.error
+                cert_data.append(entry)
+
+            # Summarize issues
+            issues = []
+            for c in certs:
+                if c.days_until_expiry is not None and c.days_until_expiry <= 7:
+                    issues.append(f"{c.path}: expires in {c.days_until_expiry} days")
+                if not c.has_client_cert and c.subject:
+                    issues.append(f"{c.path}: missing client cert")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "certificates": cert_data,
+                    "total": len(certs),
+                    "issues": issues,
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Certificate check failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    async def _execute_analyze_server_logs(self, args: Dict[str, Any]) -> ToolResult:
+        """Tail and analyze log entries on a server."""
+        server_name = args.get("server", "")
+        log_path = args.get("log_path", "")
+        lines = int(args.get("lines", 200))
+
+        if not log_path:
+            return ToolResult(success=False, error="log_path is required")
+
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'."
+            )
+
+        try:
+            content = adapter.tail_log(log_path, lines)
+            # Count error lines
+            import re
+            error_pattern = re.compile(r"ERROR|FATAL|CRITICAL|EXCEPTION", re.IGNORECASE)
+            all_lines = content.split("\n")
+            error_lines = [l for l in all_lines if error_pattern.search(l)]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "log_path": log_path,
+                    "total_lines": len(all_lines),
+                    "error_count": len(error_lines),
+                    "recent_errors": [l.strip()[:300] for l in error_lines[-20:]],
+                    "last_lines": [l.strip()[:300] for l in all_lines[-10:]],
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Log analysis failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    async def _execute_list_server_services(self, args: Dict[str, Any]) -> ToolResult:
+        """List systemd service status on a server."""
+        server_name = args.get("server", "")
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'."
+            )
+
+        try:
+            services = adapter.list_services()
+            return ToolResult(
+                success=True,
+                data={
+                    "services": [
+                        {
+                            "name": s.name,
+                            "status": s.status,
+                            "enabled": s.enabled,
+                        }
+                        for s in services
+                    ],
+                    "total": len(services),
+                    "running": sum(1 for s in services if s.status == "running"),
+                    "failed": sum(1 for s in services if s.status == "failed"),
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Service listing failed: {e}")
+        finally:
+            adapter.disconnect()

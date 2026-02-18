@@ -62,6 +62,9 @@ google-auth==2.25.0
 # Git operations
 GitPython==3.1.40
 
+# SSH connectivity (for server/infrastructure monitoring)
+paramiko>=3.4.0
+
 # Structured logging
 structlog==23.2.0
 
