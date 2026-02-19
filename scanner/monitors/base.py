@@ -39,6 +39,7 @@ class MonitorResult:
     executed_at: Optional[datetime] = None
     duration_ms: Optional[int] = None
     sql_executed: Optional[str] = None
+    raw_status: Optional["MonitorStatus"] = None
 
     @property
     def is_passing(self) -> bool:
@@ -58,6 +59,7 @@ class MonitorResult:
                 self.executed_at.isoformat() if self.executed_at else None
             ),
             "duration_ms": self.duration_ms,
+            "raw_status": self.raw_status.value if self.raw_status else None,
         }
 
 

@@ -1,21 +1,25 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
 import { MonitorConfigForm } from './MonitorConfigForm';
+import type { ScheduledTask } from '@/types/schedule';
 
 interface CreateTaskModalProps {
   open: boolean;
   onClose: () => void;
   onSubmit: (task: any) => void;
+  onUpdate?: (taskId: string, task: any) => void;
+  editTask?: ScheduledTask | null;
   integrations?: Array<{ id: string; name: string; type: string }>;
 }
 
-export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: CreateTaskModalProps) {
+export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, integrations = [] }: CreateTaskModalProps) {
   const [step, setStep] = useState(1);
+  const isEditing = !!editTask;
 
   // Step 1: Mode + content
   const [taskMode, setTaskMode] = useState<'prompt' | 'structured'>('prompt');
@@ -33,6 +37,37 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
   const [alertChannels, setAlertChannels] = useState<string[]>([]);
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'WARN', 'ERROR']);
   const [integrationId, setIntegrationId] = useState('');
+
+  // Pre-fill form when editing an existing task
+  useEffect(() => {
+    if (editTask) {
+      setName(editTask.name);
+      setTaskMode(editTask.taskMode);
+      setPrompt(editTask.prompt || '');
+      setMonitorType(editTask.monitorType || '');
+      setTargetFqn(editTask.targetFqn || '');
+      setConfig(editTask.config || {});
+      setSchedule(editTask.schedule);
+      setTimezone(editTask.timezone);
+      setAlertChannels(editTask.alertChannels || []);
+      setAlertOnStatus(editTask.alertOnStatus || ['FAIL', 'WARN', 'ERROR']);
+      setIntegrationId(editTask.integrationId || '');
+      setStep(1);
+    } else if (open) {
+      setName('');
+      setTaskMode('prompt');
+      setPrompt('');
+      setMonitorType('');
+      setTargetFqn('');
+      setConfig({});
+      setSchedule('0 8 * * *');
+      setTimezone('UTC');
+      setAlertChannels([]);
+      setAlertOnStatus(['FAIL', 'WARN', 'ERROR']);
+      setIntegrationId('');
+      setStep(1);
+    }
+  }, [editTask, open]);
 
   if (!open) return null;
 
@@ -60,7 +95,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
   const canProceedStep2 = schedule.trim();
 
   const handleSubmit = () => {
-    onSubmit({
+    const taskData = {
       name,
       taskMode,
       prompt: taskMode === 'prompt' ? prompt : undefined,
@@ -72,16 +107,21 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
       alertChannels,
       alertOnStatus,
       integrationId: integrationId || undefined,
-    });
+    };
+    if (isEditing && onUpdate) {
+      onUpdate(editTask!.id, taskData);
+    } else {
+      onSubmit(taskData);
+    }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-2xl mx-4 bg-[#0a0a12] rounded-2xl border border-white/[0.08] shadow-2xl max-h-[85vh] overflow-y-auto">
+      <div className="relative w-full max-w-3xl mx-4 bg-[#0a0a12] rounded-2xl border border-white/[0.08] shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
-          <h2 className="text-[16px] font-semibold text-white">Create Scheduled Task</h2>
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+          <h2 className="text-[16px] font-semibold text-white">{isEditing ? 'Edit Task' : 'Create Scheduled Task'}</h2>
           <button onClick={onClose} className="text-white/40 hover:text-white">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -90,7 +130,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
         </div>
 
         {/* Step indicators */}
-        <div className="flex items-center gap-2 px-6 py-3 border-b border-white/[0.04]">
+        <div className="flex-shrink-0 flex items-center gap-3 px-6 py-3 border-b border-white/[0.04]">
           {[1, 2, 3].map((s) => (
             <div key={s} className="flex items-center gap-2">
               <div className={cn(
@@ -114,8 +154,8 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
           ))}
         </div>
 
-        {/* Content */}
-        <div className="px-6 py-5 space-y-5">
+        {/* Content — scrolls vertically when needed, header/footer stay fixed */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-5">
           {step === 1 && (
             <>
               {/* Task name */}
@@ -290,7 +330,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-white/[0.06]">
+        <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-t border-white/[0.06]">
           <div>
             {step > 1 && (
               <Button variant="ghost" size="sm" onClick={() => setStep(step - 1)}>
@@ -312,7 +352,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, integrations = [] }: 
               </Button>
             ) : (
               <Button size="sm" onClick={handleSubmit}>
-                Create Task
+                {isEditing ? 'Save Changes' : 'Create Task'}
               </Button>
             )}
           </div>

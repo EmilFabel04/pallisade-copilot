@@ -49,13 +49,14 @@ class TestFreshnessMonitor:
         result = monitor.evaluate([], "db.schema.table")
         assert result.status == MonitorStatus.ERROR
 
-    def test_error_null_column(self):
+    def test_skipped_empty_table(self):
+        """Empty table with no timestamp_column → SKIPPED (not ERROR)."""
         monitor = FreshnessMonitor()
         result = monitor.evaluate(
             [{"hours_since_update": None, "last_value": None, "total_rows": 0}],
             "db.schema.table",
         )
-        assert result.status == MonitorStatus.ERROR
+        assert result.status == MonitorStatus.SKIPPED
 
     def test_build_query(self):
         monitor = FreshnessMonitor({"timestamp_column": "created_at"})
@@ -385,3 +386,198 @@ class TestMonitorExecutor:
         assert "db.pub.t" in results
         assert len(results["db.pub.t"]) == 2
         assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Edge Case Tests — Monitor Semantics Fixes
+# ---------------------------------------------------------------------------
+
+
+class TestFreshnessEdgeCases:
+    def test_empty_table_skipped(self):
+        """Empty table (total_rows=0, hours=None) should return SKIPPED."""
+        monitor = FreshnessMonitor({"timestamp_column": "created_at"})
+        result = monitor.evaluate(
+            [{"hours_since_update": None, "last_value": None, "total_rows": 0}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.SKIPPED
+        assert "empty" in result.message.lower()
+
+    def test_null_ts_user_specified_error(self):
+        """User-specified column with all NULLs should ERROR."""
+        monitor = FreshnessMonitor({"timestamp_column": "my_col"})
+        result = monitor.evaluate(
+            [{"hours_since_update": None, "last_value": None, "total_rows": 100}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.ERROR
+        assert "my_col" in result.message
+
+    def test_null_ts_auto_detected_skipped(self):
+        """Auto-detected column with all NULLs should SKIP (not ERROR)."""
+        monitor = FreshnessMonitor({})  # no timestamp_column → auto-detected
+        monitor.timestamp_column = "updated_at"  # simulate auto-detection
+        result = monitor.evaluate(
+            [{"hours_since_update": None, "last_value": None, "total_rows": 100}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.SKIPPED
+        assert "auto-detected" in result.message.lower()
+
+
+class TestVolumeEdgeCases:
+    def test_constant_volume_small_delta_pass(self):
+        """When stddev=0 and delta is below both thresholds, should PASS."""
+        monitor = VolumeMonitor({"time_bucket_column": "ts", "min_abs_delta": 10})
+        rows = [
+            {"bucket_date": f"2025-01-{d:02d}", "row_count": 100}
+            for d in range(1, 6)
+        ]
+        rows.append({"bucket_date": "2025-01-06", "row_count": 105})
+        result = monitor.evaluate(rows, "db.schema.table")
+        assert result.status == MonitorStatus.PASS
+
+    def test_constant_volume_big_delta_warn(self):
+        """When stddev=0 and delta exceeds thresholds, should WARN."""
+        monitor = VolumeMonitor({"time_bucket_column": "ts", "min_abs_delta": 10})
+        rows = [
+            {"bucket_date": f"2025-01-{d:02d}", "row_count": 100}
+            for d in range(1, 6)
+        ]
+        rows.append({"bucket_date": "2025-01-06", "row_count": 200})
+        result = monitor.evaluate(rows, "db.schema.table")
+        assert result.status == MonitorStatus.WARN
+
+    def test_max_scan_days_clamps_lookback(self):
+        """lookback_days should be clamped to max_scan_days."""
+        monitor = VolumeMonitor({
+            "time_bucket_column": "ts",
+            "lookback_days": 365,
+            "max_scan_days": 90,
+        })
+        assert monitor.lookback_days == 90
+
+
+class TestSchemaEdgeCases:
+    def test_cross_dialect_type_normalization_int64(self):
+        """INT64 (BigQuery) vs integer (Postgres) should NOT alert."""
+        monitor = SchemaMonitor({
+            "baseline_columns": [
+                {"column_name": "id", "data_type": "INT64"},
+            ],
+            "fail_on_type_change": True,
+        })
+        result = monitor.evaluate(
+            [{"column_name": "id", "data_type": "integer", "is_nullable": "NO", "ordinal_position": 1}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.PASS
+
+    def test_cross_dialect_type_normalization_string_text(self):
+        """STRING (BigQuery) vs text (Postgres) should NOT alert."""
+        monitor = SchemaMonitor({
+            "baseline_columns": [
+                {"column_name": "name", "data_type": "STRING"},
+            ],
+            "fail_on_type_change": True,
+        })
+        result = monitor.evaluate(
+            [{"column_name": "name", "data_type": "text", "is_nullable": "YES", "ordinal_position": 1}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.PASS
+
+    def test_cross_dialect_varchar_with_length(self):
+        """character varying (Postgres) vs varchar(255) should NOT alert."""
+        monitor = SchemaMonitor({
+            "baseline_columns": [
+                {"column_name": "email", "data_type": "character varying"},
+            ],
+            "fail_on_type_change": True,
+        })
+        result = monitor.evaluate(
+            [{"column_name": "email", "data_type": "varchar(255)", "is_nullable": "YES", "ordinal_position": 1}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.PASS
+
+    def test_real_type_change_still_detected(self):
+        """A genuine type change (numeric → varchar) should still FAIL."""
+        monitor = SchemaMonitor({
+            "baseline_columns": [
+                {"column_name": "price", "data_type": "numeric"},
+            ],
+            "fail_on_type_change": True,
+        })
+        result = monitor.evaluate(
+            [{"column_name": "price", "data_type": "varchar", "is_nullable": "YES", "ordinal_position": 1}],
+            "db.schema.table",
+        )
+        assert result.status == MonitorStatus.FAIL
+
+
+class TestAnomalyEdgeCases:
+    def test_metric_category_constants(self):
+        """Verify ALL_COLUMN_METRICS and NUMERIC_ONLY_METRICS are correct."""
+        assert "null_rate" in AnomalyMonitor.ALL_COLUMN_METRICS
+        assert "distinct_rate" in AnomalyMonitor.ALL_COLUMN_METRICS
+        assert "distinct_count" in AnomalyMonitor.ALL_COLUMN_METRICS
+        assert "avg" not in AnomalyMonitor.ALL_COLUMN_METRICS
+        assert "avg" in AnomalyMonitor.NUMERIC_ONLY_METRICS
+        assert "sum" in AnomalyMonitor.NUMERIC_ONLY_METRICS
+        assert "null_rate" not in AnomalyMonitor.NUMERIC_ONLY_METRICS
+
+
+class TestExecutorEdgeCases:
+    def test_adaptive_lookback_no_unbounded(self):
+        """Adaptive lookback should never try lookback_days=0 (all data)."""
+        monitor = AnomalyMonitor({
+            "column": "x",
+            "metric": "avg",
+            "timestamp_column": "ts",
+            "lookback_days": 30,
+        })
+        lookbacks_tried = []
+        original_build = monitor.build_query
+
+        def tracking_build(database, schema, table, dialect):
+            lookbacks_tried.append(monitor.lookback_days)
+            return original_build(database, schema, table, dialect)
+
+        monitor.build_query = tracking_build
+
+        def mock_query(sql):
+            return [{"bucket_date": "2025-01-01", "metric_value": 42.0}]
+
+        executor = MonitorExecutor(query_func=mock_query, dialect="postgres")
+        executor.run_monitor(monitor, "db", "schema", "table")
+        assert 0 not in lookbacks_tried
+
+    def test_max_multi_columns_constant(self):
+        """MAX_MULTI_COLUMNS should be defined."""
+        from scanner.monitors.executor import MAX_MULTI_COLUMNS
+        assert MAX_MULTI_COLUMNS == 50
+
+    def test_monitor_result_raw_status(self):
+        """MonitorResult should support raw_status field."""
+        from scanner.monitors.base import MonitorResult
+        r = MonitorResult(
+            monitor_type="test",
+            target_fqn="t",
+            status=MonitorStatus.FAIL,
+        )
+        r.raw_status = MonitorStatus.FAIL
+        d = r.to_dict()
+        assert d["raw_status"] == "fail"
+
+    def test_monitor_result_raw_status_none(self):
+        """raw_status should default to None in to_dict."""
+        from scanner.monitors.base import MonitorResult
+        r = MonitorResult(
+            monitor_type="test",
+            target_fqn="t",
+            status=MonitorStatus.PASS,
+        )
+        d = r.to_dict()
+        assert d["raw_status"] is None

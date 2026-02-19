@@ -34,6 +34,51 @@ class SchemaMonitor(BaseMonitor):
 
     monitor_type = "schema_change"
 
+    # Cross-dialect type alias mapping → canonical form.
+    _TYPE_ALIASES: Dict[str, str] = {
+        # BigQuery → canonical
+        "int64": "integer",
+        "float64": "double",
+        "bool": "boolean",
+        "string": "text",
+        "bytes": "bytea",
+        "bignumeric": "numeric",
+        # Snowflake → canonical
+        "number": "numeric",
+        "variant": "json",
+        "timestamp_ltz": "timestamptz",
+        "timestamp_ntz": "timestamp",
+        "timestamp_tz": "timestamptz",
+        # Postgres aliases → canonical
+        "character varying": "varchar",
+        "double precision": "double",
+        "int": "integer",
+        "int4": "integer",
+        "int8": "bigint",
+        "int2": "smallint",
+        "float4": "real",
+        "float8": "double",
+        "serial": "integer",
+        "bigserial": "bigint",
+        "timestamp with time zone": "timestamptz",
+        "timestamp without time zone": "timestamp",
+    }
+
+    @staticmethod
+    def _normalize_type(raw_type: str) -> str:
+        """Normalize a data type string for cross-dialect comparison.
+
+        Strips length/precision (e.g. ``varchar(255)`` → ``varchar``)
+        and maps dialect-specific names to a canonical form so that
+        ``INT64`` (BigQuery) matches ``integer`` (Postgres).
+        """
+        t = raw_type.lower().strip()
+        # Strip length/precision: varchar(255) → varchar, numeric(10,2) → numeric
+        paren_idx = t.find("(")
+        if paren_idx > 0:
+            t = t[:paren_idx].strip()
+        return SchemaMonitor._TYPE_ALIASES.get(t, t)
+
     def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
         self.baseline_columns: Optional[List[Dict[str, str]]] = self.config.get(
@@ -90,7 +135,7 @@ class SchemaMonitor(BaseMonitor):
 
         current_columns = {
             row["column_name"].lower(): {
-                "data_type": row.get("data_type", "").lower(),
+                "data_type": self._normalize_type(row.get("data_type", "")),
                 "is_nullable": row.get("is_nullable", "YES"),
                 "ordinal_position": row.get("ordinal_position"),
             }
@@ -117,7 +162,7 @@ class SchemaMonitor(BaseMonitor):
         # Build baseline lookup.
         baseline = {
             col["column_name"].lower(): {
-                "data_type": col.get("data_type", "").lower(),
+                "data_type": self._normalize_type(col.get("data_type", "")),
                 "is_nullable": col.get("is_nullable", "YES"),
             }
             for col in self.baseline_columns

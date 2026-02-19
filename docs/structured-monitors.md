@@ -90,7 +90,9 @@ When no `max_hours` is provided, the system queries the last 30 days of daily `M
 | hours_since_update ≤ warn_hours | PASS |
 | warn_hours < hours_since_update ≤ max_hours | WARN |
 | hours_since_update > max_hours | FAIL |
-| Column has no non-null values | ERROR |
+| Table is empty (0 rows) | SKIPPED |
+| User-specified column has all NULLs | ERROR |
+| Auto-detected column has all NULLs | SKIPPED |
 
 #### Generated SQL (BigQuery example)
 
@@ -132,7 +134,10 @@ WHERE timestamp_col IS NOT NULL
 | `historical_mean` | float | null | Pre-computed baseline mean for Z-score. |
 | `historical_stddev` | float | null | Pre-computed baseline stddev for Z-score. |
 | `time_bucket_column` | string | null | Column to bucket by day (enables time-series mode). |
-| `lookback_days` | int | 30 | Days of history to analyze in time-series mode. |
+| `lookback_days` | int | 30 | Days of history to analyze in time-series mode. Clamped to `max_scan_days`. |
+| `max_scan_days` | int | 90 | Upper bound for `lookback_days` to prevent unbounded scans. |
+| `min_abs_delta` | int | 10 | Minimum absolute change to trigger WARN when stddev=0 (constant volume). |
+| `min_rel_delta` | float | 0.01 | Minimum relative change (fraction) to trigger WARN when stddev=0. |
 
 #### Two modes
 
@@ -155,7 +160,8 @@ When neither `min_rows` nor `max_rows` is provided:
 | Condition | Status |
 |-----------|--------|
 | < 3 data points in lookback window | SKIPPED |
-| Constant volume and latest differs | WARN |
+| Constant volume and delta ≥ min_abs_delta AND ≥ min_rel_delta | WARN |
+| Constant volume and delta below thresholds | PASS |
 | \|z_score\| > anomaly_threshold | FAIL |
 | Within expected range | PASS |
 
@@ -180,7 +186,7 @@ When neither `min_rows` nor `max_rows` is provided:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `column` | string | "" | Target column. Use `"*"` to auto-discover all numeric columns. |
+| `column` | string | "" | Target column. Use `"*"` to auto-discover columns (all columns for null_rate/distinct_rate, numeric only for avg/min/max/etc.). |
 | `metric` | string | "row_count" (no column) or "avg" (with column) | Metric to track. See table below. |
 | `anomaly_threshold` | float | 3.0 | Z-score threshold. |
 | `seasonality` | string | null | Set to `"day_of_week"` to compare only same-weekday baselines. |
@@ -222,9 +228,10 @@ If the initial query (default 30 days) returns fewer than 3 data points, the sys
 
 1. 25 days
 2. 20 days
-3. 0 days (all available data — no date filter)
+3. 14 days
+4. 7 days
 
-If any retry produces ≥ 3 data points, that result is used. Otherwise, the monitor reports the current value as a "baseline observation" (PASS) and notes that anomaly detection isn't ready yet.
+All lookbacks are bounded — the system never falls back to scanning all available data (unbounded). If no retry produces ≥ 3 data points, the monitor reports the current value as a "baseline observation" (PASS) and notes that anomaly detection isn't ready yet.
 
 #### Confidence scaling
 
@@ -245,10 +252,13 @@ Confidence is reported in the result details and appended to the message when be
 
 When `column: "*"`, the system:
 
-1. Queries `INFORMATION_SCHEMA.COLUMNS` to discover all numeric columns in the table
-2. Runs the specified metric on each column independently
-3. Returns FAIL if any column is anomalous
-4. Reports per-column results in `details.per_column`
+1. Determines which columns to discover based on the metric:
+   - **All-column metrics** (`null_rate`, `distinct_count`, `distinct_rate`): discovers ALL columns except complex types (STRUCT, ARRAY, JSON, GEOGRAPHY, RECORD, VARIANT, OBJECT)
+   - **Numeric-only metrics** (`avg`, `min`, `max`, `sum`, `stddev`, `zero_rate`): discovers only numeric columns (INT, FLOAT, NUMERIC, etc.)
+2. Caps the column list at `MAX_MULTI_COLUMNS` (50) to prevent excessive queries
+3. Runs the specified metric on each column independently
+4. Returns FAIL if any column is anomalous
+5. Reports per-column results in `details.per_column`
 
 #### Status logic
 
@@ -305,7 +315,14 @@ The monitor detects three types of changes:
 | `column_removed` | Column exists in baseline but not in current schema |
 | `type_changed` | Column exists in both but data type differs |
 
-All comparisons are case-insensitive.
+All comparisons are case-insensitive and use **dialect-aware type normalization** to prevent false positives across warehouses. For example, `INT64` (BigQuery) and `integer` (Postgres) are treated as the same type. Length/precision is stripped (e.g., `varchar(255)` → `varchar`). Key normalizations include:
+
+- `INT64`, `int`, `int4` → `integer`
+- `FLOAT64`, `float8`, `double precision` → `double`
+- `STRING` → `text`
+- `character varying` → `varchar`
+- `NUMBER` → `numeric`
+- `timestamp with time zone`, `TIMESTAMP_LTZ`, `TIMESTAMP_TZ` → `timestamptz`
 
 #### Status logic
 
@@ -482,7 +499,7 @@ The frontend exposes three convenience monitor types that route to the Anomaly m
 | `uniqueness` | `anomaly` | `metric: "distinct_rate", column: "*"` |
 | `distribution` | `anomaly` | `metric: "avg", column: "*"` |
 
-All three use `column: "*"` which triggers multi-column mode — every numeric column in the table is checked independently.
+All three use `column: "*"` which triggers multi-column mode. For `null_rate` and `uniqueness`, **all** columns (including strings) are checked. For `distribution` (metric=avg), only numeric columns are checked.
 
 Defined in `scanner/monitors/executor.py` as `MONITOR_ROUTING`.
 
@@ -524,17 +541,17 @@ The monitor's `evaluate()` interprets the query results and produces a `MonitorR
 
 ### 7. Adaptive retry (anomaly only)
 
-If an anomaly monitor reports "not enough data" (< 3 data points), the executor retries with shorter lookback windows: 25 days → 20 days → all available data.
+If an anomaly monitor reports "not enough data" (< 3 data points), the executor retries with bounded shorter lookback windows: 25 → 20 → 14 → 7 days. The system never falls back to unbounded scans.
 
 ### 8. LLM validation (optional)
 
-When a monitor returns FAIL or WARN, the system can optionally send the result to an LLM for validation. The LLM reviews the context (monitor type, value, threshold, z-score, baseline stats, confidence) and can:
+When a monitor returns FAIL or WARN, the system can optionally send the result to an LLM for validation. The LLM reviews the context (monitor type, value, threshold, z-score, baseline stats, confidence) and can suggest adjustments. However, the following constraints are enforced:
 
-- Downgrade FAIL → WARN
-- Downgrade WARN → PASS
-- Confirm the original status
+- **Never upgrade PASS → FAIL** — the LLM cannot escalate a passing result
+- **Downgrade only when data is uncertain** — FAIL → WARN or WARN → PASS is only allowed when `confidence_pct < 60` or `baseline_count < 7`
+- **Always track both statuses** — `raw_status` (pre-LLM) and `final_status` (post-LLM) are both persisted alongside the `llm_reason`
 
-The original result is preserved and the LLM assessment is appended to `details.llm_validation`.
+The original result is preserved in `raw_status` and the LLM assessment is appended to `details.llm_validation`.
 
 ### 9. Save result
 
@@ -542,7 +559,7 @@ A `MonitorRun` record is created with the status, value, threshold, message, det
 
 ### 10. Dispatch alerts
 
-If the result status matches the monitor's `alertOnStatus` configuration, an alert is sent to the configured channels (Slack, Teams, PagerDuty, etc.) via the `/api/schedule/alert` endpoint.
+If the result status matches the monitor's `alertOnStatus` configuration, an alert is sent to the configured channels (Slack, Teams, PagerDuty, etc.) via the `/api/schedule/alert` endpoint. Alerts use `final_status` (post-LLM) when available.
 
 ---
 
@@ -620,9 +637,10 @@ Execution:
 
 1. Resolve: "null_rate" → ("anomaly", {metric: "null_rate", column: "*"})
 
-2. Multi-column mode activates:
-   a. Query INFORMATION_SCHEMA for numeric columns
-   b. Finds: [user_id, event_count, revenue, page_views]
+2. Multi-column mode activates (null_rate → ALL columns, not just numeric):
+   a. Query INFORMATION_SCHEMA for all columns (excluding complex types like STRUCT/ARRAY/JSON)
+   b. Finds: [user_id, event_count, revenue, page_views, event_name, source]
+   c. Capped at 50 columns max
 
 3. For each column, run anomaly monitor independently:
 
@@ -636,8 +654,10 @@ Execution:
    Column: event_count → Z-score = 0.3 → PASS
    Column: revenue → Z-score = -1.2 → PASS
    Column: page_views → Z-score = 0.8 → PASS
+   Column: event_name (string!) → Z-score = 0.1 → PASS
+   Column: source (string!) → Z-score = 0.2 → PASS
 
-4. Aggregate: 1 of 4 columns anomalous → overall FAIL
-   Message: "Anomalies detected in 1/4 columns: user_id null_rate is anomalous (z=98.0)"
-   Details: { columns_checked: 4, anomalies: 1, per_column: [...] }
+4. Aggregate: 1 of 6 columns anomalous → overall FAIL
+   Message: "Anomalies detected in 1/6 columns: user_id null_rate is anomalous (z=98.0)"
+   Details: { columns_checked: 6, anomalies: 1, per_column: [...] }
 ```

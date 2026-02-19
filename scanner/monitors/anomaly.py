@@ -43,6 +43,11 @@ class AnomalyMonitor(BaseMonitor):
 
     monitor_type = "anomaly"
 
+    # Metrics that work on ANY column type (string, numeric, etc.)
+    ALL_COLUMN_METRICS = {"null_rate", "distinct_count", "distinct_rate"}
+    # Metrics that require numeric columns only
+    NUMERIC_ONLY_METRICS = {"min", "max", "avg", "sum", "stddev", "zero_rate"}
+
     # Metrics that require a column
     METRIC_SQL = {
         "null_rate": (

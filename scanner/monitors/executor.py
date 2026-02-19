@@ -38,6 +38,9 @@ MONITOR_REGISTRY: Dict[str, type] = {
 
 # Map UI-only monitor types to real backend implementations.
 # Each entry is (backend_type, default_config_overrides).
+# Maximum number of columns to scan in multi-column anomaly mode.
+MAX_MULTI_COLUMNS = 50
+
 MONITOR_ROUTING: Dict[str, tuple] = {
     "null_rate": ("anomaly", {"metric": "null_rate", "column": "*"}),
     "uniqueness": ("anomaly", {"metric": "distinct_rate", "column": "*"}),
@@ -123,9 +126,9 @@ class MonitorExecutor:
         produced enough data points for Z-score analysis.
         """
         original_lookback = monitor.lookback_days
-        # Try shorter windows per user request (30 → 25 → 20),
-        # then all available data (0 = no date filter).
-        fallback_lookbacks = [25, 20, 0]
+        # Try shorter windows (30 → 25 → 20 → 14 → 7).
+        # Never fall back to 0 (unbounded) to avoid scanning entire tables.
+        fallback_lookbacks = [25, 20, 14, 7]
 
         for lookback in fallback_lookbacks:
             if lookback >= original_lookback:

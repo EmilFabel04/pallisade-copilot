@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { ModeSelector, getModeFromSlashCommand } from '@/components/copilot/ModeSelector';
@@ -121,12 +121,56 @@ const Icons = {
   ),
 };
 
-export default function AssistantPage() {
+function AssistantPageInner() {
   const { data: session } = useSession();
   const { selectedPipelineId, selectedPipeline } = usePipeline();
-  const [messages, setMessages] = useState<Message[]>([]);
+
+  // Read deep-link data from sessionStorage (primary) or URL params (fallback).
+  // sessionStorage is set by the new RunHistoryTable navigateToScout().
+  // URL params are the fallback for when the schedule page hasn't hot-reloaded yet.
+  // Using a ref initialized inline — runs synchronously during render, so the
+  // data is available before any effects fire. sessionStorage survives React
+  // Strict Mode remounts and Suspense re-renders (unlike useSearchParams).
+  const deepLinkData = useRef<{ prompt: string; context: string; display: string } | null>(
+    typeof window !== 'undefined' ? (() => {
+      // Primary: sessionStorage (set by new RunHistoryTable code)
+      const json = sessionStorage.getItem('askScoutDeepLink');
+      if (json) {
+        try { return JSON.parse(json); } catch { /* fall through */ }
+      }
+      // Fallback: URL params (old code or direct navigation)
+      const params = new URLSearchParams(window.location.search);
+      const prompt = params.get('prompt');
+      if (prompt) {
+        const data = {
+          prompt,
+          context: params.get('context') || '',
+          display: params.get('display') || '',
+        };
+        // Store in sessionStorage so it survives Strict Mode remounts
+        sessionStorage.setItem('askScoutDeepLink', JSON.stringify(data));
+        // Clean URL immediately — no Next.js re-render
+        window.history.replaceState({}, '', '/dashboard/assistant');
+        return data;
+      }
+      return null;
+    })() : null
+  );
+
+  // Initialize messages with the deep-link user message if present.
+  // Because this is a useState lazy initializer, it runs on every mount
+  // (including Strict Mode remounts), so the message is always visible.
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (!deepLinkData.current) return [];
+    return [{
+      id: `deeplink-${Date.now()}`,
+      role: 'user',
+      content: deepLinkData.current.display || deepLinkData.current.prompt,
+      timestamp: new Date(),
+    }];
+  });
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(() => !!deepLinkData.current);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
@@ -164,6 +208,7 @@ export default function AssistantPage() {
   const modelLoadedRef = useRef(false);
   const initialLoadDone = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const promptProcessed = useRef(false);
   const [confirmationLoading, setConfirmationLoading] = useState(false);
 
   // Streaming chat hook
@@ -456,6 +501,75 @@ export default function AssistantPage() {
     }
   };
 
+  // Deep-link effect: send the API message for Ask Scout deep-links.
+  // This runs BEFORE the fetchSessions mount effect (effects run in declaration order).
+  // The user message is already visible (set via useState initializer above).
+  // We only remove from sessionStorage AFTER the API call succeeds, so
+  // Strict Mode remounts can re-read the data and re-fire the API call.
+  useEffect(() => {
+    const data = deepLinkData.current;
+    if (!data || promptProcessed.current) return;
+    promptProcessed.current = true;
+
+    // Remove from sessionStorage — we've committed to processing
+    sessionStorage.removeItem('askScoutDeepLink');
+
+    // Build the full API message with structured context for the LLM
+    let apiMessage = data.prompt;
+    if (data.context) {
+      try {
+        const ctx = JSON.parse(data.context);
+        const lines: string[] = [
+          '--- MONITOR RUN DATA ---',
+          `Task: ${ctx.taskName}`,
+          `Monitor: ${ctx.monitorType} on ${ctx.targetFqn}`,
+          `Status: ${ctx.status}`,
+        ];
+        if (ctx.value != null) lines.push(`Value: ${ctx.value}`);
+        if (ctx.threshold != null) lines.push(`Threshold: ${ctx.threshold}`);
+        if (ctx.message) lines.push(`Message: ${ctx.message}`);
+        if (ctx.startedAt) lines.push(`Run time: ${ctx.startedAt}`);
+        if (ctx.durationMs) lines.push(`Duration: ${ctx.durationMs}ms`);
+        if (ctx.details && Object.keys(ctx.details).length > 0) {
+          lines.push('', 'Details:');
+          for (const [k, v] of Object.entries(ctx.details)) {
+            lines.push(`  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`);
+          }
+        }
+        if (ctx.sqlExecuted) lines.push('', `SQL: ${ctx.sqlExecuted}`);
+        if (ctx.llmValidation) {
+          lines.push('', 'AI Assessment:');
+          if (ctx.llmValidation.explanation) lines.push(`  Explanation: ${ctx.llmValidation.explanation}`);
+          if (ctx.llmValidation.original_status) lines.push(`  Original: ${ctx.llmValidation.original_status}`);
+          if (ctx.llmValidation.adjusted_status) lines.push(`  Adjusted: ${ctx.llmValidation.adjusted_status}`);
+        }
+        lines.push('--- END MONITOR DATA ---', '');
+        apiMessage = lines.join('\n') + '\n' + data.prompt;
+      } catch { /* invalid context — use prompt as-is */ }
+    }
+
+    // Call sendStreamingMessage directly — stable useCallback([]), no stale closure
+    sendStreamingMessage(apiMessage, {
+      sessionId: undefined,
+      pipelineStackId: selectedPipelineId || undefined,
+      model: selectedModel,
+      mode: 'ask',
+    }).then((result) => {
+      if (result.sessionId) {
+        setSessionId(result.sessionId);
+        fetch('/api/copilot/sessions?limit=50')
+          .then(res => res.json())
+          .then(d => setSessions(d.sessions || []))
+          .catch(() => {});
+      }
+    }).catch((error) => {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      console.error('Deep-link chat error:', error);
+    }).finally(() => {
+      setIsLoading(false);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch sessions on mount
   useEffect(() => {
     if (initialLoadDone.current) return;
@@ -478,6 +592,12 @@ export default function AssistantPage() {
       if (response.ok) {
         const data = await response.json();
         setSessions(data.sessions || []);
+
+        // If deep-link is active (from Ask Scout), don't load any session —
+        // the deep-link effect handles everything.
+        if (deepLinkData.current || promptProcessed.current) {
+          return;
+        }
 
         if (data.sessions && data.sessions.length > 0) {
           const pipelineSession = selectedPipelineId
@@ -2064,4 +2184,16 @@ function formatInline(text: string): string {
     })
     // Links
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank" rel="noopener">$1</a>');
+}
+
+export default function AssistantPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-full bg-[#050508]">
+        <div className="w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+      </div>
+    }>
+      <AssistantPageInner />
+    </Suspense>
+  );
 }

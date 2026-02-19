@@ -28,6 +28,9 @@ export default function SchedulePage() {
   const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
 
+  // Edit modal state
+  const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null);
+
   // Integrations for create modal
   const [integrations, setIntegrations] = useState<Array<{ id: string; name: string; type: string }>>([]);
 
@@ -169,6 +172,29 @@ export default function SchedulePage() {
     }
   };
 
+  // Update task
+  const handleUpdateTask = async (taskId: string, taskData: any) => {
+    try {
+      const res = await fetch(`/api/schedule/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData),
+      });
+      if (res.ok) {
+        setEditingTask(null);
+        fetchTasks();
+        // Refresh selected task with full data from GET endpoint
+        const detailRes = await fetch(`/api/schedule/tasks/${taskId}`);
+        if (detailRes.ok) {
+          const detail = await detailRes.json();
+          if (detail.task) setSelectedTask(detail.task);
+        }
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to update task:', err);
+    }
+  };
+
   // Task detail view
   if (selectedTask) {
     const statusColor = selectedTask.lastStatus
@@ -204,6 +230,13 @@ export default function SchedulePage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setEditingTask(selectedTask)}
+            >
+              Edit
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -261,8 +294,24 @@ export default function SchedulePage() {
         {/* Run history */}
         <div className="flex-1 px-6 py-4 overflow-y-auto">
           <h3 className="text-[14px] font-medium text-white mb-3">Run History</h3>
-          <RunHistoryTable runs={taskRuns} loading={runsLoading} />
+          <RunHistoryTable
+            runs={taskRuns}
+            loading={runsLoading}
+            taskName={selectedTask.name}
+            monitorType={selectedTask.monitorType}
+            targetFqn={selectedTask.targetFqn}
+          />
         </div>
+
+        {/* Edit modal (rendered inside detail view) */}
+        <CreateTaskModal
+          open={!!editingTask}
+          onClose={() => setEditingTask(null)}
+          onSubmit={handleCreateTask}
+          onUpdate={handleUpdateTask}
+          editTask={editingTask}
+          integrations={integrations}
+        />
       </div>
     );
   }
@@ -338,11 +387,13 @@ export default function SchedulePage() {
         )}
       </div>
 
-      {/* Create modal */}
+      {/* Create / Edit modal */}
       <CreateTaskModal
-        open={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        open={showCreateModal || !!editingTask}
+        onClose={() => { setShowCreateModal(false); setEditingTask(null); }}
         onSubmit={handleCreateTask}
+        onUpdate={handleUpdateTask}
+        editTask={editingTask}
         integrations={integrations}
       />
     </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { cn } from '@/lib/utils';
 import { MONITOR_TYPES } from '@/types/schedule';
 
 interface MonitorConfigFormProps {
@@ -41,14 +42,16 @@ export function MonitorConfigForm({
         <label className="block text-[12px] font-medium text-white/50 mb-2">
           Monitor Type
         </label>
-        <div className="grid grid-cols-2 gap-2">
-          {MONITOR_TYPES.map((mt) => (
+
+        {/* Data Quality monitors */}
+        <p className="text-[11px] text-white/30 uppercase tracking-wider mb-2">Data Quality</p>
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {MONITOR_TYPES.filter((mt) => !INFRA_TYPES.includes(mt.value)).map((mt) => (
             <button
               key={mt.value}
               type="button"
               onClick={() => {
                 onMonitorTypeChange(mt.value);
-                // Set sensible defaults per monitor type
                 if (mt.value === 'ANOMALY') {
                   onConfigChange({ metric: 'row_count', llm_validate: true });
                 } else if (['NULL_RATE', 'UNIQUENESS', 'DISTRIBUTION'].includes(mt.value)) {
@@ -58,13 +61,37 @@ export function MonitorConfigForm({
                 }
                 setShowAdvanced(false);
               }}
-              className={`
-                flex flex-col items-start p-3 rounded-lg text-left transition-colors
-                ${monitorType === mt.value
+              className={cn(
+                'flex flex-col items-start p-3 rounded-lg text-left transition-colors',
+                monitorType === mt.value
                   ? 'bg-white/[0.1] border border-white/[0.15]'
                   : 'bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06]'
-                }
-              `}
+              )}
+            >
+              <span className="text-[13px] font-medium text-white">{mt.label}</span>
+              <span className="text-[11px] text-white/40 mt-0.5">{mt.description}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Infrastructure monitors */}
+        <p className="text-[11px] text-white/30 uppercase tracking-wider mb-2">Infrastructure</p>
+        <div className="grid grid-cols-2 gap-2">
+          {MONITOR_TYPES.filter((mt) => INFRA_TYPES.includes(mt.value)).map((mt) => (
+            <button
+              key={mt.value}
+              type="button"
+              onClick={() => {
+                onMonitorTypeChange(mt.value);
+                onConfigChange({});
+                setShowAdvanced(false);
+              }}
+              className={cn(
+                'flex flex-col items-start p-3 rounded-lg text-left transition-colors',
+                monitorType === mt.value
+                  ? 'bg-white/[0.1] border border-white/[0.15]'
+                  : 'bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06]'
+              )}
             >
               <span className="text-[13px] font-medium text-white">{mt.label}</span>
               <span className="text-[11px] text-white/40 mt-0.5">{mt.description}</span>

@@ -55,7 +55,13 @@ class VolumeMonitor(BaseMonitor):
         self.time_bucket_column: Optional[str] = self.config.get(
             "time_bucket_column"
         )
-        self.lookback_days: int = int(self.config.get("lookback_days", 30))
+        self.min_abs_delta: int = int(self.config.get("min_abs_delta", 10))
+        self.min_rel_delta: float = float(self.config.get("min_rel_delta", 0.01))
+        self.max_scan_days: int = int(self.config.get("max_scan_days", 90))
+        self.lookback_days: int = min(
+            int(self.config.get("lookback_days", 30)),
+            self.max_scan_days,
+        )
 
     def build_query(
         self,
@@ -221,8 +227,10 @@ class VolumeMonitor(BaseMonitor):
         stddev = math.sqrt(variance) if variance > 0 else 0
 
         if stddev == 0:
-            # Constant volume — any change is suspicious.
-            if latest != mean:
+            # Constant volume — check if the change exceeds noise thresholds.
+            abs_delta = abs(latest - mean)
+            rel_delta = abs_delta / mean if mean > 0 else float("inf")
+            if abs_delta >= self.min_abs_delta and rel_delta >= self.min_rel_delta:
                 return MonitorResult(
                     monitor_type=self.monitor_type,
                     target_fqn=target_fqn,
@@ -230,11 +238,14 @@ class VolumeMonitor(BaseMonitor):
                     value=float(latest),
                     message=(
                         f"Volume changed from constant {mean:.0f} "
-                        f"to {latest:,}."
+                        f"to {latest:,} (delta: {abs_delta:.0f}, "
+                        f"{rel_delta:.1%} change)."
                     ),
                     details={
                         "baseline_mean": mean,
                         "baseline_stddev": 0,
+                        "abs_delta": abs_delta,
+                        "rel_delta": round(rel_delta, 4),
                         "data_points": len(counts),
                     },
                 )

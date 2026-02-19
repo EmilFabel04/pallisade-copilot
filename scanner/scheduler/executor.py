@@ -131,6 +131,50 @@ def _discover_numeric_columns(
         return []
 
 
+def _discover_all_columns(
+    query_func, database: str, schema: str, table: str, dialect: str
+) -> list[str]:
+    """Discover all columns suitable for null_rate/distinct_rate.
+
+    Returns every column except complex/nested types (STRUCT, ARRAY,
+    GEOGRAPHY, JSON, RECORD, etc.) that cannot be meaningfully
+    compared for null or distinct counts.
+    """
+    if dialect == "bigquery":
+        exclude = "'STRUCT', 'ARRAY', 'GEOGRAPHY', 'JSON', 'RECORD'"
+        sql = (
+            f"SELECT column_name FROM `{database}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+            f"WHERE table_name = '{table}' AND data_type NOT IN ({exclude}) "
+            f"ORDER BY ordinal_position"
+        )
+    elif dialect == "snowflake":
+        exclude = "'VARIANT', 'OBJECT', 'ARRAY'"
+        sql = (
+            f"SELECT COLUMN_NAME FROM {database}.INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_SCHEMA = '{schema.upper()}' AND TABLE_NAME = '{table.upper()}' "
+            f"AND DATA_TYPE NOT IN ({exclude}) ORDER BY ORDINAL_POSITION"
+        )
+    else:
+        # Postgres / Redshift
+        exclude = "'json', 'jsonb', 'xml', 'point', 'polygon', 'line'"
+        sql = (
+            f"SELECT column_name FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = '{table}' "
+            f"AND data_type NOT IN ({exclude}) ORDER BY ordinal_position"
+        )
+
+    try:
+        rows = query_func(sql)
+        return [
+            row.get("column_name") or row.get("COLUMN_NAME", "")
+            for row in rows
+            if row.get("column_name") or row.get("COLUMN_NAME")
+        ]
+    except Exception as e:
+        logger.warning(f"[Executor] Failed to discover all columns: {e}")
+        return []
+
+
 class TaskExecutor:
     """Executes a scheduled task (structured monitor or LLM prompt)."""
 
@@ -313,9 +357,11 @@ class TaskExecutor:
             # LLM validation for FAIL/WARN results
             llm_validate = config.get("llm_validate", True)
             if llm_validate and result.status in (MonitorStatus.FAIL, MonitorStatus.WARN):
+                result_dict["raw_status"] = result_dict["status"]
                 result_dict = await self._llm_validate_result(
                     result_dict, resolved_type, target_fqn
                 )
+                result_dict["final_status"] = result_dict["status"]
 
             return result_dict
         except Exception as e:
@@ -390,9 +436,23 @@ class TaskExecutor:
                 cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
             parsed = json_mod.loads(cleaned)
-            adjusted_status = parsed.get("adjusted_status", result_dict["status"]).upper()
+            original_status = result_dict["status"]
+            adjusted_status = parsed.get("adjusted_status", original_status).upper()
             explanation = parsed.get("explanation", "")
             confidence = parsed.get("confidence", 0.5)
+
+            # Constrain LLM adjustments:
+            # 1. Never upgrade PASS → FAIL
+            if original_status == "PASS" and adjusted_status == "FAIL":
+                adjusted_status = original_status
+
+            # 2. Only allow downgrade when confidence_pct < 60 or baseline_count < 7
+            if adjusted_status != original_status:
+                confidence_pct = details.get("confidence_pct", 100)
+                baseline_count = details.get("baseline_count", 30)
+                can_adjust = confidence_pct < 60 or baseline_count < 7
+                if original_status in ("FAIL", "WARN") and not can_adjust:
+                    adjusted_status = original_status  # reject the change
 
             # Apply adjustment
             if adjusted_status in ("FAIL", "WARN", "PASS"):
@@ -405,14 +465,16 @@ class TaskExecutor:
                 if not result_dict.get("details"):
                     result_dict["details"] = {}
                 result_dict["details"]["llm_validation"] = {
+                    "original_status": original_status,
                     "adjusted_status": adjusted_status,
                     "explanation": explanation,
                     "confidence": confidence,
                 }
+                result_dict["details"]["llm_reason"] = explanation
 
             logger.info(
                 "[Executor] LLM validation complete",
-                original_status=result_dict.get("status"),
+                original_status=original_status,
                 adjusted_status=adjusted_status,
                 confidence=confidence,
             )
@@ -432,29 +494,44 @@ class TaskExecutor:
         table: str,
         dialect: str,
     ) -> Dict[str, Any]:
-        """Discover numeric columns and run anomaly check on each one.
+        """Discover columns and run anomaly check on each one.
+
+        For metrics that work on any column type (null_rate, distinct_count,
+        distinct_rate), discovers ALL columns excluding complex types.
+        For numeric-only metrics (avg, min, max, etc.), discovers only
+        numeric columns.
 
         Returns an aggregated result with per-column details.
         """
         from scanner.monitors.anomaly import AnomalyMonitor
         from scanner.monitors.base import MonitorStatus
+        from scanner.monitors.executor import MAX_MULTI_COLUMNS
 
-        columns = _discover_numeric_columns(
-            executor.query_func, database, schema, table, dialect
-        )
+        metric = config.get("metric", "avg")
+
+        if metric in AnomalyMonitor.ALL_COLUMN_METRICS:
+            columns = _discover_all_columns(
+                executor.query_func, database, schema, table, dialect
+            )
+        else:
+            columns = _discover_numeric_columns(
+                executor.query_func, database, schema, table, dialect
+            )
+
+        # Enforce column limit
+        columns = columns[:MAX_MULTI_COLUMNS]
 
         if not columns:
             return {
                 "status": "WARN",
-                "message": f"No numeric columns found in {database}.{schema}.{table}",
+                "message": f"No suitable columns found in {database}.{schema}.{table} for metric '{metric}'",
             }
 
         logger.info(
             f"[Executor] Multi-column anomaly: checking {len(columns)} columns",
             columns=columns,
+            metric=metric,
         )
-
-        metric = config.get("metric", "avg")
         per_column: list[dict] = []
         anomalies: list[str] = []
 
@@ -525,9 +602,11 @@ class TaskExecutor:
             # LLM validation for FAIL/WARN results (reuse existing)
             llm_validate = config.get("llm_validate", True)
             if llm_validate and result.status in (MonitorStatus.FAIL, MonitorStatus.WARN):
+                result_dict["raw_status"] = result_dict["status"]
                 result_dict = await self._llm_validate_result(
                     result_dict, monitor_type, integration_config.get("host", "unknown")
                 )
+                result_dict["final_status"] = result_dict["status"]
 
             return result_dict
         except Exception as e:

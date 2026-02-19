@@ -138,6 +138,7 @@ class FreshnessMonitor(BaseMonitor):
     def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
         # Empty string or None → needs auto-detection before build_query()
+        self._user_specified_column: bool = bool(self.config.get("timestamp_column"))
         self.timestamp_column: str = (
             self.config.get("timestamp_column") or ""
         )
@@ -201,17 +202,52 @@ class FreshnessMonitor(BaseMonitor):
             )
 
         row = query_results[0]
+        total_rows = row.get("total_rows", 0)
         hours = row.get("hours_since_update")
 
         if hours is None:
-            return MonitorResult(
-                monitor_type=self.monitor_type,
-                target_fqn=target_fqn,
-                status=MonitorStatus.ERROR,
-                message=(
-                    f"Column '{self.timestamp_column}' has no non-null values."
-                ),
-            )
+            if not total_rows:
+                # Empty table — nothing to check freshness against
+                return MonitorResult(
+                    monitor_type=self.monitor_type,
+                    target_fqn=target_fqn,
+                    status=MonitorStatus.SKIPPED,
+                    message="Table is empty — no rows to check freshness against.",
+                    details={
+                        "timestamp_column": self.timestamp_column,
+                        "total_rows": 0,
+                    },
+                )
+            # Non-empty table but all NULLs in the timestamp column
+            if self._user_specified_column:
+                return MonitorResult(
+                    monitor_type=self.monitor_type,
+                    target_fqn=target_fqn,
+                    status=MonitorStatus.ERROR,
+                    message=(
+                        f"Column '{self.timestamp_column}' has no non-null values "
+                        f"({total_rows} rows checked)."
+                    ),
+                    details={
+                        "timestamp_column": self.timestamp_column,
+                        "total_rows": total_rows,
+                    },
+                )
+            else:
+                return MonitorResult(
+                    monitor_type=self.monitor_type,
+                    target_fqn=target_fqn,
+                    status=MonitorStatus.SKIPPED,
+                    message=(
+                        f"Auto-detected column '{self.timestamp_column}' has no "
+                        f"non-null values. Specify a timestamp_column manually."
+                    ),
+                    details={
+                        "timestamp_column": self.timestamp_column,
+                        "total_rows": total_rows,
+                        "auto_detected": True,
+                    },
+                )
 
         hours = float(hours)
 
