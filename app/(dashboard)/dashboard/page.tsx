@@ -2,7 +2,26 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { motion } from 'framer-motion';
 import { usePipeline } from '@/contexts/PipelineContext';
+import { cn } from '@/lib/utils';
+import {
+  MessageSquare,
+  Database,
+  GitBranch,
+  Workflow,
+  Clock,
+  FileText,
+  Users,
+  Settings,
+  CheckCircle2,
+  BarChart3,
+  ArrowUpRight,
+  Sparkles,
+  Plus,
+} from 'lucide-react';
+
+// --- Types ---
 
 interface Integration {
   id: string;
@@ -26,28 +45,122 @@ interface DashboardStats {
   totalChats: number;
 }
 
+// --- Static data ---
+
 const integrationIcons: Record<string, React.ReactNode> = {
-  SNOWFLAKE: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-    </svg>
-  ),
-  BIGQUERY: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
-    </svg>
-  ),
-  DBT_CLOUD: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2L2 7v10l10 5 10-5V7l-10-5z" />
-    </svg>
-  ),
-  POSTGRES: (
-    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-    </svg>
-  ),
+  SNOWFLAKE: <Database className="w-4 h-4" />,
+  BIGQUERY: <Database className="w-4 h-4" />,
+  DBT_CLOUD: <Workflow className="w-4 h-4" />,
+  POSTGRES: <Database className="w-4 h-4" />,
 };
+
+const quickNavCards = [
+  {
+    name: 'AI Assistant',
+    description: 'Chat with your data',
+    href: '/dashboard/assistant',
+    icon: MessageSquare,
+    color: 'from-[var(--accent)]/20 to-[var(--accent)]/5',
+    borderColor: 'border-[var(--accent)]/30 hover:border-[var(--accent)]/50',
+    iconBg: 'bg-[var(--accent)]/20',
+    iconColor: 'text-[var(--accent-2)]',
+    highlighted: true,
+  },
+  {
+    name: 'Sources',
+    description: 'Browse tables & schemas',
+    href: '/dashboard/sources',
+    icon: Database,
+    color: 'from-blue-500/10 to-blue-500/5',
+    borderColor: 'border-blue-500/20 hover:border-blue-500/40',
+    iconBg: 'bg-blue-500/10',
+    iconColor: 'text-blue-400',
+    highlighted: false,
+  },
+  {
+    name: 'Lineage',
+    description: 'Trace data flow',
+    href: '/dashboard/lineage',
+    icon: GitBranch,
+    color: 'from-purple-500/10 to-purple-500/5',
+    borderColor: 'border-purple-500/20 hover:border-purple-500/40',
+    iconBg: 'bg-purple-500/10',
+    iconColor: 'text-purple-400',
+    highlighted: false,
+  },
+  {
+    name: 'Pipeline',
+    description: 'Manage connectors',
+    href: '/dashboard/pipeline',
+    icon: Workflow,
+    color: 'from-indigo-500/10 to-indigo-500/5',
+    borderColor: 'border-indigo-500/20 hover:border-indigo-500/40',
+    iconBg: 'bg-indigo-500/10',
+    iconColor: 'text-indigo-400',
+    highlighted: false,
+  },
+  {
+    name: 'Scheduled Tasks',
+    description: 'Automated checks',
+    href: '/dashboard/schedule',
+    icon: Clock,
+    color: 'from-amber-500/10 to-amber-500/5',
+    borderColor: 'border-amber-500/20 hover:border-amber-500/40',
+    iconBg: 'bg-amber-500/10',
+    iconColor: 'text-amber-400',
+    highlighted: false,
+  },
+  {
+    name: 'Artifacts',
+    description: 'Saved queries & insights',
+    href: '/dashboard/artifacts',
+    icon: FileText,
+    color: 'from-emerald-500/10 to-emerald-500/5',
+    borderColor: 'border-emerald-500/20 hover:border-emerald-500/40',
+    iconBg: 'bg-emerald-500/10',
+    iconColor: 'text-emerald-400',
+    highlighted: false,
+  },
+  {
+    name: 'Team',
+    description: 'Manage members',
+    href: '/dashboard/team',
+    icon: Users,
+    color: 'from-cyan-500/10 to-cyan-500/5',
+    borderColor: 'border-cyan-500/20 hover:border-cyan-500/40',
+    iconBg: 'bg-cyan-500/10',
+    iconColor: 'text-cyan-400',
+    highlighted: false,
+  },
+  {
+    name: 'Settings',
+    description: 'Workspace config',
+    href: '/dashboard/settings',
+    icon: Settings,
+    color: 'from-white/5 to-white/[0.02]',
+    borderColor: 'border-white/[0.08] hover:border-white/[0.15]',
+    iconBg: 'bg-white/[0.06]',
+    iconColor: 'text-white/60',
+    highlighted: false,
+  },
+];
+
+// --- Animations ---
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.06 },
+  },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 12 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' as const } },
+};
+
+// --- Component ---
 
 export default function DashboardPage() {
   const { selectedPipelineId, selectedPipeline, loading: pipelineLoading } = usePipeline();
@@ -103,7 +216,7 @@ export default function DashboardPage() {
           const chatsData = await chatsRes.json();
           const sessions = chatsData.sessions || [];
 
-          setRecentChats(sessions.slice(0, 3).map((session: any) => ({
+          setRecentChats(sessions.slice(0, 4).map((session: any) => ({
             id: session.id,
             title: session.title || 'New Chat',
             updatedAt: formatTimeAgo(session.updatedAt),
@@ -120,7 +233,7 @@ export default function DashboardPage() {
         // First try cached data from the sources page (scoped by pipeline)
         const cachedSources = localStorage.getItem(`pallisade_sources_cache_${selectedPipelineId}`);
         let tableCountFound = false;
-        
+
         if (cachedSources) {
           try {
             const sourcesData = JSON.parse(cachedSources);
@@ -140,7 +253,7 @@ export default function DashboardPage() {
             console.error('Error parsing cached sources:', e);
           }
         }
-        
+
         // Fallback to generic cache
         if (!tableCountFound) {
           const genericCache = localStorage.getItem('pallisade_sources_cache');
@@ -163,14 +276,14 @@ export default function DashboardPage() {
             }
           }
         }
-        
+
         // If no cache, fetch tables from connected warehouse nodes
         if (!tableCountFound && pipelineData) {
           const nodes = pipelineData.stack?.nodes || [];
-          const connectedWarehouse = nodes.find((n: any) => 
+          const connectedWarehouse = nodes.find((n: any) =>
             (n.status === 'CONNECTED' || n.status === 'ACTIVE') && n.layer === 'WAREHOUSE'
           );
-          
+
           if (connectedWarehouse && selectedPipelineId) {
             try {
               const tablesRes = await fetch(`/api/pipeline/${selectedPipelineId}/nodes/${connectedWarehouse.id}/tables`);
@@ -207,13 +320,20 @@ export default function DashboardPage() {
     const diffMins = Math.floor(diffMs / (1000 * 60));
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-    
+
     if (diffMins < 1) return 'Just now';
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays === 1) return 'Yesterday';
     if (diffDays < 7) return `${diffDays} days ago`;
     return date.toLocaleDateString();
+  };
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
   };
 
   if (loading) {
@@ -228,153 +348,197 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
+    <div className="max-w-6xl mx-auto space-y-6">
       {/* Welcome Section */}
-      <div>
-        <h1 className="text-2xl font-semibold text-white mb-1">Welcome back</h1>
+      <motion.div
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+      >
+        <h1 className="text-2xl font-semibold text-white mb-1">{getGreeting()}</h1>
         <p className="text-white/50 text-[15px]">
-          Here&apos;s an overview of your data stack
+          {selectedPipeline
+            ? <>Working on <span className="text-white/70 font-medium">{selectedPipeline.name}</span></>
+            : "Here\u2019s an overview of your data stack"
+          }
         </p>
-      </div>
+      </motion.div>
 
-      {/* Quick Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-3">
+      {/* Quick Navigation Cards */}
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"
+      >
+        {quickNavCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <motion.div key={card.name} variants={itemVariants}>
+              <Link
+                href={card.href}
+                className={cn(
+                  'group relative flex items-center gap-3 p-4 rounded-xl',
+                  'bg-gradient-to-br border transition-all duration-200',
+                  'hover:-translate-y-1 hover:shadow-lg hover:shadow-black/20',
+                  card.color,
+                  card.borderColor,
+                )}
+              >
+                <div className={cn(
+                  'w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0',
+                  'transition-transform duration-200 group-hover:scale-105',
+                  card.iconBg,
+                )}>
+                  <Icon className={cn('w-5 h-5', card.iconColor)} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-[14px] font-medium text-white truncate">{card.name}</p>
+                    {card.highlighted && (
+                      <Sparkles className="w-3.5 h-3.5 text-[var(--accent-2)] flex-shrink-0" />
+                    )}
+                  </div>
+                  <p className="text-[12px] text-white/40 truncate">{card.description}</p>
+                </div>
+                <ArrowUpRight className="w-4 h-4 text-white/0 group-hover:text-white/40 transition-colors flex-shrink-0" />
+              </Link>
+            </motion.div>
+          );
+        })}
+      </motion.div>
+
+      {/* Stats Row */}
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-2 md:grid-cols-4 gap-3"
+      >
+        <motion.div variants={itemVariants}>
+          <Link
+            href="/dashboard/pipeline"
+            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+          >
             <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-              <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 13l4 4L19 7" />
-              </svg>
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
             </div>
-            <span className="text-2xl font-semibold text-white">{stats.healthyIntegrations}</span>
-          </div>
-          <p className="text-[13px] text-white/50">Connected Sources</p>
-        </div>
+            <div>
+              <span className="text-xl font-semibold text-white">{stats.healthyIntegrations}</span>
+              <p className="text-[12px] text-white/40">Connected Sources</p>
+            </div>
+          </Link>
+        </motion.div>
 
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-3">
+        <motion.div variants={itemVariants}>
+          <Link
+            href="/dashboard/sources"
+            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+          >
             <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
-              <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-              </svg>
+              <Database className="w-5 h-5 text-blue-400" />
             </div>
-            <span className="text-2xl font-semibold text-white">{stats.totalTables || '—'}</span>
-          </div>
-          <p className="text-[13px] text-white/50">Total Tables</p>
-        </div>
+            <div>
+              <span className="text-xl font-semibold text-white">{stats.totalTables || '\u2014'}</span>
+              <p className="text-[12px] text-white/40">Total Tables</p>
+            </div>
+          </Link>
+        </motion.div>
 
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-3">
+        <motion.div variants={itemVariants}>
+          <Link
+            href="/dashboard/assistant"
+            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+          >
             <div className="w-9 h-9 rounded-lg bg-purple-500/10 flex items-center justify-center">
-              <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
+              <MessageSquare className="w-5 h-5 text-purple-400" />
             </div>
-            <span className="text-2xl font-semibold text-white">{stats.totalChats}</span>
-          </div>
-          <p className="text-[13px] text-white/50">AI Conversations</p>
-        </div>
+            <div>
+              <span className="text-xl font-semibold text-white">{stats.totalChats}</span>
+              <p className="text-[12px] text-white/40">AI Conversations</p>
+            </div>
+          </Link>
+        </motion.div>
 
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-3">
+        <motion.div variants={itemVariants}>
+          <Link
+            href="/dashboard/pipeline"
+            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+          >
             <div className="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-              <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-              </svg>
+              <BarChart3 className="w-5 h-5 text-indigo-400" />
             </div>
-            <span className="text-2xl font-semibold text-white">{stats.totalIntegrations}</span>
-          </div>
-          <p className="text-[13px] text-white/50">Pipeline Nodes</p>
-        </div>
-      </div>
+            <div>
+              <span className="text-xl font-semibold text-white">{stats.totalIntegrations}</span>
+              <p className="text-[12px] text-white/40">Pipeline Nodes</p>
+            </div>
+          </Link>
+        </motion.div>
+      </motion.div>
 
-      {/* Main Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Quick Actions */}
-        <div className="lg:col-span-2 bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
-          <h2 className="text-[15px] font-medium text-white mb-4">Quick Actions</h2>
-          <div className="grid grid-cols-2 gap-3">
-            <Link
-              href="/dashboard/chat"
-              className="flex items-center gap-3 p-4 rounded-lg bg-gradient-to-br from-[var(--accent)]/15 to-[var(--accent)]/5 border border-[var(--accent)]/30 hover:border-[var(--accent)]/50 transition-colors group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-[var(--accent)]/20 flex items-center justify-center group-hover:bg-[var(--accent)]/30 transition-colors">
-                <svg className="w-5 h-5 text-[var(--accent-2)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-[14px] font-medium text-white">Ask AI</p>
-                <p className="text-[12px] text-white/40">Query your data warehouse</p>
-              </div>
-            </Link>
-
-            <Link
-              href="/dashboard/sources"
-              className="flex items-center gap-3 p-4 rounded-lg bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.12] transition-colors group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-white/[0.05] flex items-center justify-center group-hover:bg-white/[0.08] transition-colors">
-                <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-[14px] font-medium text-white">View Sources</p>
-                <p className="text-[12px] text-white/40">Browse your tables</p>
-              </div>
-            </Link>
-
-            <Link
-              href="/dashboard/pipeline"
-              className="flex items-center gap-3 p-4 rounded-lg bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.12] transition-colors group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-white/[0.05] flex items-center justify-center group-hover:bg-white/[0.08] transition-colors">
-                <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-[14px] font-medium text-white">Build Pipeline</p>
-                <p className="text-[12px] text-white/40">Design your data flow</p>
-              </div>
-            </Link>
-
-            <Link
-              href="/dashboard/settings"
-              className="flex items-center gap-3 p-4 rounded-lg bg-white/[0.02] border border-white/[0.06] hover:border-white/[0.12] transition-colors group"
-            >
-              <div className="w-10 h-10 rounded-lg bg-white/[0.05] flex items-center justify-center group-hover:bg-white/[0.08] transition-colors">
-                <svg className="w-5 h-5 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.204-.107-.397.165-.71.505-.78.929l-.15.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-[14px] font-medium text-white">Settings</p>
-                <p className="text-[12px] text-white/40">Configure your workspace</p>
-              </div>
+      {/* Activity Section — Two Column */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.3 }}
+        className="grid grid-cols-1 lg:grid-cols-5 gap-6"
+      >
+        {/* Recent Conversations */}
+        <div className="lg:col-span-3 bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-[15px] font-medium text-white">Recent Conversations</h2>
+            <Link href="/dashboard/assistant" className="text-[12px] text-white/40 hover:text-white/70 transition-colors">
+              View all
             </Link>
           </div>
+          {recentChats.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center">
+                <MessageSquare className="w-6 h-6 text-[var(--accent-2)]" />
+              </div>
+              <p className="text-[13px] text-white/50 mb-3">No conversations yet</p>
+              <Link href="/dashboard/assistant" className="text-[12px] text-[var(--accent-2)] hover:underline">
+                Start your first chat &rarr;
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {recentChats.map((chat) => (
+                <Link
+                  key={chat.id}
+                  href={`/dashboard/assistant?session=${chat.id}`}
+                  className="flex items-center gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.10] transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
+                    <MessageSquare className="w-4 h-4 text-[var(--accent-2)]" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium text-white truncate">{chat.title}</p>
+                    <p className="text-[11px] text-white/40">{chat.updatedAt}</p>
+                  </div>
+                  <ArrowUpRight className="w-3.5 h-3.5 text-white/0 group-hover:text-white/30 flex-shrink-0" />
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Connected Sources */}
-        <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+        <div className="lg:col-span-2 bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-[15px] font-medium text-white">Connected Sources</h2>
-            <Link href="/dashboard/pipeline" className="text-[12px] text-white/40 hover:text-white transition-colors">
+            <Link href="/dashboard/pipeline" className="text-[12px] text-white/40 hover:text-white/70 transition-colors">
               Manage
             </Link>
           </div>
           {integrations.length === 0 ? (
             <div className="text-center py-8">
               <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-white/[0.05] flex items-center justify-center">
-                <svg className="w-6 h-6 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+                <Plus className="w-6 h-6 text-white/30" />
               </div>
               <p className="text-[13px] text-white/50 mb-3">No sources connected</p>
               <Link href="/dashboard/pipeline" className="text-[12px] text-[var(--accent-2)] hover:underline">
-                Add your first source →
+                Add your first source &rarr;
               </Link>
             </div>
           ) : (
@@ -385,11 +549,7 @@ export default function DashboardPage() {
                   className="flex items-center gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]"
                 >
                   <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-white/60">
-                    {integrationIcons[integration.type] || (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7" />
-                      </svg>
-                    )}
+                    {integrationIcons[integration.type] || <Database className="w-4 h-4" />}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium text-white truncate">{integration.name}</p>
@@ -401,52 +561,7 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* Recent Chats */}
-      <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-[15px] font-medium text-white">Recent Conversations</h2>
-          <Link href="/dashboard/chat" className="text-[12px] text-white/40 hover:text-white transition-colors">
-            View all
-          </Link>
-        </div>
-        {recentChats.length === 0 ? (
-          <div className="text-center py-8">
-            <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center">
-              <svg className="w-6 h-6 text-[var(--accent-2)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-              </svg>
-            </div>
-            <p className="text-[13px] text-white/50 mb-3">No conversations yet</p>
-            <Link href="/dashboard/chat" className="text-[12px] text-[var(--accent-2)] hover:underline">
-              Start your first chat →
-            </Link>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {recentChats.map((chat) => (
-              <Link
-                key={chat.id}
-                href={`/dashboard/chat?session=${chat.id}`}
-                className="p-4 rounded-lg bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.08] transition-colors"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <svg className="w-4 h-4 text-[var(--accent-2)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium text-white line-clamp-2 mb-1">{chat.title}</p>
-                    <p className="text-[11px] text-white/40">{chat.updatedAt}</p>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
+      </motion.div>
     </div>
   );
 }
