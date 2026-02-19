@@ -197,6 +197,7 @@ function AssistantPageInner() {
   } | null>(null);
   const [onboardingStatus, setOnboardingStatus] = useState<string>('NOT_STARTED');
   const [onboardingLoading, setOnboardingLoading] = useState(false);
+  const [onboardingCollapsed, setOnboardingCollapsed] = useState(false);
   const [showMentionDropdown, setShowMentionDropdown] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionStartIndex, setMentionStartIndex] = useState<number | null>(null);
@@ -401,12 +402,26 @@ function AssistantPageInner() {
       return;
     }
 
+    // Restore collapsed state from localStorage
+    const savedCollapsed = localStorage.getItem(`onboarding-collapsed-${selectedPipelineId}`);
+    if (savedCollapsed === 'true') {
+      setOnboardingCollapsed(true);
+    } else {
+      setOnboardingCollapsed(false);
+    }
+
     const fetchOnboardingStatus = async () => {
       try {
         const res = await fetch(`/api/pipeline/${selectedPipelineId}/context`);
         if (res.ok) {
           const data = await res.json();
-          setOnboardingStatus(data.context?.onboardingStatus || 'NOT_STARTED');
+          const status = data.context?.onboardingStatus || 'NOT_STARTED';
+          setOnboardingStatus(status);
+          // Force expand when new integration is detected
+          if (status === 'NEEDS_UPDATE') {
+            setOnboardingCollapsed(false);
+            localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+          }
         }
       } catch (error) {
         console.error('Failed to fetch onboarding status:', error);
@@ -812,7 +827,12 @@ function AssistantPageInner() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'complete' }),
-              }).then(res => { if (res.ok) setOnboardingStatus('COMPLETED'); });
+              }).then(res => {
+                if (res.ok) {
+                  setOnboardingStatus('COMPLETED');
+                  localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+                }
+              });
             } else if (tc.name === 'save_onboarding_context' && (tc.result as Record<string, unknown>)?.saved) {
               const result = tc.result as Record<string, unknown>;
               fetch(`/api/pipeline/${selectedPipelineId}/context`, {
@@ -1275,6 +1295,18 @@ function AssistantPageInner() {
                 status={onboardingStatus as 'NOT_STARTED' | 'IN_PROGRESS' | 'NEEDS_UPDATE'}
                 onStart={handleStartOnboarding}
                 isLoading={onboardingLoading}
+                collapsed={onboardingCollapsed}
+                onToggleCollapse={() => {
+                  const next = !onboardingCollapsed;
+                  setOnboardingCollapsed(next);
+                  if (selectedPipelineId) {
+                    if (next) {
+                      localStorage.setItem(`onboarding-collapsed-${selectedPipelineId}`, 'true');
+                    } else {
+                      localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+                    }
+                  }
+                }}
               />
             </div>
           )}
@@ -1349,7 +1381,7 @@ function AssistantPageInner() {
                           </div>
                         </div>
                       ) : (
-                        <div className="px-3 py-2 bg-[var(--accent)] text-white rounded-xl rounded-tr-sm">
+                        <div className="px-3 py-2 bg-white/[0.06] border border-[var(--accent)]/50 text-white rounded-xl rounded-tr-sm">
                           {message.content.length > MAX_MESSAGE_LENGTH ? (
                             <div>
                               <div className="text-sm whitespace-pre-wrap break-words">
