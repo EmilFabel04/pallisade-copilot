@@ -198,7 +198,7 @@ class CopilotContext:
     
     def has_orchestrator(self) -> bool:
         """Check if any orchestrator is connected."""
-        orchestrator_types = {"AIRFLOW", "DAGSTER", "PREFECT"}
+        orchestrator_types = {"AIRFLOW", "DAGSTER", "PREFECT", "N8N"}
         return bool(self.integration_types & orchestrator_types)
     
     def has_transformation(self) -> bool:
@@ -1179,7 +1179,17 @@ class CopilotContextBuilder:
                 "get_prefect_flow_status",
                 "get_prefect_flow_runs",
             ])
-        
+
+        # n8n tools
+        if "N8N" in integration_types:
+            tools.extend([
+                "get_n8n_workflows",
+                "get_n8n_workflow_details",
+                "get_n8n_executions",
+                "get_n8n_execution_details",
+                "get_n8n_recent_failures",
+            ])
+
         # Fivetran tools
         if "FIVETRAN" in integration_types:
             tools.extend([
@@ -1243,6 +1253,15 @@ class CopilotContextBuilder:
                 "list_github_repos",
                 "get_github_tree",
                 "get_github_file",
+            ])
+
+        # Infrastructure tools (SSH-based server inspection)
+        if "LINUX_SERVER" in integration_types:
+            tools.extend([
+                "check_server_health",
+                "check_certificates",
+                "analyze_server_logs",
+                "list_server_services",
             ])
 
         return tools

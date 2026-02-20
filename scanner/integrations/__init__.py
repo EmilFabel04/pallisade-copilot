@@ -30,6 +30,13 @@ except ImportError:
     PrefectFlowRun = None
     PrefectDeployment = None
 
+try:
+    from .n8n import N8nIntegration, N8nWorkflow, N8nExecution
+except ImportError:
+    N8nIntegration = None
+    N8nWorkflow = None
+    N8nExecution = None
+
 __all__ = [
     # dbt
     'DbtIntegration',
@@ -54,5 +61,9 @@ __all__ = [
     'PrefectFlow',
     'PrefectFlowRun',
     'PrefectDeployment',
+    # n8n
+    'N8nIntegration',
+    'N8nWorkflow',
+    'N8nExecution',
 ]
 

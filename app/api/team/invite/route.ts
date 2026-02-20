@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
 
 // POST - Send invite
 export async function POST(request: NextRequest) {
@@ -134,6 +135,20 @@ export async function POST(request: NextRequest) {
 
     // TODO: Send invite email
     // await sendInviteEmail(email, inviteLink, currentMember.user.name || 'Your team', personalNote);
+
+    // Fire-and-forget Slack notification
+    const inviterName = currentMember.user.name || currentMember.user.email;
+    getSlackOrgConfig(organizationId).then(async (cfg) => {
+      if (!cfg.connected || !cfg.preferences.alertOnTeamInvite) return;
+      const client = await getSlackClient(organizationId);
+      if (!client) return;
+      await client.sendMessage({
+        title: 'Team Invite Sent',
+        text: `*${inviterName}* invited *${email}* to join the team as *${role}*`,
+        severity: 'low',
+        footer: `Pallisade Team`,
+      });
+    }).catch(err => console.error('[team-invite] Slack notification failed:', err));
 
     return NextResponse.json({
       success: true,

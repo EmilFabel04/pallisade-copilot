@@ -621,7 +621,14 @@ class ToolExecutor:
                 except ImportError:
                     from scanner.integrations.prefect import PrefectIntegration
                 return PrefectIntegration(integration.config)
-            
+
+            elif integration_type == "N8N":
+                try:
+                    from integrations.n8n import N8nIntegration
+                except ImportError:
+                    from scanner.integrations.n8n import N8nIntegration
+                return N8nIntegration(integration.config)
+
             elif integration_type == "FIVETRAN":
                 try:
                     from integrations.fivetran import FivetranIntegration
@@ -2550,6 +2557,161 @@ class ToolExecutor:
                     ]
                 }
             )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # N8N TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_n8n_workflows(self, args: Dict[str, Any]) -> ToolResult:
+        """List n8n workflows."""
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            active_only = args.get("active_only", False)
+            limit = args.get("limit", 50)
+            workflows = n8n.get_workflows(active_only=active_only, limit=limit)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "total_workflows": len(workflows),
+                    "workflows": [
+                        {
+                            "id": wf.id,
+                            "name": wf.name,
+                            "active": wf.active,
+                            "node_count": wf.node_count,
+                            "tags": [t.get("name", "") for t in wf.tags],
+                            "updated_at": wf.updated_at.isoformat() if wf.updated_at else None,
+                        }
+                        for wf in workflows
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_workflow_details(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed n8n workflow info."""
+        workflow_id = args["workflow_id"]
+
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            wf = n8n.get_workflow(workflow_id)
+            if not wf:
+                return ToolResult(success=False, error=f"Workflow not found: {workflow_id}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "id": wf.id,
+                    "name": wf.name,
+                    "active": wf.active,
+                    "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                    "updated_at": wf.updated_at.isoformat() if wf.updated_at else None,
+                    "tags": [t.get("name", "") for t in wf.tags],
+                    "node_count": wf.node_count,
+                    "nodes": [
+                        {
+                            "name": node.name,
+                            "type": node.short_type,
+                            "full_type": node.type,
+                        }
+                        for node in wf.nodes
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_executions(self, args: Dict[str, Any]) -> ToolResult:
+        """Get n8n execution history."""
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            workflow_id = args.get("workflow_id")
+            status = args.get("status")
+            limit = args.get("limit", 20)
+
+            executions = n8n.get_executions(
+                workflow_id=workflow_id,
+                status=status,
+                limit=limit,
+            )
+
+            return ToolResult(
+                success=True,
+                data={
+                    "total_executions": len(executions),
+                    "filter": {"workflow_id": workflow_id, "status": status},
+                    "executions": [
+                        {
+                            "id": ex.id,
+                            "workflow_id": ex.workflow_id,
+                            "workflow_name": ex.workflow_name,
+                            "status": ex.status.value,
+                            "started_at": ex.started_at.isoformat() if ex.started_at else None,
+                            "finished_at": ex.finished_at.isoformat() if ex.finished_at else None,
+                            "duration_seconds": ex.duration_seconds,
+                            "mode": ex.mode,
+                            "error_node": ex.error_node,
+                        }
+                        for ex in executions
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_execution_details(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed n8n execution info with per-node results."""
+        execution_id = args["execution_id"]
+
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            details = n8n.get_execution_details(execution_id)
+            return ToolResult(success=True, data=details)
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_recent_failures(self, args: Dict[str, Any]) -> ToolResult:
+        """Get recent n8n execution failures."""
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            workflow_id = args.get("workflow_id")
+            limit = args.get("limit", 10)
+            result = n8n.get_recent_failures(workflow_id=workflow_id, limit=limit)
+            return ToolResult(success=True, data=result)
         except Exception as e:
             return ToolResult(success=False, error=str(e))
 

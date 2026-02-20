@@ -5,6 +5,7 @@ import { EmailClient } from '@/lib/integrations/email';
 import { TeamsClient } from '@/lib/integrations/teams';
 import { OpsgenieClient } from '@/lib/integrations/opsgenie';
 import prisma from '@/lib/db';
+import { decrypt } from '@/lib/crypto';
 
 // POST /api/schedule/alert - Dispatch alert notifications
 export async function POST(request: NextRequest) {
@@ -43,11 +44,17 @@ export async function POST(request: NextRequest) {
 
       try {
         if (channel === 'slack') {
-          const webhookUrl =
-            channelConfig.webhook_url ||
-            (integration?.config as any)?.webhook_url;
-          if (webhookUrl) {
-            const client = new SlackClient({ webhook_url: webhookUrl });
+          let botToken = '';
+          if (integration?.accessToken) {
+            try { botToken = decrypt(integration.accessToken); } catch {}
+          }
+          const creds = integration?.credentials
+            ? (typeof integration.credentials === 'string' ? JSON.parse(integration.credentials) : integration.credentials) as Record<string, any>
+            : {};
+          const slackChannel = channelConfig.channel || creds.channel;
+
+          if (botToken) {
+            const client = new SlackClient({ bot_token: botToken, channel: slackChannel });
             await client.sendMessage({
               title: `Task Alert: ${taskName}`,
               text: message || `Task "${taskName}" completed with status: ${status}`,
@@ -59,7 +66,7 @@ export async function POST(request: NextRequest) {
             });
             results.push({ channel: 'slack', success: true });
           } else {
-            results.push({ channel: 'slack', success: false, error: 'No webhook URL' });
+            results.push({ channel: 'slack', success: false, error: 'No bot token configured' });
           }
         } else if (channel === 'email') {
           const recipients =

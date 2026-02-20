@@ -16,6 +16,17 @@ interface OAuthIntegration {
   createdAt: string;
 }
 
+interface SlackConfig {
+  connected: boolean;
+  channel?: string;
+  teamName?: string;
+  alertOnCritical: boolean;
+  alertOnHigh: boolean;
+  alertOnScanComplete: boolean;
+  alertOnPrCreated: boolean;
+  alertOnTeamInvite: boolean;
+}
+
 export default function SettingsPage() {
   const { data: session } = useSession();
   const [activeTab, setActiveTab] = useState('general');
@@ -25,15 +36,53 @@ export default function SettingsPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
+  // Slack state (preferences only — connection managed on Pipeline page)
+  const [slackConfig, setSlackConfig] = useState<SlackConfig | null>(null);
+  const [slackLoading, setSlackLoading] = useState(false);
+
   const showSaved = () => {
     setSavedNotification(true);
     setTimeout(() => setSavedNotification(false), 2000);
+  };
+
+  const fetchSlackConfig = async () => {
+    setSlackLoading(true);
+    try {
+      const res = await fetch('/api/integrations/slack');
+      if (res.ok) {
+        const data = await res.json();
+        setSlackConfig(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch Slack config:', error);
+    } finally {
+      setSlackLoading(false);
+    }
+  };
+
+  const handleSlackToggle = async (key: string, value: boolean) => {
+    if (!slackConfig) return;
+    setSlackConfig({ ...slackConfig, [key]: value });
+    try {
+      await fetch('/api/integrations/slack', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: value }),
+      });
+    } catch (error) {
+      console.error('Failed to update Slack preference:', error);
+      // Revert on failure
+      setSlackConfig({ ...slackConfig, [key]: !value });
+    }
   };
 
   // Fetch OAuth integrations when the integrations tab is active
   useEffect(() => {
     if (activeTab === 'integrations') {
       fetchIntegrations();
+    }
+    if (activeTab === 'notifications') {
+      fetchSlackConfig();
     }
   }, [activeTab]);
 
@@ -318,9 +367,70 @@ export default function SettingsPage() {
       {/* Notifications Tab */}
       {activeTab === 'notifications' && (
         <div className="space-y-6">
+          {/* Slack Notifications */}
           <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-white mb-4">Email Notifications</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <h2 className="text-[15px] font-medium text-white">Slack Notifications</h2>
+                {slackLoading ? (
+                  <div className="w-4 h-4 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+                ) : slackConfig?.connected ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/20 text-emerald-400">
+                    Connected
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-400">
+                    Not Connected
+                  </span>
+                )}
+              </div>
+              {!slackConfig?.connected && (
+                <a
+                  href="/dashboard/pipeline"
+                  className="text-[12px] text-white/40 hover:text-white/60 underline transition-colors"
+                >
+                  Connect on Pipeline page
+                </a>
+              )}
+            </div>
             <div className="space-y-4">
+              {[
+                { key: 'alertOnCritical', label: 'Monitor Alerts (Critical)', desc: 'When a scheduled monitor reports a critical failure' },
+                { key: 'alertOnHigh', label: 'Monitor Alerts (High)', desc: 'When a scheduled monitor reports a high-severity issue' },
+                { key: 'alertOnScanComplete', label: 'Scan Completion', desc: 'When a data scan finishes running' },
+                { key: 'alertOnPrCreated', label: 'Change Plan PR Created', desc: 'When a change plan is applied and a PR is opened' },
+                { key: 'alertOnTeamInvite', label: 'Team Invites', desc: 'When a new team member is invited' },
+              ].map((item) => {
+                const enabled = slackConfig?.[item.key as keyof SlackConfig] as boolean ?? true;
+                const disabled = !slackConfig?.connected;
+                return (
+                  <div key={item.key} className={`flex items-center justify-between ${disabled ? 'opacity-40' : ''}`}>
+                    <div>
+                      <p className="text-[14px] font-medium text-white">{item.label}</p>
+                      <p className="text-[12px] text-white/40">{item.desc}</p>
+                    </div>
+                    <button
+                      onClick={() => !disabled && handleSlackToggle(item.key, !enabled)}
+                      disabled={disabled}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        enabled ? 'bg-[var(--accent)]' : 'bg-white/[0.1]'
+                      } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                    >
+                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'left-6' : 'left-1'}`} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Email Notifications */}
+          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-[15px] font-medium text-white">Email Notifications</h2>
+              <span className="text-[11px] text-white/30 px-2 py-0.5 rounded bg-white/[0.04]">Coming soon</span>
+            </div>
+            <div className="space-y-4 opacity-50">
               {[
                 { id: 'alerts', label: 'Data Alerts', desc: 'Get notified about data quality issues', enabled: true },
                 { id: 'sync', label: 'Sync Failures', desc: 'Notifications when sources fail to sync', enabled: true },
@@ -331,8 +441,9 @@ export default function SettingsPage() {
                     <p className="text-[14px] font-medium text-white">{item.label}</p>
                     <p className="text-[12px] text-white/40">{item.desc}</p>
                   </div>
-                  <button 
-                    className={`relative w-11 h-6 rounded-full transition-colors ${item.enabled ? 'bg-[var(--accent)]' : 'bg-white/[0.1]'}`}
+                  <button
+                    disabled
+                    className={`relative w-11 h-6 rounded-full transition-colors cursor-not-allowed ${item.enabled ? 'bg-[var(--accent)]' : 'bg-white/[0.1]'}`}
                   >
                     <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${item.enabled ? 'left-6' : 'left-1'}`} />
                   </button>

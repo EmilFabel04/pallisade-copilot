@@ -21,6 +21,7 @@ interface AlertChannelPickerProps {
   onChannelsChange: (channels: string[]) => void;
   alertOnStatus: string[];
   onAlertOnStatusChange: (statuses: string[]) => void;
+  connectedChannels?: string[];
 }
 
 export function AlertChannelPicker({
@@ -28,6 +29,7 @@ export function AlertChannelPicker({
   onChannelsChange,
   alertOnStatus,
   onAlertOnStatusChange,
+  connectedChannels,
 }: AlertChannelPickerProps) {
   const toggleChannel = (id: string) => {
     if (channels.includes(id)) {
@@ -53,22 +55,29 @@ export function AlertChannelPicker({
           Alert Channels
         </label>
         <div className="flex flex-wrap gap-2">
-          {ALERT_CHANNELS.map((ch) => (
-            <button
-              key={ch.id}
-              type="button"
-              onClick={() => toggleChannel(ch.id)}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
-                channels.includes(ch.id)
-                  ? 'bg-white/[0.12] text-white border border-white/[0.15]'
-                  : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:bg-white/[0.08]'
-              )}
-            >
-              <span>{ch.icon}</span>
-              {ch.label}
-            </button>
-          ))}
+          {ALERT_CHANNELS.map((ch) => {
+            const isSelected = channels.includes(ch.id);
+            const isConnected = !connectedChannels || connectedChannels.includes(ch.id);
+            return (
+              <button
+                key={ch.id}
+                type="button"
+                onClick={() => toggleChannel(ch.id)}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+                  isSelected
+                    ? 'bg-white/[0.12] text-white border border-white/[0.15]'
+                    : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:bg-white/[0.08]'
+                )}
+              >
+                <span>{ch.icon}</span>
+                {ch.label}
+                {isSelected && !isConnected && (
+                  <span className="text-[10px] text-amber-400 ml-1">(not connected)</span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 

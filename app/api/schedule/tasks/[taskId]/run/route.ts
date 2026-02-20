@@ -100,6 +100,35 @@ export async function POST(
       console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
     }
 
+    // For infrastructure monitors, resolve server connection config
+    const INFRA_MONITOR_TYPES = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'];
+    if (INFRA_MONITOR_TYPES.includes(task.monitorType || '')) {
+      const taskConfig = (task.config as Record<string, any>) || {};
+      const serverNodeId = taskConfig.serverNodeId;
+
+      const serverStack = await prisma.pipelineStack.findFirst({
+        where: { organizationId },
+        include: {
+          nodes: {
+            where: {
+              toolType: 'linux_server',
+              ...(serverNodeId ? { id: serverNodeId } : {}),
+            },
+            select: { id: true, name: true, toolType: true, config: true },
+            take: 1,
+          },
+        },
+      });
+
+      const serverNode = serverStack?.nodes[0];
+      if (serverNode) {
+        integrationConfig = resolveNodeConfig(serverNode);
+        console.log(`[Schedule] Resolved server: ${serverNode.name}`);
+      } else {
+        console.warn('[Schedule] No linux_server node found for infra monitor');
+      }
+    }
+
     // Inject stored baseline into config (so monitors can use it when
     // warehouse history is insufficient for Z-score computation)
     const monitorConfig = { ...(task.config as Record<string, any> || {}) };

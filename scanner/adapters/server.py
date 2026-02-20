@@ -388,6 +388,67 @@ class ServerAdapter:
 
         return health
 
+    def discover_log_files(self) -> List[Dict[str, Any]]:
+        """Discover log files on the server.
+
+        Uses a single SSH command to find log files and print their sizes,
+        avoiding per-file round-trips.
+        """
+        # Single command: find + printf to get path and size in one shot
+        cmd = (
+            "find /var/log /opt /srv /home "
+            "-maxdepth 4 "
+            r"-type f \( -name '*.log' -o -name '*.log.*' -o -name 'syslog' "
+            r"-o -name 'messages' -o -name 'kern.log' -o -name 'auth.log' "
+            r"-o -name 'daemon.log' -o -name 'error.log' -o -name 'access.log' \) "
+            "-readable "
+            r"-printf '%s\t%p\n' "
+            "2>/dev/null "
+            "| head -50"
+        )
+        result = self.execute_command(cmd, timeout=15)
+        output = result.stdout.strip()
+
+        if not output:
+            return []
+
+        log_files: List[Dict[str, Any]] = []
+        for line in output.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Format: "size\tpath"
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                try:
+                    size_bytes = int(parts[0])
+                except ValueError:
+                    size_bytes = 0
+                log_files.append({
+                    "path": parts[1],
+                    "size_bytes": size_bytes,
+                    "size_human": self._human_size(size_bytes),
+                })
+            else:
+                # Fallback if -printf not supported (e.g. busybox)
+                log_files.append({
+                    "path": line,
+                    "size_bytes": 0,
+                    "size_human": "0 B",
+                })
+
+        log_files.sort(key=lambda f: f["size_bytes"], reverse=True)
+        return log_files
+
+    @staticmethod
+    def _human_size(size_bytes: int) -> str:
+        """Convert bytes to human-readable size."""
+        for unit in ("B", "KB", "MB", "GB"):
+            if size_bytes < 1024:
+                return f"{size_bytes:.0f} {unit}" if unit == "B" else f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024
+        return f"{size_bytes:.1f} TB"
+
     def tail_log(self, path: str, lines: int = 100) -> str:
         """Read the last N lines of a log file."""
         result = self.execute_command(f"tail -n {lines} {path} 2>&1")

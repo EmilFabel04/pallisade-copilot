@@ -33,34 +33,25 @@ export async function POST(request: NextRequest) {
     switch (integrationType) {
       // Notification integrations
       case 'slack': {
-        const webhookUrl = decryptedConfig.webhook_url;
-        if (!webhookUrl) {
-          return NextResponse.json({ success: false, message: 'Webhook URL is required' });
+        const botToken = decryptedConfig.bot_token;
+        if (!botToken) {
+          return NextResponse.json({ success: false, message: 'Bot token is required' });
         }
 
         try {
-          // Send a test message to the Slack webhook
-          const response = await fetch(webhookUrl, {
+          const response = await fetch('https://slack.com/api/auth.test', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text: '✅ Pallisade connection test successful!',
-              blocks: [
-                {
-                  type: 'section',
-                  text: {
-                    type: 'mrkdwn',
-                    text: '*Pallisade Connection Test*\n✅ Your Slack webhook is working correctly!',
-                  },
-                },
-              ],
-            }),
+            headers: {
+              'Authorization': `Bearer ${botToken}`,
+              'Content-Type': 'application/json',
+            },
           });
+          const data = await response.json();
 
-          if (response.ok) {
-            return NextResponse.json({ success: true, message: 'Slack webhook is working! Check your channel for a test message.' });
+          if (data.ok) {
+            return NextResponse.json({ success: true, message: `Connected to workspace "${data.team}" as @${data.user}` });
           } else {
-            return NextResponse.json({ success: false, message: 'Invalid webhook URL or permission denied' });
+            return NextResponse.json({ success: false, message: `Slack auth failed: ${data.error}` });
           }
         } catch (error) {
           return NextResponse.json({ success: false, message: 'Failed to connect to Slack' });

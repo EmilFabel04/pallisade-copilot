@@ -65,7 +65,7 @@ export default function SchedulePage() {
           const data = await res.json();
           const nodes = data.nodes || [];
           const intgs = nodes
-            .filter((n: any) => n.status === 'active' || n.status === 'connected')
+            .filter((n: any) => ['CONNECTED', 'HEALTHY', 'WARNING'].includes(n.status))
             .map((n: any) => ({
               id: n.integrationId || n.id,
               name: n.name,

@@ -1,4 +1,5 @@
 import prisma from '@/lib/db';
+import { decrypt } from '@/lib/crypto';
 
 interface ScanAlert {
   scanType: string;
@@ -12,6 +13,8 @@ interface ScanAlert {
   reportTitle: string;
 }
 
+const SLACK_API = 'https://slack.com/api/chat.postMessage';
+
 // Send alert to Slack after scan completes
 export async function sendScanAlert(organizationId: string, alert: ScanAlert) {
   try {
@@ -24,20 +27,28 @@ export async function sendScanAlert(organizationId: string, alert: ScanAlert) {
       },
     });
 
-    if (!slackIntegration) return;
+    if (!slackIntegration?.accessToken) return;
 
-    const config = typeof slackIntegration.credentials === 'string' 
-      ? JSON.parse(slackIntegration.credentials) 
+    let botToken: string;
+    try {
+      botToken = decrypt(slackIntegration.accessToken);
+    } catch {
+      console.error('[alerts] Failed to decrypt Slack bot token');
+      return;
+    }
+
+    const config = typeof slackIntegration.credentials === 'string'
+      ? JSON.parse(slackIntegration.credentials)
       : (slackIntegration.credentials as Record<string, any> || {});
-    const { webhookUrl, alertOnCritical, alertOnHigh, alertOnScanComplete } = config;
+    const { channel, alertOnCritical, alertOnHigh, alertOnScanComplete } = config;
 
-    if (!webhookUrl) return;
+    if (!channel) return;
 
     // Check if we should send an alert
     const hasCritical = alert.criticalCount > 0;
     const hasHigh = alert.highCount > 0;
 
-    const shouldAlert = 
+    const shouldAlert =
       alertOnScanComplete ||
       (alertOnCritical && hasCritical) ||
       (alertOnHigh && hasHigh);
@@ -60,6 +71,7 @@ export async function sendScanAlert(organizationId: string, alert: ScanAlert) {
     const scanName = scanTypeNames[alert.scanType] || alert.scanType;
 
     const payload = {
+      channel,
       attachments: [
         {
           color,
@@ -74,22 +86,10 @@ export async function sendScanAlert(organizationId: string, alert: ScanAlert) {
             {
               type: 'section',
               fields: [
-                {
-                  type: 'mrkdwn',
-                  text: `*Critical:* ${alert.criticalCount}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*High:* ${alert.highCount}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Medium:* ${alert.mediumCount}`,
-                },
-                {
-                  type: 'mrkdwn',
-                  text: `*Low:* ${alert.lowCount}`,
-                },
+                { type: 'mrkdwn', text: `*Critical:* ${alert.criticalCount}` },
+                { type: 'mrkdwn', text: `*High:* ${alert.highCount}` },
+                { type: 'mrkdwn', text: `*Medium:* ${alert.mediumCount}` },
+                { type: 'mrkdwn', text: `*Low:* ${alert.lowCount}` },
               ],
             },
             {
@@ -97,10 +97,7 @@ export async function sendScanAlert(organizationId: string, alert: ScanAlert) {
               elements: [
                 {
                   type: 'button',
-                  text: {
-                    type: 'plain_text',
-                    text: 'View Report',
-                  },
+                  text: { type: 'plain_text', text: 'View Report' },
                   url: `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/dashboard/reports/${alert.reportId}`,
                   style: hasCritical ? 'danger' : 'primary',
                 },
@@ -109,16 +106,24 @@ export async function sendScanAlert(organizationId: string, alert: ScanAlert) {
           ],
         },
       ],
+      text: `${emoji} ${scanName} Scan Complete — ${status}`,
     };
 
-    // Send to Slack
-    await fetch(webhookUrl, {
+    const res = await fetch(SLACK_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${botToken}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
       body: JSON.stringify(payload),
     });
 
-    console.log(`Slack alert sent for ${alert.scanType} scan`);
+    const data = await res.json();
+    if (data.ok) {
+      console.log(`Slack alert sent for ${alert.scanType} scan`);
+    } else {
+      console.error(`Slack API error: ${data.error}`);
+    }
   } catch (error) {
     console.error('Failed to send Slack alert:', error);
     // Don't throw - alerts shouldn't break scans
@@ -145,14 +150,22 @@ export async function sendFindingAlert(
       },
     });
 
-    if (!slackIntegration) return;
+    if (!slackIntegration?.accessToken) return;
 
-    const config = typeof slackIntegration.credentials === 'string' 
-      ? JSON.parse(slackIntegration.credentials) 
+    let botToken: string;
+    try {
+      botToken = decrypt(slackIntegration.accessToken);
+    } catch {
+      console.error('[alerts] Failed to decrypt Slack bot token');
+      return;
+    }
+
+    const config = typeof slackIntegration.credentials === 'string'
+      ? JSON.parse(slackIntegration.credentials)
       : (slackIntegration.credentials as Record<string, any> || {});
-    const { webhookUrl, alertOnCritical, alertOnHigh } = config;
+    const { channel, alertOnCritical, alertOnHigh } = config;
 
-    if (!webhookUrl) return;
+    if (!channel) return;
 
     // Only alert on critical/high based on settings
     if (finding.severity === 'critical' && !alertOnCritical) return;
@@ -163,6 +176,7 @@ export async function sendFindingAlert(
     const color = finding.severity === 'critical' ? '#dc2626' : '#f59e0b';
 
     const payload = {
+      channel,
       attachments: [
         {
           color,
@@ -177,10 +191,7 @@ export async function sendFindingAlert(
             ...(finding.table ? [{
               type: 'context',
               elements: [
-                {
-                  type: 'mrkdwn',
-                  text: `📊 Table: \`${finding.table}\``,
-                },
+                { type: 'mrkdwn', text: `📊 Table: \`${finding.table}\`` },
               ],
             }] : []),
             {
@@ -188,10 +199,7 @@ export async function sendFindingAlert(
               elements: [
                 {
                   type: 'button',
-                  text: {
-                    type: 'plain_text',
-                    text: 'View Details',
-                  },
+                  text: { type: 'plain_text', text: 'View Details' },
                   url: `${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/dashboard/reports/${finding.reportId}`,
                   style: 'danger',
                 },
@@ -200,15 +208,23 @@ export async function sendFindingAlert(
           ],
         },
       ],
+      text: `${emoji} ${finding.severity.toUpperCase()} Issue Found: ${finding.title}`,
     };
 
-    await fetch(webhookUrl, {
+    const res = await fetch(SLACK_API, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${botToken}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
       body: JSON.stringify(payload),
     });
+
+    const data = await res.json();
+    if (!data.ok) {
+      console.error(`Slack API error: ${data.error}`);
+    }
   } catch (error) {
     console.error('Failed to send finding alert:', error);
   }
 }
-

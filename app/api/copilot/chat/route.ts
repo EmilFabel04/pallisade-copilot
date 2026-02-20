@@ -180,6 +180,11 @@ export async function POST(request: Request) {
         delete config.host;
       }
 
+      // n8n: host -> base_url (adapter accepts both, but be consistent)
+      if (toolType === 'N8N' && config.host && !config.base_url) {
+        config.base_url = config.host;
+      }
+
       return {
         id: node.id,
         name: node.name,
@@ -641,6 +646,11 @@ async function handleStreamingChat(
     if (toolType === 'AIRFLOW' && config.host && !config.base_url) {
       config.base_url = config.host;
       delete config.host;
+    }
+
+    // n8n: host -> base_url
+    if (toolType === 'N8N' && config.host && !config.base_url) {
+      config.base_url = config.host;
     }
 
     return {

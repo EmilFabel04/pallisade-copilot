@@ -396,7 +396,18 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       ],
     },
   ],
-  ORCHESTRATION: [],
+  ORCHESTRATION: [
+    {
+      id: 'n8n',
+      name: 'n8n',
+      description: 'n8n workflow automation',
+      layer: 'ORCHESTRATION',
+      configFields: [
+        { name: 'host', label: 'n8n Instance URL', type: 'text', required: true, placeholder: 'https://your-n8n.example.com', helperText: 'Base URL of your n8n instance (self-hosted or cloud)' },
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your n8n API key', helperText: 'Generate from Settings > API in your n8n instance' },
+      ],
+    },
+  ],
   INFRASTRUCTURE: [
     {
       id: 'linux_server',
@@ -412,6 +423,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
           { value: 'password', label: 'Password' },
         ]},
         { name: 'private_key', label: 'Private Key', type: 'textarea', required: false, placeholder: '-----BEGIN RSA PRIVATE KEY-----', helperText: 'Paste your SSH private key (for key-based auth)' },
+        { name: 'passphrase', label: 'Key Passphrase', type: 'password', required: false, placeholder: 'Passphrase for encrypted key', helperText: 'Leave empty if your key is not passphrase-protected' },
         { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'SSH password', helperText: 'For password-based auth' },
       ],
     },
@@ -470,7 +482,7 @@ export const INTEGRATIONS: Record<IntegrationType, IntegrationDefinition[]> = {
       description: 'Send alerts to Slack channels',
       category: 'NOTIFICATIONS',
       configFields: [
-        { name: 'webhook_url', label: 'Webhook URL', type: 'text', required: true, placeholder: 'https://hooks.slack.com/services/...' },
+        { name: 'bot_token', label: 'Bot Token', type: 'password', required: true, placeholder: 'xoxb-...', helperText: 'Create a Slack App, add bot scopes (chat:write, channels:read, groups:read), then paste the Bot Token' },
         { name: 'channel', label: 'Default Channel', type: 'text', required: false, placeholder: '#data-alerts' },
       ],
     },

@@ -126,6 +126,7 @@ function mapToolTypeToIntegrationType(toolType: string): string {
     'dbt_core': 'DBT_CORE',
     'airflow': 'AIRFLOW',
     'dagster': 'DAGSTER',
+    'n8n': 'N8N',
     'looker': 'LOOKER',
     'tableau': 'TABLEAU',
     'powerbi': 'POWERBI',

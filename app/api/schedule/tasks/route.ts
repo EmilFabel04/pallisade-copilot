@@ -111,7 +111,9 @@ export async function POST(request: NextRequest) {
         description,
         monitorType: monitorType || null,
         targetFqn: targetFqn || null,
-        config: config || undefined,
+        config: integrationId && ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType)
+          ? { ...(config || {}), serverNodeId: integrationId }
+          : (config || undefined),
         schedule,
         timezone,
         enabled: true,
@@ -122,7 +124,12 @@ export async function POST(request: NextRequest) {
         createdBy: userId,
         source: 'pallisade',
         organizationId,
-        integrationId: integrationId || undefined,
+        // For infrastructure monitors (CERTIFICATE, SERVER_HEALTH, LOG_ANALYSIS),
+        // the integrationId from the form is a PipelineNode ID, not an Integration ID.
+        // Store it in config.serverNodeId instead to avoid FK violation.
+        ...(integrationId && !['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType)
+          ? { integrationId }
+          : {}),
       },
     });
 

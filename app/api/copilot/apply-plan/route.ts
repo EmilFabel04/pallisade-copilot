@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
+import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -140,6 +141,28 @@ export async function POST(request: Request) {
         { error: data.detail || 'Failed to apply plan' },
         { status: response.status },
       );
+    }
+
+    // Fire-and-forget Slack notification for PR creation
+    if (data.pr_url || data.pull_request_url) {
+      const prUrl = data.pr_url || data.pull_request_url;
+      getSlackOrgConfig(user.organizationId!).then(async (cfg) => {
+        if (!cfg.connected || !cfg.preferences.alertOnPrCreated) return;
+        const client = await getSlackClient(user.organizationId!);
+        if (!client) return;
+        await client.sendMessage({
+          title: 'Change Plan PR Created',
+          text: `A new pull request was opened in *${repo_owner}/${repo_name}*`,
+          severity: 'low',
+          fields: [
+            { label: 'Repository', value: `${repo_owner}/${repo_name}` },
+            { label: 'Branch', value: data.branch || base_branch || 'main' },
+            ...(data.files_changed ? [{ label: 'Files Changed', value: String(data.files_changed) }] : []),
+          ],
+          actions: [{ text: 'View Pull Request', url: prUrl }],
+          footer: `Pallisade Change Plan`,
+        });
+      }).catch(err => console.error('[apply-plan] Slack notification failed:', err));
     }
 
     return NextResponse.json(data);

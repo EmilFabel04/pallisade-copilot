@@ -4,6 +4,12 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { MONITOR_TYPES } from '@/types/schedule';
 
+interface DiscoveredLog {
+  path: string;
+  size_bytes: number;
+  size_human: string;
+}
+
 interface MonitorConfigFormProps {
   monitorType: string;
   onMonitorTypeChange: (type: string) => void;
@@ -11,6 +17,7 @@ interface MonitorConfigFormProps {
   onTargetFqnChange: (fqn: string) => void;
   config: Record<string, any>;
   onConfigChange: (config: Record<string, any>) => void;
+  integrationId?: string;
 }
 
 // Monitor types that need no config — fully auto-configured
@@ -29,8 +36,43 @@ export function MonitorConfigForm({
   onTargetFqnChange,
   config,
   onConfigChange,
+  integrationId,
 }: MonitorConfigFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveredLogs, setDiscoveredLogs] = useState<DiscoveredLog[]>([]);
+  const [discoverError, setDiscoverError] = useState('');
+
+  const handleDiscoverLogs = async () => {
+    setDiscovering(true);
+    setDiscoverError('');
+    setDiscoveredLogs([]);
+    try {
+      const res = await fetch('/api/schedule/discover-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ integrationId: integrationId || undefined }),
+      });
+      const data = await res.json();
+      if (data.success && data.log_files?.length > 0) {
+        setDiscoveredLogs(data.log_files);
+      } else {
+        setDiscoverError(data.message || 'No log files found on the server');
+      }
+    } catch {
+      setDiscoverError('Failed to connect to server');
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
+  const toggleLogPath = (path: string) => {
+    const current: string[] = config.log_paths || [];
+    const updated = current.includes(path)
+      ? current.filter((p: string) => p !== path)
+      : [...current, path];
+    onConfigChange({ ...config, log_paths: updated });
+  };
 
   const hasAdvanced = HAS_ADVANCED.includes(monitorType);
   const isAutoOnly = AUTO_ONLY_TYPES.includes(monitorType);
@@ -444,51 +486,126 @@ export function MonitorConfigForm({
           {monitorType === 'LOG_ANALYSIS' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
-                  Log file paths (one per line) <span className="text-red-400">*</span>
-                </label>
-                <textarea
-                  value={(config.log_paths || []).join('\n')}
-                  onChange={(e) =>
-                    onConfigChange({
-                      ...config,
-                      log_paths: e.target.value.split('\n').filter((p: string) => p.trim()),
-                    })
-                  }
-                  placeholder={"/var/log/syslog\n/var/log/app/error.log"}
-                  rows={3}
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2] font-mono"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
-                    Max errors before FAIL
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[12px] font-medium text-white/50">
+                    Log file paths <span className="text-red-400">*</span>
                   </label>
+                  <button
+                    type="button"
+                    onClick={handleDiscoverLogs}
+                    disabled={discovering}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-violet-400 bg-violet-500/[0.08] border border-violet-500/[0.15] rounded-md hover:bg-violet-500/[0.15] transition-colors disabled:opacity-50"
+                  >
+                    {discovering ? (
+                      <>
+                        <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Scanning server...
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        Discover Log Files
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Discovered log files — click to toggle selection */}
+                {discoveredLogs.length > 0 && (
+                  <div className="mb-2 max-h-[180px] overflow-y-auto rounded-lg border border-white/[0.08] bg-white/[0.02]">
+                    {discoveredLogs.map((log) => {
+                      const selected = (config.log_paths || []).includes(log.path);
+                      return (
+                        <button
+                          key={log.path}
+                          type="button"
+                          onClick={() => toggleLogPath(log.path)}
+                          className={cn(
+                            'flex items-center justify-between w-full px-3 py-1.5 text-left transition-colors border-b border-white/[0.04] last:border-b-0',
+                            selected
+                              ? 'bg-violet-500/[0.08]'
+                              : 'hover:bg-white/[0.04]'
+                          )}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className={cn(
+                              'w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center',
+                              selected
+                                ? 'bg-violet-500 border-violet-500'
+                                : 'border-white/20'
+                            )}>
+                              {selected && (
+                                <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <span className="text-[12px] text-white/80 font-mono truncate">{log.path}</span>
+                          </div>
+                          <span className="text-[11px] text-white/30 flex-shrink-0 ml-2">{log.size_human}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {discoverError && (
+                  <p className="text-[11px] text-red-400 mb-2">{discoverError}</p>
+                )}
+
+                {/* Path input — Enter to add */}
+                <div className="flex gap-2">
                   <input
-                    type="number"
-                    value={config.max_errors || ''}
-                    onChange={(e) =>
-                      onConfigChange({ ...config, max_errors: parseInt(e.target.value) || 10 })
-                    }
-                    placeholder="10"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                    type="text"
+                    placeholder="/var/log/syslog — press Enter to add"
+                    className="flex-1 bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2] font-mono"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const input = e.currentTarget;
+                        const val = input.value.trim();
+                        if (val) {
+                          const current: string[] = config.log_paths || [];
+                          if (!current.includes(val)) {
+                            onConfigChange({ ...config, log_paths: [...current, val] });
+                          }
+                          input.value = '';
+                        }
+                      }
+                    }}
                   />
                 </div>
-                <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
-                    Lines to scan
-                  </label>
-                  <input
-                    type="number"
-                    value={config.lookback_lines || ''}
-                    onChange={(e) =>
-                      onConfigChange({ ...config, lookback_lines: parseInt(e.target.value) || 1000 })
-                    }
-                    placeholder="1000"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
-                  />
-                </div>
+
+                {/* Selected paths as removable chips */}
+                {(config.log_paths || []).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {(config.log_paths || []).map((p: string) => (
+                      <span
+                        key={p}
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-white/[0.06] border border-white/[0.08] rounded-md text-[12px] text-white/80 font-mono"
+                      >
+                        {p}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = (config.log_paths || []).filter((x: string) => x !== p);
+                            onConfigChange({ ...config, log_paths: updated });
+                          }}
+                          className="text-white/30 hover:text-white/70 ml-0.5"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-[12px] font-medium text-white/50 mb-2">

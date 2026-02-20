@@ -37,6 +37,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
   const [alertChannels, setAlertChannels] = useState<string[]>([]);
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'WARN', 'ERROR']);
   const [integrationId, setIntegrationId] = useState('');
+  const [connectedChannels, setConnectedChannels] = useState<string[]>(['email']);
 
   // Pre-fill form when editing an existing task
   useEffect(() => {
@@ -68,6 +69,19 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
       setStep(1);
     }
   }, [editTask, open]);
+
+  // Fetch connected channel status when modal opens
+  useEffect(() => {
+    if (!open) return;
+    const channels = ['email'];
+    fetch('/api/integrations/slack')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data?.connected) channels.push('slack');
+        setConnectedChannels(channels);
+      })
+      .catch(() => setConnectedChannels(channels));
+  }, [open]);
 
   if (!open) return null;
 
@@ -240,6 +254,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
                   onTargetFqnChange={setTargetFqn}
                   config={config}
                   onConfigChange={setConfig}
+                  integrationId={integrationId}
                 />
               )}
 
@@ -325,6 +340,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
               onChannelsChange={setAlertChannels}
               alertOnStatus={alertOnStatus}
               onAlertOnStatusChange={setAlertOnStatus}
+              connectedChannels={connectedChannels}
             />
           )}
         </div>

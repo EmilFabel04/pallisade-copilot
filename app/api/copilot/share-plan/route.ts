@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
         type: true,
         credentials: true,
         config: true,
+        accessToken: true,
       },
     });
 
@@ -82,14 +83,20 @@ export async function POST(request: NextRequest) {
     // Handle based on target type
     switch (target.type) {
       case 'slack': {
-        const webhookUrl = credentials.webhook_url || credentials.webhookUrl || config.webhook_url;
-        if (!webhookUrl) {
-          return NextResponse.json({ error: 'Slack webhook URL not configured' }, { status: 400 });
+        let botToken = '';
+        if (integration.accessToken) {
+          try { botToken = decrypt(integration.accessToken); } catch {}
+        }
+        if (!botToken) {
+          return NextResponse.json({ error: 'Slack bot token not configured' }, { status: 400 });
         }
 
+        const slackCreds = integration.credentials
+          ? (typeof integration.credentials === 'string' ? JSON.parse(integration.credentials as string) : integration.credentials) as Record<string, any>
+          : {};
         const slackClient = new SlackClient({
-          webhook_url: webhookUrl,
-          channel: target.channel || config.channel,
+          bot_token: botToken,
+          channel: target.channel || slackCreds.channel || config.channel,
         });
 
         const message = formatPlanForSlack(plan);

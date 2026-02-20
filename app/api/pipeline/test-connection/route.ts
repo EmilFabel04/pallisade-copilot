@@ -372,6 +372,40 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      case 'n8n': {
+        try {
+          const host = config.host;
+          const apiKey = config.api_key;
+
+          if (!host || !apiKey) {
+            return NextResponse.json({ success: false, message: 'Instance URL and API key are required' });
+          }
+
+          const n8nUrl = `${host.replace(/\/$/, '')}/api/v1/workflows?limit=1`;
+          const n8nResponse = await fetch(n8nUrl, {
+            headers: {
+              'X-N8N-API-KEY': apiKey,
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (n8nResponse.ok) {
+            return NextResponse.json({
+              success: true,
+              message: 'Connected to n8n successfully'
+            });
+          } else if (n8nResponse.status === 401) {
+            return NextResponse.json({ success: false, message: 'Invalid n8n API key' });
+          } else {
+            return NextResponse.json({ success: false, message: `n8n API error: ${n8nResponse.status}` });
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : 'Unknown error';
+          return NextResponse.json({ success: false, message: `Failed to connect to n8n: ${msg}` });
+        }
+      }
+
       // Infrastructure tools - test via scanner SSH endpoint
       case 'linux_server': {
         try {
@@ -384,6 +418,7 @@ export async function POST(request: NextRequest) {
               username: config.username,
               auth_method: config.auth_method || 'key',
               private_key: config.private_key,
+              passphrase: config.passphrase,
               password: config.password,
             }),
             signal: AbortSignal.timeout(15000),

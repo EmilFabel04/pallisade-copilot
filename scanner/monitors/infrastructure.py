@@ -9,7 +9,6 @@ Non-SQL monitors that inspect remote servers via SSH for:
 
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List, Optional
 
 from .base import MonitorResult, MonitorStatus
@@ -276,15 +275,16 @@ class ServerHealthMonitor:
 class LogMonitor:
     """Monitors server logs for error patterns.
 
+    Scans all log entries from the configured files, using grep on the
+    server for efficient pattern matching.  Reports any errors found.
+
     Config keys:
         log_paths : list[str]
             Log file paths to check.
         error_patterns : list[str]
             Regex patterns to match (default: ["ERROR", "FATAL", "CRITICAL"]).
-        max_errors : int
-            Max error count before FAIL (default: 10).
-        lookback_lines : int
-            Number of lines to tail (default: 1000).
+        lookback_days : int
+            Only scan files modified within this many days (default: 20).
     """
 
     monitor_type = "log_analysis"
@@ -295,11 +295,10 @@ class LogMonitor:
         self.error_patterns: List[str] = self.config.get(
             "error_patterns", ["ERROR", "FATAL", "CRITICAL"]
         )
-        self.max_errors: int = int(self.config.get("max_errors", 10))
-        self.lookback_lines: int = int(self.config.get("lookback_lines", 1000))
+        self.lookback_days: int = int(self.config.get("lookback_days", 20))
 
     def execute(self, server_adapter: Any) -> MonitorResult:
-        """Scan log files for error patterns."""
+        """Scan log files for error patterns using remote grep."""
         target = server_adapter._config.get("host", "unknown")
 
         if not self.log_paths:
@@ -314,29 +313,53 @@ class LogMonitor:
         per_file: List[Dict[str, Any]] = []
         sample_errors: List[str] = []
 
-        pattern = "|".join(self.error_patterns)
-        regex = re.compile(pattern, re.IGNORECASE)
+        # Build grep pattern: "ERROR|FATAL|CRITICAL"
+        grep_pattern = "|".join(self.error_patterns)
 
         for log_path in self.log_paths:
             try:
-                content = server_adapter.tail_log(log_path, self.lookback_lines)
-                matches = [
-                    line for line in content.split("\n")
-                    if line.strip() and regex.search(line)
-                ]
-                error_count = len(matches)
+                # Check if file was modified within lookback window
+                check_cmd = (
+                    f"find {log_path} -mtime -{self.lookback_days} "
+                    f"-type f 2>/dev/null | head -1"
+                )
+                check_result = server_adapter.execute_command(check_cmd, timeout=5)
+                if not check_result.stdout.strip():
+                    per_file.append({
+                        "path": log_path,
+                        "error_count": 0,
+                        "skipped": True,
+                        "reason": f"Not modified in last {self.lookback_days} days",
+                    })
+                    continue
+
+                # Use grep -c for count, grep for samples — single pass
+                count_cmd = (
+                    f"grep -ciE '{grep_pattern}' {log_path} 2>/dev/null || echo 0"
+                )
+                count_result = server_adapter.execute_command(count_cmd, timeout=30)
+                try:
+                    error_count = int(count_result.stdout.strip())
+                except ValueError:
+                    error_count = 0
                 total_errors += error_count
+
+                # Get sample error lines (first 5 matches)
+                if error_count > 0:
+                    sample_cmd = (
+                        f"grep -iE '{grep_pattern}' {log_path} 2>/dev/null | head -5"
+                    )
+                    sample_result = server_adapter.execute_command(sample_cmd, timeout=10)
+                    for line in sample_result.stdout.strip().split("\n"):
+                        if line.strip() and len(sample_errors) < 10:
+                            sample_errors.append(
+                                f"[{log_path}] {line.strip()[:200]}"
+                            )
 
                 per_file.append({
                     "path": log_path,
                     "error_count": error_count,
-                    "lines_checked": len(content.split("\n")),
                 })
-
-                # Collect sample error lines
-                for match_line in matches[:5]:
-                    if len(sample_errors) < 10:
-                        sample_errors.append(f"[{log_path}] {match_line.strip()[:200]}")
 
             except Exception as e:
                 per_file.append({
@@ -350,32 +373,18 @@ class LogMonitor:
             "per_file": per_file,
             "sample_errors": sample_errors[:10],
             "patterns": self.error_patterns,
+            "lookback_days": self.lookback_days,
         }
 
-        if total_errors > self.max_errors:
+        if total_errors > 0:
             return MonitorResult(
                 monitor_type=self.monitor_type,
                 target_fqn=target,
                 status=MonitorStatus.FAIL,
                 value=float(total_errors),
-                threshold=float(self.max_errors),
                 message=(
-                    f"Found {total_errors} errors across {len(self.log_paths)} log file(s) "
-                    f"(threshold: {self.max_errors})"
-                ),
-                details=details,
-            )
-
-        if total_errors > self.max_errors // 2:
-            return MonitorResult(
-                monitor_type=self.monitor_type,
-                target_fqn=target,
-                status=MonitorStatus.WARN,
-                value=float(total_errors),
-                threshold=float(self.max_errors),
-                message=(
-                    f"Found {total_errors} errors across {len(self.log_paths)} log file(s) "
-                    f"(approaching threshold of {self.max_errors})"
+                    f"Found {total_errors} error(s) across {len(self.log_paths)} log file(s) "
+                    f"in the last {self.lookback_days} days"
                 ),
                 details=details,
             )
@@ -384,10 +393,10 @@ class LogMonitor:
             monitor_type=self.monitor_type,
             target_fqn=target,
             status=MonitorStatus.PASS,
-            value=float(total_errors),
+            value=0.0,
             message=(
-                f"Log analysis passed — {total_errors} error(s) found "
-                f"across {len(self.log_paths)} file(s) (within {self.max_errors} threshold)"
+                f"No errors found across {len(self.log_paths)} log file(s) "
+                f"in the last {self.lookback_days} days"
             ),
             details=details,
         )

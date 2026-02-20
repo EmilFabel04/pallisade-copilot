@@ -552,6 +552,8 @@ enum PipelineLayer {
   REPORTING // Tableau, Looker, Power BI, Metabase
   STORAGE // Amazon S3, Google Cloud Storage, Azure Data Lake Storage
   VERSION_CONTROL // GitHub, GitLab, Bitbucket
+  ORCHESTRATION // Airflow, Dagster (standalone orchestration)
+  INFRASTRUCTURE // Linux Server (SSH-based monitoring)
 }
 
 enum PipelineNodeStatus {
@@ -1869,6 +1871,7 @@ enum IntegrationType {
   AIRFLOW // Apache Airflow orchestration
   DAGSTER // Dagster orchestration
   PREFECT // Prefect orchestration
+  N8N     // n8n workflow automation
 
   // ===========================================
   // REPORTING (Layer: REPORTING)
@@ -2920,6 +2923,9 @@ enum MonitorKind {
   REFERENTIAL
   CUSTOM_SQL
   ANOMALY
+  CERTIFICATE      // Infrastructure: TLS/SSL cert expiry
+  SERVER_HEALTH    // Infrastructure: CPU, memory, disk
+  LOG_ANALYSIS     // Infrastructure: log file error scanning
 }
 
 enum MonitorRunStatus {

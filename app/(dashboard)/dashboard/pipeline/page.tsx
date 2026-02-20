@@ -95,7 +95,7 @@ function mapIntegrationTypeToConnectorId(type: string): string {
     SQLSERVER: 'sqlserver', AZURE_SQL: 'azure_sql', DATABRICKS: 'databricks',
     FIVETRAN: 'fivetran', AIRBYTE: 'airbyte', STITCH: 'stitch',
     DBT_CLOUD: 'dbt_cloud', DBT_CORE: 'dbt_core',
-    AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect',
+    AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect', N8N: 'n8n',
     LOOKER: 'looker', TABLEAU: 'tableau', POWERBI: 'powerbi', METABASE: 'metabase',
     AMAZON_S3: 'amazon_s3', GCS: 'gcs', ADLS: 'adls',
     LINUX_SERVER: 'linux_server',
@@ -180,6 +180,7 @@ export default function PipelinePage() {
       ...TOOLS.WAREHOUSE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['dbt_cloud', 'dbt_core'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['airflow', 'dagster', 'prefect'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),
+      ...TOOLS.ORCHESTRATION.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.REPORTING.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'BI' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.INGESTION.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INGESTION' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.STORAGE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'STORAGE' as const, mode: 'pipeline' as const, layer: t.layer })),
@@ -308,6 +309,7 @@ export default function PipelinePage() {
     const success = searchParams.get('success');
     const error = searchParams.get('error');
     if (success === 'github') { toast.success('GitHub connected successfully'); fetchIntegrations(); window.history.replaceState({}, '', '/dashboard/pipeline'); }
+    else if (success === 'slack') { toast.success('Slack connected successfully'); fetchIntegrations(); window.history.replaceState({}, '', '/dashboard/pipeline'); }
     else if (error) { toast.error(`Authentication error: ${error}`); window.history.replaceState({}, '', '/dashboard/pipeline'); }
   }, [fetchIntegrations, searchParams]);
 

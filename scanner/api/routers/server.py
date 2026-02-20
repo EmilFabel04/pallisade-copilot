@@ -105,6 +105,26 @@ async def check_certificates(req: CertCheckRequest):
         adapter.disconnect()
 
 
+@router.post("/server/discover-logs")
+async def discover_log_files(config: ServerConfig):
+    """Discover log files on a remote server via SSH."""
+    from scanner.adapters.server import ServerAdapter
+
+    adapter = ServerAdapter()
+    try:
+        adapter.connect(config.model_dump())
+        log_files = adapter.discover_log_files()
+        return {
+            "success": True,
+            "log_files": log_files,
+        }
+    except Exception as e:
+        logger.error("[Server] Log discovery failed", error=str(e))
+        return {"success": False, "message": str(e), "log_files": []}
+    finally:
+        adapter.disconnect()
+
+
 @router.post("/server/health")
 async def server_health(config: ServerConfig):
     """Get system health metrics from a remote server."""
