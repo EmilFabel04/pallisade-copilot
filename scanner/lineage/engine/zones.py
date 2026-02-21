@@ -133,6 +133,11 @@ def classify_dataset_zone(node: LineageNode) -> DatasetZone:
     3. Table name patterns
     4. Default based on platform domain
     """
+    # 0. Explicit zone hint (from LLM or enrichment)
+    zone_hint = node.raw_metadata.get("zone", "")
+    if zone_hint and zone_hint in {z.value for z in DatasetZone}:
+        return DatasetZone(zone_hint)
+
     # 1. Check dbt resource type metadata
     dbt_type = node.raw_metadata.get("dbt_resource_type", "")
     if dbt_type == "source":

@@ -7,6 +7,7 @@ Extracts lineage from connected warehouses and returns a graph.
 from typing import Dict, Any, List, Optional, Set
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 router = APIRouter()
 
@@ -2488,3 +2489,171 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest):
             success=False,
             errors=[str(e)],
         )
+
+
+# ---------------------------------------------------------------------------
+# LLM-Powered Extraction (SSE streaming)
+# ---------------------------------------------------------------------------
+
+
+class LLMExtractRequest(BaseModel):
+    """Request for LLM-powered lineage extraction."""
+    tool_configs: List[InvestigateToolConfig]
+    llm_provider: str = "anthropic"
+    llm_model: Optional[str] = None
+    tool_nodes: Optional[List[Dict[str, Any]]] = None
+
+
+@router.post("/lineage/extract-llm")
+async def extract_lineage_with_llm(request: LLMExtractRequest):
+    """
+    LLM-powered lineage extraction with SSE streaming progress.
+
+    The LLM acts as an agent that queries each integration via tools,
+    reasons about data flow, and builds the lineage graph itself.
+    Returns a stream of SSE events showing real-time progress.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    async def event_stream():
+        try:
+            try:
+                from lineage.engine.investigator import ToolConfig
+                from lineage.engine.llm_extractor import LLMExtractorConfig, LLMLineageExtractor
+            except ImportError:
+                from scanner.lineage.engine.investigator import ToolConfig
+                from scanner.lineage.engine.llm_extractor import LLMExtractorConfig, LLMLineageExtractor
+
+            # Pre-process dbt_core configs (same pattern as investigate-llm)
+            for tc in request.tool_configs:
+                if tc.tool_type.lower() != "dbt_core" or tc.config.get("manifest"):
+                    continue
+                source_mode = tc.config.get("source_mode", "")
+                if source_mode == "project" and tc.config.get("project_files"):
+                    try:
+                        try:
+                            from lineage.dbt_project_parser import parse_dbt_project
+                        except ImportError:
+                            from scanner.lineage.dbt_project_parser import parse_dbt_project
+                        project_files = tc.config["project_files"]
+                        if isinstance(project_files, dict):
+                            manifest = parse_dbt_project(
+                                files=project_files,
+                                project_name=tc.config.get("project_name", ""),
+                                warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                            )
+                            if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                                tc.config["manifest"] = manifest
+                    except Exception as parse_err:
+                        _logger.warning(f"[LLM-Extract] Project files parsing failed: {parse_err}")
+                elif source_mode == "github":
+                    github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
+                    github_repo = tc.config.get("github_repo")
+                    if github_token and github_repo:
+                        try:
+                            try:
+                                from lineage.github_reader import fetch_dbt_project_files
+                                from lineage.dbt_project_parser import parse_dbt_project
+                            except ImportError:
+                                from scanner.lineage.github_reader import fetch_dbt_project_files
+                                from scanner.lineage.dbt_project_parser import parse_dbt_project
+                            project_files = await fetch_dbt_project_files(
+                                repo=github_repo, token=github_token,
+                                branch=tc.config.get("github_branch", "main"),
+                                dbt_root=tc.config.get("dbt_project_path", ""),
+                            )
+                            if project_files:
+                                manifest = parse_dbt_project(
+                                    files=project_files,
+                                    project_name=tc.config.get("project_name", ""),
+                                    warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                                )
+                                tc.config["manifest"] = manifest
+                        except Exception as gh_err:
+                            _logger.warning(f"[LLM-Extract] GitHub fetch failed: {gh_err}")
+
+            # Build ToolConfig list
+            tool_configs = [
+                ToolConfig(
+                    tool_type=tc.tool_type,
+                    config=tc.config,
+                    integration_id=tc.integration_id,
+                    layer=tc.layer,
+                    adapter_type=tc.adapter_type,
+                )
+                for tc in request.tool_configs
+            ]
+
+            # Create extractor
+            extractor_config = LLMExtractorConfig(
+                provider=request.llm_provider,
+                model=request.llm_model,
+            )
+            extractor = LLMLineageExtractor(extractor_config)
+
+            # Stream extraction events
+            graph = None
+            views = None
+            async for event in extractor.extract(tool_configs, request.tool_nodes or []):
+                yield event.to_sse()
+
+                # Capture final graph/views from complete event
+                if event.event_type == "complete":
+                    graph = event.data.get("graph")
+                    views = event.data.get("views")
+
+            # After extraction, persist to registry + store
+            if graph:
+                try:
+                    from scanner.lineage.engine.run_registry import RunArtifacts
+                except ImportError:
+                    from lineage.engine.run_registry import RunArtifacts
+
+                registry = _get_run_registry()
+                store = _get_engine_store()
+
+                run_id = registry.start_run(
+                    [tc.tool_type for tc in request.tool_configs]
+                )
+                artifacts = RunArtifacts(
+                    graph_dict=graph,
+                    views=views or {},
+                    stats={
+                        "total_nodes": graph.get("stats", {}).get("node_count", 0),
+                        "total_edges": graph.get("stats", {}).get("edge_count", 0),
+                        "extraction_mode": "llm",
+                        "run_id": run_id,
+                        "views_built": list((views or {}).keys()),
+                    },
+                )
+                registry.complete_run(run_id, artifacts)
+
+                # Update store for backward compat
+                try:
+                    from scanner.lineage.graph import LineageGraph
+                except ImportError:
+                    from lineage.graph import LineageGraph
+                store.graph = LineageGraph.from_dict(graph)
+
+                import json
+                yield f"data: {json.dumps({'type': 'persisted', 'data': {'run_id': run_id}})}\n\n"
+
+                _logger.info(f"[LLM-Extract] Persisted run_id={run_id}")
+
+        except Exception as e:
+            import json
+            import traceback
+            traceback.print_exc()
+            _logger.error(f"[LLM-Extract] Stream error: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'data': {'message': str(e)}})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -532,6 +532,12 @@ export default function LineagePage() {
   // laneOverview is now populated by fetchControlPlane (lane view is the primary Pipeline Overview)
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
+  // LLM extraction state
+  const [llmExtracting, setLlmExtracting] = useState(false);
+  const [llmProgress, setLlmProgress] = useState<Array<{type: string; message: string; ts?: number}>>([]);
+  const [llmNodeCount, setLlmNodeCount] = useState(0);
+  const [llmEdgeCount, setLlmEdgeCount] = useState(0);
+
   // Track fetch version to ignore stale responses on rapid tab switches
   const fetchVersionRef = useRef(0);
 
@@ -857,6 +863,87 @@ export default function LineagePage() {
     } catch (err) {
       setError('Failed to extract lineage');
       setExtracting(false);
+    }
+  };
+
+  // LLM-powered extraction with SSE streaming
+  const extractWithLLM = async () => {
+    if (!stackId) return;
+
+    setLlmExtracting(true);
+    setLlmProgress([]);
+    setLlmNodeCount(0);
+    setLlmEdgeCount(0);
+    setError(null);
+
+    try {
+      // Clear existing lineage first
+      await fetch(`/api/pipeline/${stackId}/lineage`, { method: 'DELETE' });
+
+      const res = await fetch(`/api/pipeline/${stackId}/lineage/extract-llm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llmProvider: 'openai' }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        setError(errorData.error || 'LLM extraction failed');
+        setLlmExtracting(false);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        setError('No stream from server');
+        setLlmExtracting(false);
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            const { type, data } = event;
+
+            if (type === 'phase') {
+              setLlmProgress(prev => [...prev.slice(-29), { type: 'phase', message: data.message }]);
+            } else if (type === 'tool_call') {
+              setLlmProgress(prev => [...prev.slice(-29), { type: 'tool', message: `Calling ${data.tool}...` }]);
+            } else if (type === 'node_added') {
+              setLlmNodeCount(data.total_nodes || 0);
+              setLlmProgress(prev => [...prev.slice(-29), { type: 'node', message: `Added ${data.node_type}: ${data.name}` }]);
+            } else if (type === 'edge_added') {
+              setLlmEdgeCount(data.total_edges || 0);
+            } else if (type === 'error') {
+              setLlmProgress(prev => [...prev.slice(-29), { type: 'error', message: data.message }]);
+            } else if (type === 'complete') {
+              setLlmProgress(prev => [...prev.slice(-29), { type: 'complete', message: `Done: ${data.stats?.total_nodes || 0} nodes, ${data.stats?.total_edges || 0} edges` }]);
+            } else if (type === 'persisted') {
+              // Extraction persisted — refresh views
+              await fetchLineage();
+            }
+          } catch {
+            // Ignore parse errors on partial SSE chunks
+          }
+        }
+      }
+
+      setLlmExtracting(false);
+    } catch (err) {
+      setError('LLM extraction failed');
+      setLlmExtracting(false);
     }
   };
 
@@ -1288,6 +1375,25 @@ export default function LineagePage() {
                 </>
               )}
             </button>
+            <button
+              onClick={extractWithLLM}
+              disabled={llmExtracting || extracting || !stackId}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-[13px] font-medium transition-all"
+            >
+              {llmExtracting ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  AI Extracting...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                  </svg>
+                  Extract with AI
+                </>
+              )}
+            </button>
             {extracting && lineageData && (
               <span className="ml-2 px-2 py-1 text-[10px] bg-violet-500/20 text-violet-300 rounded-full animate-pulse">
                 Updating...
@@ -1295,6 +1401,35 @@ export default function LineagePage() {
             )}
           </div>
         </div>
+
+        {/* LLM extraction progress panel */}
+        {llmExtracting && (
+          <div className="mb-4 rounded-xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
+              <span className="text-[13px] font-medium text-violet-300">AI is analyzing your pipeline...</span>
+              <span className="ml-auto text-[12px] text-white/40">
+                {llmNodeCount} nodes &middot; {llmEdgeCount} edges
+              </span>
+            </div>
+            <div className="max-h-[160px] overflow-y-auto space-y-1 text-[11px] font-mono">
+              {llmProgress.map((entry, i) => (
+                <div key={i} className={`flex items-start gap-2 ${
+                  entry.type === 'tool' ? 'text-blue-400/70' :
+                  entry.type === 'node' ? 'text-emerald-400/70' :
+                  entry.type === 'error' ? 'text-red-400/80' :
+                  entry.type === 'complete' ? 'text-violet-300' :
+                  'text-white/40'
+                }`}>
+                  <span className="shrink-0 mt-0.5">
+                    {entry.type === 'tool' ? '>' : entry.type === 'node' ? '+' : entry.type === 'error' ? '!' : entry.type === 'complete' ? '*' : '-'}
+                  </span>
+                  <span>{entry.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Tab bar */}
         <div className="flex items-center gap-1 mb-4">
