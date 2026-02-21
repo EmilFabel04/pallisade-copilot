@@ -135,9 +135,15 @@ function engineNodeToUnified(
   } else if (nodeType === 'task') {
     category = 'task';
     layer = 'ORCHESTRATION';
+  } else if (nodeType === 'workflow') {
+    category = 'workflow';
+    layer = 'ORCHESTRATION';
   } else if (nodeType === 'model' || isDbtModel) {
     // Nodes that are dbt models (including merged warehouse+dbt nodes)
     category = 'model';
+    layer = 'TRANSFORMATION';
+  } else if (nodeType === 'notebook') {
+    category = 'notebook';
     layer = 'TRANSFORMATION';
   } else if (nodeType === 'view' || nodeType === 'materialized_view') {
     category = 'view';
@@ -151,6 +157,37 @@ function engineNodeToUnified(
       category = 'source';
       layer = 'INGESTION';
     }
+  } else if (nodeType === 'connector') {
+    category = 'connector';
+    layer = 'INGESTION';
+  } else if (nodeType === 'dashboard') {
+    category = 'dashboard';
+    layer = 'REPORTING';
+  } else if (nodeType === 'report') {
+    category = 'report';
+    layer = 'REPORTING';
+  } else if (nodeType === 'workbook') {
+    category = 'workbook';
+    layer = 'REPORTING';
+  } else if (nodeType === 'dataset' && eNode.platform_domain === 'bi') {
+    category = 'dataset';
+    layer = 'REPORTING';
+  } else if (nodeType === 'question') {
+    category = 'question';
+    layer = 'REPORTING';
+  } else if (nodeType === 'file') {
+    category = 'file';
+    layer = 'INGESTION';
+  } else if (nodeType === 'monitor') {
+    category = 'test';
+    layer = 'WAREHOUSE';
+  } else if (eNode.platform_domain === 'bi') {
+    // Catch-all for BI domain nodes
+    category = 'dashboard';
+    layer = 'REPORTING';
+  } else if (eNode.platform_domain === 'ingestion') {
+    category = 'source';
+    layer = 'INGESTION';
   }
 
   // Extract run summary from raw_metadata (for DAG/task nodes)
@@ -366,24 +403,33 @@ export async function GET(
       orderBy: { createdAt: 'desc' },
     });
 
+    // Layers that participate in data lineage flow.
+    // VCS and INFRASTRUCTURE don't produce data edges — including them creates
+    // disconnected islands in the graph, so we exclude them from the data view.
+    const DATA_FLOW_LAYERS = new Set([
+      'INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION', 'STORAGE',
+    ]);
+
     // Convert PipelineNodes to UnifiedLineageNodes (tool nodes)
-    const toolNodes: UnifiedLineageNode[] = stack.nodes.map((pNode) => {
-      const category = pNode.layer.toLowerCase() as UnifiedNodeCategory;
-      return {
-        id: pNode.id,
-        name: pNode.name,
-        fullName: pNode.name,
-        category,
-        layer: pNode.layer as PipelineLayer,
-        toolType: pNode.toolType,
-        status: pNode.status,
-        healthScore: pNode.healthScore ?? undefined,
-        findingsCount: pNode.findingsCount,
-        criticalCount: pNode.criticalCount,
-        highCount: pNode.highCount,
-        integrationId: pNode.integrationId ?? undefined,
-      };
-    });
+    const toolNodes: UnifiedLineageNode[] = stack.nodes
+      .filter((pNode) => DATA_FLOW_LAYERS.has(pNode.layer))
+      .map((pNode) => {
+        const category = pNode.layer.toLowerCase() as UnifiedNodeCategory;
+        return {
+          id: pNode.id,
+          name: pNode.name,
+          fullName: pNode.name,
+          category,
+          layer: pNode.layer as PipelineLayer,
+          toolType: pNode.toolType,
+          status: pNode.status,
+          healthScore: pNode.healthScore ?? undefined,
+          findingsCount: pNode.findingsCount,
+          criticalCount: pNode.criticalCount,
+          highCount: pNode.highCount,
+          integrationId: pNode.integrationId ?? undefined,
+        };
+      });
 
     // Build data asset nodes — prefer engine graph, fallback to Prisma
     let dataAssetNodes: UnifiedLineageNode[];
@@ -435,10 +481,32 @@ export async function GET(
       const engineIdToUnifiedId = new Map<string, string>();
       dataAssetNodes = [];
 
+      // Build integration_id → tool node lookup for orchestration edge promotion
+      const integrationToToolNode = new Map<string, UnifiedLineageNode>();
+      for (const tn of toolNodes) {
+        if (tn.integrationId) {
+          integrationToToolNode.set(tn.integrationId, tn);
+        }
+      }
+
       for (const eNode of engineGraph.nodes) {
         if (airflowToWarehouseRemap.has(eNode.id)) {
           // This Airflow table ref has a matching warehouse node — skip it,
           // its edges will be remapped to the warehouse node below
+          continue;
+        }
+
+        // In data view, skip orchestration-domain nodes (n8n tasks/workflows,
+        // airflow DAGs/tasks). Remap their edges to the pipeline tool node
+        // so the graph shows "n8n → BQ table" instead of "n8n task X → BQ table".
+        if (planeParam === 'data' && eNode.platform_domain === 'orchestration') {
+          const intId = eNode.integration_id;
+          if (intId) {
+            const toolNode = integrationToToolNode.get(intId);
+            if (toolNode) {
+              engineIdToUnifiedId.set(eNode.id, toolNode.id);
+            }
+          }
           continue;
         }
 
@@ -714,6 +782,16 @@ export async function GET(
     allNodes = allNodes.filter((n) => {
       if (seenNodeIds.has(n.id)) return false;
       seenNodeIds.add(n.id);
+      return true;
+    });
+
+    // Deduplicate edges by (source, target) — when orchestration nodes are
+    // remapped to tool nodes, multiple internal edges can collapse to the same pair
+    const seenEdgePairs = new Set<string>();
+    allEdges = allEdges.filter((e) => {
+      const pair = `${e.source}→${e.target}`;
+      if (seenEdgePairs.has(pair)) return false;
+      seenEdgePairs.add(pair);
       return true;
     });
 

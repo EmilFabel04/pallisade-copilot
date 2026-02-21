@@ -17,6 +17,14 @@ import {
   XCircle,
   Workflow,
   Play,
+  GitBranch,
+  Plug,
+  BookOpen,
+  HelpCircle,
+  FileCode,
+  FileArchive,
+  LayoutDashboard,
+  FileBarChart,
 } from 'lucide-react';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { CATEGORY_VISUALS, type UnifiedNodeCategory } from './types';
@@ -31,6 +39,11 @@ interface ToolNodeData {
   findingsCount?: number;
   criticalCount?: number;
   highCount?: number;
+  // Control plane mode
+  isControlPlane?: boolean;
+  domainColor?: string;
+  assetCount?: number;
+  healthSummary?: { healthy: number; degraded: number; failing: number; unknown: number };
 }
 
 interface DataAssetIssues {
@@ -65,6 +78,8 @@ interface DataAssetNodeData {
   tags?: string[];
   // Overlay mode (orchestration overlay on data tab)
   isOverlay?: boolean;
+  // Inferred node (bridge node from investigator)
+  isInferred?: boolean;
 }
 
 // Get layer icon component
@@ -102,6 +117,26 @@ function getDataAssetIcon(category: UnifiedNodeCategory) {
       return <Workflow {...iconProps} />;
     case 'task':
       return <Play {...iconProps} />;
+    case 'workflow':
+      return <GitBranch {...iconProps} />;
+    case 'connector':
+      return <Plug {...iconProps} />;
+    case 'workbook':
+      return <BookOpen {...iconProps} />;
+    case 'dataset':
+      return <Database {...iconProps} />;
+    case 'question':
+      return <HelpCircle {...iconProps} />;
+    case 'notebook':
+      return <FileCode {...iconProps} />;
+    case 'file':
+      return <FileArchive {...iconProps} />;
+    case 'test':
+      return <CheckCircle {...iconProps} />;
+    case 'dashboard':
+      return <LayoutDashboard {...iconProps} />;
+    case 'report':
+      return <FileBarChart {...iconProps} />;
     default:
       return <Table {...iconProps} />;
   }
@@ -146,10 +181,89 @@ function getStatusConfig(status?: string): { icon: React.ReactNode; color: strin
  * Dimensions: ~220x90px
  */
 export function ToolNode({ data }: { data: ToolNodeData }) {
-  const layerColor = LAYER_COLORS[data.layer] || '#6366F1';
+  const layerColor = data.isControlPlane
+    ? (data.domainColor || '#6366F1')
+    : (LAYER_COLORS[data.layer] || '#6366F1');
   const statusConfig = getStatusConfig(data.status);
   const toolInitial = data.toolType?.charAt(0).toUpperCase() || data.name.charAt(0).toUpperCase();
 
+  // Control Plane mode: larger tool cards with asset count + health bar
+  if (data.isControlPlane) {
+    const health = data.healthSummary;
+    const total = health ? health.healthy + health.degraded + health.failing + health.unknown : 0;
+    const healthPct = total > 0 && health ? Math.round((health.healthy / total) * 100) : 0;
+
+    return (
+      <div
+        className="relative px-5 py-4 rounded-xl border-2 min-w-[220px] max-w-[260px] shadow-lg transition-all hover:shadow-xl hover:scale-[1.02]"
+        style={{
+          borderColor: layerColor,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          backdropFilter: 'blur(8px)',
+        }}
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-3 !h-3 !border-2"
+          style={{ backgroundColor: layerColor, borderColor: 'rgba(255,255,255,0.3)' }}
+        />
+
+        <div className="flex items-center gap-3 mb-3">
+          <div
+            className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-base"
+            style={{ backgroundColor: layerColor }}
+          >
+            {toolInitial}
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-white font-semibold text-[14px] truncate block">{data.name}</span>
+            <span className="text-[10px] uppercase tracking-wide" style={{ color: layerColor }}>
+              {data.toolType || data.category}
+            </span>
+          </div>
+        </div>
+
+        {/* Asset count */}
+        {data.assetCount !== undefined && (
+          <div className="flex items-center justify-between text-[11px] mb-2">
+            <span className="text-white/50">Data Assets</span>
+            <span className="text-white font-semibold">{data.assetCount}</span>
+          </div>
+        )}
+
+        {/* Health bar */}
+        {total > 0 && (
+          <div>
+            <div className="flex items-center justify-between text-[10px] text-white/50 mb-1">
+              <span>Health</span>
+              <span>{healthPct}%</span>
+            </div>
+            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden flex">
+              {health!.healthy > 0 && (
+                <div className="h-full bg-emerald-400" style={{ width: `${(health!.healthy / total) * 100}%` }} />
+              )}
+              {health!.degraded > 0 && (
+                <div className="h-full bg-amber-400" style={{ width: `${(health!.degraded / total) * 100}%` }} />
+              )}
+              {health!.failing > 0 && (
+                <div className="h-full bg-red-400" style={{ width: `${(health!.failing / total) * 100}%` }} />
+              )}
+            </div>
+          </div>
+        )}
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-3 !h-3 !border-2"
+          style={{ backgroundColor: layerColor, borderColor: 'rgba(255,255,255,0.3)' }}
+        />
+      </div>
+    );
+  }
+
+  // Standard ToolNode (data plane)
   return (
     <div
       className="relative px-4 py-3 rounded-lg border-2 min-w-[200px] max-w-[240px] shadow-lg transition-all hover:shadow-xl hover:scale-[1.02]"
@@ -282,14 +396,16 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
     borderColor = '#F59E0B'; // amber
   }
 
+  const isInferred = data.isInferred || false;
+
   return (
     <div
       className="relative px-3 py-2.5 rounded-lg border min-w-[160px] max-w-[220px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02]"
       style={{
-        borderColor: borderColor,
-        backgroundColor: visuals.bgColor,
-        opacity: data.isOverlay ? 0.5 : 1,
-        borderStyle: data.isOverlay ? 'dashed' : 'solid',
+        borderColor: isInferred ? '#F59E0B60' : borderColor,
+        backgroundColor: isInferred ? 'rgba(245,158,11,0.06)' : visuals.bgColor,
+        opacity: data.isOverlay ? 0.5 : isInferred ? 0.75 : 1,
+        borderStyle: (data.isOverlay || isInferred) ? 'dashed' : 'solid',
       }}
     >
       {/* Input handle (left side) */}
@@ -316,6 +432,11 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
           {data.category === 'model' && data.nodeType && data.nodeType !== 'model' && (
             <span className="text-[9px] text-white/30 lowercase">
               · {data.nodeType}
+            </span>
+          )}
+          {isInferred && (
+            <span className="text-[8px] text-amber-400/70 font-medium uppercase tracking-wide">
+              inferred
             </span>
           )}
         </div>

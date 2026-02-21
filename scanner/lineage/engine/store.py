@@ -25,6 +25,8 @@ from ..graph import (
     TimeWindow,
 )
 from .adapter import AdapterRegistry, BaseLineageAdapter, Capability, create_default_registry
+from .canonical import canonicalize_graph_in_place
+from .reconciler import ReconcilerConfig, ReconciliationEngine, ReconciliationResult
 from .resolver import ResolverConfig, ResolverPipeline, ResolutionStats
 
 logger = logging.getLogger(__name__)
@@ -149,6 +151,9 @@ class GraphStore:
         self.resolution_stats = pipeline.stats
         self.graph.built_at = datetime.utcnow()
 
+        # Apply canonical type mapping
+        self.canonicalize()
+
         return self.graph
 
     def build_graph_from_yaml(self, config_path: str) -> LineageGraph:
@@ -156,6 +161,21 @@ class GraphStore:
         with open(config_path) as f:
             config = yaml.safe_load(f)
         return self.build_graph(config)
+
+    def canonicalize(self) -> None:
+        """Apply canonical type mapping and URNs to all nodes/edges.
+
+        Call after resolver produces the graph. Populates canonical_type,
+        canonical_edge_type, and urn fields on every node/edge, and
+        identifies nodes that need manual mapping.
+        """
+        if not self.graph:
+            return
+        result = canonicalize_graph_in_place(self.graph.nodes, self.graph.edges)
+        self._needs_mapping = result.get("needs_mapping", set())
+        logger.info(
+            f"Canonicalized graph: {len(self._needs_mapping)} nodes need mapping"
+        )
 
     def update_graph(
         self,
@@ -389,6 +409,36 @@ class GraphStore:
                     sub.add_edge(edge)
 
         return sub
+
+    # ---- Reconciliation ----
+
+    async def reconcile(
+        self, config: Optional[ReconcilerConfig] = None,
+    ) -> ReconciliationResult:
+        """Run LLM reconciliation on the current graph.
+
+        Analyzes the graph for structural issues (duplicates, disconnected
+        components, missing bridge nodes) and uses an LLM to produce a
+        structured patch.
+
+        Args:
+            config: Reconciler configuration. If None, uses defaults.
+
+        Returns:
+            ReconciliationResult with the patch, diagnostics, and applied counts.
+        """
+        if not self.graph or not self.graph.nodes:
+            raise ValueError("No graph built. Call build_graph() first.")
+
+        engine = ReconciliationEngine(config or ReconcilerConfig())
+        result = await engine.reconcile(self.graph)
+
+        if result.success and result.graph:
+            self.graph = result.graph
+            self.canonicalize()
+
+        self._last_reconciliation = result
+        return result
 
     # ---- Filter helpers ----
 

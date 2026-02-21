@@ -14,8 +14,12 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
  *   ?action=explain-edge&id= → /api/v1/lineage/engine/explain-edge/{id}
  *   ?action=blast-radius&id= → /api/v1/lineage/engine/blast-radius/{id}
  *   ?action=control-plane&id= → /api/v1/lineage/engine/control-plane/{id} (optional id for specific DAG)
+ *   ?action=control-plane-overview → /api/v1/lineage/engine/control-plane-overview (tool-sequence graph)
  *   ?action=cross-links&id= → /api/v1/lineage/engine/cross-links/{id}
  *   ?action=run-history&id= → /api/v1/lineage/engine/run-history/{id}
+ *   ?action=view-pipeline-overview → /api/v1/lineage/engine/views/pipeline-overview
+ *   ?action=view-lane-pipeline-overview → /api/v1/lineage/engine/views/lane-pipeline-overview
+ *   ?action=view-data-plane → /api/v1/lineage/engine/views/data-plane
  *
  * Passes through filter params: level, system, domain, kind, min_confidence, depth, plane
  */
@@ -71,6 +75,9 @@ export async function GET(
           ? `/api/v1/lineage/engine/control-plane/${encodeURIComponent(assetId)}${qs}`
           : `/api/v1/lineage/engine/control-plane${qs}`;
         break;
+      case 'control-plane-overview':
+        endpoint = `/api/v1/lineage/engine/control-plane-overview${qs}`;
+        break;
       case 'cross-links':
         if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
         endpoint = `/api/v1/lineage/engine/cross-links/${encodeURIComponent(assetId)}${qs}`;
@@ -78,6 +85,33 @@ export async function GET(
       case 'run-history':
         if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
         endpoint = `/api/v1/lineage/engine/run-history/${encodeURIComponent(assetId)}${qs}`;
+        break;
+      case 'view-pipeline-overview':
+        endpoint = `/api/v1/lineage/engine/views/pipeline-overview${qs}`;
+        break;
+      case 'view-lane-pipeline-overview':
+        endpoint = `/api/v1/lineage/engine/views/lane-pipeline-overview${qs}`;
+        break;
+      case 'view-data-plane':
+        endpoint = `/api/v1/lineage/engine/views/data-plane${qs}`;
+        break;
+      case 'reconcile-diagnostics':
+        endpoint = `/api/v1/lineage/engine/reconcile/diagnostics`;
+        break;
+      case 'run-status':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param for run-status' }, { status: 400 });
+        endpoint = `/api/v1/lineage/runs/${encodeURIComponent(assetId)}/status`;
+        break;
+      case 'runs-current':
+        endpoint = `/api/v1/lineage/runs/current`;
+        break;
+      case 'runs-list':
+        endpoint = `/api/v1/lineage/runs${qs}`;
+        break;
+      case 'run-view':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param for run-view' }, { status: 400 });
+        const viewType = searchParams.get('viewType') || 'data_plane';
+        endpoint = `/api/v1/lineage/runs/${encodeURIComponent(assetId)}/views/${encodeURIComponent(viewType)}`;
         break;
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
@@ -102,8 +136,12 @@ export async function GET(
 /**
  * POST /api/pipeline/[stackId]/lineage/engine
  *
- * Proxies to /api/v1/lineage/engine/build
- * Body: { config: { adapters: [...], resolver: {...}, ... } }
+ * Proxies to FastAPI engine POST endpoints:
+ *   ?action=build (default) → /api/v1/lineage/engine/build
+ *   ?action=reconcile       → /api/v1/lineage/engine/reconcile
+ *   ?action=reconcile-apply → /api/v1/lineage/engine/reconcile/apply
+ *
+ * Body: action-specific payload
  */
 export async function POST(
   request: NextRequest,
@@ -115,21 +153,41 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { searchParams } = new URL(request.url);
+    const action = searchParams.get('action') || 'build';
     const body = await request.json();
 
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/build`, {
+    let endpoint: string;
+    let timeout = 120000;
+
+    switch (action) {
+      case 'build':
+        endpoint = '/api/v1/lineage/engine/build';
+        break;
+      case 'reconcile':
+        endpoint = '/api/v1/lineage/engine/reconcile';
+        timeout = 180000; // LLM call may take longer
+        break;
+      case 'reconcile-apply':
+        endpoint = '/api/v1/lineage/engine/reconcile/apply';
+        break;
+      default:
+        return NextResponse.json({ error: `Unknown POST action: ${action}` }, { status: 400 });
+    }
+
+    const res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(timeout),
     });
 
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
-    console.error('[ENGINE PROXY] Build error:', error);
+    console.error('[ENGINE PROXY] POST error:', error);
     return NextResponse.json(
-      { error: 'Failed to build engine graph' },
+      { error: 'Failed to proxy to engine API' },
       { status: 500 }
     );
   }

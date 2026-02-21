@@ -12,7 +12,7 @@ import { PipelineLayer, LAYER_COLORS } from '@/components/pipeline/types';
 export type LinePlane = 'data' | 'control' | 'cross';
 
 // Active view tab on the lineage page
-export type LineageViewTab = 'data' | 'orchestration';
+export type LineageViewTab = 'data' | 'control-plane';
 
 // Run summary for DAG/task nodes (from raw_metadata)
 export interface RunSummary {
@@ -49,7 +49,7 @@ export interface OrchestrationContext {
   runSummary?: RunSummary;
 }
 
-// Response from control-plane API
+// Response from control-plane API (per-DAG)
 export interface ControlPlaneResponse {
   dagId: string;
   nodes: UnifiedLineageNode[];
@@ -62,19 +62,66 @@ export interface ControlPlaneResponse {
   };
 }
 
+// Control plane overview: tool-sequence graph (pipeline architecture)
+export interface ControlPlaneNode {
+  id: string;
+  name: string;                    // "Snowflake (prod)"
+  toolType: string;                // "snowflake"
+  platformDomain: string;          // "warehouse", "transform", etc.
+  integrationId?: string;
+  assetCount: number;              // Number of underlying data assets
+  healthSummary: {
+    healthy: number;
+    degraded: number;
+    failing: number;
+    unknown: number;
+  };
+  position: number;                // Sequence position in pipeline
+}
+
+export interface ControlPlaneEdge {
+  id: string;
+  source: string;                  // Source tool node ID
+  target: string;                  // Target tool node ID
+  dataFlowCount: number;           // Number of underlying data edges
+  sampleAssets: string[];          // Top 3 asset names for tooltip
+}
+
+export interface ControlPlaneOverviewResponse {
+  nodes: ControlPlaneNode[];
+  edges: ControlPlaneEdge[];
+  stats: {
+    tool_count: number;
+    flow_count: number;
+  };
+}
+
 // All possible node categories in the unified lineage
 export type UnifiedNodeCategory =
-  | 'ingestion'       // Fivetran, Airbyte, Stitch connectors
-  | 'transformation'  // dbt, Dagster jobs
-  | 'warehouse'       // Snowflake, BigQuery tools (the platform node)
-  | 'reporting'       // Tableau, Looker, Power BI dashboards
-  | 'orchestration'   // Airflow (tool-level, from pipeline nodes)
-  | 'table'           // Database table
-  | 'view'            // Database view
-  | 'source'          // dbt source
-  | 'model'           // dbt model
-  | 'dag'             // Airflow DAG (orchestration job)
-  | 'task';           // Airflow task (orchestration step)
+  | 'ingestion'         // Fivetran, Airbyte, Stitch connectors
+  | 'transformation'    // dbt, Dagster jobs
+  | 'warehouse'         // Snowflake, BigQuery tools (the platform node)
+  | 'reporting'         // Tableau, Looker, Power BI dashboards
+  | 'orchestration'     // Airflow (tool-level, from pipeline nodes)
+  | 'version_control'   // GitHub, GitLab (VCS)
+  | 'infrastructure'    // Linux servers, cloud infrastructure
+  | 'storage'           // S3, GCS, ADLS (storage layer)
+  | 'table'             // Database table
+  | 'view'              // Database view
+  | 'source'            // dbt source
+  | 'model'             // dbt model
+  | 'dag'               // Airflow DAG (orchestration job)
+  | 'task'              // Airflow task (orchestration step)
+  | 'workflow'          // n8n workflow
+  | 'connector'         // Fivetran/Airbyte connector (data asset)
+  | 'workbook'          // Tableau workbook
+  | 'dataset'           // Power BI dataset
+  | 'question'          // Metabase question
+  | 'notebook'          // Databricks notebook
+  | 'file'              // S3/GCS/ADLS object
+  | 'test'              // Elementary test/monitor
+  | 'dashboard'         // Looker/BI dashboard (data asset)
+  | 'report';           // Power BI report
 
 // Issue summary for data assets
 export interface DataAssetIssues {
@@ -186,6 +233,7 @@ export interface LineageFilterState {
   searchQuery: string;
   lineageLevel: LineageLevelFilter; // Filter edges by lineage level
   minConfidence: number;            // Min confidence threshold (0.0–1.0)
+  showInferred: boolean;            // Show inferred (bridge) nodes and edges
 }
 
 // Quick filter preset
@@ -228,12 +276,25 @@ export const CATEGORY_LAYER_MAP: Record<UnifiedNodeCategory, PipelineLayer> = {
   warehouse: 'WAREHOUSE',
   reporting: 'REPORTING',
   orchestration: 'ORCHESTRATION',
+  version_control: 'VERSION_CONTROL',
+  infrastructure: 'INFRASTRUCTURE',
+  storage: 'STORAGE',
   table: 'WAREHOUSE',
   view: 'WAREHOUSE',
   source: 'INGESTION',  // dbt sources are upstream
   model: 'TRANSFORMATION',
   dag: 'ORCHESTRATION',
   task: 'ORCHESTRATION',
+  workflow: 'ORCHESTRATION',
+  connector: 'INGESTION',
+  workbook: 'REPORTING',
+  dataset: 'REPORTING',
+  question: 'REPORTING',
+  notebook: 'TRANSFORMATION',
+  file: 'INGESTION',
+  test: 'WAREHOUSE',
+  dashboard: 'REPORTING',
+  report: 'REPORTING',
 };
 
 // Visual config per category
@@ -279,6 +340,27 @@ export const CATEGORY_VISUALS: Record<UnifiedNodeCategory, {
     bgColor: 'rgba(249,115,22,0.15)',
     label: 'Orchestration',
   },
+  version_control: {
+    icon: 'git-branch',
+    color: LAYER_COLORS.VERSION_CONTROL,
+    borderColor: LAYER_COLORS.VERSION_CONTROL,
+    bgColor: 'rgba(139,92,246,0.15)',
+    label: 'Version Control',
+  },
+  infrastructure: {
+    icon: 'server',
+    color: LAYER_COLORS.INFRASTRUCTURE,
+    borderColor: LAYER_COLORS.INFRASTRUCTURE,
+    bgColor: 'rgba(148,163,184,0.15)',
+    label: 'Infrastructure',
+  },
+  storage: {
+    icon: 'hard-drive',
+    color: LAYER_COLORS.STORAGE,
+    borderColor: LAYER_COLORS.STORAGE,
+    bgColor: 'rgba(168,85,247,0.15)',
+    label: 'Storage',
+  },
   table: {
     icon: 'table',
     color: '#3B82F6',
@@ -321,6 +403,76 @@ export const CATEGORY_VISUALS: Record<UnifiedNodeCategory, {
     bgColor: 'rgba(251,146,60,0.1)',
     label: 'Task',
   },
+  workflow: {
+    icon: 'git-branch',
+    color: '#F97316',
+    borderColor: '#F97316',
+    bgColor: 'rgba(249,115,22,0.12)',
+    label: 'Workflow',
+  },
+  connector: {
+    icon: 'plug',
+    color: '#10B981',
+    borderColor: '#10B981',
+    bgColor: 'rgba(16,185,129,0.12)',
+    label: 'Connector',
+  },
+  workbook: {
+    icon: 'book-open',
+    color: '#06B6D4',
+    borderColor: '#06B6D4',
+    bgColor: 'rgba(6,182,212,0.12)',
+    label: 'Workbook',
+  },
+  dataset: {
+    icon: 'database',
+    color: '#06B6D4',
+    borderColor: '#06B6D4',
+    bgColor: 'rgba(6,182,212,0.1)',
+    label: 'Dataset',
+  },
+  question: {
+    icon: 'help-circle',
+    color: '#38BDF8',
+    borderColor: '#38BDF8',
+    bgColor: 'rgba(56,189,248,0.1)',
+    label: 'Question',
+  },
+  notebook: {
+    icon: 'file-code',
+    color: '#818CF8',
+    borderColor: '#818CF8',
+    bgColor: 'rgba(129,140,248,0.1)',
+    label: 'Notebook',
+  },
+  file: {
+    icon: 'file-archive',
+    color: '#A855F7',
+    borderColor: '#A855F7',
+    bgColor: 'rgba(168,85,247,0.1)',
+    label: 'File',
+  },
+  test: {
+    icon: 'check-circle',
+    color: '#10B981',
+    borderColor: '#10B981',
+    bgColor: 'rgba(16,185,129,0.1)',
+    label: 'Test',
+  },
+  dashboard: {
+    icon: 'layout-dashboard',
+    color: '#06B6D4',
+    borderColor: '#06B6D4',
+    bgColor: 'rgba(6,182,212,0.12)',
+    label: 'Dashboard',
+  },
+  report: {
+    icon: 'file-bar-chart',
+    color: '#06B6D4',
+    borderColor: '#06B6D4',
+    bgColor: 'rgba(6,182,212,0.1)',
+    label: 'Report',
+  },
 };
 
 // Preset filter configurations
@@ -334,7 +486,7 @@ export const FILTER_PRESETS: Record<LineageFilterPreset, {
   'full': {
     label: 'Full Pipeline',
     description: 'Show all tools and data assets',
-    layers: ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION'],
+    layers: ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION', 'VERSION_CONTROL', 'INFRASTRUCTURE', 'STORAGE'],
     showToolNodes: true,
     showTableNodes: true,
   },
@@ -361,25 +513,154 @@ export const FILTER_PRESETS: Record<LineageFilterPreset, {
   },
 };
 
+// ---- Rendered View types (from ViewBuilder backend) ----
+
+// Canonical node types from the backend's 5-type taxonomy
+export type CanonicalNodeType = 'system' | 'service' | 'job' | 'dataset' | 'semantic';
+
+// Canonical edge types from the backend's 6-type taxonomy
+export type CanonicalEdgeTypeName = 'hosts' | 'runs' | 'reads' | 'writes' | 'derives' | 'serves';
+
+// A node in a rendered view, pre-positioned by the backend
+export interface ViewNode {
+  id: string;
+  name: string;
+  canonicalType: CanonicalNodeType;
+  originalType: string;
+  platform: string | null;
+  platformDomain: string;
+  layer: string;
+  clusterId: string | null;
+  x: number;
+  y: number;
+  inferred: boolean;
+  needsMapping: boolean;
+  metadata: Record<string, any>;
+}
+
+// An edge in a rendered view
+export interface ViewEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  canonicalType: CanonicalEdgeTypeName;
+  originalType: string;
+  confidence: number;
+  inferred: boolean;
+  evidenceCount: number;
+}
+
+// A visual cluster grouping related nodes
+export interface ViewCluster {
+  id: string;
+  label: string;
+  platform: string | null;
+  layer: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  nodeCount: number;
+}
+
+// Lane metadata for the lane-based pipeline overview
+export interface LaneMeta {
+  name: string;
+  label: string;
+  order: number;
+  x: number;
+  nodeCount: number;
+}
+
+// Orchestrator overlay (control-plane, not in data lanes)
+export interface OrchestratorOverlay {
+  id: string;
+  name: string;
+  platform: string;
+  integrationId: string | null;
+  x: number;
+  y: number;
+  runsJobIds: string[];
+}
+
+// Pipeline lane names
+export type PipelineLaneName =
+  | 'ingestion'
+  | 'warehouse_raw'
+  | 'transformation'
+  | 'warehouse_analytics'
+  | 'reporting';
+
+// Lane color mapping
+export const LANE_COLORS: Record<PipelineLaneName, string> = {
+  ingestion: '#8B5CF6',         // violet
+  warehouse_raw: '#3B82F6',     // blue
+  transformation: '#F59E0B',    // amber
+  warehouse_analytics: '#10B981', // emerald
+  reporting: '#EC4899',         // pink
+};
+
+// Lane label mapping
+export const LANE_LABELS: Record<PipelineLaneName, string> = {
+  ingestion: 'Ingestion',
+  warehouse_raw: 'Warehouse (Raw)',
+  transformation: 'Transformation',
+  warehouse_analytics: 'Warehouse (Analytics)',
+  reporting: 'Reporting',
+};
+
+// Response from the rendered view endpoints
+export interface RenderedViewResponse {
+  viewType: string;
+  nodes: ViewNode[];
+  edges: ViewEdge[];
+  clusters: ViewCluster[];
+  unmappedNodes: Array<{
+    id: string;
+    name: string;
+    fqn: string;
+    originalType: string;
+    platform: string;
+    sources: string[];
+  }>;
+  stats: Record<string, any>;
+  lanes?: LaneMeta[];
+  orchestrators?: OrchestratorOverlay[];
+}
+
+// Run versioning types
+export interface RunStatusResponse {
+  run_id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  duration_ms: number;
+  errors: string[];
+  is_current: boolean;
+}
+
 // Check if a category is a tool category (pipeline tool nodes)
 export function isToolCategory(category: UnifiedNodeCategory): boolean {
-  return ['ingestion', 'transformation', 'warehouse', 'reporting', 'orchestration'].includes(category);
+  return ['ingestion', 'transformation', 'warehouse', 'reporting', 'orchestration', 'version_control', 'infrastructure', 'storage'].includes(category);
 }
 
 // Check if a category is a data asset category
 export function isDataAssetCategory(category: UnifiedNodeCategory): boolean {
-  return ['table', 'view', 'source', 'model', 'dag', 'task'].includes(category);
+  return [
+    'table', 'view', 'source', 'model', 'dag', 'task',
+    'workflow', 'connector', 'workbook', 'dataset', 'question',
+    'notebook', 'file', 'test', 'dashboard', 'report',
+  ].includes(category);
 }
 
 // Get the default filter state
 export function getDefaultFilterState(): LineageFilterState {
   return {
-    layers: new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION']),
+    layers: new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION', 'VERSION_CONTROL', 'INFRASTRUCTURE', 'STORAGE']),
     showToolNodes: true,
     showTableNodes: true,
     searchQuery: '',
     lineageLevel: 'all',
     minConfidence: 0,
+    showInferred: true,
   };
 }
 
@@ -393,6 +674,7 @@ export function applyFilterPreset(preset: LineageFilterPreset): LineageFilterSta
     searchQuery: '',
     lineageLevel: 'all',
     minConfidence: 0,
+    showInferred: true,
   };
 }
 
@@ -454,6 +736,67 @@ export function getCrossLinkedOrchestration(
   }
 
   return contexts;
+}
+
+// ---- Reconciliation types ----
+
+export interface ReconciliationDiagnostics {
+  datasetRoots: Array<{ nodeId: string; name: string; fqn: string; platform: string }>;
+  disconnectedComponents: string[][];
+  suspectedDuplicates: Array<{ name: string; nodeIds: string[]; platforms: string[]; reason: string }>;
+  missingLinksHints: Array<{ description: string }>;
+}
+
+export interface ReconciliationMerge {
+  keepId: string;
+  mergeIds: string[];
+  reason: string;
+  confidence: number;
+}
+
+export interface ReconciliationPatch {
+  patchVersion: string;
+  mergeSuggestions: ReconciliationMerge[];
+  addNodes: Array<{
+    canonicalId: string;
+    type: CanonicalNodeType;
+    platform: string;
+    displayName: string;
+    reason: string;
+    confidence: number;
+    inferred: boolean;
+  }>;
+  addEdges: Array<{
+    fromId: string;
+    toId: string;
+    type: CanonicalEdgeTypeName;
+    confidence: number;
+    reason: string;
+    inferred: boolean;
+  }>;
+  layerAssignments: Array<{
+    canonicalId: string;
+    layer: string;
+    reason: string;
+    confidence: number;
+  }>;
+  unknowns: Array<{
+    entityRef: string;
+    issue: string;
+    suggestedAction: string;
+    questions: string[];
+  }>;
+}
+
+export interface ReconciliationResult {
+  success: boolean;
+  patch: ReconciliationPatch;
+  diagnostics: ReconciliationDiagnostics;
+  applied: Record<string, number>;
+  unknowns: ReconciliationPatch['unknowns'];
+  validationErrors: string[];
+  durationMs: number;
+  runId: string;
 }
 
 // Check if a node passes the current filters

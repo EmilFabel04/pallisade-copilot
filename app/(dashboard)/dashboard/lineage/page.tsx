@@ -26,8 +26,19 @@ import {
   type UnifiedLineageEdge,
   type UnifiedLineageResponse,
   type LineageFilterState,
-  type LineageViewTab,
+  type UnifiedNodeCategory,
   type EngineCoverageStats,
+  type ControlPlaneOverviewResponse,
+  type ControlPlaneNode as CPNode,
+  type ControlPlaneEdge as CPEdge,
+  type RenderedViewResponse,
+  type ViewNode,
+  type ViewEdge,
+  type LaneMeta,
+  type OrchestratorOverlay,
+  type PipelineLaneName,
+  LANE_COLORS,
+  LANE_LABELS,
   getDefaultFilterState,
   isToolCategory,
   isDataAssetCategory,
@@ -36,6 +47,32 @@ import {
   getConfidenceColor,
   CATEGORY_VISUALS,
 } from '@/components/lineage/types';
+
+// Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
+function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
+  // Use originalType when it maps directly to a known category
+  const ot = vn.originalType as UnifiedNodeCategory;
+  const knownCategories: UnifiedNodeCategory[] = [
+    'table', 'view', 'source', 'model', 'dag', 'task', 'workflow',
+    'connector', 'workbook', 'dataset', 'question', 'notebook',
+    'file', 'test', 'dashboard', 'report',
+  ];
+  if (knownCategories.includes(ot)) return ot;
+
+  // Fall back on canonical type → category mapping
+  switch (vn.canonicalType) {
+    case 'dataset': return 'table';
+    case 'semantic': return 'dashboard';
+    case 'job': return 'workflow';
+    case 'service': return vn.platformDomain === 'warehouse' ? 'warehouse'
+      : vn.platformDomain === 'transform' ? 'transformation'
+      : vn.platformDomain === 'bi' ? 'reporting'
+      : vn.platformDomain === 'ingestion' ? 'ingestion'
+      : 'warehouse';
+    case 'system': return 'infrastructure';
+    default: return 'table';
+  }
+}
 
 // Dagre layout with layer-aware sizing
 const getLayoutedElements = (
@@ -140,6 +177,341 @@ function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode)
   };
 }
 
+// ---------------------------------------------------------------------------
+// Lane Overview Canvas — renders the lane-based pipeline overview
+// Uses pre-positioned nodes from backend (no Dagre needed)
+// ---------------------------------------------------------------------------
+function LaneOverviewCanvas({
+  data,
+  loading,
+  onExtract,
+  extracting,
+  stackId,
+}: {
+  data: RenderedViewResponse | null;
+  loading: boolean;
+  onExtract: () => void;
+  extracting: boolean;
+  stackId: string | null;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-white/50">Loading lane overview...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data || !data.nodes || data.nodes.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full">
+        <svg className="w-16 h-16 text-white/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
+        </svg>
+        <p className="text-white/50 text-[15px] mb-2">No lane overview available</p>
+        <p className="text-white/30 text-[13px] mb-4">
+          Extract lineage from the Data Lineage tab first
+        </p>
+        <button
+          onClick={onExtract}
+          disabled={extracting || !stackId}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium"
+        >
+          {extracting ? 'Extracting...' : 'Extract Lineage'}
+        </button>
+      </div>
+    );
+  }
+
+  const lanes = data.lanes || [];
+  const orchestrators = data.orchestrators || [];
+  const nodes = data.nodes;
+  const edges = data.edges;
+
+  // Compute bounds for the SVG viewBox
+  const allX = nodes.map(n => n.x);
+  const allY = nodes.map(n => n.y);
+  const minX = Math.min(...allX, ...orchestrators.map(o => o.x)) - 80;
+  const maxX = Math.max(...allX, ...orchestrators.map(o => o.x)) + 250;
+  const minY = Math.min(...allY, ...orchestrators.map(o => o.y)) - 80;
+  const maxY = Math.max(...allY) + 100;
+
+  const viewWidth = maxX - minX + 100;
+  const viewHeight = maxY - minY + 100;
+
+  // Node dimensions
+  const NODE_W = 180;
+  const NODE_H = 50;
+
+  // Build a node map for edge drawing
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+
+  return (
+    <div className="w-full h-full overflow-auto relative bg-[#030303]">
+      <svg
+        width="100%"
+        height="100%"
+        viewBox={`${minX} ${minY} ${viewWidth} ${viewHeight}`}
+        className="min-w-full min-h-full"
+      >
+        {/* Lane backgrounds */}
+        {lanes.map((lane) => {
+          const laneColor = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
+          return (
+            <g key={lane.name}>
+              {/* Lane column background */}
+              <rect
+                x={lane.x - 30}
+                y={minY}
+                width={NODE_W + 60}
+                height={viewHeight}
+                fill={`${laneColor}08`}
+                rx={8}
+              />
+              {/* Lane header */}
+              <text
+                x={lane.x + NODE_W / 2 - 30}
+                y={minY + 20}
+                textAnchor="middle"
+                fill={laneColor}
+                fontSize={12}
+                fontWeight={600}
+                fontFamily="system-ui, sans-serif"
+              >
+                {lane.label}
+              </text>
+              <text
+                x={lane.x + NODE_W / 2 - 30}
+                y={minY + 36}
+                textAnchor="middle"
+                fill="rgba(255,255,255,0.3)"
+                fontSize={10}
+                fontFamily="system-ui, sans-serif"
+              >
+                {lane.nodeCount} {lane.nodeCount === 1 ? 'node' : 'nodes'}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Edges */}
+        {edges.map((edge) => {
+          const src = nodeMap.get(edge.sourceId);
+          const tgt = nodeMap.get(edge.targetId);
+          if (!src || !tgt) return null;
+
+          const x1 = src.x + NODE_W;
+          const y1 = src.y + NODE_H / 2;
+          const x2 = tgt.x;
+          const y2 = tgt.y + NODE_H / 2;
+
+          // Elbow path (right from source, then down/up, then right to target)
+          const midX = (x1 + x2) / 2;
+          const path = `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`;
+
+          const color = edge.inferred
+            ? 'rgba(139,92,246,0.4)'
+            : `${getConfidenceColor(edge.confidence)}80`;
+
+          return (
+            <path
+              key={edge.id}
+              d={path}
+              fill="none"
+              stroke={color}
+              strokeWidth={edge.inferred ? 1.5 : 2}
+              strokeDasharray={edge.inferred ? '6,4' : undefined}
+              markerEnd="url(#arrowhead)"
+            />
+          );
+        })}
+
+        {/* Arrow marker */}
+        <defs>
+          <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="rgba(255,255,255,0.4)" />
+          </marker>
+        </defs>
+
+        {/* Orchestrator overlays */}
+        {orchestrators.map((orch) => {
+          return (
+            <g key={orch.id}>
+              <rect
+                x={orch.x - 10}
+                y={orch.y - 5}
+                width={NODE_W + 20}
+                height={40}
+                rx={8}
+                fill="rgba(251,146,60,0.1)"
+                stroke="rgba(251,146,60,0.3)"
+                strokeWidth={1}
+                strokeDasharray="4,3"
+              />
+              <text
+                x={orch.x + NODE_W / 2}
+                y={orch.y + 18}
+                textAnchor="middle"
+                fill="#FB923C"
+                fontSize={11}
+                fontWeight={500}
+                fontFamily="system-ui, sans-serif"
+              >
+                {orch.name}
+              </text>
+              {/* Dashed lines to jobs it runs */}
+              {orch.runsJobIds.map((jobId) => {
+                const jobNode = nodeMap.get(jobId);
+                if (!jobNode) return null;
+                return (
+                  <line
+                    key={`${orch.id}-${jobId}`}
+                    x1={orch.x + NODE_W / 2}
+                    y1={orch.y + 35}
+                    x2={jobNode.x + NODE_W / 2}
+                    y2={jobNode.y}
+                    stroke="rgba(251,146,60,0.25)"
+                    strokeWidth={1}
+                    strokeDasharray="3,3"
+                  />
+                );
+              })}
+            </g>
+          );
+        })}
+
+        {/* Nodes */}
+        {nodes.map((node) => {
+          const lane = node.metadata?.lane as PipelineLaneName | undefined;
+          const laneColor = lane ? LANE_COLORS[lane] || '#6366F1' : '#6366F1';
+          const badges = node.metadata?.badges as Record<string, string> | undefined;
+          const isInferred = node.inferred;
+
+          return (
+            <g key={node.id}>
+              {/* Node background */}
+              <rect
+                x={node.x}
+                y={node.y}
+                width={NODE_W}
+                height={NODE_H}
+                rx={8}
+                fill={isInferred ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.04)'}
+                stroke={isInferred ? `${laneColor}40` : `${laneColor}60`}
+                strokeWidth={1.5}
+                strokeDasharray={isInferred ? '4,3' : undefined}
+              />
+              {/* Left accent bar */}
+              <rect
+                x={node.x}
+                y={node.y}
+                width={4}
+                height={NODE_H}
+                rx={2}
+                fill={laneColor}
+              />
+              {/* Node name */}
+              <text
+                x={node.x + 14}
+                y={node.y + 20}
+                fill="white"
+                fontSize={11}
+                fontWeight={500}
+                fontFamily="system-ui, sans-serif"
+              >
+                {node.name.length > 22 ? node.name.slice(0, 22) + '...' : node.name}
+              </text>
+              {/* Type badge */}
+              <text
+                x={node.x + 14}
+                y={node.y + 36}
+                fill="rgba(255,255,255,0.4)"
+                fontSize={9}
+                fontFamily="system-ui, sans-serif"
+              >
+                {node.canonicalType}
+                {badges?.zone ? ` / ${badges.zone}` : ''}
+                {badges?.capability ? ` / ${badges.capability}` : ''}
+              </text>
+              {/* Inferred badge */}
+              {isInferred && (
+                <text
+                  x={node.x + NODE_W - 8}
+                  y={node.y + 14}
+                  textAnchor="end"
+                  fill="rgba(139,92,246,0.6)"
+                  fontSize={8}
+                  fontFamily="system-ui, sans-serif"
+                >
+                  inferred
+                </text>
+              )}
+              {/* Platform badge */}
+              {node.platform && (
+                <text
+                  x={node.x + NODE_W - 8}
+                  y={node.y + 40}
+                  textAnchor="end"
+                  fill="rgba(255,255,255,0.25)"
+                  fontSize={8}
+                  fontFamily="system-ui, sans-serif"
+                >
+                  {node.platform}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Legend */}
+      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] max-w-lg">
+        {Object.entries(LANE_COLORS).map(([lane, color]) => (
+          <div key={lane} className="flex items-center gap-1">
+            <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
+            <span className="text-white/50">{LANE_LABELS[lane as PipelineLaneName]}</span>
+          </div>
+        ))}
+        <div className="flex items-center gap-1">
+          <div className="w-4 h-0.5 border-t border-dashed border-violet-400/60" />
+          <span className="text-white/50">Inferred</span>
+        </div>
+        {orchestrators.length > 0 && (
+          <div className="flex items-center gap-1">
+            <div className="w-4 h-0.5 border-t border-dashed border-orange-400/60" />
+            <span className="text-white/50">Orchestration</span>
+          </div>
+        )}
+      </div>
+
+      {/* Stats overlay */}
+      {data.stats && (
+        <div className="absolute top-4 right-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] space-y-1">
+          <div className="text-white/50">
+            <span className="text-white font-medium">{data.stats.totalNodes}</span> nodes
+            {' / '}
+            <span className="text-white font-medium">{data.stats.totalEdges}</span> edges
+          </div>
+          {data.stats.inferredNodeCount > 0 && (
+            <div className="text-violet-300/60">
+              {data.stats.inferredNodeCount} inferred nodes
+            </div>
+          )}
+          {data.stats.orchestratorCount > 0 && (
+            <div className="text-orange-300/60">
+              {data.stats.orchestratorCount} orchestrators
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export default function LineagePage() {
   const { selectedPipelineId: stackId, loading: pipelineLoading } = usePipeline();
   const [lineageData, setLineageData] = useState<UnifiedLineageResponse | null>(null);
@@ -149,13 +521,21 @@ export default function LineagePage() {
   const [selectedNode, setSelectedNode] = useState<UnifiedLineageNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<UnifiedLineageEdge | null>(null);
   const [filters, setFilters] = useState<LineageFilterState>(getDefaultFilterState());
-  const [activeTab, setActiveTab] = useState<LineageViewTab>('data');
-  const [showOrchOverlay, setShowOrchOverlay] = useState(false);
+  const [activeTab, setActiveTab] = useState<'data' | 'control-plane'>('data');
+  const [controlPlaneData, setControlPlaneData] = useState<ControlPlaneOverviewResponse | null>(null);
+  const [controlPlaneLoading, setControlPlaneLoading] = useState(false);
+  // Rendered view data (from ViewBuilder backend — pre-positioned, canonical types)
+  const [renderedView, setRenderedView] = useState<RenderedViewResponse | null>(null);
+  const [renderedOverview, setRenderedOverview] = useState<RenderedViewResponse | null>(null);
+  // Lane-based pipeline overview
+  const [laneOverview, setLaneOverview] = useState<RenderedViewResponse | null>(null);
+  // laneOverview is now populated by fetchControlPlane (lane view is the primary Pipeline Overview)
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
   // Track fetch version to ignore stale responses on rapid tab switches
   const fetchVersionRef = useRef(0);
 
-  // Fetch unified lineage data
+  // Fetch unified lineage data — tries rendered view first, falls back to unified
   const fetchLineage = useCallback(async () => {
     if (!stackId) return;
 
@@ -164,14 +544,26 @@ export default function LineagePage() {
     setError(null);
 
     try {
-      const plane = activeTab === 'orchestration'
-        ? 'control'
-        : showOrchOverlay
-        ? 'all'
-        : 'data';
-      const res = await fetch(`/api/pipeline/${stackId}/lineage/unified?plane=${plane}`);
+      // Try rendered data-plane view first (pre-positioned, canonical types)
+      let usedRenderedView = false;
+      try {
+        const viewRes = await fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-data-plane`);
+        if (fetchVersionRef.current !== thisVersion) return;
+        if (viewRes.ok) {
+          const viewData: RenderedViewResponse = await viewRes.json();
+          if (fetchVersionRef.current !== thisVersion) return;
+          if (viewData.nodes && viewData.nodes.length > 0) {
+            console.log('[Lineage] Data Lineage: using data-plane view');
+            setRenderedView(viewData);
+            usedRenderedView = true;
+          }
+        }
+      } catch {
+        // Non-fatal — fall through to unified endpoint
+      }
 
-      // Ignore stale response if a newer fetch has started
+      // Always fetch unified data (for detail panels, filters, and fallback)
+      const res = await fetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`);
       if (fetchVersionRef.current !== thisVersion) return;
 
       if (res.ok) {
@@ -188,8 +580,11 @@ export default function LineagePage() {
           }));
         }
       } else {
-        const errorData = await res.json().catch(() => ({}));
-        setError(errorData.error || 'Failed to fetch lineage');
+        // If we got rendered view, this isn't fatal
+        if (!usedRenderedView) {
+          const errorData = await res.json().catch(() => ({}));
+          setError(errorData.error || 'Failed to fetch lineage');
+        }
       }
     } catch (err) {
       if (fetchVersionRef.current !== thisVersion) return;
@@ -199,20 +594,223 @@ export default function LineagePage() {
         setLoading(false);
       }
     }
-  }, [stackId, activeTab, showOrchOverlay]);
+  }, [stackId]);
+
+  // Fetch pipeline overview — tries lane-based view first (swimlane layout),
+  // then falls back to tool-sequence pipeline-overview, then legacy merge.
+  const fetchControlPlane = useCallback(async () => {
+    if (!stackId) return;
+    setControlPlaneLoading(true);
+    try {
+      // Try lane-based pipeline overview first (swimlane: n8n → BQ raw → dbt → analytics)
+      try {
+        const laneRes = await fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-lane-pipeline-overview`);
+        if (laneRes.ok) {
+          const laneData: RenderedViewResponse = await laneRes.json();
+          if (laneData.nodes && laneData.nodes.length > 0) {
+            console.log('[Lineage] Pipeline Overview: using lane-pipeline-overview view');
+            setLaneOverview(laneData);
+            setControlPlaneLoading(false);
+            return;
+          }
+        }
+      } catch {
+        // Non-fatal — fall through
+      }
+
+      // Try rendered pipeline overview (tool clusters)
+      try {
+        const viewRes = await fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-pipeline-overview`);
+        if (viewRes.ok) {
+          const viewData: RenderedViewResponse = await viewRes.json();
+          if (viewData.nodes && viewData.nodes.length > 0) {
+            console.log('[Lineage] Pipeline Overview: using pipeline-overview view (fallback)');
+            setRenderedOverview(viewData);
+            // Also set controlPlaneData for compatibility with side panels
+            setControlPlaneData({
+              nodes: viewData.nodes.map((n: ViewNode) => ({
+                id: n.id,
+                name: n.name,
+                toolType: n.platform || n.originalType,
+                platformDomain: n.platformDomain,
+                integrationId: n.metadata?.integrationId,
+                assetCount: n.metadata?.assetCount || 0,
+                healthSummary: n.metadata?.healthSummary || { healthy: 0, degraded: 0, failing: 0, unknown: 0 },
+                position: 0,
+              })),
+              edges: viewData.edges.map((e: ViewEdge) => ({
+                id: e.id,
+                source: e.sourceId,
+                target: e.targetId,
+                dataFlowCount: e.evidenceCount,
+                sampleAssets: [],
+              })),
+              stats: {
+                tool_count: viewData.nodes.length,
+                flow_count: viewData.edges.length,
+              },
+            });
+            setControlPlaneLoading(false);
+            return;
+          }
+        }
+      } catch {
+        // Non-fatal — fall through to legacy path
+      }
+
+      // Fetch engine control plane data and pipeline stack in parallel
+      const [engineRes, stackRes] = await Promise.all([
+        fetch(`/api/pipeline/${stackId}/lineage/engine?action=control-plane-overview`).catch(() => null),
+        fetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`).catch(() => null),
+      ]);
+
+      const engineData: ControlPlaneOverviewResponse | null = engineRes?.ok
+        ? await engineRes.json()
+        : null;
+
+      // Build a map of engine tool nodes by toolType for merging
+      const engineNodesByType = new Map<string, CPNode>();
+      if (engineData?.nodes) {
+        for (const n of engineData.nodes) {
+          engineNodesByType.set(n.toolType, n);
+        }
+      }
+
+      // Get pipeline stack tool nodes from the unified response
+      const stackData: UnifiedLineageResponse | null = stackRes?.ok
+        ? await stackRes.json()
+        : null;
+
+      const pipelineToolNodes = (stackData?.nodes || []).filter(
+        (n) => isToolCategory(n.category)
+      );
+
+      // Map pipeline layer to control plane domain
+      const layerToDomain: Record<string, string> = {
+        INGESTION: 'ingestion',
+        TRANSFORMATION: 'transform',
+        WAREHOUSE: 'warehouse',
+        REPORTING: 'bi',
+        ORCHESTRATION: 'orchestration',
+        VERSION_CONTROL: 'version_control',
+        INFRASTRUCTURE: 'infrastructure',
+        STORAGE: 'storage',
+      };
+
+      // Domain ordering for position
+      const domainOrder: Record<string, number> = {
+        ingestion: 0, warehouse: 1, transform: 2,
+        orchestration: 3, bi: 4, version_control: 5,
+        infrastructure: 6, storage: 0, other: 7,
+      };
+
+      // Build merged nodes: start with pipeline tool nodes as the base
+      const mergedNodes: CPNode[] = [];
+      const seenToolTypes = new Set<string>();
+
+      for (const toolNode of pipelineToolNodes) {
+        const toolType = (toolNode.toolType || toolNode.category || '').toLowerCase();
+        if (seenToolTypes.has(toolType)) continue;
+        seenToolTypes.add(toolType);
+
+        const domain = layerToDomain[toolNode.layer] || 'other';
+        const engineNode = engineNodesByType.get(toolType);
+
+        mergedNodes.push({
+          id: engineNode?.id || `pipeline:${toolType}`,
+          name: toolNode.name,
+          toolType: toolType,
+          platformDomain: domain,
+          integrationId: toolNode.integrationId,
+          assetCount: engineNode?.assetCount || 0,
+          healthSummary: engineNode?.healthSummary || { healthy: 0, degraded: 0, failing: 0, unknown: 0 },
+          position: domainOrder[domain] ?? 7,
+        });
+      }
+
+      // Add any engine nodes that don't have a matching pipeline tool node
+      // (e.g., dbt adapter might discover data but no pipeline tool node exists)
+      if (engineData?.nodes) {
+        for (const engNode of engineData.nodes) {
+          if (!seenToolTypes.has(engNode.toolType)) {
+            seenToolTypes.add(engNode.toolType);
+            mergedNodes.push(engNode);
+          }
+        }
+      }
+
+      // Use engine edges (data flow counts between tools)
+      const edges = engineData?.edges || [];
+
+      // Also create pipeline-flow edges from pipeline stack edges for tools
+      // that don't have engine-derived data flows
+      const edgeKeys = new Set(edges.map((e) => `${e.source}→${e.target}`));
+      const pipelineEdges = (stackData?.edges || []).filter(
+        (e) => e.edgeType === 'pipeline_flow'
+      );
+
+      // Map pipeline node IDs to control plane tool IDs
+      const pipelineIdToToolType = new Map<string, string>();
+      for (const tn of pipelineToolNodes) {
+        const toolType = (tn.toolType || tn.category || '').toLowerCase();
+        pipelineIdToToolType.set(tn.id, toolType);
+      }
+
+      const nodeIdMap = new Map(mergedNodes.map((n) => [n.toolType, n.id]));
+      const syntheticEdges: CPEdge[] = [];
+      for (const pe of pipelineEdges) {
+        const srcTool = pipelineIdToToolType.get(pe.source);
+        const tgtTool = pipelineIdToToolType.get(pe.target);
+        if (!srcTool || !tgtTool) continue;
+        const srcId = nodeIdMap.get(srcTool);
+        const tgtId = nodeIdMap.get(tgtTool);
+        if (!srcId || !tgtId) continue;
+        const key = `${srcId}→${tgtId}`;
+        if (edgeKeys.has(key)) continue; // Engine already has this edge
+        edgeKeys.add(key);
+        syntheticEdges.push({
+          id: key,
+          source: srcId,
+          target: tgtId,
+          dataFlowCount: 0, // Pipeline edge, no data flow count yet
+          sampleAssets: [],
+        });
+      }
+
+      setControlPlaneData({
+        nodes: mergedNodes.sort((a, b) => a.position - b.position),
+        edges: [...edges, ...syntheticEdges],
+        stats: {
+          tool_count: mergedNodes.length,
+          flow_count: edges.length + syntheticEdges.length,
+        },
+      });
+    } catch {
+      // Non-fatal
+    } finally {
+      setControlPlaneLoading(false);
+    }
+  }, [stackId]);
 
   useEffect(() => {
     if (stackId) {
-      fetchLineage();
+      if (activeTab === 'control-plane') {
+        fetchControlPlane();
+      } else {
+        fetchLineage();
+      }
     }
-  }, [stackId, fetchLineage]);
+  }, [stackId, activeTab, fetchLineage, fetchControlPlane]);
 
   // Clear selection when switching tabs
-  const handleTabChange = useCallback((tab: LineageViewTab) => {
+  const handleTabChange = useCallback((tab: 'data' | 'control-plane') => {
     setActiveTab(tab);
     setSelectedNode(null);
     setSelectedEdge(null);
     setLineageData(null); // Clear stale data to prevent wrong-layout flash
+    setRenderedView(null);
+    setRenderedOverview(null);
+    setLaneOverview(null);
   }, []);
 
   // Extract lineage from warehouse (uses original endpoint)
@@ -221,6 +819,7 @@ export default function LineagePage() {
 
     setExtracting(true);
     setError(null);
+    // Keep old view visible during extraction (atomic swap on completion)
 
     try {
       // Clear existing lineage first
@@ -239,23 +838,59 @@ export default function LineagePage() {
 
       if (res.ok) {
         const result = await res.json();
-        if (result.success) {
-          // Clear stale data before re-fetch to prevent jumpy transition
-          setLineageData(null);
+        if (result.run_id) {
+          // Pipeline completed with run_id — poll for completion
+          setActiveRunId(result.run_id);
+        } else if (result.success) {
+          // Backward compat: old response format without run_id
           await fetchLineage();
+          setExtracting(false);
         } else {
           setError(result.results?.[0]?.error || 'Extraction failed');
+          setExtracting(false);
         }
       } else {
         const errorData = await res.json().catch(() => ({}));
         setError(errorData.error || 'Extraction request failed');
+        setExtracting(false);
       }
     } catch (err) {
       setError('Failed to extract lineage');
-    } finally {
       setExtracting(false);
     }
   };
+
+  // Poll run status and atomically swap views when complete
+  useEffect(() => {
+    if (!activeRunId || !stackId) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/pipeline/${stackId}/lineage/engine?action=run-status&id=${activeRunId}`
+        );
+        if (!res.ok) return;
+        const status = await res.json();
+
+        if (status.status === 'completed') {
+          clearInterval(interval);
+          setActiveRunId(null);
+          // Atomic swap: fetch new views, then update state
+          await fetchLineage();
+          setExtracting(false);
+        } else if (status.status === 'failed') {
+          clearInterval(interval);
+          setActiveRunId(null);
+          setError(status.errors?.[0] || 'Extraction failed');
+          setExtracting(false);
+        }
+      } catch {
+        // Polling error — continue trying
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeRunId, stackId]);
 
   // Apply filters to nodes
   const filteredNodes = useMemo(() => {
@@ -277,16 +912,85 @@ export default function LineagePage() {
   }, [filteredNodes]);
 
   // Build React Flow nodes and edges
+  // Uses pre-positioned rendered view when available, falls back to Dagre
   const { flowNodes, flowEdges } = useMemo(() => {
+    // Rendered view path: use backend-computed positions
+    if (renderedView && renderedView.nodes.length > 0) {
+      // Filter by inferred toggle
+      const visibleViewNodes = renderedView.nodes.filter(
+        (n) => filters.showInferred || !n.inferred
+      );
+      const visibleIds = new Set(visibleViewNodes.map((n) => n.id));
+
+      const nodes: Node[] = visibleViewNodes.map((vn) => ({
+        id: vn.id,
+        type: vn.canonicalType === 'service' ? 'toolNode' : 'dataAssetNode',
+        position: { x: vn.x, y: vn.y },
+        targetPosition: Position.Left,
+        sourcePosition: Position.Right,
+        data: {
+          name: vn.name,
+          fullName: vn.metadata?.fqn || vn.name,
+          category: _viewNodeToCategory(vn),
+          layer: vn.layer as any,
+          toolType: vn.platform,
+          database: vn.metadata?.database,
+          schema: vn.metadata?.schema,
+          tableName: vn.name,
+          nodeType: vn.originalType,
+          criticality: vn.metadata?.criticality,
+          rowCount: vn.metadata?.rowCount,
+          upstreamCount: vn.metadata?.upstreamCount,
+          downstreamCount: vn.metadata?.downstreamCount,
+          healthStatus: vn.metadata?.healthStatus,
+          owner: vn.metadata?.owner,
+          tags: vn.metadata?.tags,
+          // Visual flags
+          isInferred: vn.inferred,
+          isOverlay: vn.inferred,
+        },
+      }));
+
+      const edges: Edge[] = renderedView.edges
+        .filter(
+          (e) =>
+            visibleIds.has(e.sourceId) &&
+            visibleIds.has(e.targetId) &&
+            (filters.showInferred || !e.inferred) &&
+            e.confidence >= filters.minConfidence
+        )
+        .map((ve) => {
+          const confidenceColor = getConfidenceColor(ve.confidence);
+          const isInferred = ve.inferred;
+          return {
+            id: ve.id,
+            source: ve.sourceId,
+            target: ve.targetId,
+            type: 'smoothstep',
+            animated: !isInferred,
+            style: {
+              stroke: isInferred ? '#ffffff30' : confidenceColor,
+              strokeWidth: isInferred ? 1.5 : 2,
+              strokeDasharray: isInferred ? '6,4' : undefined,
+            },
+            markerEnd: {
+              type: MarkerType.ArrowClosed,
+              color: isInferred ? '#ffffff30' : confidenceColor,
+            },
+            label: ve.confidence !== undefined
+              ? `${Math.round(ve.confidence * 100)}%`
+              : undefined,
+          };
+        });
+
+      return { flowNodes: nodes, flowEdges: edges };
+    }
+
+    // Fallback: use unified data + Dagre layout
     if (!filteredNodes.length) return { flowNodes: [], flowEdges: [] };
 
     const nodeIds = new Set(filteredNodes.map((n) => n.id));
     const nodeMap = new Map(filteredNodes.map((n) => [n.id, n]));
-
-    // Determine if node is an overlay orchestration node (data tab + overlay on)
-    const isOverlayNode = (n: UnifiedLineageNode) =>
-      activeTab === 'data' && showOrchOverlay &&
-      (n.category === 'dag' || n.category === 'task');
 
     // Convert to ReactFlow nodes
     const nodes: Node[] = filteredNodes.map((node) => ({
@@ -319,20 +1023,12 @@ export default function LineagePage() {
         issues: node.issues,
         owner: node.owner,
         tags: node.tags,
-        // Overlay flag for orchestration nodes on data tab
-        isOverlay: isOverlayNode(node),
       },
     }));
 
-    // Only render edges matching the active plane in the graph.
-    // All edges (including other planes) remain in lineageData for the detail panel.
+    // Data graph: show everything except pure control-plane edges
+    // (pipeline/synthetic edges have no plane field — always show them)
     const isDisplayPlane = (e: UnifiedLineageEdge): boolean => {
-      if (activeTab === 'orchestration') {
-        // Orchestration graph: control + cross edges only
-        return e.plane === 'control' || e.plane === 'cross';
-      }
-      // Data graph: everything except pure control-plane edges
-      // (pipeline/synthetic edges have no plane field — always show them)
       return e.plane !== 'control';
     };
 
@@ -365,26 +1061,148 @@ export default function LineagePage() {
 
     if (nodes.length === 0) return { flowNodes: [], flowEdges: [] };
 
-    const direction = activeTab === 'orchestration' ? 'TB' : 'LR';
-    const layouted = getLayoutedElements(nodes, edges, direction);
+    const layouted = getLayoutedElements(nodes, edges, 'LR');
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges, filters, activeTab, showOrchOverlay]);
+  }, [filteredNodes, lineageData?.edges, filters, renderedView]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
+  // Build control plane flow nodes/edges
+  // Uses rendered overview positions when available, falls back to Dagre
+  const { cpFlowNodes, cpFlowEdges } = useMemo(() => {
+    const DOMAIN_COLORS: Record<string, string> = {
+      ingestion: '#10B981',
+      warehouse: '#6366F1',
+      transform: '#F59E0B',
+      orchestration: '#F97316',
+      bi: '#06B6D4',
+      version_control: '#8B5CF6',
+      infrastructure: '#94A3B8',
+      storage: '#A855F7',
+      catalog: '#8B5CF6',
+      app: '#EC4899',
+      other: '#6B7280',
+    };
+
+    // Rendered overview path: use backend positions
+    if (renderedOverview && renderedOverview.nodes.length > 0) {
+      const cpNodes: Node[] = renderedOverview.nodes.map((vn) => ({
+        id: vn.id,
+        type: 'toolNode',
+        position: { x: vn.x, y: vn.y },
+        targetPosition: Position.Left,
+        sourcePosition: Position.Right,
+        data: {
+          name: vn.name,
+          category: vn.platformDomain as UnifiedNodeCategory || 'warehouse',
+          layer: vn.layer as PipelineLayer,
+          toolType: vn.platform || vn.originalType,
+          assetCount: vn.metadata?.assetCount,
+          healthSummary: vn.metadata?.healthSummary,
+          isControlPlane: true,
+          domainColor: DOMAIN_COLORS[vn.platformDomain] || DOMAIN_COLORS.other,
+        },
+      }));
+
+      const cpEdges: Edge[] = renderedOverview.edges.map((ve) => ({
+        id: ve.id,
+        source: ve.sourceId,
+        target: ve.targetId,
+        type: 'smoothstep',
+        animated: ve.evidenceCount > 0,
+        label: ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : 'connected',
+        style: {
+          stroke: ve.evidenceCount > 0 ? '#6366F180' : '#ffffff20',
+          strokeWidth: ve.evidenceCount > 0
+            ? Math.min(2 + Math.log2(ve.evidenceCount + 1), 6)
+            : 2,
+          strokeDasharray: ve.evidenceCount > 0 ? undefined : '6,4',
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: ve.evidenceCount > 0 ? '#6366F1' : '#ffffff40',
+        },
+      }));
+
+      return { cpFlowNodes: cpNodes, cpFlowEdges: cpEdges };
+    }
+
+    // Fallback: use controlPlaneData + Dagre
+    if (!controlPlaneData?.nodes?.length) return { cpFlowNodes: [], cpFlowEdges: [] };
+
+    const cpNodes: Node[] = controlPlaneData.nodes.map((n: CPNode) => ({
+      id: n.id,
+      type: 'toolNode',
+      position: { x: 0, y: 0 },
+      data: {
+        name: n.name,
+        category: n.platformDomain as UnifiedNodeCategory || 'warehouse',
+        layer: 'WAREHOUSE' as PipelineLayer,
+        toolType: n.toolType,
+        assetCount: n.assetCount,
+        healthSummary: n.healthSummary,
+        isControlPlane: true,
+        domainColor: DOMAIN_COLORS[n.platformDomain] || DOMAIN_COLORS.other,
+      },
+    }));
+
+    const cpEdges: Edge[] = controlPlaneData.edges.map((e: CPEdge) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: 'smoothstep',
+      animated: e.dataFlowCount > 0,
+      label: e.dataFlowCount > 0 ? `${e.dataFlowCount} flows` : 'connected',
+      style: {
+        stroke: e.dataFlowCount > 0 ? '#6366F180' : '#ffffff20',
+        strokeWidth: e.dataFlowCount > 0
+          ? Math.min(2 + Math.log2(e.dataFlowCount + 1), 6)
+          : 2,
+        strokeDasharray: e.dataFlowCount > 0 ? undefined : '6,4',
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: e.dataFlowCount > 0 ? '#6366F1' : '#ffffff40',
+      },
+    }));
+
+    if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
+    const layouted = getLayoutedElements(cpNodes, cpEdges, 'LR');
+    return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
+  }, [controlPlaneData, renderedOverview]);
+
+  // Pick the right flow data based on active tab
+  const activeFlowNodes = activeTab === 'control-plane' ? cpFlowNodes : flowNodes;
+  const activeFlowEdges = activeTab === 'control-plane' ? cpFlowEdges : flowEdges;
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(activeFlowNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(activeFlowEdges);
 
   useEffect(() => {
-    setNodes(flowNodes);
-    setEdges(flowEdges);
-  }, [flowNodes, flowEdges, setNodes, setEdges]);
+    setNodes(activeFlowNodes);
+    setEdges(activeFlowEdges);
+  }, [activeFlowNodes, activeFlowEdges, setNodes, setEdges]);
 
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
-      const unifiedNode = lineageData?.nodes.find((n) => n.id === node.id);
-      setSelectedNode(unifiedNode || null);
+      if (activeTab === 'control-plane') {
+        // For control plane, create a synthetic UnifiedLineageNode so the side panel works
+        const cpNode = controlPlaneData?.nodes?.find((n: CPNode) => n.id === node.id);
+        if (cpNode) {
+          setSelectedNode({
+            id: cpNode.id,
+            name: cpNode.name,
+            category: cpNode.platformDomain as UnifiedNodeCategory || 'warehouse',
+            layer: 'WAREHOUSE',
+            toolType: cpNode.toolType,
+            integrationId: cpNode.integrationId,
+          });
+        }
+      } else {
+        const unifiedNode = lineageData?.nodes.find((n) => n.id === node.id);
+        setSelectedNode(unifiedNode || null);
+      }
       setSelectedEdge(null);
     },
-    [lineageData?.nodes]
+    [lineageData?.nodes, activeTab, controlPlaneData?.nodes]
   );
 
   const handleEdgeClick = useCallback(
@@ -470,6 +1288,11 @@ export default function LineagePage() {
                 </>
               )}
             </button>
+            {extracting && lineageData && (
+              <span className="ml-2 px-2 py-1 text-[10px] bg-violet-500/20 text-violet-300 rounded-full animate-pulse">
+                Updating...
+              </span>
+            )}
           </div>
         </div>
 
@@ -490,18 +1313,18 @@ export default function LineagePage() {
             Data Lineage
           </button>
           <button
-            onClick={() => handleTabChange('orchestration')}
+            onClick={() => handleTabChange('control-plane')}
             className={`
               flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all border
-              ${activeTab === 'orchestration'
-                ? 'bg-orange-500/15 border-orange-500/30 text-orange-300'
+              ${activeTab === 'control-plane'
+                ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
                 : 'border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]'}
             `}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
             </svg>
-            Orchestration
+            Pipeline Overview
           </button>
         </div>
 
@@ -512,13 +1335,22 @@ export default function LineagePage() {
           availableLayers={lineageData?.availableLayers || []}
           stats={filteredStats}
           activeTab={activeTab}
-          showOrchOverlay={showOrchOverlay}
-          onOrchOverlayToggle={() => setShowOrchOverlay((prev) => !prev)}
         />
 
         {/* Stats */}
         <div className="flex items-center gap-6 mt-4 pt-4 border-t border-white/[0.04]">
-          {activeTab === 'data' ? (
+          {activeTab === 'control-plane' ? (
+            <>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-emerald-400">{controlPlaneData?.stats?.tool_count || 0}</div>
+                <div className="text-[11px] text-white/40">Tools</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-white">{controlPlaneData?.stats?.flow_count || 0}</div>
+                <div className="text-[11px] text-white/40">Data Flows</div>
+              </div>
+            </>
+          ) : (
             <>
               <div className="text-center">
                 <div className="text-xl font-semibold text-white">{filteredStats.toolNodes}</div>
@@ -536,39 +1368,37 @@ export default function LineagePage() {
                 <div className="text-xl font-semibold text-white">{filteredStats.modelNodes}</div>
                 <div className="text-[11px] text-white/40">Models</div>
               </div>
-              {(filteredStats.dagNodes + filteredStats.taskNodes) > 0 && (
-                <div className="text-center">
-                  <div className="text-xl font-semibold text-white">
-                    {filteredStats.dagNodes + filteredStats.taskNodes}
-                  </div>
-                  <div className="text-[11px] text-white/40">Orchestration</div>
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-orange-400">{filteredStats.dagNodes}</div>
-                <div className="text-[11px] text-white/40">DAGs</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-orange-300">{filteredStats.taskNodes}</div>
-                <div className="text-[11px] text-white/40">Tasks</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-white">
-                  {filteredStats.tableNodes + filteredStats.viewNodes}
-                </div>
-                <div className="text-[11px] text-white/40">Linked Assets</div>
-              </div>
             </>
           )}
           <div className="text-center">
             <div className="text-xl font-semibold text-white">
-              {lineageData?.stats?.totalEdges || 0}
+              {renderedView?.stats?.edgeCount || lineageData?.stats?.totalEdges || 0}
             </div>
             <div className="text-[11px] text-white/40">Dependencies</div>
           </div>
+
+          {/* Rendered view stats (when available) */}
+          {activeTab === 'data' && renderedView?.stats && (
+            <>
+              <div className="w-px h-8 bg-white/10" />
+              {renderedView.stats.inferredNodeCount > 0 && (
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-amber-400">
+                    {renderedView.stats.inferredNodeCount}
+                  </div>
+                  <div className="text-[11px] text-white/40">Inferred</div>
+                </div>
+              )}
+              {renderedView.stats.needsMappingCount > 0 && (
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-orange-400">
+                    {renderedView.stats.needsMappingCount}
+                  </div>
+                  <div className="text-[11px] text-white/40">Needs Mapping</div>
+                </div>
+              )}
+            </>
+          )}
 
           {/* Engine coverage stats (when available, data tab only) */}
           {activeTab === 'data' && lineageData?.engineStats && (
@@ -608,7 +1438,22 @@ export default function LineagePage() {
       <div className="flex-1 flex min-h-0">
         {/* Canvas */}
         <div className="flex-1 relative">
-          {nodes.length === 0 ? (
+          {activeTab === 'control-plane' && laneOverview ? (
+            <LaneOverviewCanvas
+              data={laneOverview}
+              loading={controlPlaneLoading}
+              onExtract={extractLineage}
+              extracting={extracting}
+              stackId={stackId}
+            />
+          ) : controlPlaneLoading && activeTab === 'control-plane' ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="flex flex-col items-center gap-4">
+                <div className="w-10 h-10 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm text-white/50">Loading pipeline overview...</p>
+              </div>
+            </div>
+          ) : nodes.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full">
               <svg
                 className="w-16 h-16 text-white/20 mb-4"
@@ -623,34 +1468,33 @@ export default function LineagePage() {
                   d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
                 />
               </svg>
-              {lineageData && lineageData.nodes.length > 0 ? (
+              {activeTab === 'control-plane' ? (
+                <>
+                  <p className="text-white/50 text-[15px] mb-2">No pipeline overview available</p>
+                  <p className="text-white/30 text-[13px] mb-4">
+                    Extract lineage from the Data Lineage tab first to generate the pipeline overview
+                  </p>
+                </>
+              ) : lineageData && lineageData.nodes.length > 0 ? (
                 <>
                   <p className="text-white/50 text-[15px] mb-2">No nodes match current filters</p>
                   <p className="text-white/30 text-[13px]">
-                    {activeTab === 'orchestration'
-                      ? 'No orchestration data available. Connect Airflow to see DAGs and tasks.'
-                      : 'Try adjusting the layer or node type filters'}
+                    Try adjusting the layer or node type filters
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-white/50 text-[15px] mb-2">
-                    {activeTab === 'orchestration' ? 'No orchestration data' : 'No lineage data yet'}
-                  </p>
+                  <p className="text-white/50 text-[15px] mb-2">No lineage data yet</p>
                   <p className="text-white/30 text-[13px] mb-4">
-                    {activeTab === 'orchestration'
-                      ? 'Connect an Airflow instance to your pipeline to see DAG and task graphs'
-                      : 'Configure your pipeline and click "Extract Lineage" to discover dependencies'}
+                    Configure your pipeline and click &quot;Extract Lineage&quot; to discover dependencies
                   </p>
-                  {activeTab === 'data' && (
-                    <button
-                      onClick={extractLineage}
-                      disabled={extracting || !stackId}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium"
-                    >
-                      {extracting ? 'Extracting...' : 'Extract Lineage'}
-                    </button>
-                  )}
+                  <button
+                    onClick={extractLineage}
+                    disabled={extracting || !stackId}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium"
+                  >
+                    {extracting ? 'Extracting...' : 'Extract Lineage'}
+                  </button>
                 </>
               )}
             </div>
@@ -696,7 +1540,35 @@ export default function LineagePage() {
           {/* Legend */}
           {nodes.length > 0 && (
             <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] max-w-md">
-              {activeTab === 'data' ? (
+              {activeTab === 'control-plane' ? (
+                <>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#10B981' }} />
+                    <span className="text-white/50">Ingestion</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#6366F1' }} />
+                    <span className="text-white/50">Warehouse</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#F59E0B' }} />
+                    <span className="text-white/50">Transform</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#F97316' }} />
+                    <span className="text-white/50">Orchestration</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#06B6D4' }} />
+                    <span className="text-white/50">BI</span>
+                  </div>
+                  <div className="w-px h-3 bg-white/20" />
+                  <div className="flex items-center gap-1">
+                    <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#6366F1' }} />
+                    <span className="text-white/50">Data Flow</span>
+                  </div>
+                </>
+              ) : (
                 <>
                   {/* Layer colors */}
                   <div className="flex items-center gap-1">
@@ -725,29 +1597,14 @@ export default function LineagePage() {
                     <span className="text-white/50">View</span>
                   </div>
                 </>
-              ) : (
+              )}
+              {/* Inferred legend (shows when rendered view has inferred nodes) */}
+              {activeTab === 'data' && renderedView?.stats?.inferredNodeCount > 0 && (
                 <>
-                  {/* Orchestration legend */}
-                  <div className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.dag.color }} />
-                    <span className="text-white/50">DAG</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
-                    <span className="text-white/50">Task</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.table.color }} />
-                    <span className="text-white/50">Linked Table</span>
-                  </div>
                   <div className="w-px h-3 bg-white/20" />
                   <div className="flex items-center gap-1">
-                    <span className="w-4 h-0.5 rounded" style={{ backgroundColor: LAYER_COLORS.ORCHESTRATION }} />
-                    <span className="text-white/50">Control</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="w-4 h-0.5 rounded border border-dashed border-orange-400/50" />
-                    <span className="text-white/50">Cross-link</span>
+                    <span className="w-4 h-0.5 rounded" style={{ borderTop: '1.5px dashed #F59E0B' }} />
+                    <span className="text-white/50">Inferred</span>
                   </div>
                 </>
               )}
@@ -782,8 +1639,107 @@ export default function LineagePage() {
           />
         )}
 
+        {/* Side panel - Control Plane tool details */}
+        {activeTab === 'control-plane' && selectedNode && !selectedEdge && (() => {
+          const cpNode = controlPlaneData?.nodes?.find((n: CPNode) => n.id === selectedNode.id);
+          if (!cpNode) return null;
+          const health = cpNode.healthSummary;
+          const totalHealth = health.healthy + health.degraded + health.failing + health.unknown;
+          return (
+            <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[15px] font-medium text-white">Tool Details</h3>
+                <button onClick={() => setSelectedNode(null)} className="p-1 hover:bg-white/[0.05] rounded">
+                  <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
+                  <p className="text-[13px] text-white font-mono mt-1">{cpNode.name}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
+                    <p className="text-[13px] text-white mt-1 capitalize">{cpNode.toolType}</p>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Domain</label>
+                    <p className="text-[13px] text-white mt-1 capitalize">{cpNode.platformDomain}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Assets</label>
+                  <p className="text-2xl font-semibold text-white mt-1">{cpNode.assetCount}</p>
+                </div>
+                {totalHealth > 0 && (
+                  <div>
+                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Health Summary</label>
+                    <div className="mt-2 space-y-2">
+                      {health.healthy > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[12px] text-emerald-400">Healthy</span>
+                          <span className="text-[12px] text-white">{health.healthy}</span>
+                        </div>
+                      )}
+                      {health.degraded > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[12px] text-amber-400">Degraded</span>
+                          <span className="text-[12px] text-white">{health.degraded}</span>
+                        </div>
+                      )}
+                      {health.failing > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[12px] text-red-400">Failing</span>
+                          <span className="text-[12px] text-white">{health.failing}</span>
+                        </div>
+                      )}
+                      {health.unknown > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-[12px] text-white/40">Unknown</span>
+                          <span className="text-[12px] text-white">{health.unknown}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {/* Connected edges in control plane */}
+                {(() => {
+                  const connEdges = controlPlaneData?.edges?.filter(
+                    (e: CPEdge) => e.source === cpNode.id || e.target === cpNode.id
+                  ) || [];
+                  if (connEdges.length === 0) return null;
+                  const cpNodeMap = new Map((controlPlaneData?.nodes || []).map((n: CPNode) => [n.id, n]));
+                  return (
+                    <div>
+                      <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Flows ({connEdges.length})</label>
+                      <div className="mt-2 space-y-1.5">
+                        {connEdges.map((e: CPEdge) => {
+                          const otherId = e.source === cpNode.id ? e.target : e.source;
+                          const other = cpNodeMap.get(otherId);
+                          const direction = e.source === cpNode.id ? '\u2192' : '\u2190';
+                          return (
+                            <div key={e.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-white/[0.03]">
+                              <span className="text-[12px] text-white font-mono truncate">
+                                {direction} {other?.name || otherId}
+                              </span>
+                              <span className="text-[10px] text-white/40 shrink-0 ml-2">{e.dataFlowCount} flows</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Side panel - Node details */}
-        {selectedNode && !selectedEdge && (
+        {activeTab !== 'control-plane' && selectedNode && !selectedEdge && (
           (selectedNode.category === 'dag' || selectedNode.category === 'task') ? (
             <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">

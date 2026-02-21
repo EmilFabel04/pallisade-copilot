@@ -282,6 +282,60 @@ async def extract_dbt_lineage(
         with open(config["manifest_path"]) as f:
             manifest = json.load(f)
 
+    # If dbt Core with project folder upload, parse raw project files
+    if not manifest and config.get("source_mode") == "project":
+        project_files = config.get("project_files")
+        if project_files and isinstance(project_files, dict):
+            try:
+                try:
+                    from lineage.dbt_project_parser import parse_dbt_project
+                except ImportError:
+                    from scanner.lineage.dbt_project_parser import parse_dbt_project
+
+                manifest = parse_dbt_project(
+                    files=project_files,
+                    project_name=config.get("project_name", ""),
+                    warehouse_type=config.get("warehouse_type", "bigquery"),
+                )
+                if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                    logger.info(f"[dbt] Parsed project files: {len(manifest.get('nodes', {}))} models, {len(manifest.get('sources', {}))} sources")
+                else:
+                    logger.warning("[dbt] Project files contained no models or sources")
+                    manifest = None
+            except Exception as parse_err:
+                logger.warning(f"[dbt] Project files parsing failed: {parse_err}")
+
+    # If dbt Core with GitHub source mode, fetch raw project files from repo
+    if not manifest and config.get("source_mode") == "github":
+        github_token = config.get("github", {}).get("token") or config.get("github_token")
+        github_repo = config.get("github_repo")
+        if github_token and github_repo:
+            try:
+                try:
+                    from lineage.github_reader import fetch_dbt_project_files
+                    from lineage.dbt_project_parser import parse_dbt_project
+                except ImportError:
+                    from scanner.lineage.github_reader import fetch_dbt_project_files
+                    from scanner.lineage.dbt_project_parser import parse_dbt_project
+
+                project_files = await fetch_dbt_project_files(
+                    repo=github_repo,
+                    token=github_token,
+                    branch=config.get("github_branch", "main"),
+                    dbt_root=config.get("dbt_project_path", ""),
+                )
+                if project_files:
+                    manifest = parse_dbt_project(
+                        files=project_files,
+                        project_name=config.get("project_name", ""),
+                        warehouse_type=config.get("warehouse_type", "bigquery"),
+                    )
+                    logger.info(f"[dbt] Parsed GitHub project: {len(manifest.get('nodes', {}))} models, {len(manifest.get('sources', {}))} sources")
+                else:
+                    logger.warning(f"[dbt] No project files found in GitHub repo: {github_repo}")
+            except Exception as gh_err:
+                logger.warning(f"[dbt] GitHub project fetch failed: {gh_err}")
+
     # If dbt Cloud, try to fetch manifest from API
     if not manifest and integration_type == "DBT_CLOUD":
         api_token = config.get("api_token") or config.get("access_token")
@@ -951,6 +1005,7 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
 
 # Singleton store for the engine graph (in-memory for now)
 _engine_store = None
+_run_registry = None
 
 # Cached engine adapter results — nodes/edges from each extraction, fed to resolver
 _engine_collected_results: dict = {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
@@ -975,6 +1030,17 @@ def _get_engine_store():
             from scanner.lineage.engine.store import GraphStore
         _engine_store = GraphStore()
     return _engine_store
+
+
+def _get_run_registry():
+    global _run_registry
+    if _run_registry is None:
+        try:
+            from lineage.engine.run_registry import RunRegistry
+        except ImportError:
+            from scanner.lineage.engine.run_registry import RunRegistry
+        _run_registry = RunRegistry()
+    return _run_registry
 
 
 def _rebuild_engine_from_cache() -> None:
@@ -1058,6 +1124,28 @@ def _rebuild_engine_from_cache() -> None:
                 )
             except Exception as synth_err:
                 _logger.warning(f"[Engine] Cross-tool synthesis failed (non-fatal): {synth_err}")
+
+        # Apply canonical type mapping after all synthesis is done
+        store.canonicalize()
+
+        # --- Bridge rules: fill structural gaps (e.g. missing ingestion → raw writes) ---
+        try:
+            try:
+                from lineage.engine.bridge import BridgeRuleEngine
+            except ImportError:
+                from scanner.lineage.engine.bridge import BridgeRuleEngine
+
+            bridge_engine = BridgeRuleEngine(store.graph)
+            bridge_result = bridge_engine.apply_all()
+            if bridge_result.total_changes > 0:
+                _logger.info(
+                    f"[Engine] Bridge rules: +{len(bridge_result.added_nodes)} nodes, "
+                    f"+{len(bridge_result.added_edges)} edges"
+                )
+                # Re-canonicalize so bridge-added nodes get canonical types
+                store.canonicalize()
+        except Exception as bridge_err:
+            _logger.warning(f"[Engine] Bridge rules failed (non-fatal): {bridge_err}")
 
     except Exception as e:
         import traceback
@@ -1415,3 +1503,988 @@ async def engine_export(
     else:
         content = export_json(store.graph, filters)
         return {"format": "json", "content": content}
+
+
+# ==========================================
+# CONTROL PLANE OVERVIEW (tool-sequence graph)
+# ==========================================
+
+
+@router.get("/lineage/engine/control-plane-overview")
+async def engine_control_plane_overview():
+    """
+    Return the derived control plane graph showing tool/integration sequence.
+
+    This is different from the per-DAG control plane — it shows the entire
+    pipeline architecture: which tools feed into which, in what order.
+
+    Example: Fivetran → Snowflake → dbt → Snowflake → Looker
+    """
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        return {"nodes": [], "edges": [], "stats": {"tool_count": 0, "flow_count": 0}}
+
+    try:
+        try:
+            from lineage.engine.control_plane import build_control_plane_graph
+        except ImportError:
+            from scanner.lineage.engine.control_plane import build_control_plane_graph
+
+        cp_graph = build_control_plane_graph(store.graph)
+        return cp_graph.to_dict()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Engine] Control plane overview failed: {e}")
+        return {"nodes": [], "edges": [], "stats": {"tool_count": 0, "flow_count": 0}, "error": str(e)}
+
+
+# ==========================================
+# RENDERED VIEWS (v2 — canonical + deterministic layout)
+# ==========================================
+
+
+class ViewNodeResponse(BaseModel):
+    """A node in a rendered view."""
+    id: str
+    name: str
+    canonicalType: str
+    originalType: str
+    platform: Optional[str] = None
+    platformDomain: str = "other"
+    layer: str = "WAREHOUSE"
+    clusterId: Optional[str] = None
+    x: float = 0
+    y: float = 0
+    inferred: bool = False
+    needsMapping: bool = False
+    metadata: Dict[str, Any] = {}
+
+
+class ViewEdgeResponse(BaseModel):
+    """An edge in a rendered view."""
+    id: str
+    sourceId: str
+    targetId: str
+    canonicalType: str
+    originalType: str
+    confidence: float = 1.0
+    inferred: bool = False
+    evidenceCount: int = 0
+
+
+class ViewClusterResponse(BaseModel):
+    """A visual cluster in a rendered view."""
+    id: str
+    label: str
+    platform: Optional[str] = None
+    layer: str = "WAREHOUSE"
+    x: float = 0
+    y: float = 0
+    width: float = 0
+    height: float = 0
+    nodeCount: int = 0
+
+
+class RenderedViewResponse(BaseModel):
+    """Full rendered view response."""
+    viewType: str
+    nodes: List[ViewNodeResponse] = []
+    edges: List[ViewEdgeResponse] = []
+    clusters: List[ViewClusterResponse] = []
+    unmappedNodes: List[Dict[str, Any]] = []
+    stats: Dict[str, Any] = {}
+
+
+@router.get("/lineage/engine/views/pipeline-overview")
+async def view_pipeline_overview():
+    """
+    Return the pre-rendered Pipeline Overview view.
+
+    Shows tool/integration instances as service nodes with inter-tool
+    data flow edges. Deterministic layout with canonical types.
+
+    Serves from pre-computed run artifacts when available,
+    falls back to on-demand computation.
+    """
+    # Try pre-computed view from run registry
+    registry = _get_run_registry()
+    if registry.current_run_id:
+        record = registry.get_run(registry.current_run_id)
+        if record and "pipeline_overview" in record.artifacts.views:
+            return record.artifacts.views["pipeline_overview"]
+
+    # Fallback: compute on-demand
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        return RenderedViewResponse(
+            viewType="pipeline_overview",
+            stats={"serviceCount": 0, "flowCount": 0, "totalAssets": 0},
+        ).dict()
+
+    try:
+        try:
+            from lineage.engine.views import ViewBuilder
+        except ImportError:
+            from scanner.lineage.engine.views import ViewBuilder
+
+        builder = ViewBuilder(store.graph)
+        view = builder.build_pipeline_overview()
+        return view.to_dict()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Engine] Pipeline overview view failed: {e}")
+        return RenderedViewResponse(
+            viewType="pipeline_overview",
+            stats={"error": str(e)},
+        ).dict()
+
+
+@router.get("/lineage/engine/views/lane-pipeline-overview")
+async def view_lane_pipeline_overview():
+    """
+    Return the lane-based Pipeline Overview view.
+
+    Renders nodes in fixed lanes:
+      ingestion → warehouse_raw → transformation → warehouse_analytics → reporting
+
+    Serves from pre-computed run artifacts when available,
+    falls back to on-demand computation.
+    """
+    # Try pre-computed view from run registry
+    registry = _get_run_registry()
+    if registry.current_run_id:
+        record = registry.get_run(registry.current_run_id)
+        if record and "lane_pipeline_overview" in record.artifacts.views:
+            return record.artifacts.views["lane_pipeline_overview"]
+
+    # Fallback: compute on-demand
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        return RenderedViewResponse(
+            viewType="lane_pipeline_overview",
+            stats={"totalNodes": 0, "totalEdges": 0},
+        ).dict()
+
+    try:
+        try:
+            from lineage.engine.views import ViewBuilder
+        except ImportError:
+            from scanner.lineage.engine.views import ViewBuilder
+
+        builder = ViewBuilder(store.graph)
+        view = builder.build_lane_pipeline_overview()
+        return view.to_dict()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Engine] Lane pipeline overview failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return RenderedViewResponse(
+            viewType="lane_pipeline_overview",
+            stats={"error": str(e)},
+        ).dict()
+
+
+@router.get("/lineage/engine/views/data-plane")
+async def view_data_plane():
+    """
+    Return the pre-rendered Data Plane view.
+
+    Shows dataset-to-dataset derivation chains with deterministic
+    layered layout, canonical types, and cluster grouping.
+
+    Serves from pre-computed run artifacts when available,
+    falls back to on-demand computation.
+    """
+    # Try pre-computed view from run registry
+    registry = _get_run_registry()
+    if registry.current_run_id:
+        record = registry.get_run(registry.current_run_id)
+        if record and "data_plane" in record.artifacts.views:
+            return record.artifacts.views["data_plane"]
+
+    # Fallback: compute on-demand
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        return RenderedViewResponse(
+            viewType="data_plane",
+            stats={"datasetCount": 0, "edgeCount": 0},
+        ).dict()
+
+    try:
+        try:
+            from lineage.engine.views import ViewBuilder
+        except ImportError:
+            from scanner.lineage.engine.views import ViewBuilder
+
+        builder = ViewBuilder(store.graph)
+        view = builder.build_data_plane()
+        return view.to_dict()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Engine] Data plane view failed: {e}")
+        return RenderedViewResponse(
+            viewType="data_plane",
+            stats={"error": str(e)},
+        ).dict()
+
+
+# ==========================================
+# RUN VERSIONING
+# ==========================================
+
+
+@router.get("/lineage/runs/current")
+async def get_current_run():
+    """Return the current (published) run_id and its status."""
+    registry = _get_run_registry()
+    if not registry.current_run_id:
+        return {"current_run_id": None, "status": None}
+    record = registry.get_run(registry.current_run_id)
+    if not record:
+        return {"current_run_id": None, "status": None}
+    return record.to_dict()
+
+
+@router.get("/lineage/runs/{run_id}/status")
+async def get_run_status(run_id: str):
+    """Lightweight status for polling a specific run."""
+    registry = _get_run_registry()
+    status = registry.get_run_status(run_id)
+    if not status:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    return status
+
+
+@router.get("/lineage/runs/{run_id}/views/{view_type}")
+async def get_run_view(run_id: str, view_type: str):
+    """Return a pre-computed view from a specific run."""
+    registry = _get_run_registry()
+    record = registry.get_run(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    view = record.artifacts.views.get(view_type)
+    if not view:
+        raise HTTPException(
+            status_code=404,
+            detail=f"View '{view_type}' not found for run {run_id}. "
+                   f"Available: {list(record.artifacts.views.keys())}",
+        )
+    return view
+
+
+@router.get("/lineage/runs")
+async def list_runs(limit: int = Query(5, ge=1, le=20)):
+    """Return recent extraction runs."""
+    registry = _get_run_registry()
+    return {
+        "runs": registry.list_runs(limit),
+        "current_run_id": registry.current_run_id,
+    }
+
+
+# ==========================================
+# RECONCILIATION (LLM-powered graph patching)
+# ==========================================
+
+
+class ReconcileRequest(BaseModel):
+    """Request to run LLM reconciliation on the engine graph."""
+    provider: str = Field("anthropic", description="LLM provider: anthropic or openai")
+    model: Optional[str] = Field(None, description="Model override")
+    dry_run: bool = Field(True, description="If true, return patch without applying")
+
+
+class ReconcilePatchResponse(BaseModel):
+    """The reconciliation patch for review."""
+    patch_version: str = "1.0"
+    merge_suggestions: List[Dict[str, Any]] = []
+    add_nodes: List[Dict[str, Any]] = []
+    add_edges: List[Dict[str, Any]] = []
+    layer_assignments: List[Dict[str, Any]] = []
+    unknowns: List[Dict[str, Any]] = []
+
+
+class ReconcileResponse(BaseModel):
+    """Full reconciliation response."""
+    success: bool
+    patch: ReconcilePatchResponse
+    diagnostics: Dict[str, Any] = {}
+    applied: Dict[str, int] = {}
+    unknowns: List[Dict[str, Any]] = []
+    validation_errors: List[str] = []
+    duration_ms: int = 0
+    run_id: str = ""
+
+
+@router.get("/lineage/engine/reconcile/diagnostics")
+async def engine_reconcile_diagnostics():
+    """Return graph diagnostics without calling the LLM.
+
+    Useful for showing the user what issues exist before they
+    decide to run the (potentially expensive) LLM reconciliation.
+    """
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        return {"diagnostics": {"dataset_roots": [], "disconnected_components": [],
+                                "suspected_duplicates": [], "missing_links_hints": []}}
+
+    try:
+        try:
+            from lineage.engine.reconciler import DiagnosticsBuilder
+        except ImportError:
+            from scanner.lineage.engine.reconciler import DiagnosticsBuilder
+
+        builder = DiagnosticsBuilder(store.graph)
+        diagnostics = builder.build()
+        return {"diagnostics": diagnostics.to_dict()}
+    except Exception as e:
+        return {"diagnostics": {}, "error": str(e)}
+
+
+@router.post("/lineage/engine/reconcile", response_model=ReconcileResponse)
+async def engine_reconcile(request: ReconcileRequest):
+    """Run LLM reconciliation on the current engine graph.
+
+    If dry_run=True (default), returns the patch for UI review without applying.
+    If dry_run=False, applies the patch immediately.
+
+    Requires a built engine graph (call /lineage/investigate or
+    /lineage/engine/build first).
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        raise HTTPException(404, "No graph built. Extract lineage first.")
+
+    try:
+        try:
+            from lineage.engine.reconciler import ReconcilerConfig
+        except ImportError:
+            from scanner.lineage.engine.reconciler import ReconcilerConfig
+
+        config = ReconcilerConfig(
+            provider=request.provider,
+            model=request.model or (
+                "claude-sonnet-4-20250514" if request.provider == "anthropic"
+                else "gpt-5.2"
+            ),
+            dry_run=request.dry_run,
+        )
+
+        result = await store.reconcile(config)
+
+        _logger.info(
+            f"[Reconciler] {result.run_id}: success={result.success}, "
+            f"applied={result.applied}, duration={result.duration_ms}ms"
+        )
+
+        return ReconcileResponse(
+            success=result.success,
+            patch=ReconcilePatchResponse(**result.patch.to_dict()),
+            diagnostics=result.diagnostics.to_dict(),
+            applied=result.applied,
+            unknowns=[
+                {"entity_ref": u.entity_ref, "issue": u.issue,
+                 "suggested_action": u.suggested_action,
+                 "questions": u.questions}
+                for u in result.unknowns
+            ],
+            validation_errors=result.validation_errors,
+            duration_ms=result.duration_ms,
+            run_id=result.run_id,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Reconciliation failed: {e}")
+
+
+class ReconcileApplyRequest(BaseModel):
+    """Request to apply a previously-generated reconciliation patch."""
+    run_id: str = Field(..., description="Run ID from a previous dry-run")
+    patch: Dict[str, Any] = Field(..., description="The patch dict to apply")
+
+
+@router.post("/lineage/engine/reconcile/apply")
+async def engine_reconcile_apply(request: ReconcileApplyRequest):
+    """Apply a reconciliation patch that was previously generated with dry_run=True.
+
+    This enables the 'review & confirm' flow:
+    1. User triggers reconcile with dry_run=True
+    2. UI shows the patch (merges, new nodes, unknowns)
+    3. User reviews and clicks 'Apply'
+    4. This endpoint applies the approved patch
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    store = _get_engine_store()
+    if not store.graph or not store.graph.nodes:
+        raise HTTPException(404, "No graph built.")
+
+    try:
+        try:
+            from lineage.engine.reconciler import (
+                ReconciliationPatch, PatchValidator, PatchApplier,
+            )
+            from lineage.engine.canonical import canonicalize_graph_in_place
+        except ImportError:
+            from scanner.lineage.engine.reconciler import (
+                ReconciliationPatch, PatchValidator, PatchApplier,
+            )
+            from scanner.lineage.engine.canonical import canonicalize_graph_in_place
+
+        patch = ReconciliationPatch.from_dict(request.patch)
+
+        # Validate
+        validator = PatchValidator(store.graph)
+        if not validator.validate(patch):
+            return {
+                "success": False,
+                "errors": validator.errors,
+                "message": "Patch validation failed",
+            }
+
+        # Apply
+        applier = PatchApplier(store.graph, request.run_id)
+        applied = applier.apply(patch)
+
+        # Re-canonicalize
+        canonicalize_graph_in_place(store.graph.nodes, store.graph.edges)
+
+        _logger.info(
+            f"[Reconciler] Applied patch {request.run_id}: {applied}"
+        )
+
+        return {
+            "success": True,
+            "applied": applied,
+            "total_nodes": len(store.graph.nodes),
+            "total_edges": len(store.graph.edges),
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
+# ==========================================
+# OPENLINEAGE EVENT INGESTION
+# ==========================================
+
+
+class OpenLineageEventRequest(BaseModel):
+    """A single OpenLineage RunEvent."""
+    eventType: str
+    eventTime: str
+    run: Dict[str, Any]
+    job: Dict[str, Any]
+    inputs: List[Dict[str, Any]] = []
+    outputs: List[Dict[str, Any]] = []
+    producer: Optional[str] = None
+
+
+class OpenLineageBatchRequest(BaseModel):
+    """Batch of OpenLineage RunEvents."""
+    events: List[Dict[str, Any]]
+
+
+@router.post("/lineage/openlineage/event")
+async def ingest_openlineage_event(request: OpenLineageEventRequest):
+    """
+    Ingest a single OpenLineage RunEvent.
+
+    Maps the event to internal LineageNode/LineageEdge format and adds
+    to the engine cache, triggering an incremental graph rebuild.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.engine.openlineage import OpenLineageMapper
+        except ImportError:
+            from scanner.lineage.engine.openlineage import OpenLineageMapper
+
+        mapper = OpenLineageMapper()
+        event_dict = request.dict()
+        nodes, edges = mapper.map_event(event_dict)
+
+        _engine_collected_results["nodes"].extend(nodes)
+        _engine_collected_results["edges"].extend(edges)
+        _rebuild_engine_from_cache()
+
+        _logger.info(
+            f"[OpenLineage] Ingested event: {request.job.get('name', '?')} "
+            f"({request.eventType}) → {len(nodes)} nodes, {len(edges)} edges"
+        )
+
+        return {
+            "success": True,
+            "nodes_added": len(nodes),
+            "edges_added": len(edges),
+        }
+    except Exception as e:
+        _logger.error(f"[OpenLineage] Event ingestion failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/lineage/openlineage/events")
+async def ingest_openlineage_events_batch(request: OpenLineageBatchRequest):
+    """
+    Ingest a batch of OpenLineage RunEvents.
+
+    Processes all events, accumulates nodes/edges, then rebuilds once.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.engine.openlineage import OpenLineageMapper
+        except ImportError:
+            from scanner.lineage.engine.openlineage import OpenLineageMapper
+
+        mapper = OpenLineageMapper()
+        total_nodes = 0
+        total_edges = 0
+        errors = []
+
+        for i, event in enumerate(request.events):
+            try:
+                nodes, edges = mapper.map_event(event)
+                _engine_collected_results["nodes"].extend(nodes)
+                _engine_collected_results["edges"].extend(edges)
+                total_nodes += len(nodes)
+                total_edges += len(edges)
+            except Exception as e:
+                errors.append(f"Event {i}: {str(e)}")
+
+        _rebuild_engine_from_cache()
+
+        _logger.info(
+            f"[OpenLineage] Batch ingested {len(request.events)} events "
+            f"→ {total_nodes} nodes, {total_edges} edges, {len(errors)} errors"
+        )
+
+        return {
+            "success": len(errors) == 0,
+            "events_processed": len(request.events),
+            "nodes_added": total_nodes,
+            "edges_added": total_edges,
+            "errors": errors,
+        }
+    except Exception as e:
+        _logger.error(f"[OpenLineage] Batch ingestion failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ==========================================
+# GENERIC TOOL EXTRACTION (for new adapters)
+# ==========================================
+
+
+class ToolExtractionRequest(BaseModel):
+    """Request to extract lineage from any tool via its adapter."""
+    adapter_type: str = Field(..., description="Adapter type name (e.g., live_n8n, live_tableau)")
+    config: Dict[str, Any] = Field(..., description="Adapter configuration")
+    integration_id: Optional[str] = Field(default=None, description="Pallisade integration ID")
+
+
+@router.post("/lineage/extract-tool")
+async def extract_tool_lineage(request: ToolExtractionRequest):
+    """
+    Extract lineage from any registered adapter.
+
+    Generic endpoint that routes to any adapter by type name.
+    Supports all registered adapters: n8n, Tableau, Power BI, Metabase,
+    Databricks, Storage, Elementary, OpenLineage, etc.
+    """
+    import asyncio
+    import logging
+    import time
+    _logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.engine.adapter import create_default_registry
+        except ImportError:
+            from scanner.lineage.engine.adapter import create_default_registry
+
+        registry = create_default_registry()
+        available = registry.list_types()
+
+        if request.adapter_type not in available:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown adapter type: {request.adapter_type}. Available: {available}",
+            )
+
+        adapter_id = f"{request.adapter_type}_{request.integration_id or 'default'}"
+        adapter = registry.create(request.adapter_type, adapter_id)
+
+        config = {**request.config}
+        if request.integration_id:
+            config["integration_id"] = request.integration_id
+
+        start = time.time()
+
+        def run():
+            nodes = adapter.discover_assets(config)
+            edges = adapter.extract_lineage(config)
+            return nodes, edges
+
+        nodes, edges = await asyncio.to_thread(run)
+
+        _engine_collected_results["nodes"].extend(nodes)
+        _engine_collected_results["edges"].extend(edges)
+        _rebuild_engine_from_cache()
+
+        duration_ms = int((time.time() - start) * 1000)
+
+        _logger.info(
+            f"[Engine] {request.adapter_type}: {len(nodes)} nodes, "
+            f"{len(edges)} edges in {duration_ms}ms"
+        )
+
+        return {
+            "success": True,
+            "adapter_type": request.adapter_type,
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "duration_ms": duration_ms,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
+# ==========================================
+# LINEAGE INVESTIGATOR (context-accumulating)
+# ==========================================
+
+
+class InvestigateToolConfig(BaseModel):
+    """Configuration for a single tool in the investigation."""
+    tool_type: str = Field(..., description="Tool type: bigquery, dbt_cloud, n8n, etc.")
+    config: Dict[str, Any] = Field(..., description="Decrypted integration config")
+    integration_id: Optional[str] = Field(default=None)
+    layer: Optional[str] = Field(default=None)
+    adapter_type: Optional[str] = Field(default=None)
+
+
+class InvestigateRequest(BaseModel):
+    """Request to run a full lineage investigation."""
+    organization_id: str
+    tool_configs: List[InvestigateToolConfig]
+    options: Optional[Dict[str, Any]] = None
+
+
+class InvestigateResponse(BaseModel):
+    """Response from lineage investigation."""
+    success: bool
+    nodes: List[EngineNodeResponse] = []
+    edges: List[EngineEdgeResponse] = []
+    investigation: Dict[str, Any] = {}
+    stats: Dict[str, Any] = {}
+    errors: List[str] = []
+
+
+@router.post("/lineage/investigate", response_model=InvestigateResponse)
+async def investigate_lineage(request: InvestigateRequest):
+    """
+    Run a sequential lineage investigation across all tools.
+
+    Examines tools in data-flow order (warehouse → ingestion → transformation
+    → orchestration → reporting → infrastructure → VCS), accumulating context
+    at each step to enable richer cross-tool correlation.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.engine.investigator import ToolConfig
+        except ImportError:
+            from scanner.lineage.engine.investigator import ToolConfig
+
+        # Pre-process dbt_core nodes: parse project zip or fetch from GitHub
+        # (must happen here since the investigator runs synchronously in a thread)
+        for tc in request.tool_configs:
+            if tc.tool_type.lower() != "dbt_core" or tc.config.get("manifest"):
+                continue
+
+            source_mode = tc.config.get("source_mode", "")
+
+            # Project folder upload: parse files dict
+            if source_mode == "project" and tc.config.get("project_files"):
+                try:
+                    try:
+                        from lineage.dbt_project_parser import parse_dbt_project
+                    except ImportError:
+                        from scanner.lineage.dbt_project_parser import parse_dbt_project
+
+                    project_files = tc.config["project_files"]
+                    if isinstance(project_files, dict):
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=tc.config.get("project_name", ""),
+                            warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                        )
+                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                            tc.config["manifest"] = manifest
+                            _logger.info(f"[Investigator] Parsed dbt project files: {len(manifest.get('nodes', {}))} models")
+                except Exception as parse_err:
+                    _logger.warning(f"[Investigator] Project files parsing failed: {parse_err}")
+
+            # GitHub mode: fetch raw project files and parse
+            elif source_mode == "github":
+                github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
+                github_repo = tc.config.get("github_repo")
+                if github_token and github_repo:
+                    try:
+                        try:
+                            from lineage.github_reader import fetch_dbt_project_files
+                            from lineage.dbt_project_parser import parse_dbt_project
+                        except ImportError:
+                            from scanner.lineage.github_reader import fetch_dbt_project_files
+                            from scanner.lineage.dbt_project_parser import parse_dbt_project
+
+                        project_files = await fetch_dbt_project_files(
+                            repo=github_repo,
+                            token=github_token,
+                            branch=tc.config.get("github_branch", "main"),
+                            dbt_root=tc.config.get("dbt_project_path", ""),
+                        )
+                        if project_files:
+                            manifest = parse_dbt_project(
+                                files=project_files,
+                                project_name=tc.config.get("project_name", ""),
+                                warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                            )
+                            tc.config["manifest"] = manifest
+                            _logger.info(f"[Investigator] Parsed dbt project from GitHub: {github_repo} ({len(manifest.get('nodes', {}))} models)")
+                        else:
+                            _logger.warning(f"[Investigator] No project files found in GitHub: {github_repo}")
+                    except Exception as gh_err:
+                        _logger.warning(f"[Investigator] GitHub project fetch failed: {gh_err}")
+
+        tool_configs = [
+            ToolConfig(
+                tool_type=tc.tool_type,
+                config=tc.config,
+                integration_id=tc.integration_id,
+                layer=tc.layer,
+                adapter_type=tc.adapter_type,
+            )
+            for tc in request.tool_configs
+        ]
+
+        # Run the full extraction pipeline (canonicalize → bridge → views → publish)
+        try:
+            from lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
+        except ImportError:
+            from scanner.lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
+
+        registry = _get_run_registry()
+        store = _get_engine_store()
+        pipeline_config = ExtractionPipelineConfig()
+
+        run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
+
+        # Build response from run record
+        record = registry.get_run(run_id)
+        if not record or record.status.value == "failed":
+            return InvestigateResponse(
+                success=False,
+                errors=record.errors if record else ["Pipeline failed"],
+            )
+
+        # Convert to response (backward compatible)
+        nodes_resp = []
+        edges_resp = []
+        if store.graph:
+            nodes_resp = [_node_to_engine_response(n) for n in store.graph.nodes.values()]
+            edges_resp = [_edge_to_engine_response(e) for e in store.graph.edges.values()]
+
+        stats = {**record.artifacts.stats}
+        stats["run_id"] = run_id
+
+        _logger.info(
+            f"[Investigator] Complete: run_id={run_id}, "
+            f"{len(nodes_resp)} nodes, {len(edges_resp)} edges, "
+            f"{record.duration_ms}ms"
+        )
+
+        return InvestigateResponse(
+            success=True,
+            nodes=nodes_resp,
+            edges=edges_resp,
+            investigation=stats,
+            stats=stats,
+            errors=record.errors,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return InvestigateResponse(
+            success=False,
+            errors=[str(e)],
+        )
+
+
+class InvestigateLLMRequest(BaseModel):
+    """Request to run LLM-enhanced investigation."""
+    tool_configs: List[InvestigateToolConfig]
+    use_llm_planner: bool = True
+    use_llm_reconciler: bool = True
+    llm_provider: str = "anthropic"
+    llm_model: Optional[str] = None
+
+
+@router.post("/lineage/investigate-llm", response_model=InvestigateResponse)
+async def investigate_lineage_llm(request: InvestigateLLMRequest):
+    """
+    Run LLM-enhanced lineage investigation.
+
+    Extends the standard investigation with:
+    1. LLM planner determines optimal adapter execution order
+    2. Deterministic bridge rules fix structural gaps (raw tables as sources)
+    3. LLM reconciler reviews and patches the graph
+
+    Falls back to heuristic ordering and deterministic bridge rules
+    if LLM calls fail.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    try:
+        try:
+            from lineage.engine.investigator import ToolConfig
+        except ImportError:
+            from scanner.lineage.engine.investigator import ToolConfig
+
+        # Pre-process dbt_core nodes (same as standard investigate)
+        for tc in request.tool_configs:
+            if tc.tool_type.lower() != "dbt_core" or tc.config.get("manifest"):
+                continue
+            source_mode = tc.config.get("source_mode", "")
+            if source_mode == "project" and tc.config.get("project_files"):
+                try:
+                    try:
+                        from lineage.dbt_project_parser import parse_dbt_project
+                    except ImportError:
+                        from scanner.lineage.dbt_project_parser import parse_dbt_project
+                    project_files = tc.config["project_files"]
+                    if isinstance(project_files, dict):
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=tc.config.get("project_name", ""),
+                            warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                        )
+                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                            tc.config["manifest"] = manifest
+                except Exception as parse_err:
+                    _logger.warning(f"[Investigator-LLM] Project files parsing failed: {parse_err}")
+            elif source_mode == "github":
+                github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
+                github_repo = tc.config.get("github_repo")
+                if github_token and github_repo:
+                    try:
+                        try:
+                            from lineage.github_reader import fetch_dbt_project_files
+                            from lineage.dbt_project_parser import parse_dbt_project
+                        except ImportError:
+                            from scanner.lineage.github_reader import fetch_dbt_project_files
+                            from scanner.lineage.dbt_project_parser import parse_dbt_project
+                        project_files = await fetch_dbt_project_files(
+                            repo=github_repo, token=github_token,
+                            branch=tc.config.get("github_branch", "main"),
+                            dbt_root=tc.config.get("dbt_project_path", ""),
+                        )
+                        if project_files:
+                            manifest = parse_dbt_project(
+                                files=project_files,
+                                project_name=tc.config.get("project_name", ""),
+                                warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                            )
+                            tc.config["manifest"] = manifest
+                    except Exception as gh_err:
+                        _logger.warning(f"[Investigator-LLM] GitHub fetch failed: {gh_err}")
+
+        tool_configs = [
+            ToolConfig(
+                tool_type=tc.tool_type,
+                config=tc.config,
+                integration_id=tc.integration_id,
+                layer=tc.layer,
+                adapter_type=tc.adapter_type,
+            )
+            for tc in request.tool_configs
+        ]
+
+        # Run the full extraction pipeline with LLM planner + reconciler
+        try:
+            from lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
+        except ImportError:
+            from scanner.lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
+
+        registry = _get_run_registry()
+        store = _get_engine_store()
+        pipeline_config = ExtractionPipelineConfig(
+            use_llm_planner=request.use_llm_planner,
+            use_llm_reconciler=request.use_llm_reconciler,
+            llm_provider=request.llm_provider,
+            llm_model=request.llm_model,
+        )
+
+        run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
+
+        # Build response from run record
+        record = registry.get_run(run_id)
+        if not record or record.status.value == "failed":
+            return InvestigateResponse(
+                success=False,
+                errors=record.errors if record else ["Pipeline failed"],
+            )
+
+        nodes_resp = []
+        edges_resp = []
+        if store.graph:
+            nodes_resp = [_node_to_engine_response(n) for n in store.graph.nodes.values()]
+            edges_resp = [_edge_to_engine_response(e) for e in store.graph.edges.values()]
+
+        stats = {**record.artifacts.stats}
+        stats["run_id"] = run_id
+
+        _logger.info(
+            f"[Investigator-LLM] Complete: run_id={run_id}, "
+            f"{len(nodes_resp)} nodes, {len(edges_resp)} edges, "
+            f"{record.duration_ms}ms"
+        )
+
+        return InvestigateResponse(
+            success=True,
+            nodes=nodes_resp,
+            edges=edges_resp,
+            investigation=stats,
+            stats=stats,
+            errors=record.errors,
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return InvestigateResponse(
+            success=False,
+            errors=[str(e)],
+        )

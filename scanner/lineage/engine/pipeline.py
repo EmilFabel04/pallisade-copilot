@@ -1,0 +1,236 @@
+"""
+Lineage Extraction Pipeline — correct end-to-end ordering.
+
+Steps:
+0. Start run_id via RunRegistry
+1. (optional) LLM planner → adapter execution order
+2. Investigator executes adapters → raw nodes/edges; resolver → graph
+3. Canonicalize types (first pass)
+4. Deterministic bridge rules (uses canonical types to identify orphans)
+5. Re-canonicalize (bridge-added nodes)
+6. (optional) LLM reconciliation → GraphPatch → validate + apply safe subset
+7. Build rendered views (PipelineOverview, DataPlane, LanePipelineOverview)
+8. Persist artifacts under run_id, atomically publish current_run_id
+9. Update store.graph for backward compatibility
+"""
+
+import asyncio
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from .bridge import BridgeRuleEngine
+from .canonical import canonicalize_graph_in_place
+from .investigator import InvestigationResult, LineageInvestigator, ToolConfig
+from .run_registry import RunArtifacts, RunRegistry
+from .views import ViewBuilder
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ExtractionPipelineConfig:
+    """Configuration for a pipeline run."""
+
+    use_llm_planner: bool = False
+    use_llm_reconciler: bool = False
+    llm_provider: str = "anthropic"
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    tool_nodes: List[Dict[str, Any]] = field(default_factory=list)
+
+
+async def run_extraction_pipeline(
+    tool_configs: List[ToolConfig],
+    registry: RunRegistry,
+    store: Any,  # GraphStore — avoid circular import
+    config: Optional[ExtractionPipelineConfig] = None,
+) -> str:
+    """
+    Execute the full extraction pipeline with correct step ordering.
+
+    Returns run_id. On success, registry.current_run_id is atomically
+    updated and store.graph is set for backward compatibility.
+    On failure, current_run_id stays pointing to the previous run.
+    """
+    config = config or ExtractionPipelineConfig()
+
+    # Step 0: Start run
+    tool_names = [tc.tool_type for tc in tool_configs]
+    run_id = registry.start_run(tool_names)
+
+    try:
+        start = time.time()
+
+        # Steps 1–2: Investigation (planner + adapters + resolver)
+        result = await _run_investigation(tool_configs, config)
+
+        if not result.graph:
+            registry.fail_run(run_id, result.errors or ["No graph produced"])
+            return run_id
+
+        graph = result.graph
+
+        # Step 3: Canonicalize (first pass)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        # Step 4: Bridge rules
+        bridge_engine = BridgeRuleEngine(graph)
+        bridge_result = bridge_engine.apply_all()
+        bridge_dict = bridge_result.to_dict() if bridge_result.total_changes > 0 else None
+        if bridge_result.total_changes > 0:
+            logger.info(
+                "[Pipeline:%s] Bridge: +%d nodes, +%d edges",
+                run_id,
+                len(bridge_result.added_nodes),
+                len(bridge_result.added_edges),
+            )
+
+        # Step 5: Re-canonicalize (bridge-added nodes)
+        if bridge_result.total_changes > 0:
+            canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        # Step 6: LLM Reconciliation (optional)
+        reconciliation_dict = None
+        if config.use_llm_reconciler and config.llm_api_key:
+            reconciliation_dict = await _run_reconciliation(
+                graph, config, run_id
+            )
+
+        # Step 7: Build rendered views
+        views = _build_views(graph, config.tool_nodes, run_id)
+
+        # Step 8: Persist artifacts and atomically publish
+        artifacts = RunArtifacts(
+            graph_dict=graph.to_dict(),
+            views=views,
+            diagnostics=(
+                reconciliation_dict.get("diagnostics")
+                if reconciliation_dict
+                else None
+            ),
+            reconciliation=reconciliation_dict,
+            stats={
+                **result.stats,
+                "bridge": bridge_dict,
+                "views_built": list(views.keys()),
+                "run_id": run_id,
+            },
+            bridge_result=bridge_dict,
+        )
+
+        registry.complete_run(run_id, artifacts)
+
+        # Step 9: Update store.graph for backward compatibility
+        # (existing query endpoints like /engine/upstream still read from store)
+        store.graph = graph
+
+        duration = int((time.time() - start) * 1000)
+        logger.info(
+            "[Pipeline:%s] Complete: %d nodes, %d edges, %d views, %dms",
+            run_id,
+            len(graph.nodes),
+            len(graph.edges),
+            len(views),
+            duration,
+        )
+
+        return run_id
+
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        registry.fail_run(run_id, [str(e)])
+        return run_id
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+async def _run_investigation(
+    tool_configs: List[ToolConfig],
+    config: ExtractionPipelineConfig,
+) -> InvestigationResult:
+    """Run the investigator — sync run() wrapped in a thread."""
+    investigator = LineageInvestigator()
+
+    if config.use_llm_planner and config.llm_api_key:
+        # Use LLM planner for extraction order, but NOT the reconciler
+        # (we handle reconciliation separately in the pipeline)
+        result = await investigator.run_with_llm(
+            tool_configs,
+            use_llm_planner=True,
+            use_llm_reconciler=False,
+            llm_provider=config.llm_provider,
+            llm_model=config.llm_model,
+            llm_api_key=config.llm_api_key,
+        )
+    else:
+        result = await asyncio.to_thread(investigator.run, tool_configs)
+
+    return result
+
+
+async def _run_reconciliation(
+    graph: Any,
+    config: ExtractionPipelineConfig,
+    run_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Run LLM reconciliation. Returns result dict or None."""
+    try:
+        from .reconciler import ReconcilerConfig, ReconciliationEngine
+
+        recon_config = ReconcilerConfig(
+            provider=config.llm_provider,
+            model=config.llm_model or "claude-sonnet-4-20250514",
+            api_key=config.llm_api_key,
+        )
+        recon_engine = ReconciliationEngine(recon_config)
+        recon_result = await recon_engine.reconcile(graph)
+
+        if recon_result.success:
+            logger.info(
+                "[Pipeline:%s] Reconciliation applied: %s",
+                run_id, recon_result.applied,
+            )
+        else:
+            logger.warning(
+                "[Pipeline:%s] Reconciliation issues: %s",
+                run_id, recon_result.validation_errors,
+            )
+        return recon_result.to_dict()
+    except Exception as e:
+        logger.warning(
+            "[Pipeline:%s] LLM reconciler failed (non-fatal): %s", run_id, e,
+        )
+        return None
+
+
+def _build_views(
+    graph: Any,
+    tool_nodes: List[Dict[str, Any]],
+    run_id: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Build all rendered views from the final canonical graph."""
+    views: Dict[str, Dict[str, Any]] = {}
+
+    builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+
+    for view_name, build_fn in [
+        ("pipeline_overview", builder.build_pipeline_overview),
+        ("data_plane", builder.build_data_plane),
+        ("lane_pipeline_overview", builder.build_lane_pipeline_overview),
+    ]:
+        try:
+            view = build_fn()
+            views[view_name] = view.to_dict()
+        except Exception as e:
+            logger.warning(
+                "[Pipeline:%s] %s view failed: %s", run_id, view_name, e,
+            )
+
+    return views

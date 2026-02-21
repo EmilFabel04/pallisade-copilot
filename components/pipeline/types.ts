@@ -69,7 +69,7 @@ export function getToolsByLayer(layer: PipelineLayer): ToolDefinition[] {
 export interface ConfigField {
   name: string;
   label: string;
-  type: 'text' | 'password' | 'select' | 'file' | 'textarea' | 'number' | 'multi-select';
+  type: 'text' | 'password' | 'select' | 'file' | 'folder' | 'textarea' | 'number' | 'multi-select';
   required: boolean;
   placeholder?: string;
   helperText?: string;
@@ -78,6 +78,8 @@ export interface ConfigField {
   dynamicOptions?: boolean;
   // API endpoint to fetch options (relative path, e.g., 'datasets')
   optionsEndpoint?: string;
+  // Conditional visibility: only show this field when another field has a specific value
+  showWhen?: { field: string; value: string };
 }
 
 // Tool definition
@@ -142,13 +144,32 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'project_id', label: 'Project ID', type: 'text', required: false, placeholder: 'Optional: filter to specific project' },
       ],
     },
-    { 
-      id: 'dbt_core', 
-      name: 'dbt Core', 
-      description: 'dbt Core (manifest upload)', 
+    {
+      id: 'dbt_core',
+      name: 'dbt Core',
+      description: 'dbt Core (upload, project, or GitHub)',
       layer: 'TRANSFORMATION',
       configFields: [
-        { name: 'manifest', label: 'Manifest File', type: 'file', required: true, helperText: 'Upload your manifest.json from target/ folder' },
+        { name: 'source_mode', label: 'Source', type: 'select', required: true, options: [
+          { value: 'upload', label: 'Upload manifest.json' },
+          { value: 'project', label: 'Upload dbt project (zip)' },
+          { value: 'github', label: 'Connect GitHub repo' },
+        ], helperText: 'Choose how to provide your dbt project' },
+        // Upload manifest mode
+        { name: 'manifest', label: 'Manifest File', type: 'file', required: false, helperText: 'Upload your manifest.json from target/ folder', showWhen: { field: 'source_mode', value: 'upload' } },
+        // Upload project folder mode
+        { name: 'project_files', label: 'dbt Project Folder', type: 'folder', required: false, helperText: 'Select your dbt project folder (models/, dbt_project.yml, etc.)', showWhen: { field: 'source_mode', value: 'project' } },
+        // GitHub repo mode
+        { name: 'github_repo', label: 'Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repository containing your dbt project', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'dbt_project_path', label: 'dbt Project Path', type: 'text', required: false, placeholder: '/ (repo root)', helperText: 'Path to dbt project within the repo (leave empty for root)', showWhen: { field: 'source_mode', value: 'github' } },
+        // Common fields
+        { name: 'warehouse_type', label: 'Target Warehouse', type: 'select', required: false, options: [
+          { value: 'bigquery', label: 'BigQuery' },
+          { value: 'snowflake', label: 'Snowflake' },
+          { value: 'postgres', label: 'Postgres' },
+          { value: 'redshift', label: 'Redshift' },
+        ], helperText: 'The warehouse your dbt project targets' },
         { name: 'project_name', label: 'Project Name', type: 'text', required: false, placeholder: 'Name to identify this dbt project' },
       ],
     },

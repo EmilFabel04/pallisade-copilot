@@ -20,29 +20,39 @@ class NodeType(Enum):
     TABLE = "table"             # Database table
     VIEW = "view"               # Database view
     MATERIALIZED_VIEW = "materialized_view"
-    
+
     # Transformation layer
     MODEL = "model"             # dbt model
     SNAPSHOT = "snapshot"       # dbt snapshot
     SEED = "seed"               # dbt seed
     MACRO = "macro"             # dbt macro
-    
+
     # Pipeline/orchestration
     TASK = "task"               # Airflow/Prefect task
     DAG = "dag"                 # Airflow DAG
     FLOW = "flow"               # Prefect flow
     PIPELINE = "pipeline"       # Generic pipeline
-    
+    WORKFLOW = "workflow"        # n8n workflow
+    NOTEBOOK = "notebook"       # Databricks notebook
+
     # BI/Analytics
     DASHBOARD = "dashboard"     # BI dashboard
     REPORT = "report"           # BI report
     DATASET = "dataset"         # Power BI dataset
     EXPLORE = "explore"         # Looker explore
-    
+    WORKBOOK = "workbook"       # Tableau workbook
+    QUESTION = "question"       # Metabase question/card
+
+    # Ingestion
+    CONNECTOR = "connector"     # Fivetran/Airbyte connector
+
+    # Quality/Observability
+    MONITOR = "monitor"         # Elementary monitor/test suite
+
     # ML
     FEATURE = "feature"         # ML feature
     MODEL_ARTIFACT = "model_artifact"  # ML model
-    
+
     # Unknown
     UNKNOWN = "unknown"
 
@@ -63,6 +73,15 @@ class EdgeType(Enum):
     # Cross-plane (asset ↔ orchestration)
     PRODUCED_BY = "produced_by"         # Asset produced by a task/DAG
     MATERIALIZES = "materializes"       # Task materializes an asset
+
+    # Ingestion
+    SYNCS_TO = "syncs_to"               # Fivetran/Airbyte syncs data to warehouse
+
+    # BI
+    QUERIES = "queries"                 # BI tool queries warehouse
+
+    # Quality/Observability
+    MONITORS = "monitors"               # Elementary monitors a table
 
 
 class LinePlane(Enum):
@@ -106,6 +125,14 @@ class AssetKind(Enum):
     TOPIC = "topic"
     STREAM = "stream"
     API = "api"
+    CONNECTOR = "connector"     # Fivetran/Airbyte connector
+    WORKBOOK = "workbook"       # Tableau workbook
+    NOTEBOOK = "notebook"       # Databricks notebook
+    REPORT = "report"           # BI report
+    EXPLORE = "explore"         # Looker explore
+    QUESTION = "question"       # Metabase question/card
+    MONITOR = "monitor"         # Elementary monitor/test
+    WORKFLOW = "workflow"        # n8n workflow
     UNKNOWN = "unknown"
 
 
@@ -264,6 +291,12 @@ class LineageNode:
     observed_at: Optional[datetime] = None
     sources: List[str] = field(default_factory=list)  # adapter ids
 
+    # Canonical / v2 extensions (backward-compatible defaults)
+    canonical_type: Optional[str] = None  # system, service, job, dataset, semantic
+    urn: Optional[str] = None  # urn:pallisade:{type}:{platform}:{namespace}:{name}
+    inferred: bool = False  # True if this node was bridge-inferred
+    evidence: List['Evidence'] = field(default_factory=list)  # node-level evidence
+
     @property
     def stable_id(self) -> str:
         """Deterministic ID from physical identity (no system/platform)."""
@@ -306,6 +339,10 @@ class LineageNode:
             "sources": self.sources,
             "integration_id": self.integration_id,
             "raw_metadata": self.raw_metadata,
+            "canonical_type": self.canonical_type,
+            "urn": self.urn,
+            "inferred": self.inferred,
+            "node_evidence": [e.to_dict() for e in self.evidence],
         }
 
 
@@ -334,6 +371,10 @@ class LineageEdge:
     time_window: Optional[TimeWindow] = None
     plane: LinePlane = LinePlane.DATA
 
+    # Canonical / v2 extensions (backward-compatible defaults)
+    canonical_edge_type: Optional[str] = None  # hosts, runs, reads, writes, derives, serves
+    inferred: bool = False  # True if this edge was bridge-inferred
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -350,6 +391,8 @@ class LineageEdge:
             "column_mappings": [m.to_dict() for m in self.column_mappings],
             "time_window": self.time_window.to_dict() if self.time_window else None,
             "plane": self.plane.value,
+            "canonical_edge_type": self.canonical_edge_type,
+            "inferred": self.inferred,
         }
 
 
@@ -708,6 +751,10 @@ class LineageGraph:
                 sources=node_data.get("sources", []),
                 integration_id=node_data.get("integration_id"),
                 raw_metadata=node_data.get("raw_metadata", {}),
+                canonical_type=node_data.get("canonical_type"),
+                urn=node_data.get("urn"),
+                inferred=node_data.get("inferred", False),
+                evidence=[Evidence.from_dict(e) for e in node_data.get("node_evidence", [])],
             )
             graph.add_node(node)
 
@@ -728,6 +775,8 @@ class LineageGraph:
                 column_mappings=[ColumnMapping.from_dict(m) for m in edge_data.get("column_mappings", [])],
                 time_window=TimeWindow.from_dict(tw_data) if tw_data else None,
                 plane=LinePlane(edge_data.get("plane", "data")),
+                canonical_edge_type=edge_data.get("canonical_edge_type"),
+                inferred=edge_data.get("inferred", False),
             )
             graph.add_edge(edge)
 

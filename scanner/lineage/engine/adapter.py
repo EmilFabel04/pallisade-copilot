@@ -122,6 +122,16 @@ def create_default_registry() -> AdapterRegistry:
     from .adapters.live_fivetran import LiveFivetranAdapter
     from .adapters.live_airbyte import LiveAirbyteAdapter
     from .adapters.live_looker import LiveLookerAdapter
+    from .adapters.live_tableau import LiveTableauAdapter
+    from .adapters.live_databricks import LiveDatabricksAdapter
+    from .adapters.live_n8n import LiveN8nAdapter
+    from .adapters.live_powerbi import LivePowerBIAdapter
+    from .adapters.live_metabase import LiveMetabaseAdapter
+    from .adapters.live_storage import LiveStorageAdapter
+    from .adapters.live_elementary import LiveElementaryAdapter
+    from .adapters.live_openlineage import LiveOpenLineageAdapter
+    from .adapters.live_linux import LiveLinuxAdapter
+    from .adapters.live_github import LiveGithubAdapter
 
     registry = AdapterRegistry()
     # Reference adapters (JSON fixture-based)
@@ -135,9 +145,23 @@ def create_default_registry() -> AdapterRegistry:
     # Orchestration adapters
     registry.register_type("live_dagster", LiveDagsterAdapter)
     registry.register_type("live_prefect", LivePrefectAdapter)
+    registry.register_type("live_n8n", LiveN8nAdapter)
     # Ingestion adapters
     registry.register_type("live_fivetran", LiveFivetranAdapter)
     registry.register_type("live_airbyte", LiveAirbyteAdapter)
+    registry.register_type("live_storage", LiveStorageAdapter)
     # BI adapters
     registry.register_type("live_looker", LiveLookerAdapter)
+    registry.register_type("live_tableau", LiveTableauAdapter)
+    registry.register_type("live_powerbi", LivePowerBIAdapter)
+    registry.register_type("live_metabase", LiveMetabaseAdapter)
+    # Warehouse adapters (Unity Catalog)
+    registry.register_type("live_databricks", LiveDatabricksAdapter)
+    # Quality enrichment
+    registry.register_type("live_elementary", LiveElementaryAdapter)
+    # OpenLineage (standard event ingestion)
+    registry.register_type("live_openlineage", LiveOpenLineageAdapter)
+    # Infrastructure & VCS stubs
+    registry.register_type("live_linux", LiveLinuxAdapter)
+    registry.register_type("live_github", LiveGithubAdapter)
     return registry

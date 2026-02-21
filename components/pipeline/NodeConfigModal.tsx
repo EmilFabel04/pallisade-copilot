@@ -13,6 +13,8 @@ import { Loader2, Check, ExternalLink } from 'lucide-react';
 
 // Tools that support OAuth authentication
 const OAUTH_TOOLS = ['github'];
+// Tools that may need GitHub OAuth for a specific source mode
+const GITHUB_DEPENDENT_TOOLS = ['dbt_core'];
 
 interface GitHubConnectionInfo {
   connected: boolean;
@@ -223,19 +225,22 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // OAuth state for GitHub
   const isOAuthTool = OAUTH_TOOLS.includes(node.toolType);
+  const isGithubDependentTool = GITHUB_DEPENDENT_TOOLS.includes(node.toolType);
+  const needsGithubForMode = isGithubDependentTool && config.source_mode === 'github';
   const [useOAuth, setUseOAuth] = useState(isOAuthTool);
   const [githubInfo, setGithubInfo] = useState<GitHubConnectionInfo | null>(null);
   const [loadingGithub, setLoadingGithub] = useState(false);
 
   // Check for existing GitHub OAuth connection
   useEffect(() => {
-    if (isOAuthTool) {
+    if (isOAuthTool || needsGithubForMode) {
       checkGitHubConnection();
     }
-  }, [isOAuthTool]);
+  }, [isOAuthTool, needsGithubForMode]);
 
   const checkGitHubConnection = async () => {
     setLoadingGithub(true);
@@ -304,6 +309,49 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
     reader.readAsText(file);
   };
 
+  const handleFolderUpload = async (name: string, fileList: FileList) => {
+    const projectFiles: Record<string, string> = {};
+    const relevantExts = ['.sql', '.yml', '.yaml'];
+    const skipDirs = ['target', 'dbt_packages', 'dbt_modules', '.git', 'logs', 'node_modules'];
+    let fileCount = 0;
+
+    const readPromises: Promise<void>[] = [];
+
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      const path = file.webkitRelativePath || file.name;
+      const lower = path.toLowerCase();
+
+      // Only .sql and .yml/.yaml files
+      if (!relevantExts.some(ext => lower.endsWith(ext))) continue;
+
+      // Skip irrelevant directories
+      const parts = path.split('/');
+      if (parts.some(p => skipDirs.includes(p))) continue;
+
+      readPromises.push(
+        file.text().then(content => {
+          // Strip the top-level folder name from the path
+          // e.g. "my-dbt-project/models/x.sql" → "models/x.sql"
+          const relPath = parts.length > 1 ? parts.slice(1).join('/') : path;
+          projectFiles[relPath] = content;
+          fileCount++;
+        }).catch(() => {
+          // Skip files that can't be read
+        })
+      );
+    }
+
+    await Promise.all(readPromises);
+
+    if (fileCount > 0) {
+      handleFieldChange(name, projectFiles);
+      setTestResult({ success: true, message: `Loaded ${fileCount} project files (SQL + YAML)` });
+    } else {
+      setTestResult({ success: false, message: 'No SQL or YAML files found in selected folder' });
+    }
+  };
+
   const testConnection = async () => {
     setTesting(true);
     setTestResult(null);
@@ -329,6 +377,8 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
   const isValid = configFields.every(field => {
     if (!field.required) return true;
+    // Skip validation for fields hidden by showWhen
+    if (field.showWhen && config[field.showWhen.field] !== field.showWhen.value) return true;
     const value = config[field.name];
     // For multi-select, check array has items
     if (field.type === 'multi-select') {
@@ -458,8 +508,58 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
             </div>
           )}
 
+          {/* GitHub OAuth section for dbt_core in GitHub mode */}
+          {needsGithubForMode && (
+            <div className="mb-4">
+              {loadingGithub ? (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                </div>
+              ) : githubInfo?.connected ? (
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                  <div className="flex items-center gap-3">
+                    {githubInfo.avatar ? (
+                      <img src={githubInfo.avatar} alt="" className="w-8 h-8 rounded-full" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-[#24292e] flex items-center justify-center">
+                        <GitHubIcon className="w-4 h-4 text-white" />
+                      </div>
+                    )}
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 text-emerald-400 mb-0.5">
+                        <Check className="w-3.5 h-3.5" />
+                        <span className="font-medium text-xs">GitHub Connected — @{githubInfo.username}</span>
+                      </div>
+                    </div>
+                    <button onClick={handleGitHubConnect} className="text-xs text-gray-400 hover:text-white underline">Reconnect</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.08)] text-center">
+                  <p className="text-sm text-gray-400 mb-3">
+                    Connect GitHub to read your dbt project files from a repository.
+                  </p>
+                  <button
+                    onClick={handleGitHubConnect}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-[#24292e] hover:bg-[#2d3339] text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    <GitHubIcon className="w-4 h-4" />
+                    Connect with GitHub
+                    <ExternalLink className="w-3 h-3 ml-1 opacity-50" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Manual config fields (shown if not using OAuth or if OAuth is connected) */}
-          {(!isOAuthTool || !useOAuth || githubInfo?.connected) && configFields.map(field => (
+          {(!isOAuthTool || !useOAuth || githubInfo?.connected) && configFields.filter(field => {
+            // Apply showWhen conditional visibility
+            if (field.showWhen) {
+              return config[field.showWhen.field] === field.showWhen.value;
+            }
+            return true;
+          }).map(field => (
             <div key={field.name}>
               <label className="block text-sm font-medium text-white mb-2">
                 {field.label}
@@ -496,6 +596,46 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
                         Click to upload file
+                      </span>
+                    )}
+                  </button>
+                  {field.helperText && (
+                    <p className="text-xs text-gray-500 mt-2">{field.helperText}</p>
+                  )}
+                </div>
+              ) : field.type === 'folder' ? (
+                <div>
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    /* @ts-expect-error webkitdirectory is not in React types */
+                    webkitdirectory=""
+                    directory=""
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      if (files && files.length > 0) handleFolderUpload(field.name, files);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => folderInputRef.current?.click()}
+                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[rgba(255,255,255,0.1)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
+                  >
+                    {config[field.name] && typeof config[field.name] === 'object' ? (
+                      <span className="flex items-center justify-center gap-2 text-emerald-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        {Object.keys(config[field.name]).length} project files loaded
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center gap-2 text-gray-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        Click to select project folder
                       </span>
                     )}
                   </button>

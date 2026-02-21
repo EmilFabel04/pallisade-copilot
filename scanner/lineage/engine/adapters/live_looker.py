@@ -8,7 +8,6 @@ via tile SQL parsing and explore metadata.
 """
 
 import logging
-import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -25,15 +24,9 @@ from ...graph import (
 )
 from ..adapter import BaseLineageAdapter, Capability
 from ..ids import generate_asset_id, generate_edge_id, normalize_identifier
+from ..sql_lineage import SQLLineageExtractor
 
 logger = logging.getLogger(__name__)
-
-# Regex for extracting table references from SQL
-_TABLE_PATTERN = re.compile(
-    r"""(?:FROM|JOIN)\s+"""
-    r"""(?:`([^`]+)`|"([^"]+)"|(\w+(?:\.\w+)*))\s*""",
-    re.IGNORECASE,
-)
 
 
 class LiveLookerAdapter(BaseLineageAdapter):
@@ -389,29 +382,23 @@ class LiveLookerAdapter(BaseLineageAdapter):
     # SQL parsing helpers
     # ------------------------------------------------------------------
 
+    _sql_extractor: Optional[SQLLineageExtractor] = None
+
+    def _get_sql_extractor(self) -> SQLLineageExtractor:
+        if self._sql_extractor is None:
+            self._sql_extractor = SQLLineageExtractor(default_dialect="bigquery")
+        return self._sql_extractor
+
     def _extract_table_refs_from_sql(self, sql: str) -> List[str]:
         """
-        Extract table references from SQL using regex.
+        Extract source table references from SQL using sqlglot.
 
-        Handles:
-            FROM schema.table
-            JOIN `project.dataset.table`
-            FROM "schema"."table"
+        Handles all dialects and complex SQL (CTEs, subqueries, etc.).
         """
         if not sql:
             return []
 
-        refs = []
-        for match in _TABLE_PATTERN.finditer(sql):
-            # Pick the first non-None group
-            ref = match.group(1) or match.group(2) or match.group(3)
-            if ref:
-                # Skip common SQL keywords that might match
-                if ref.upper() in ("SELECT", "WHERE", "AND", "OR", "ON", "AS", "SET"):
-                    continue
-                refs.append(ref)
-
-        return refs
+        return self._get_sql_extractor().extract_source_tables(sql)
 
     # ------------------------------------------------------------------
     # Edge helpers

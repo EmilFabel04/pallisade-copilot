@@ -153,7 +153,9 @@ class ResolverPipeline:
         self, nodes: List[LineageNode]
     ) -> Tuple[List[LineageNode], Dict[str, str]]:
         """
-        Deduplicate nodes that have the same stable_id.
+        Deduplicate nodes using two passes:
+        1. stable_id — deterministic hash from (domain, namespace, container, name)
+        2. FQN fallback — catches divergent containers (e.g. dbt omits database)
 
         Returns:
             Tuple of (merged_nodes, id_remap) where id_remap maps
@@ -177,7 +179,6 @@ class ResolverPipeline:
             # Secondary key: prefer real warehouse platforms over dbt (both
             # use platform_domain=WAREHOUSE, so without this tiebreaker the
             # winner depends on extraction order which is non-deterministic).
-            _WH_PLATFORMS = {"bigquery", "snowflake", "postgres", "redshift"}
             group.sort(key=lambda n: (
                 _domain_priority(n.platform_domain.value),
                 0 if n.platform in _WH_PLATFORMS else 1,
@@ -191,6 +192,51 @@ class ResolverPipeline:
 
             id_remap[primary.id] = primary.id
             merged.append(primary)
+
+        stable_deduped = self.stats.nodes_deduplicated
+
+        # Second pass: schema-qualified name dedup for same-domain nodes.
+        # Catches cases where adapters produce different container/FQN values
+        # for the same physical table (e.g. dbt omits database field,
+        # giving FQN "raw.customers" vs BigQuery's "project.raw.customers").
+        # Key: (platform_domain, namespace, schema, name) — database-independent.
+        by_short: Dict[Tuple[str, str, str, str], List[LineageNode]] = defaultdict(list)
+        no_short: List[LineageNode] = []
+        for node in merged:
+            if node.name:
+                key = (
+                    node.platform_domain.value,
+                    (node.namespace or "").lower(),
+                    (node.schema or "").lower(),
+                    node.name.lower(),
+                )
+                by_short[key].append(node)
+            else:
+                no_short.append(node)
+
+        fqn_merged: List[LineageNode] = []
+        for key, group in by_short.items():
+            if len(group) == 1:
+                fqn_merged.append(group[0])
+                continue
+            group.sort(key=lambda n: (
+                _domain_priority(n.platform_domain.value),
+                0 if n.platform in _WH_PLATFORMS else 1,
+            ))
+            primary = group[0]
+            for secondary in group[1:]:
+                _merge_node_metadata(primary, secondary)
+                id_remap[secondary.id] = primary.id
+                self.stats.nodes_deduplicated += 1
+            fqn_merged.append(primary)
+
+        merged = fqn_merged + no_short
+        fqn_deduped = self.stats.nodes_deduplicated - stable_deduped
+
+        logger.info(
+            "[Resolver] Dedup: %d nodes → %d unique (%d merged by stable_id, %d by schema+name)",
+            len(nodes), len(merged), stable_deduped, fqn_deduped,
+        )
 
         return merged, id_remap
 
@@ -282,6 +328,10 @@ class ResolverPipeline:
         return "api_metadata"  # default to middle tier
 
 
+# Platforms that are real warehouses (vs dbt which also uses WAREHOUSE domain)
+_WH_PLATFORMS = {"bigquery", "snowflake", "postgres", "redshift"}
+
+
 # Priority for deduplication: lower = higher priority
 _DOMAIN_PRIORITIES = {
     "warehouse": 1,
@@ -342,3 +392,6 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
     # Prefer primary's integration_id (warehouse priority), fallback to secondary
     if not primary.integration_id and secondary.integration_id:
         primary.integration_id = secondary.integration_id
+
+    # Merge node-level evidence lists
+    primary.evidence.extend(secondary.evidence)
