@@ -381,6 +381,14 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
     # Merge sources
     primary.sources = list(set(primary.sources + secondary.sources))
 
+    # Merge discovered_platforms for multi-platform provenance
+    primary_platforms = primary.raw_metadata.setdefault("discovered_platforms", [])
+    for p in secondary.raw_metadata.get("discovered_platforms", []):
+        if p not in primary_platforms:
+            primary_platforms.append(p)
+    if secondary.platform and secondary.platform not in primary_platforms:
+        primary_platforms.append(secondary.platform)
+
     # Preserve dbt resource type info so the UI can identify dbt models after dedup.
     # When a dbt model node is merged into a warehouse node, the warehouse node_type
     # (view/table) wins, losing the "model" type. Stash it in raw_metadata.

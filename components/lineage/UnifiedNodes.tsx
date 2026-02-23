@@ -76,6 +76,8 @@ interface DataAssetNodeData {
   issues?: DataAssetIssues;
   owner?: string;
   tags?: string[];
+  // Multi-platform provenance
+  platforms?: string[];
   // Overlay mode (orchestration overlay on data tab)
   isOverlay?: boolean;
   // Inferred node (bridge node from investigator)
@@ -479,6 +481,20 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
           <span>{data.rowCount.toLocaleString()} rows</span>
         )}
       </div>
+
+      {/* Platform provenance badges (only when multi-platform) */}
+      {data.platforms && data.platforms.length > 1 && (
+        <div className="flex items-center gap-1 mt-1">
+          {data.platforms.map((p) => (
+            <span
+              key={p}
+              className="px-1 py-0.5 text-[8px] font-medium uppercase tracking-wide rounded bg-white/[0.06] text-white/40 border border-white/[0.06]"
+            >
+              {p}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Issue badges */}
       {hasIssues && (

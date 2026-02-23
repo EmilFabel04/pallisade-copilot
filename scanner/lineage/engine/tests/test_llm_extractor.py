@@ -81,7 +81,7 @@ class TestAddNode:
         assert node.fqn == "project.raw.customers"
         assert "llm_extractor" in node.sources
 
-    def test_add_node_rejects_duplicates(self):
+    def test_add_node_enriches_duplicates(self):
         ext = _make_extractor()
         ext._tool_add_node({
             "node_id": "bigquery:project.raw.customers",
@@ -91,7 +91,7 @@ class TestAddNode:
             "platform_domain": "warehouse",
         })
 
-        # Second add should skip, not error
+        # Second add should enrich, not error
         result = ext._tool_add_node({
             "node_id": "bigquery:project.raw.customers",
             "name": "customers",
@@ -101,7 +101,7 @@ class TestAddNode:
         })
 
         assert result["success"] is True
-        assert result["action"] == "skipped"
+        assert result["action"] == "enriched"
         assert len(ext.graph.nodes) == 1
 
     def test_add_node_lowercases_id(self):

@@ -718,6 +718,7 @@ class ViewBuilder:
                     "dbtResourceType": node.raw_metadata.get("dbt_resource_type"),
                     "healthStatus": node.health_status.value,
                     "tags": node.tags,
+                    "platforms": node.raw_metadata.get("discovered_platforms"),
                 },
             ))
             node_id_set.add(node.id)

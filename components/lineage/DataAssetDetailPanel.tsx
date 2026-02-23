@@ -669,6 +669,23 @@ export function DataAssetDetailPanel({
           )}
         </div>
 
+        {/* ─── Platforms (multi-platform provenance) ────────── */}
+        {node.platforms && node.platforms.length > 0 && (
+          <div>
+            <label className="text-[11px] text-white/40 uppercase tracking-wide">Discovered In</label>
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {node.platforms.map((p) => (
+                <span
+                  key={p}
+                  className="px-2 py-1 text-[11px] font-medium capitalize bg-indigo-500/15 text-indigo-300 rounded border border-indigo-500/20"
+                >
+                  {p}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Criticality & Owner */}
         <div className="grid grid-cols-2 gap-3">
           {node.criticality && (
@@ -718,6 +735,31 @@ export function DataAssetDetailPanel({
             <label className="text-[11px] text-white/40 uppercase tracking-wide">Description</label>
             <p className="text-[13px] text-white/70 mt-1">{node.description}</p>
           </div>
+        )}
+
+        {/* ─── Column Schema ──────────────────────────────── */}
+        {node.columns && node.columns.length > 0 && (
+          <Section title="Columns" count={node.columns.length}>
+            <div className="space-y-0.5 max-h-48 overflow-y-auto">
+              {node.columns.map((col, i) => (
+                <div key={i} className="flex items-center justify-between py-1 px-2 rounded bg-white/[0.02]">
+                  <span className="text-[11px] text-white/80 font-mono">{col.name}</span>
+                  {col.type && (
+                    <span className="text-[10px] text-white/30 font-mono">{col.type}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* ─── SQL Definition ─────────────────────────────── */}
+        {node.sqlDefinition && (
+          <Section title="SQL Definition">
+            <pre className="text-[11px] text-white/60 font-mono bg-white/[0.03] p-2 rounded overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all">
+              {node.sqlDefinition}
+            </pre>
+          </Section>
         )}
       </div>
     </div>

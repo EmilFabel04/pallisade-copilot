@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from ..graph import (
+    ColumnMapping,
     EdgeType,
     Evidence,
     LineageEdge,
@@ -145,9 +146,14 @@ Call the appropriate discover tool for each warehouse (BigQuery, Snowflake, etc.
 For each table/view discovered, call `add_node` with the correct fields. For any SQL lineage edges found, call `add_edge`.
 
 ### Phase 3: Transformation Layer
-Call `discover_dbt_assets` for dbt integrations. dbt manifests contain explicit depends_on relationships. Models map to warehouse tables.
+Call `discover_dbt_assets` for dbt integrations. dbt manifests contain explicit depends_on relationships.
 
-IMPORTANT: When a dbt model maps to a warehouse table you already added, use THE SAME node_id. Don't create duplicates.
+CRITICAL: dbt models materialize into warehouse tables. When you find a dbt model that matches a warehouse table (same schema + table name), do NOT create a new node. Instead:
+1. The warehouse table node already exists from Phase 2
+2. Call add_node with THE SAME node_id — this enriches it with dbt metadata (dbt_path, dbt_resource_type="model", zone_hint)
+3. Add any new edges from the dbt manifest (depends_on relationships)
+
+Only create new dbt-only nodes when there's no matching warehouse table.
 
 ### Phase 4: Ingestion & Orchestration
 Call discover tools for n8n, Fivetran, Airbyte, Airflow, etc. These show what loads data into the warehouse.
@@ -172,6 +178,15 @@ When satisfied, call `mark_extraction_complete`.
 - For BI assets: `{platform}:{dashboard_id}` or `{platform}:{report_name}`
 - For ingestion connectors: `{platform}:{connector_id}`
 - Always lowercase, no spaces
+
+## Node Type Rules
+- `table` — Physical warehouse table (BigQuery, Snowflake, Postgres). Use for ALL warehouse tables, including raw/landing tables
+- `view` — Warehouse view
+- `model` — dbt model (transformed data). When a dbt model maps to a warehouse table you already added, reuse the SAME node_id and keep node_type as "table"
+- `source` — ONLY for dbt source definitions (declared in schema.yml sources). Do NOT use "source" for raw warehouse tables — use "table" instead
+- `dashboard`, `report`, `explore`, `workbook`, `question` — BI/reporting assets
+- `workflow`, `dag`, `task`, `pipeline` — Orchestration/job assets
+- `connector` — Ingestion connector (Fivetran, Airbyte)
 
 ## Edge Direction
 - `source_id` = upstream (where data comes FROM)
@@ -449,6 +464,22 @@ def _build_tool_definitions() -> List[Dict[str, Any]]:
                         "type": "string",
                         "description": "Why this edge exists (e.g. 'dbt depends_on in manifest', 'SQL SELECT FROM detected')",
                     },
+                    "column_mappings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from_column": {"type": "string"},
+                                "to_column": {"type": "string"},
+                            },
+                            "required": ["from_column", "to_column"],
+                        },
+                        "description": "Column-level lineage (optional). Each maps a source column to a target column.",
+                    },
+                    "transformation": {
+                        "type": "string",
+                        "description": "SQL snippet or transformation logic (optional)",
+                    },
                 },
                 "required": ["source_id", "target_id", "edge_type", "confidence", "evidence"],
             },
@@ -527,6 +558,7 @@ class LLMLineageExtractor:
         self._extraction_complete = False
         self._completion_summary = ""
         self._unresolved_gaps: List[str] = []
+        self._discovery_cache: Dict[str, Dict[str, Any]] = {}  # node_id → rich metadata
 
     async def extract(
         self,
@@ -972,6 +1004,32 @@ class LLMLineageExtractor:
                 "confidence": e.confidence,
             })
 
+        # Cache rich metadata for auto-enrichment when add_node is called
+        platform_name = (tc.tool_type or "").lower()
+        for n in nodes:
+            cache_entry: Dict[str, Any] = {
+                "_platform": platform_name,
+                "_adapter_id": integration_id,
+            }
+            if n.columns:
+                cache_entry["columns"] = n.columns
+            if n.row_count is not None:
+                cache_entry["row_count"] = n.row_count
+            if n.owner:
+                cache_entry["owner"] = n.owner
+            if n.tags:
+                cache_entry["tags"] = n.tags
+            if n.description:
+                cache_entry["description"] = n.description
+            for mkey in ("sql", "materialized", "depends_on"):
+                if mkey in n.raw_metadata:
+                    cache_entry[mkey] = n.raw_metadata[mkey]
+
+            self._discovery_cache[n.id] = cache_entry
+            norm_key = self._make_discovery_key(n)
+            if norm_key:
+                self._discovery_cache[norm_key] = cache_entry
+
         result = {
             "success": True,
             "summary": f"Found {len(nodes)} assets and {len(edges)} edges from {tc.tool_type}",
@@ -988,6 +1046,71 @@ class LLMLineageExtractor:
 
         return result
 
+    def _make_discovery_key(self, node: LineageNode) -> Optional[str]:
+        """Build a normalized lookup key for discovery cache matching.
+
+        Format: ``{platform}:{db}.{schema}.{name}`` lowercased — matches
+        the node_id format the LLM is instructed to use.
+        """
+        platform = (node.platform or "").lower()
+        if not platform or not node.name:
+            return None
+        db = (node.database or "").lower()
+        schema = (node.schema or "").lower()
+        name = node.name.lower()
+        fqn_parts = [p for p in [db, schema, name] if p]
+        return f"{platform}:{'.'.join(fqn_parts)}"
+
+    def _enrich_from_discovery(self, node_id: str, node: LineageNode) -> None:
+        """Auto-enrich a node from discovery cache data."""
+        cached = self._discovery_cache.get(node_id)
+        if not cached:
+            # Try normalized lookup
+            key = self._make_discovery_key(node)
+            cached = self._discovery_cache.get(key) if key else None
+        if not cached:
+            return
+
+        if cached.get("columns") and not node.columns:
+            node.columns = cached["columns"]
+        if cached.get("row_count") is not None and node.row_count is None:
+            node.row_count = cached["row_count"]
+        if cached.get("owner") and not node.owner:
+            node.owner = cached["owner"]
+        if cached.get("tags") and not node.tags:
+            node.tags = list(cached["tags"])
+        if cached.get("description") and not node.description:
+            node.description = cached["description"]
+        for mkey in ("sql", "materialized", "depends_on"):
+            if cached.get(mkey) and mkey not in node.raw_metadata:
+                node.raw_metadata[mkey] = cached[mkey]
+
+        # Track discovering platform for multi-platform provenance
+        plat = cached.get("_platform")
+        if plat:
+            platforms = node.raw_metadata.setdefault("discovered_platforms", [])
+            if plat not in platforms:
+                platforms.append(plat)
+        adapter_id = cached.get("_adapter_id")
+        if adapter_id and adapter_id not in node.sources:
+            node.sources.append(adapter_id)
+
+    def _sweep_discovery_enrichment(self) -> int:
+        """Final sweep: match graph nodes to discovery cache entries that
+        were not matched during add_node (e.g. due to ID format differences)."""
+        enriched = 0
+        for node_id, node in self._graph.nodes.items():
+            if node.columns:
+                continue  # already enriched
+            cached = self._discovery_cache.get(node_id)
+            if not cached:
+                key = self._make_discovery_key(node)
+                cached = self._discovery_cache.get(key) if key else None
+            if cached:
+                self._enrich_from_discovery(node_id, node)
+                enriched += 1
+        return enriched
+
     # -------------------------------------------------------------------
     # Graph-building tools
     # -------------------------------------------------------------------
@@ -998,12 +1121,38 @@ class LLMLineageExtractor:
         if not node_id:
             return {"success": False, "error": "node_id is required", "summary": "Missing node_id"}
 
-        # Check for duplicate
+        # Parse fields early so enrichment path can use them
+        description = args.get("description")
+        namespace = args.get("namespace")
+        zone_hint = args.get("zone_hint")
+        dbt_path = args.get("dbt_path")
+        dbt_resource_type = args.get("dbt_resource_type")
+
+        # Enrich existing node instead of skipping (allows dbt metadata merge)
         if node_id in self._graph.nodes:
+            existing = self._graph.nodes[node_id]
+            if description and not existing.description:
+                existing.description = description
+            if zone_hint and "zone" not in existing.raw_metadata:
+                existing.raw_metadata["zone"] = zone_hint
+            if dbt_path:
+                existing.raw_metadata["dbt_path"] = dbt_path
+            if dbt_resource_type:
+                existing.raw_metadata["dbt_resource_type"] = dbt_resource_type
+            if namespace and not existing.namespace:
+                existing.namespace = namespace
+            # Multi-platform provenance
+            platform = args.get("platform", "")
+            if platform:
+                platforms = existing.raw_metadata.setdefault("discovered_platforms", [])
+                if platform not in platforms:
+                    platforms.append(platform)
+            # Auto-enrich from discovery cache
+            self._enrich_from_discovery(node_id, existing)
             return {
                 "success": True,
-                "action": "skipped",
-                "summary": f"Node {node_id} already exists",
+                "action": "enriched",
+                "summary": f"Enriched existing node {node_id} with new metadata",
                 "node_id": node_id,
             }
 
@@ -1027,16 +1176,16 @@ class LLMLineageExtractor:
         except ValueError:
             platform_domain = PlatformDomain.OTHER
 
+        # Auto-fix: "source" is dbt-only; warehouse tables should be "table"
+        if node_type == NodeType.SOURCE and platform_domain == PlatformDomain.WAREHOUSE:
+            if not dbt_resource_type or dbt_resource_type != "source":
+                node_type = NodeType.TABLE
+
         name = args.get("name", node_id.split(":")[-1] if ":" in node_id else node_id)
         platform = args.get("platform", "unknown")
         database = args.get("database")
         schema = args.get("schema")
-        description = args.get("description")
         integration_id = args.get("integration_id")
-        namespace = args.get("namespace")
-        zone_hint = args.get("zone_hint")
-        dbt_path = args.get("dbt_path")
-        dbt_resource_type = args.get("dbt_resource_type")
 
         # Build FQN
         parts = [p for p in [database, schema, name] if p]
@@ -1050,6 +1199,8 @@ class LLMLineageExtractor:
             raw_metadata["dbt_path"] = dbt_path
         if dbt_resource_type:
             raw_metadata["dbt_resource_type"] = dbt_resource_type
+        # Multi-platform provenance
+        raw_metadata["discovered_platforms"] = [platform]
 
         node = LineageNode(
             id=node_id,
@@ -1068,6 +1219,9 @@ class LLMLineageExtractor:
         )
 
         self._graph.add_node(node)
+
+        # Auto-enrich from discovery cache (columns, row_count, owner, etc.)
+        self._enrich_from_discovery(node_id, node)
 
         return {
             "success": True,
@@ -1119,8 +1273,20 @@ class LLMLineageExtractor:
 
         confidence = min(1.0, max(0.0, float(args.get("confidence", 0.5))))
         evidence_text = args.get("evidence", "LLM-inferred")
+        transformation = args.get("transformation")
 
-        edge_id = generate_edge_id(source_id, target_id, edge_type.value, "table", "llm_extractor")
+        # Parse column mappings
+        column_mappings: List[ColumnMapping] = []
+        for cm in args.get("column_mappings", []) or []:
+            if isinstance(cm, dict) and cm.get("from_column") and cm.get("to_column"):
+                column_mappings.append(ColumnMapping(
+                    from_column=cm["from_column"],
+                    to_column=cm["to_column"],
+                    confidence=confidence,
+                ))
+
+        lineage_level = LineageLevel.COLUMN if column_mappings else LineageLevel.TABLE
+        edge_id = generate_edge_id(source_id, target_id, edge_type.value, lineage_level.value, "llm_extractor")
 
         # Check for duplicate edge
         if edge_id in self._graph.edges:
@@ -1155,12 +1321,14 @@ class LLMLineageExtractor:
             source_id=source_id,
             target_id=target_id,
             edge_type=edge_type,
-            lineage_level=LineageLevel.TABLE,
+            lineage_level=lineage_level,
             confidence=confidence,
             discovered_from="llm_extractor",
             discovered_at=datetime.now(timezone.utc),
             evidence=[evidence],
             plane=plane,
+            column_mappings=column_mappings,
+            transformation=transformation,
         )
 
         self._graph.add_edge(edge)
@@ -1254,8 +1422,10 @@ class LLMLineageExtractor:
         """
         stats: Dict[str, Any] = {}
 
+        stats["discovery_enriched"] = self._sweep_discovery_enrichment()
         stats["identifiers_normalized"] = self._normalize_identifiers()
         stats["namespaces_filled"] = self._fill_missing_namespaces()
+        stats["node_types_fixed"] = self._normalize_node_types()
         stats["zones_enriched"] = self._enrich_zone_metadata()
         stats["nodes_deduped"] = self._deduplicate_nodes()
         edge_stats = self._validate_edges()
@@ -1317,8 +1487,22 @@ class LLMLineageExtractor:
                 enriched += 1
         return enriched
 
+    def _normalize_node_types(self) -> int:
+        """Fix common LLM node type mistakes."""
+        fixed = 0
+        for node in self._graph.nodes.values():
+            # "source" is dbt-specific. Warehouse nodes should be "table"
+            # unless they have explicit dbt_resource_type="source"
+            if node.node_type == NodeType.SOURCE:
+                dbt_type = node.raw_metadata.get("dbt_resource_type", "")
+                if dbt_type != "source":
+                    node.node_type = NodeType.TABLE
+                    fixed += 1
+        return fixed
+
     def _deduplicate_nodes(self) -> int:
-        """Merge nodes with same (platform_domain, namespace, schema, name)."""
+        """Merge nodes with same (platform_domain, namespace, schema, name),
+        plus cross-domain dedup for transform↔warehouse overlap."""
         by_key: Dict[Tuple[str, str, str, str], List[str]] = defaultdict(list)
         for node_id, node in self._graph.nodes.items():
             if not node.name:
@@ -1361,7 +1545,69 @@ class LLMLineageExtractor:
                 for mk, mv in dup.raw_metadata.items():
                     if mk not in primary.raw_metadata:
                         primary.raw_metadata[mk] = mv
+                # Merge discovered_platforms
+                primary_platforms = primary.raw_metadata.setdefault("discovered_platforms", [])
+                for p in dup.raw_metadata.get("discovered_platforms", []):
+                    if p not in primary_platforms:
+                        primary_platforms.append(p)
+                if dup.platform and dup.platform not in primary_platforms:
+                    primary_platforms.append(dup.platform)
                 # Merge evidence
+                primary.evidence.extend(dup.evidence)
+
+                id_remap[dup_id] = primary_id
+                del self._graph.nodes[dup_id]
+                removed += 1
+
+        # --- Cross-domain dedup: transform ↔ warehouse ---
+        # dbt models (transform) that map to warehouse tables should be merged
+        cross_key: Dict[Tuple[str, str, str], List[str]] = defaultdict(list)
+        for node_id, node in self._graph.nodes.items():
+            if node.platform_domain not in (PlatformDomain.WAREHOUSE, PlatformDomain.TRANSFORM):
+                continue
+            if not node.name:
+                continue
+            key = (
+                (node.namespace or "").lower(),
+                (node.schema or "").lower(),
+                node.name.lower(),
+            )
+            cross_key[key].append(node_id)
+
+        for key, node_ids in cross_key.items():
+            if len(node_ids) <= 1:
+                continue
+            # Prefer warehouse node as winner (it's the physical asset)
+            warehouse_ids = [nid for nid in node_ids
+                            if self._graph.nodes[nid].platform_domain == PlatformDomain.WAREHOUSE]
+            transform_ids = [nid for nid in node_ids
+                            if self._graph.nodes[nid].platform_domain == PlatformDomain.TRANSFORM]
+            if not warehouse_ids or not transform_ids:
+                continue  # Same-domain — already handled above
+            primary_id = sorted(warehouse_ids)[0]
+            primary = self._graph.nodes[primary_id]
+            for dup_id in sorted(transform_ids):
+                if dup_id not in self._graph.nodes:
+                    continue  # Already removed
+                dup = self._graph.nodes[dup_id]
+                # Merge metadata from transform node into warehouse winner
+                if dup.description and not primary.description:
+                    primary.description = dup.description
+                if dup.columns and len(dup.columns) > len(primary.columns):
+                    primary.columns = dup.columns
+                for src in dup.sources:
+                    if src not in primary.sources:
+                        primary.sources.append(src)
+                for mk, mv in dup.raw_metadata.items():
+                    if mk not in primary.raw_metadata:
+                        primary.raw_metadata[mk] = mv
+                # Merge discovered_platforms
+                primary_platforms = primary.raw_metadata.setdefault("discovered_platforms", [])
+                for p in dup.raw_metadata.get("discovered_platforms", []):
+                    if p not in primary_platforms:
+                        primary_platforms.append(p)
+                if dup.platform and dup.platform not in primary_platforms:
+                    primary_platforms.append(dup.platform)
                 primary.evidence.extend(dup.evidence)
 
                 id_remap[dup_id] = primary_id

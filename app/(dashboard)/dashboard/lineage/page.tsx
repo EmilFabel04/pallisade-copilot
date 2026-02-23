@@ -1032,6 +1032,7 @@ export default function LineagePage() {
           healthStatus: vn.metadata?.healthStatus,
           owner: vn.metadata?.owner,
           tags: vn.metadata?.tags,
+          platforms: vn.metadata?.platforms,
           // Visual flags
           isInferred: vn.inferred,
           isOverlay: vn.inferred,
@@ -1110,6 +1111,7 @@ export default function LineagePage() {
         issues: node.issues,
         owner: node.owner,
         tags: node.tags,
+        platforms: node.platforms,
       },
     }));
 

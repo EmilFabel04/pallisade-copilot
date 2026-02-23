@@ -105,15 +105,18 @@ _RAW_PATTERNS = [
 
 _STAGING_PATTERNS = [
     r"\bstg\b", r"\bstaging\b", r"\bstg_\w+",
+    r"_staging\b",  # compound: analytics_staging
 ]
 
 _INTERMEDIATE_PATTERNS = [
     r"\bint\b", r"\bintermediate\b", r"\bint_\w+",
+    r"_intermediate\b",  # compound: analytics_intermediate
 ]
 
 _MART_PATTERNS = [
     r"\bmart\b", r"\bmarts\b", r"\bfct_\w+", r"\bdim_\w+",
     r"\bfact_\w+", r"\bdimension_\w+",
+    r"_marts?\b",  # compound: analytics_mart, analytics_marts
 ]
 
 _ANALYTICS_PATTERNS = [

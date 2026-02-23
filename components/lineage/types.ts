@@ -174,6 +174,12 @@ export interface UnifiedLineageNode {
   description?: string;
   owner?: string;
   tags?: string[];
+
+  // Multi-platform provenance & enriched data
+  platforms?: string[];           // e.g. ["bigquery", "dbt"]
+  columns?: Array<{ name: string; type?: string }>;
+  sqlDefinition?: string;         // SQL definition from raw_metadata
+  materialization?: string;       // dbt materialization type
 }
 
 // Evidence record for a lineage edge (from engine)

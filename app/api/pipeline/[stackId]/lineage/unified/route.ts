@@ -233,6 +233,14 @@ function engineNodeToUnified(
     owner: eNode.owner || undefined,
     tags: eNode.tags || undefined,
     issues: issuesSummary,
+    // Multi-platform provenance & enriched data
+    platforms: eNode.raw_metadata?.discovered_platforms ||
+              (eNode.platform ? [eNode.platform] : undefined),
+    columns: eNode.columns?.length > 0
+      ? eNode.columns.map((c: any) => ({ name: c.name, type: c.type || c.data_type || '' }))
+      : undefined,
+    sqlDefinition: eNode.raw_metadata?.sql || undefined,
+    materialization: eNode.raw_metadata?.materialized || undefined,
   };
 }
 

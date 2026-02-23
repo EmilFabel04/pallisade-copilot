@@ -696,3 +696,491 @@ class TestAddNodeEnrichment:
 
         node = ext._graph.nodes["bigquery:proj.raw.events"]
         assert node.raw_metadata["case_hint"] == "lower"
+
+    def test_enriches_existing_node_instead_of_skipping(self):
+        """When add_node is called with an existing node_id, it enriches."""
+        ext = _make_extractor()
+        # First add as warehouse table
+        result1 = _add_node(ext, "bigquery:proj.raw.customers", "customers",
+                           schema="raw", database="proj")
+        assert result1["action"] == "added"
+
+        # Now add same ID with dbt metadata
+        result2 = _add_node(ext, "bigquery:proj.raw.customers", "customers",
+                           schema="raw", database="proj",
+                           dbt_resource_type="model",
+                           dbt_path="models/staging/stg_customers.sql",
+                           zone_hint="staging",
+                           description="Staged customers")
+        assert result2["action"] == "enriched"
+
+        node = ext._graph.nodes["bigquery:proj.raw.customers"]
+        assert node.raw_metadata["dbt_resource_type"] == "model"
+        assert node.raw_metadata["dbt_path"] == "models/staging/stg_customers.sql"
+        assert node.raw_metadata["zone"] == "staging"
+        assert node.description == "Staged customers"
+
+    def test_enrichment_does_not_overwrite_existing_zone(self):
+        """Enrichment preserves existing zone if already set."""
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.events", "events",
+                  schema="raw", zone_hint="raw")
+
+        # Try to enrich with different zone — should keep "raw"
+        _add_node(ext, "bigquery:proj.raw.events", "events",
+                  zone_hint="staging")
+
+        node = ext._graph.nodes["bigquery:proj.raw.events"]
+        assert node.raw_metadata["zone"] == "raw"
+
+
+# =====================================================================
+# Normalize node types
+# =====================================================================
+
+
+class TestNormalizeNodeTypes:
+    """Test _normalize_node_types fixes source→table for non-dbt nodes."""
+
+    def test_warehouse_source_becomes_table(self):
+        """A warehouse node with type 'source' (not dbt) → 'table'."""
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.events", "events",
+                  node_type="source", platform_domain="warehouse")
+
+        # The auto-fix in add_node should already fix this
+        node = ext._graph.nodes["bigquery:proj.raw.events"]
+        assert node.node_type == NodeType.TABLE
+
+    def test_normalize_catches_remaining_source_nodes(self):
+        """_normalize_node_types fixes any source nodes without dbt_resource_type."""
+        ext = _make_extractor()
+        # Manually create a SOURCE node that bypassed the add_node auto-fix
+        node = LineageNode(
+            id="bigquery:proj.raw.orders",
+            name="orders",
+            fqn="proj.raw.orders",
+            node_type=NodeType.SOURCE,
+            platform="bigquery",
+            platform_domain=PlatformDomain.WAREHOUSE,
+            schema="raw",
+            raw_metadata={},
+        )
+        ext._graph.add_node(node)
+
+        fixed = ext._normalize_node_types()
+        assert fixed == 1
+        assert ext._graph.nodes["bigquery:proj.raw.orders"].node_type == NodeType.TABLE
+
+    def test_preserves_dbt_source(self):
+        """A node with dbt_resource_type='source' keeps SOURCE type."""
+        ext = _make_extractor()
+        _add_node(ext, "dbt:proj.raw.src_events", "src_events",
+                  node_type="source", platform="dbt",
+                  platform_domain="warehouse",
+                  dbt_resource_type="source")
+
+        node = ext._graph.nodes["dbt:proj.raw.src_events"]
+        assert node.node_type == NodeType.SOURCE
+
+        # Normalization should also preserve it
+        fixed = ext._normalize_node_types()
+        assert fixed == 0
+        assert ext._graph.nodes["dbt:proj.raw.src_events"].node_type == NodeType.SOURCE
+
+    def test_non_warehouse_source_kept(self):
+        """SOURCE type on non-warehouse nodes is not touched by auto-fix."""
+        ext = _make_extractor()
+        # A dbt source with transform domain stays as-is through normalize
+        node = LineageNode(
+            id="dbt:proj.raw.external",
+            name="external",
+            fqn="proj.raw.external",
+            node_type=NodeType.SOURCE,
+            platform="dbt",
+            platform_domain=PlatformDomain.TRANSFORM,
+            schema="raw",
+            raw_metadata={"dbt_resource_type": "source"},
+        )
+        ext._graph.add_node(node)
+        fixed = ext._normalize_node_types()
+        assert fixed == 0
+
+
+# =====================================================================
+# Cross-domain dedup (transform ↔ warehouse)
+# =====================================================================
+
+
+class TestCrossDomainDedup:
+    """Test cross-domain dedup merges transform + warehouse nodes."""
+
+    def test_merges_dbt_model_with_warehouse_table(self):
+        """A dbt model (transform) and a BQ table (warehouse) with same
+        namespace+schema+name should merge, keeping the warehouse node."""
+        ext = _make_extractor()
+        ext._namespace_lookup = {"bigquery": "proj", "dbt": "proj"}
+
+        _add_node(ext, "bigquery:proj.staging.stg_orders", "stg_orders",
+                  schema="staging", database="proj", namespace="proj")
+        _add_node(ext, "dbt:proj.staging.stg_orders", "stg_orders",
+                  platform="dbt", platform_domain="transform",
+                  schema="staging", namespace="proj",
+                  dbt_resource_type="model",
+                  dbt_path="models/staging/stg_orders.sql",
+                  description="Staged orders from raw")
+
+        # Add an edge FROM raw TO the dbt node
+        _add_node(ext, "bigquery:proj.raw.orders", "orders",
+                  schema="raw", namespace="proj")
+        _add_edge(ext, "bigquery:proj.raw.orders", "dbt:proj.staging.stg_orders",
+                  evidence="dbt depends_on")
+
+        ext._normalize_identifiers()
+        ext._fill_missing_namespaces()
+        removed = ext._deduplicate_nodes()
+
+        assert removed == 1
+        # dbt node removed, warehouse node kept
+        assert "dbt:proj.staging.stg_orders" not in ext._graph.nodes
+        assert "bigquery:proj.staging.stg_orders" in ext._graph.nodes
+
+        # dbt metadata merged into warehouse node
+        winner = ext._graph.nodes["bigquery:proj.staging.stg_orders"]
+        assert winner.raw_metadata.get("dbt_resource_type") == "model"
+        assert winner.raw_metadata.get("dbt_path") == "models/staging/stg_orders.sql"
+        assert winner.description == "Staged orders from raw"
+
+        # Edge remapped to warehouse node
+        edge = list(ext._graph.edges.values())[0]
+        assert edge.target_id == "bigquery:proj.staging.stg_orders"
+
+    def test_same_domain_not_affected_by_cross_domain(self):
+        """Two warehouse nodes with same name in same-domain pass should
+        dedup, not in cross-domain pass."""
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.events", "events",
+                  schema="raw", namespace="proj")
+        _add_node(ext, "bigquery:proj2.raw.events", "events",
+                  schema="raw", namespace="proj")
+
+        removed = ext._deduplicate_nodes()
+        assert removed == 1  # Same domain dedup catches it
+
+    def test_no_merge_when_namespace_differs(self):
+        """Transform and warehouse nodes with different namespaces
+        should NOT merge."""
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.events", "events",
+                  schema="raw", namespace="proj-a")
+        _add_node(ext, "dbt:other.raw.events", "events",
+                  platform="dbt", platform_domain="transform",
+                  schema="raw", namespace="proj-b")
+
+        removed = ext._deduplicate_nodes()
+        assert removed == 0
+        assert len(ext._graph.nodes) == 2
+
+    def test_cross_domain_removes_self_loops(self):
+        """After cross-domain merge, self-loop edges are removed."""
+        ext = _make_extractor()
+        ext._namespace_lookup = {"bigquery": "proj"}
+
+        _add_node(ext, "bigquery:proj.staging.stg_orders", "stg_orders",
+                  schema="staging", namespace="proj")
+        _add_node(ext, "dbt:proj.staging.stg_orders", "stg_orders",
+                  platform="dbt", platform_domain="transform",
+                  schema="staging", namespace="proj")
+
+        # Edge between the two (will become self-loop after merge)
+        _add_edge(ext, "bigquery:proj.staging.stg_orders",
+                  "dbt:proj.staging.stg_orders",
+                  evidence="same table")
+
+        removed = ext._deduplicate_nodes()
+        assert removed == 1
+        # Self-loop edge should be removed
+        assert len(ext._graph.edges) == 0
+
+
+# =====================================================================
+# Discovery cache & auto-enrichment
+# =====================================================================
+
+
+class TestDiscoveryCacheEnrichment:
+    """Test auto-enrichment from discovery cache."""
+
+    def test_add_node_auto_enriches_from_cache(self):
+        """add_node should pull columns/row_count/owner from discovery cache."""
+        ext = _make_extractor()
+        # Pre-populate cache (as if discover ran first)
+        ext._discovery_cache["bigquery:proj.raw.users"] = {
+            "columns": [{"name": "id", "type": "INT64"}, {"name": "email", "type": "STRING"}],
+            "row_count": 5000,
+            "owner": "data-team",
+            "tags": ["pii"],
+            "sql": "SELECT * FROM raw.users",
+            "_adapter_id": "bq-1",
+            "_platform": "bigquery",
+        }
+
+        _add_node(ext, "bigquery:proj.raw.users", "users",
+                  database="proj", schema="raw")
+
+        node = ext._graph.nodes["bigquery:proj.raw.users"]
+        assert len(node.columns) == 2
+        assert node.columns[0]["name"] == "id"
+        assert node.row_count == 5000
+        assert node.owner == "data-team"
+        assert "pii" in node.tags
+        assert node.raw_metadata.get("sql") == "SELECT * FROM raw.users"
+
+    def test_enrichment_does_not_overwrite_existing(self):
+        """If node already has columns, cache should not overwrite."""
+        ext = _make_extractor()
+        ext._discovery_cache["bigquery:proj.raw.users"] = {
+            "columns": [{"name": "id", "type": "INT64"}],
+            "owner": "cache-owner",
+            "_platform": "bigquery",
+            "_adapter_id": "bq-1",
+        }
+
+        # Manually add node with existing data
+        node = LineageNode(
+            id="bigquery:proj.raw.users", name="users", fqn="proj.raw.users",
+            node_type=NodeType.TABLE, platform="bigquery",
+            platform_domain=PlatformDomain.WAREHOUSE,
+            columns=[{"name": "id", "type": "INT64"}, {"name": "name", "type": "STRING"}],
+            owner="explicit-owner",
+            raw_metadata={},
+        )
+        ext._graph.add_node(node)
+        ext._enrich_from_discovery("bigquery:proj.raw.users", node)
+
+        # Should keep existing (more complete) columns and owner
+        assert len(node.columns) == 2
+        assert node.owner == "explicit-owner"
+
+    def test_enrichment_via_normalized_key(self):
+        """Discovery cache lookup should work via normalized key."""
+        ext = _make_extractor()
+        # Cache under adapter's ID format
+        ext._discovery_cache["bq:proj.raw.users"] = {
+            "columns": [{"name": "id", "type": "INT64"}],
+            "row_count": 100,
+            "_platform": "bigquery",
+            "_adapter_id": "bq-1",
+        }
+        # Also under normalized key (as _tool_discover_assets would do)
+        ext._discovery_cache["bigquery:proj.raw.users"] = ext._discovery_cache["bq:proj.raw.users"]
+
+        _add_node(ext, "bigquery:proj.raw.users", "users",
+                  database="proj", schema="raw")
+
+        node = ext._graph.nodes["bigquery:proj.raw.users"]
+        assert len(node.columns) == 1
+        assert node.row_count == 100
+
+    def test_sweep_catches_unmatched_nodes(self):
+        """Post-discovery sweep should enrich nodes not matched during add_node."""
+        ext = _make_extractor()
+        # Add node first without cache
+        _add_node(ext, "bigquery:proj.raw.orders", "orders",
+                  database="proj", schema="raw")
+
+        # Now populate cache (simulating late discovery)
+        ext._discovery_cache["bigquery:proj.raw.orders"] = {
+            "columns": [{"name": "order_id", "type": "INT64"}],
+            "row_count": 9999,
+            "_platform": "bigquery",
+            "_adapter_id": "bq-1",
+        }
+
+        enriched = ext._sweep_discovery_enrichment()
+        assert enriched == 1
+
+        node = ext._graph.nodes["bigquery:proj.raw.orders"]
+        assert len(node.columns) == 1
+        assert node.row_count == 9999
+
+    def test_sweep_skips_already_enriched(self):
+        """Sweep should skip nodes that already have columns."""
+        ext = _make_extractor()
+        ext._discovery_cache["bigquery:proj.raw.users"] = {
+            "columns": [{"name": "id", "type": "INT64"}],
+            "_platform": "bigquery",
+            "_adapter_id": "bq-1",
+        }
+        _add_node(ext, "bigquery:proj.raw.users", "users",
+                  database="proj", schema="raw")
+
+        # Node already enriched during add_node
+        assert len(ext._graph.nodes["bigquery:proj.raw.users"].columns) == 1
+
+        # Sweep should find 0 additional nodes to enrich
+        enriched = ext._sweep_discovery_enrichment()
+        assert enriched == 0
+
+    def test_metadata_keys_cached(self):
+        """SQL, materialized, depends_on from raw_metadata should be cached."""
+        ext = _make_extractor()
+        ext._discovery_cache["bigquery:proj.analytics.dim_users"] = {
+            "sql": "SELECT id, name FROM staging.stg_users",
+            "materialized": "table",
+            "depends_on": ["staging.stg_users"],
+            "_platform": "bigquery",
+            "_adapter_id": "bq-1",
+        }
+
+        _add_node(ext, "bigquery:proj.analytics.dim_users", "dim_users",
+                  database="proj", schema="analytics")
+
+        node = ext._graph.nodes["bigquery:proj.analytics.dim_users"]
+        assert node.raw_metadata["sql"] == "SELECT id, name FROM staging.stg_users"
+        assert node.raw_metadata["materialized"] == "table"
+        assert node.raw_metadata["depends_on"] == ["staging.stg_users"]
+
+
+# =====================================================================
+# Multi-platform provenance
+# =====================================================================
+
+
+class TestMultiPlatformProvenance:
+    """Test discovered_platforms tracking."""
+
+    def test_new_node_has_platform(self):
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.users", "users")
+        node = ext._graph.nodes["bigquery:proj.raw.users"]
+        assert "bigquery" in node.raw_metadata.get("discovered_platforms", [])
+
+    def test_enrichment_merges_platforms(self):
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.users", "users")
+        # Enrich with dbt (same node_id, different platform)
+        ext._tool_add_node({
+            "node_id": "bigquery:proj.raw.users",
+            "name": "users",
+            "node_type": "table",
+            "platform": "dbt",
+            "platform_domain": "transform",
+        })
+        node = ext._graph.nodes["bigquery:proj.raw.users"]
+        platforms = node.raw_metadata.get("discovered_platforms", [])
+        assert "bigquery" in platforms
+        assert "dbt" in platforms
+
+    def test_dedup_merges_platforms_same_domain(self):
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.raw.users_1", "users",
+                  schema="raw", namespace="proj")
+        _add_node(ext, "bigquery:proj.raw.users_2", "users",
+                  schema="raw", namespace="proj")
+
+        ext._deduplicate_nodes()
+        remaining = list(ext._graph.nodes.values())
+        assert len(remaining) == 1
+        platforms = remaining[0].raw_metadata.get("discovered_platforms", [])
+        assert "bigquery" in platforms
+
+    def test_cross_domain_dedup_merges_platforms(self):
+        ext = _make_extractor()
+        _add_node(ext, "bigquery:proj.staging.stg_orders", "stg_orders",
+                  schema="staging", namespace="proj")
+        _add_node(ext, "dbt:proj.staging.stg_orders", "stg_orders",
+                  platform="dbt", platform_domain="transform",
+                  schema="staging", namespace="proj")
+
+        ext._deduplicate_nodes()
+        remaining = list(ext._graph.nodes.values())
+        assert len(remaining) == 1
+        platforms = remaining[0].raw_metadata.get("discovered_platforms", [])
+        assert "bigquery" in platforms
+        assert "dbt" in platforms
+
+    def test_discovery_cache_adds_platform(self):
+        """Auto-enrichment from cache should add the discovering platform."""
+        ext = _make_extractor()
+        ext._discovery_cache["bigquery:proj.raw.users"] = {
+            "columns": [{"name": "id", "type": "INT64"}],
+            "_platform": "bigquery",
+            "_adapter_id": "bq-1",
+        }
+        _add_node(ext, "bigquery:proj.raw.users", "users",
+                  database="proj", schema="raw")
+
+        node = ext._graph.nodes["bigquery:proj.raw.users"]
+        platforms = node.raw_metadata.get("discovered_platforms", [])
+        assert "bigquery" in platforms
+
+
+# =====================================================================
+# Column mappings on edges
+# =====================================================================
+
+
+class TestColumnMappingsOnEdge:
+    """Test column_mappings parameter on add_edge."""
+
+    def test_add_edge_with_column_mappings(self):
+        ext = _make_extractor()
+        _add_node(ext, "bq:raw.users", "users")
+        _add_node(ext, "dbt:stg.stg_users", "stg_users",
+                  platform="dbt", platform_domain="transform")
+
+        result = ext._tool_add_edge({
+            "source_id": "bq:raw.users",
+            "target_id": "dbt:stg.stg_users",
+            "edge_type": "derived_from",
+            "confidence": 0.9,
+            "evidence": "SQL SELECT FROM",
+            "column_mappings": [
+                {"from_column": "user_id", "to_column": "id"},
+                {"from_column": "email_address", "to_column": "email"},
+            ],
+            "transformation": "SELECT user_id AS id, email_address AS email FROM raw.users",
+        })
+
+        assert result["success"] is True
+        edge = list(ext._graph.edges.values())[0]
+        assert len(edge.column_mappings) == 2
+        assert edge.column_mappings[0].from_column == "user_id"
+        assert edge.column_mappings[0].to_column == "id"
+        assert edge.column_mappings[1].from_column == "email_address"
+        assert edge.transformation is not None
+        assert edge.lineage_level == LineageLevel.COLUMN
+
+    def test_add_edge_without_column_mappings_stays_table_level(self):
+        ext = _make_extractor()
+        _add_node(ext, "bq:a", "a")
+        _add_node(ext, "bq:b", "b")
+        _add_edge(ext, "bq:a", "bq:b")
+
+        edge = list(ext._graph.edges.values())[0]
+        assert edge.lineage_level == LineageLevel.TABLE
+        assert len(edge.column_mappings) == 0
+
+    def test_add_edge_ignores_malformed_column_mappings(self):
+        ext = _make_extractor()
+        _add_node(ext, "bq:a", "a")
+        _add_node(ext, "bq:b", "b")
+
+        result = ext._tool_add_edge({
+            "source_id": "bq:a",
+            "target_id": "bq:b",
+            "edge_type": "derived_from",
+            "confidence": 0.8,
+            "evidence": "test",
+            "column_mappings": [
+                {"from_column": "x"},  # missing to_column
+                "invalid_string",       # not a dict
+                {"from_column": "a", "to_column": "b"},  # valid
+            ],
+        })
+
+        assert result["success"] is True
+        edge = list(ext._graph.edges.values())[0]
+        assert len(edge.column_mappings) == 1
+        assert edge.column_mappings[0].from_column == "a"
