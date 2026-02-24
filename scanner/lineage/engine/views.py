@@ -400,233 +400,208 @@ class ViewBuilder:
 
     def build_lane_pipeline_overview(self) -> RenderedView:
         """
-        Build a lane-based Pipeline Overview view.
+        Build a tool-level lane-based Pipeline Overview.
 
-        Unlike build_pipeline_overview() which groups by tool, this view
-        renders individual nodes (actors + key datasets) placed into fixed
-        lanes for a readable left-to-right data flow:
+        Shows ONE box per tool/integration per lane — not individual
+        dataset/table nodes.  Orchestrators appear as regular tool nodes
+        in the Transformation lane.  Empty lanes are omitted and positions
+        are compacted.
 
-          ingestion → warehouse_raw → transformation → warehouse_analytics → reporting
-
-        Orchestration nodes are shown as overlays (not in the data-plane lanes).
+        Layout:  Linux + n8n  →  BigQuery (Raw)  →  dbt + Airflow  →  BigQuery (Analytics)
 
         Algorithm:
-        1. Classify every node: dataset_zone / actor_capability
-        2. Assign each node to a lane
-        3. Separate orchestrator nodes into overlay
-        4. Build edges (data-plane only, skip control-plane)
-        5. Compute deterministic x/y positions by lane
-        6. Build lane metadata
+        1. Walk graph nodes to discover which tools exist in which lanes
+        2. Merge tool_nodes from the pipeline stack (for tools not in graph)
+        3. Group by lane, one ViewNode per tool per lane
+        4. Build tool-to-tool flow edges (cross-lane data flows)
+        5. Skip empty lanes, assign compact x/y positions
         """
-        # Lane layout constants
-        LANE_X_SPACING = 350.0
-        LANE_NODE_Y_SPACING = 90.0
-        ORCHESTRATOR_Y_OFFSET = -120.0  # above the main lanes
+        LANE_X_SPACING = 300.0
+        TOOL_Y_SPACING = 80.0
 
-        # Step 1: Classify and assign lanes to all nodes
-        view_nodes: List[ViewNode] = []
-        orchestrator_nodes: List[LineageNode] = []
-        node_id_set: Set[str] = set()
-
-        # Track which jobs are run by orchestrators (for overlay)
-        orchestrator_runs: Dict[str, List[str]] = defaultdict(list)  # orch_id → [job_ids]
-        for edge in self.graph.edges.values():
-            if edge.canonical_edge_type == "runs":
-                orchestrator_runs[edge.source_id].append(edge.target_id)
+        # ── Step 1: Discover tools per lane from engine graph ──────────
+        # Key: (lane, tool_identity)  →  { platform, display_name, integration_id, asset_count }
+        tool_info: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # Track which node.id maps to which tool_key (for edge aggregation)
+        node_to_tool: Dict[str, Tuple[str, str]] = {}
 
         for node in self.graph.nodes.values():
             ct = node.canonical_type or map_node_type(node).value
-
-            # Classify
             dataset_zone = classify_dataset_zone(node) if ct == "dataset" else None
             actor_cap = classify_actor_capability(node) if ct in ("service", "job", "system") else None
 
-            # Orchestration nodes → overlay, not data-plane lane
+            # Determine which lane this node would fall in
             if actor_cap == ActorCapability.ORCHESTRATION:
-                orchestrator_nodes.append(node)
-                continue
+                lane = PipelineLane.TRANSFORMATION.value
+            elif ct == "system" or actor_cap == ActorCapability.INFRA:
+                lane = PipelineLane.INGESTION.value
+            else:
+                lane = assign_lane(node, ct, dataset_zone, actor_cap)
 
-            # Skip system/infra nodes from overview (they're not data-plane)
-            if ct == "system":
-                continue
-            if actor_cap == ActorCapability.INFRA:
-                continue
+            # Tool identity: group by platform (+ integration_id if present)
+            platform = (node.platform or "unknown").lower()
+            int_id = node.integration_id or ""
+            tool_id = f"{platform}:{int_id}" if int_id else platform
+            tk: Tuple[str, str] = (lane, tool_id)
 
-            lane = assign_lane(node, ct, dataset_zone, actor_cap)
+            node_to_tool[node.id] = tk
 
-            # Build badges
-            badges: Dict[str, Any] = {}
-            if dataset_zone:
-                badges["zone"] = dataset_zone.value
-            if actor_cap:
-                badges["capability"] = actor_cap.value
-            materialization = node.node_type.value if ct == "dataset" else None
-            if materialization:
-                badges["materialization"] = materialization
-            # Producer: which adapter/tool produced this node
-            if node.sources:
-                badges["producer"] = node.sources[0]
+            if tk not in tool_info:
+                # Determine display name
+                display = platform.title()
+                if actor_cap == ActorCapability.ORCHESTRATION:
+                    display = node.name if node.name else platform.title()
+                tool_info[tk] = {
+                    "platform": platform,
+                    "display_name": display,
+                    "integration_id": int_id or None,
+                    "asset_count": 0,
+                    "is_orchestrator": actor_cap == ActorCapability.ORCHESTRATION,
+                    "is_infra": actor_cap == ActorCapability.INFRA or ct == "system",
+                }
+            tool_info[tk]["asset_count"] += 1
 
-            view_nodes.append(ViewNode(
-                id=node.id,
-                name=node.name,
-                canonical_type=ct,
-                original_type=node.node_type.value,
-                platform=node.platform,
-                platform_domain=node.platform_domain.value,
-                layer=lane,
-                cluster_id=lane,  # cluster by lane for grouping
-                x=0, y=0,  # computed below
-                inferred=node.inferred,
-                needs_mapping=is_needs_mapping(node),
-                metadata={
-                    "lane": lane,
-                    "badges": badges,
-                    "fqn": node.fqn,
-                    "database": node.database,
-                    "schema": node.schema,
-                    "integrationId": node.integration_id,
-                    "confidence": getattr(node, "confidence", 1.0),
-                },
-            ))
-            node_id_set.add(node.id)
-
-        # Step 1b: Include pipeline tool_nodes not covered by engine graph nodes
-        covered_integrations: Set[str] = set()
-        for vn in view_nodes:
-            int_id = vn.metadata.get("integrationId")
-            if int_id:
-                covered_integrations.add(int_id)
-        for orch_node in orchestrator_nodes:
-            if orch_node.integration_id:
-                covered_integrations.add(orch_node.integration_id)
+        # ── Step 2: Merge pipeline tool_nodes not already covered ─────
+        covered_integration_ids: Set[str] = {
+            info["integration_id"]
+            for info in tool_info.values()
+            if info["integration_id"]
+        }
 
         for tn in self.tool_nodes:
-            int_id = tn.get("integrationId") or tn.get("integration_id")
-            tn_id = tn.get("id", "")
-            if int_id and int_id in covered_integrations:
-                continue
-            if tn_id in node_id_set:
+            int_id = tn.get("integrationId") or tn.get("integration_id") or ""
+            if int_id and int_id in covered_integration_ids:
                 continue
 
             tool_type = (tn.get("toolType") or tn.get("tool_type") or "unknown").lower()
 
-            # Determine lane based on tool type
+            # Determine lane
             if tool_type in INFRA_PLATFORMS:
                 lane = PipelineLane.INGESTION.value
             elif tool_type in INGESTION_PLATFORMS:
                 lane = PipelineLane.INGESTION.value
             elif tool_type in TRANSFORM_PLATFORMS:
                 lane = PipelineLane.TRANSFORMATION.value
+            elif tool_type in ORCHESTRATION_PLATFORMS:
+                lane = PipelineLane.TRANSFORMATION.value
             elif tool_type in REPORTING_PLATFORMS:
                 lane = PipelineLane.REPORTING.value
             elif tool_type in WAREHOUSE_PLATFORMS:
                 lane = PipelineLane.WAREHOUSE_RAW.value
-            elif tool_type in ORCHESTRATION_PLATFORMS:
-                continue  # orchestration → overlay, not a lane node
             else:
                 lane = PipelineLane.WAREHOUSE_RAW.value
 
-            display_name = tn.get("name") or tool_type.title()
-            node_view_id = tn_id or f"tool:{tool_type}:{int_id or 'default'}"
+            tool_id = f"{tool_type}:{int_id}" if int_id else tool_type
+            tk = (lane, tool_id)
+            if tk not in tool_info:
+                display = tn.get("name") or tool_type.title()
+                tool_info[tk] = {
+                    "platform": tool_type,
+                    "display_name": display,
+                    "integration_id": int_id or None,
+                    "asset_count": 0,
+                    "is_orchestrator": tool_type in ORCHESTRATION_PLATFORMS,
+                    "is_infra": tool_type in INFRA_PLATFORMS,
+                    "from_pipeline_stack": True,
+                }
+                if int_id:
+                    covered_integration_ids.add(int_id)
+
+        # Warehouse lanes: if a warehouse appears in both raw and analytics,
+        # keep both.  If it only appears in raw (all nodes classified raw),
+        # check if there are analytics-zone datasets and split.
+        # (No change needed — assign_lane already handles this.)
+
+        # ── Step 3: Build one ViewNode per tool per lane ──────────────
+        view_nodes: List[ViewNode] = []
+
+        for (lane, tool_id), info in sorted(tool_info.items(), key=lambda x: (LANE_ORDER.get(x[0][0], 99), x[0][1])):
+            platform = info["platform"]
+            node_view_id = f"tool:{lane}:{tool_id}"
+
             view_nodes.append(ViewNode(
                 id=node_view_id,
-                name=display_name,
+                name=info["display_name"],
                 canonical_type="service",
                 original_type="service",
-                platform=tool_type,
-                platform_domain="other",
+                platform=platform,
+                platform_domain="orchestration" if info.get("is_orchestrator") else (
+                    "infrastructure" if info.get("is_infra") else "other"
+                ),
                 layer=lane,
                 cluster_id=lane,
-                x=0, y=0,
+                x=0, y=0,  # computed below
                 inferred=False,
                 needs_mapping=False,
                 metadata={
                     "lane": lane,
-                    "badges": {"capability": tool_type},
-                    "integrationId": int_id,
-                    "fromPipelineStack": True,
+                    "assetCount": info["asset_count"],
+                    "integrationId": info["integration_id"],
+                    "isOrchestrator": info.get("is_orchestrator", False),
+                    "isInfra": info.get("is_infra", False),
+                    "fromPipelineStack": info.get("from_pipeline_stack", False),
                 },
             ))
-            node_id_set.add(node_view_id)
 
-        # Step 2: Build edges (data-plane only)
-        view_edges: List[ViewEdge] = []
-        seen_pairs: Set[str] = set()
+        # ── Step 4: Build tool-to-tool flow edges ─────────────────────
+        # Aggregate graph edges into cross-tool flows
+        tool_edge_counts: Dict[str, int] = defaultdict(int)  # "src_tk→tgt_tk" → count
 
         for edge in self.graph.edges.values():
-            # Skip control-plane edges (orchestration runs)
             if edge.plane == LinePlane.CONTROL:
                 continue
-            if edge.canonical_edge_type == "runs":
+            src_tk = node_to_tool.get(edge.source_id)
+            tgt_tk = node_to_tool.get(edge.target_id)
+            if not src_tk or not tgt_tk or src_tk == tgt_tk:
                 continue
+            pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
+            tool_edge_counts[pair_key] += 1
 
-            src_id = edge.source_id
-            tgt_id = edge.target_id
-
-            if src_id not in node_id_set or tgt_id not in node_id_set:
-                continue
-            if src_id == tgt_id:
-                continue
-
-            pair = f"{src_id}→{tgt_id}"
-            if pair in seen_pairs:
-                continue
-            seen_pairs.add(pair)
-
+        view_edges: List[ViewEdge] = []
+        for pair, count in tool_edge_counts.items():
+            src_id, tgt_id = pair.split("→")
             view_edges.append(ViewEdge(
-                id=edge.id,
+                id=f"flow-{pair}",
                 source_id=src_id,
                 target_id=tgt_id,
-                canonical_type=edge.canonical_edge_type or "derives",
-                original_type=edge.edge_type.value,
-                confidence=edge.confidence,
-                inferred=edge.inferred,
-                evidence_count=len(edge.evidence),
+                canonical_type="derives",
+                original_type="data_flow",
+                confidence=1.0,
+                inferred=False,
+                evidence_count=count,
             ))
 
-        # Step 3: Compute deterministic lane-based positions
-        lane_names = [l.value for l in PipelineLane]
-        lane_x_map = {name: i * LANE_X_SPACING for i, name in enumerate(lane_names)}
-
-        # Group nodes by lane, sort within lane for stable positioning
+        # ── Step 5: Skip empty lanes, compact positions ───────────────
         by_lane: Dict[str, List[ViewNode]] = defaultdict(list)
         for vn in view_nodes:
             by_lane[vn.layer].append(vn)
 
-        # Within each lane, sort by:
-        #  1. canonical_type (actors first, then datasets)
-        #  2. name (alphabetical)
-        TYPE_SORT = {"service": 0, "job": 1, "dataset": 2, "semantic": 3}
+        # Sort within each lane: orchestrators/infra last, then alphabetical
         for lane_name in by_lane:
-            by_lane[lane_name].sort(
-                key=lambda n: (TYPE_SORT.get(n.canonical_type, 9), n.name)
-            )
+            by_lane[lane_name].sort(key=lambda n: (
+                1 if n.metadata.get("isOrchestrator") else 0,
+                1 if n.metadata.get("isInfra") else 0,
+                n.name,
+            ))
 
-        # Assign positions
+        # Only include lanes that have tools
+        active_lanes = [
+            l.value for l in PipelineLane
+            if by_lane.get(l.value)
+        ]
+
+        # Assign compact positions (skip empty lanes)
+        lane_x_map: Dict[str, float] = {}
+        for idx, lane_name in enumerate(active_lanes):
+            lane_x_map[lane_name] = idx * LANE_X_SPACING
+
         for lane_name, lane_nodes in by_lane.items():
             x = lane_x_map.get(lane_name, 0)
             for idx, vn in enumerate(lane_nodes):
                 vn.x = x
-                vn.y = idx * LANE_NODE_Y_SPACING
+                vn.y = idx * TOOL_Y_SPACING
 
-        # Step 4: Build orchestrator overlays
-        orchestrators: List[OrchestratorOverlay] = []
-        for idx, orch_node in enumerate(sorted(orchestrator_nodes, key=lambda n: n.name)):
-            # Position above the transformation lane
-            orch_x = lane_x_map.get(PipelineLane.TRANSFORMATION.value, 2 * LANE_X_SPACING)
-            orchestrators.append(OrchestratorOverlay(
-                id=orch_node.id,
-                name=orch_node.name,
-                platform=orch_node.platform or "unknown",
-                integration_id=orch_node.integration_id,
-                x=orch_x + idx * 200,
-                y=ORCHESTRATOR_Y_OFFSET,
-                runs_job_ids=orchestrator_runs.get(orch_node.id, []),
-            ))
-
-        # Step 5: Build lane metadata
-        lanes: List[LaneMeta] = []
+        # ── Step 6: Build lane metadata (active lanes only) ───────────
         lane_labels = {
             PipelineLane.INGESTION.value: "Ingestion",
             PipelineLane.WAREHOUSE_RAW.value: "Warehouse (Raw)",
@@ -634,7 +609,9 @@ class ViewBuilder:
             PipelineLane.WAREHOUSE_ANALYTICS.value: "Warehouse (Analytics)",
             PipelineLane.REPORTING.value: "Reporting",
         }
-        for lane_name in lane_names:
+
+        lanes: List[LaneMeta] = []
+        for lane_name in active_lanes:
             lanes.append(LaneMeta(
                 name=lane_name,
                 label=lane_labels.get(lane_name, lane_name),
@@ -643,19 +620,16 @@ class ViewBuilder:
                 node_count=len(by_lane.get(lane_name, [])),
             ))
 
-        # Step 6: Build clusters per lane
-        clusters = _build_clusters_from_nodes(view_nodes)
-
         # Stats
         stats = {
             "totalNodes": len(view_nodes),
             "totalEdges": len(view_edges),
-            "orchestratorCount": len(orchestrators),
-            "inferredNodeCount": sum(1 for n in view_nodes if n.inferred),
-            "inferredEdgeCount": sum(1 for e in view_edges if e.inferred),
+            "orchestratorCount": sum(
+                1 for n in view_nodes if n.metadata.get("isOrchestrator")
+            ),
             "laneDistribution": {
                 lane_name: len(by_lane.get(lane_name, []))
-                for lane_name in lane_names
+                for lane_name in active_lanes
             },
         }
 
@@ -663,11 +637,11 @@ class ViewBuilder:
             view_type="lane_pipeline_overview",
             nodes=view_nodes,
             edges=view_edges,
-            clusters=clusters,
+            clusters=[],
             unmapped_nodes=[],
             stats=stats,
             lanes=lanes,
-            orchestrators=orchestrators,
+            orchestrators=[],  # no separate overlays — orchestrators are in the lanes
         )
 
     def build_data_plane(self) -> RenderedView:

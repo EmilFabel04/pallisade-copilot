@@ -227,27 +227,27 @@ function LaneOverviewCanvas({
   }
 
   const lanes = data.lanes || [];
-  const orchestrators = data.orchestrators || [];
   const nodes = data.nodes;
   const edges = data.edges;
+
+  // Tool box dimensions (larger than old node cards)
+  const BOX_W = 200;
+  const BOX_H = 56;
+  const LANE_PADDING = 40;
+
+  // Build a node map for edge drawing
+  const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
   // Compute bounds for the SVG viewBox
   const allX = nodes.map(n => n.x);
   const allY = nodes.map(n => n.y);
-  const minX = Math.min(...allX, ...orchestrators.map(o => o.x)) - 80;
-  const maxX = Math.max(...allX, ...orchestrators.map(o => o.x)) + 250;
-  const minY = Math.min(...allY, ...orchestrators.map(o => o.y)) - 80;
-  const maxY = Math.max(...allY) + 100;
+  const minX = Math.min(...allX, 0) - LANE_PADDING - 20;
+  const maxX = Math.max(...allX, 0) + BOX_W + LANE_PADDING + 20;
+  const minY = -60;  // room for lane headers
+  const maxY = Math.max(...allY, 0) + BOX_H + 40;
 
-  const viewWidth = maxX - minX + 100;
-  const viewHeight = maxY - minY + 100;
-
-  // Node dimensions
-  const NODE_W = 180;
-  const NODE_H = 50;
-
-  // Build a node map for edge drawing
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  const viewWidth = maxX - minX;
+  const viewHeight = maxY - minY;
 
   return (
     <div className="w-full h-full overflow-auto relative bg-[#030303]">
@@ -262,19 +262,18 @@ function LaneOverviewCanvas({
           const laneColor = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
           return (
             <g key={lane.name}>
-              {/* Lane column background */}
               <rect
-                x={lane.x - 30}
+                x={lane.x - LANE_PADDING}
                 y={minY}
-                width={NODE_W + 60}
+                width={BOX_W + LANE_PADDING * 2}
                 height={viewHeight}
                 fill={`${laneColor}08`}
                 rx={8}
               />
               {/* Lane header */}
               <text
-                x={lane.x + NODE_W / 2 - 30}
-                y={minY + 20}
+                x={lane.x + BOX_W / 2}
+                y={minY + 22}
                 textAnchor="middle"
                 fill={laneColor}
                 fontSize={12}
@@ -283,228 +282,127 @@ function LaneOverviewCanvas({
               >
                 {lane.label}
               </text>
-              <text
-                x={lane.x + NODE_W / 2 - 30}
-                y={minY + 36}
-                textAnchor="middle"
-                fill="rgba(255,255,255,0.3)"
-                fontSize={10}
-                fontFamily="system-ui, sans-serif"
-              >
-                {lane.nodeCount} {lane.nodeCount === 1 ? 'node' : 'nodes'}
-              </text>
             </g>
           );
         })}
 
-        {/* Edges */}
+        {/* Flow arrows between tool boxes */}
+        <defs>
+          <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill="rgba(255,255,255,0.35)" />
+          </marker>
+        </defs>
         {edges.map((edge) => {
           const src = nodeMap.get(edge.sourceId);
           const tgt = nodeMap.get(edge.targetId);
           if (!src || !tgt) return null;
 
-          const x1 = src.x + NODE_W;
-          const y1 = src.y + NODE_H / 2;
+          const x1 = src.x + BOX_W;
+          const y1 = src.y + BOX_H / 2;
           const x2 = tgt.x;
-          const y2 = tgt.y + NODE_H / 2;
-
-          // Elbow path (right from source, then down/up, then right to target)
+          const y2 = tgt.y + BOX_H / 2;
           const midX = (x1 + x2) / 2;
           const path = `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`;
-
-          const color = edge.inferred
-            ? 'rgba(139,92,246,0.4)'
-            : `${getConfidenceColor(edge.confidence)}80`;
 
           return (
             <path
               key={edge.id}
               d={path}
               fill="none"
-              stroke={color}
-              strokeWidth={edge.inferred ? 1.5 : 2}
-              strokeDasharray={edge.inferred ? '6,4' : undefined}
+              stroke="rgba(255,255,255,0.15)"
+              strokeWidth={2}
               markerEnd="url(#arrowhead)"
             />
           );
         })}
 
-        {/* Arrow marker */}
-        <defs>
-          <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="rgba(255,255,255,0.4)" />
-          </marker>
-        </defs>
-
-        {/* Orchestrator overlays */}
-        {orchestrators.map((orch) => {
-          return (
-            <g key={orch.id}>
-              <rect
-                x={orch.x - 10}
-                y={orch.y - 5}
-                width={NODE_W + 20}
-                height={40}
-                rx={8}
-                fill="rgba(251,146,60,0.1)"
-                stroke="rgba(251,146,60,0.3)"
-                strokeWidth={1}
-                strokeDasharray="4,3"
-              />
-              <text
-                x={orch.x + NODE_W / 2}
-                y={orch.y + 18}
-                textAnchor="middle"
-                fill="#FB923C"
-                fontSize={11}
-                fontWeight={500}
-                fontFamily="system-ui, sans-serif"
-              >
-                {orch.name}
-              </text>
-              {/* Dashed lines to jobs it runs */}
-              {orch.runsJobIds.map((jobId) => {
-                const jobNode = nodeMap.get(jobId);
-                if (!jobNode) return null;
-                return (
-                  <line
-                    key={`${orch.id}-${jobId}`}
-                    x1={orch.x + NODE_W / 2}
-                    y1={orch.y + 35}
-                    x2={jobNode.x + NODE_W / 2}
-                    y2={jobNode.y}
-                    stroke="rgba(251,146,60,0.25)"
-                    strokeWidth={1}
-                    strokeDasharray="3,3"
-                  />
-                );
-              })}
-            </g>
-          );
-        })}
-
-        {/* Nodes */}
+        {/* Tool boxes */}
         {nodes.map((node) => {
           const lane = node.metadata?.lane as PipelineLaneName | undefined;
           const laneColor = lane ? LANE_COLORS[lane] || '#6366F1' : '#6366F1';
-          const badges = node.metadata?.badges as Record<string, string> | undefined;
-          const isInferred = node.inferred;
+          const isOrch = node.metadata?.isOrchestrator;
+          const isInfra = node.metadata?.isInfra;
+          const assetCount = node.metadata?.assetCount as number | undefined;
+
+          // Orchestrators get orange accent, infra gets a muted purple
+          const accentColor = isOrch ? '#FB923C' : laneColor;
 
           return (
             <g key={node.id}>
-              {/* Node background */}
+              {/* Box background */}
               <rect
                 x={node.x}
                 y={node.y}
-                width={NODE_W}
-                height={NODE_H}
-                rx={8}
-                fill={isInferred ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.04)'}
-                stroke={isInferred ? `${laneColor}40` : `${laneColor}60`}
+                width={BOX_W}
+                height={BOX_H}
+                rx={10}
+                fill={isOrch ? 'rgba(251,146,60,0.06)' : 'rgba(255,255,255,0.04)'}
+                stroke={`${accentColor}50`}
                 strokeWidth={1.5}
-                strokeDasharray={isInferred ? '4,3' : undefined}
+                strokeDasharray={isOrch ? '5,3' : undefined}
               />
               {/* Left accent bar */}
               <rect
                 x={node.x}
-                y={node.y}
+                y={node.y + 8}
                 width={4}
-                height={NODE_H}
+                height={BOX_H - 16}
                 rx={2}
-                fill={laneColor}
+                fill={accentColor}
               />
-              {/* Node name */}
+              {/* Tool name */}
               <text
-                x={node.x + 14}
-                y={node.y + 20}
+                x={node.x + 16}
+                y={node.y + 24}
                 fill="white"
-                fontSize={11}
-                fontWeight={500}
+                fontSize={13}
+                fontWeight={600}
                 fontFamily="system-ui, sans-serif"
               >
-                {node.name.length > 22 ? node.name.slice(0, 22) + '...' : node.name}
+                {node.name.length > 20 ? node.name.slice(0, 20) + '…' : node.name}
               </text>
-              {/* Type badge */}
+              {/* Asset count subtitle */}
               <text
-                x={node.x + 14}
-                y={node.y + 36}
-                fill="rgba(255,255,255,0.4)"
-                fontSize={9}
+                x={node.x + 16}
+                y={node.y + 42}
+                fill="rgba(255,255,255,0.35)"
+                fontSize={10}
                 fontFamily="system-ui, sans-serif"
               >
-                {node.canonicalType}
-                {badges?.zone ? ` / ${badges.zone}` : ''}
-                {badges?.capability ? ` / ${badges.capability}` : ''}
+                {isOrch ? 'orchestrator' : isInfra ? 'infrastructure' : (
+                  assetCount ? `${assetCount} asset${assetCount !== 1 ? 's' : ''}` : 'tool'
+                )}
               </text>
-              {/* Inferred badge */}
-              {isInferred && (
-                <text
-                  x={node.x + NODE_W - 8}
-                  y={node.y + 14}
-                  textAnchor="end"
-                  fill="rgba(139,92,246,0.6)"
-                  fontSize={8}
-                  fontFamily="system-ui, sans-serif"
-                >
-                  inferred
-                </text>
-              )}
-              {/* Platform badge */}
-              {node.platform && (
-                <text
-                  x={node.x + NODE_W - 8}
-                  y={node.y + 40}
-                  textAnchor="end"
-                  fill="rgba(255,255,255,0.25)"
-                  fontSize={8}
-                  fontFamily="system-ui, sans-serif"
-                >
-                  {node.platform}
-                </text>
-              )}
             </g>
           );
         })}
       </svg>
 
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] max-w-lg">
-        {Object.entries(LANE_COLORS).map(([lane, color]) => (
-          <div key={lane} className="flex items-center gap-1">
-            <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
-            <span className="text-white/50">{LANE_LABELS[lane as PipelineLaneName]}</span>
-          </div>
-        ))}
-        <div className="flex items-center gap-1">
-          <div className="w-4 h-0.5 border-t border-dashed border-violet-400/60" />
-          <span className="text-white/50">Inferred</span>
-        </div>
-        {orchestrators.length > 0 && (
-          <div className="flex items-center gap-1">
-            <div className="w-4 h-0.5 border-t border-dashed border-orange-400/60" />
-            <span className="text-white/50">Orchestration</span>
-          </div>
-        )}
+      {/* Legend — only show lanes present */}
+      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px]">
+        {lanes.map((lane) => {
+          const color = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
+          return (
+            <div key={lane.name} className="flex items-center gap-1">
+              <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
+              <span className="text-white/50">{lane.label}</span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Stats overlay */}
       {data.stats && (
         <div className="absolute top-4 right-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] space-y-1">
           <div className="text-white/50">
-            <span className="text-white font-medium">{data.stats.totalNodes}</span> nodes
-            {' / '}
-            <span className="text-white font-medium">{data.stats.totalEdges}</span> edges
+            <span className="text-white font-medium">{data.stats.totalNodes}</span> tools
+            {data.stats.totalEdges > 0 && (
+              <>
+                {' / '}
+                <span className="text-white font-medium">{data.stats.totalEdges}</span> flows
+              </>
+            )}
           </div>
-          {data.stats.inferredNodeCount > 0 && (
-            <div className="text-violet-300/60">
-              {data.stats.inferredNodeCount} inferred nodes
-            </div>
-          )}
-          {data.stats.orchestratorCount > 0 && (
-            <div className="text-orange-300/60">
-              {data.stats.orchestratorCount} orchestrators
-            </div>
-          )}
         </div>
       )}
     </div>

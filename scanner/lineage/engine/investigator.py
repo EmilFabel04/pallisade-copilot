@@ -1303,6 +1303,16 @@ def _build_adapter_config(tc: ToolConfig) -> Dict[str, Any]:
         config.setdefault("powerbi_config", tc.config)
     elif tool_lower == "metabase":
         config.setdefault("metabase_config", tc.config)
+    elif tool_lower == "airflow":
+        base_url = tc.config.get("base_url") or tc.config.get("host") or tc.config.get("url")
+        if base_url:
+            config["mode"] = "api"
+            config["base_url"] = base_url
+            config.setdefault("username", tc.config.get("username") or tc.config.get("user"))
+            config.setdefault("password", tc.config.get("password"))
+        else:
+            config["mode"] = "static"
+            config.setdefault("dag_directory", tc.config.get("dag_directory", "dags"))
     elif tool_lower in ("linux_server", "ssh"):
         config.setdefault("hostname", tc.config.get("host") or tc.config.get("hostname"))
     elif tool_lower in ("github", "gitlab"):

@@ -124,16 +124,21 @@ class Tool:
     
     def is_available(self, user_integrations: Set[str]) -> bool:
         """Check if this tool is available for the user's integrations."""
+        # Normalise to uppercase for case-insensitive comparison
+        upper_user = {u.upper() for u in user_integrations}
+
         # Check required integrations (all must be present)
         if self.required_integrations:
-            if not self.required_integrations.issubset(user_integrations):
+            upper_req = {r.upper() for r in self.required_integrations}
+            if not upper_req.issubset(upper_user):
                 return False
-        
+
         # Check alternative integrations (at least one must be present)
         if self.alternative_integrations:
-            if not self.alternative_integrations & user_integrations:
+            upper_alt = {a.upper() for a in self.alternative_integrations}
+            if not upper_alt & upper_user:
                 return False
-        
+
         return True
 
 

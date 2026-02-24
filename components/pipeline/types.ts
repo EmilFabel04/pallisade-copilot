@@ -179,10 +179,19 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       description: 'Apache Airflow orchestration',
       layer: 'TRANSFORMATION',
       configFields: [
-        { name: 'host', label: 'Airflow Host', type: 'text', required: false, placeholder: 'https://your-airflow.com', helperText: 'Leave empty to parse DAGs from connected GitHub repo instead' },
-        { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'Airflow username' },
-        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'Airflow password' },
-        { name: 'dag_directory', label: 'DAG Directory', type: 'text', required: false, placeholder: 'dags', helperText: 'Path to DAGs folder in the repo (default: dags)' },
+        { name: 'source_mode', label: 'Connection Mode', type: 'select', required: false, options: [
+          { value: 'api', label: 'Airflow API' },
+          { value: 'github', label: 'GitHub DAG Files' },
+        ], helperText: 'Connect via Airflow REST API or parse DAG files from a GitHub repo' },
+        // API mode fields
+        { name: 'host', label: 'Airflow Host', type: 'text', required: false, placeholder: 'https://your-airflow.com', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'Airflow username', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'Airflow password', showWhen: { field: 'source_mode', value: 'api' } },
+        // GitHub mode fields
+        { name: 'github_repo', label: 'Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repository containing your Airflow DAGs', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_token', label: 'GitHub Token', type: 'password', required: false, placeholder: 'ghp_...', helperText: 'Personal access token with repo read access', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'dag_directory', label: 'DAG Directory', type: 'text', required: false, placeholder: 'dags', helperText: 'Path to DAGs folder in the repo (default: dags)', showWhen: { field: 'source_mode', value: 'github' } },
       ],
     },
     { 

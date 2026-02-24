@@ -259,19 +259,16 @@ class TestRawDatasetLaneAssignment:
                 f"{node.name} should be in warehouse_raw, got {lane}"
             )
 
-    def test_lane_overview_places_raw_in_warehouse_raw(self, n8n_bq_dbt_graph):
-        """ViewBuilder.build_lane_pipeline_overview places raw datasets in warehouse_raw lane."""
+    def test_lane_overview_has_bigquery_tool_in_warehouse_raw(self, n8n_bq_dbt_graph):
+        """ViewBuilder.build_lane_pipeline_overview places BigQuery tool in warehouse_raw lane."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        raw_view_nodes = [
+        bq_raw_nodes = [
             n for n in view.nodes
-            if n.name in ("charges", "customers")
+            if n.platform == "bigquery" and n.layer == PipelineLane.WAREHOUSE_RAW.value
         ]
-        assert len(raw_view_nodes) == 2
-        for vn in raw_view_nodes:
-            assert vn.layer == PipelineLane.WAREHOUSE_RAW.value
-            assert vn.metadata.get("badges", {}).get("zone") == "raw"
+        assert len(bq_raw_nodes) >= 1, "BigQuery should appear in warehouse_raw lane"
 
 
 # ---- 2) Ingestion actor exists upstream (bridge if needed) ----
@@ -402,18 +399,16 @@ class TestDbtLaneAssignment:
         zone = classify_dataset_zone(node)
         assert zone == DatasetZone.MART
 
-    def test_lane_overview_dbt_nodes_in_correct_lanes(self, n8n_bq_dbt_graph):
-        """ViewBuilder places dbt staging models in transformation lane."""
+    def test_lane_overview_dbt_tool_in_transformation(self, n8n_bq_dbt_graph):
+        """ViewBuilder places dbt tool in transformation lane."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        stg_nodes = [
+        dbt_nodes = [
             n for n in view.nodes
-            if n.name in ("stg_charges", "stg_customers")
+            if n.platform == "dbt" and n.layer == PipelineLane.TRANSFORMATION.value
         ]
-        assert len(stg_nodes) == 2
-        for vn in stg_nodes:
-            assert vn.layer == PipelineLane.TRANSFORMATION.value
+        assert len(dbt_nodes) >= 1, "dbt should appear in transformation lane"
 
 
 # ---- 4) Analytics outputs render in lane=warehouse_analytics ----
@@ -434,18 +429,16 @@ class TestAnalyticsLaneAssignment:
         lane = assign_lane(node, node.canonical_type, zone)
         assert lane == PipelineLane.WAREHOUSE_ANALYTICS.value
 
-    def test_lane_overview_analytics_outputs(self, n8n_bq_dbt_graph):
-        """ViewBuilder places analytics outputs in warehouse_analytics lane."""
+    def test_lane_overview_bigquery_in_warehouse_analytics(self, n8n_bq_dbt_graph):
+        """ViewBuilder places BigQuery analytics tool in warehouse_analytics lane."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        analytics_nodes = [
+        bq_analytics_nodes = [
             n for n in view.nodes
-            if n.name == "fct_revenue" and n.platform == "bigquery"
+            if n.platform == "bigquery" and n.layer == PipelineLane.WAREHOUSE_ANALYTICS.value
         ]
-        assert len(analytics_nodes) >= 1
-        for vn in analytics_nodes:
-            assert vn.layer == PipelineLane.WAREHOUSE_ANALYTICS.value
+        assert len(bq_analytics_nodes) >= 1, "BigQuery should appear in warehouse_analytics lane"
 
 
 # ---- 5) No dataset labeled as 'source' because indegree=0 ----
@@ -661,15 +654,16 @@ class TestLaneOverviewView:
         assert "lanes" in d
         assert isinstance(d["lanes"], list)
 
-    def test_n8n_actor_in_ingestion_lane(self, n8n_bq_dbt_graph):
-        """n8n service/job nodes should be in the ingestion lane."""
+    def test_n8n_tool_in_ingestion_lane(self, n8n_bq_dbt_graph):
+        """n8n tool should appear in the ingestion lane."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         n8n_nodes = [n for n in view.nodes if n.platform == "n8n"]
+        assert len(n8n_nodes) >= 1, "n8n should appear in overview"
         for vn in n8n_nodes:
             assert vn.layer == PipelineLane.INGESTION.value, (
-                f"n8n node {vn.name} should be in ingestion lane, got {vn.layer}"
+                f"n8n tool {vn.name} should be in ingestion lane, got {vn.layer}"
             )
 
     def test_looker_in_reporting_lane(self, n8n_bq_dbt_graph):

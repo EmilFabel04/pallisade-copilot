@@ -216,9 +216,16 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
   const tool = getToolById(node.toolType);
   const [config, setConfig] = useState<Record<string, any>>(() => {
     const initial = node.config || {};
-    // Ensure Airflow always has a dag_directory default so config is never empty
-    if (node.toolType === 'airflow' && !initial.dag_directory) {
-      return { ...initial, dag_directory: 'dags' };
+    // Ensure Airflow defaults
+    if (node.toolType === 'airflow') {
+      if (!initial.source_mode) {
+        // Default to API mode if host is set, otherwise github
+        initial.source_mode = initial.host ? 'api' : 'api';
+      }
+      if (!initial.dag_directory) {
+        initial.dag_directory = 'dags';
+      }
+      return { ...initial };
     }
     return initial;
   });

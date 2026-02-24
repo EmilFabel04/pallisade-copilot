@@ -332,12 +332,46 @@ export async function POST(request: NextRequest) {
       case 'airflow': {
         try {
           const host = config.host;
+          const sourceMode = config.source_mode || (host ? 'api' : 'github');
+
+          if (sourceMode === 'github') {
+            // GitHub mode — verify we can list the DAG directory
+            const repo = config.github_repo;
+            const token = config.github_token;
+            const branch = config.github_branch || 'main';
+            const dagDir = config.dag_directory || 'dags';
+
+            if (!repo || !token) {
+              return NextResponse.json({ success: false, message: 'GitHub repo and token are required for DAG file parsing' });
+            }
+
+            const ghResponse = await fetch(
+              `https://api.github.com/repos/${repo}/contents/${dagDir}?ref=${branch}`,
+              {
+                headers: {
+                  Authorization: `token ${token}`,
+                  Accept: 'application/vnd.github.v3+json',
+                },
+                signal: AbortSignal.timeout(10000),
+              }
+            );
+
+            if (ghResponse.ok) {
+              const items = await ghResponse.json();
+              const pyFiles = Array.isArray(items) ? items.filter((i: any) => i.name?.endsWith('.py')).length : 0;
+              return NextResponse.json({
+                success: true,
+                message: `Found ${pyFiles} DAG files in ${repo}/${dagDir}`
+              });
+            } else if (ghResponse.status === 404) {
+              return NextResponse.json({ success: false, message: `DAG directory "${dagDir}" not found in ${repo} (branch: ${branch})` });
+            } else {
+              return NextResponse.json({ success: false, message: `GitHub API error: ${ghResponse.status}` });
+            }
+          }
+
           if (!host) {
-            // GitHub-only mode (static DAG parsing) — no API to test
-            return NextResponse.json({
-              success: true,
-              message: 'Airflow configured for GitHub DAG parsing (no API connection needed)'
-            });
+            return NextResponse.json({ success: false, message: 'Airflow host URL is required for API mode' });
           }
 
           // API mode — ping the Airflow health endpoint

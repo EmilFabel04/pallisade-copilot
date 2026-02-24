@@ -1351,7 +1351,9 @@ async def engine_snapshot():
     store = _get_engine_store()
     if not store.graph or not store.graph.nodes:
         return {"has_graph": False, "graph_data": None}
-    return {"has_graph": True, "graph_data": store.graph.to_dict()}
+    graph_data = store.graph.to_dict()
+    graph_data["tool_nodes"] = store.tool_nodes or []
+    return {"has_graph": True, "graph_data": graph_data}
 
 
 class EngineRestoreRequest(BaseModel):
@@ -1378,9 +1380,10 @@ async def engine_restore(request: EngineRestoreRequest):
         graph = LineageGraph.from_dict(request.graph_data)
         store = _get_engine_store()
         store.graph = graph
+        store.tool_nodes = request.graph_data.get("tool_nodes", [])
         _logger.info(
             f"[Engine] Restored graph from snapshot: {len(graph.nodes)} nodes, "
-            f"{len(graph.edges)} edges"
+            f"{len(graph.edges)} edges, {len(store.tool_nodes)} tool_nodes"
         )
         return {
             "success": True,
@@ -1654,7 +1657,7 @@ async def view_pipeline_overview():
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
         view = builder.build_pipeline_overview()
         return view.to_dict()
     except Exception as e:
@@ -1698,7 +1701,7 @@ async def view_lane_pipeline_overview():
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
         view = builder.build_lane_pipeline_overview()
         return view.to_dict()
     except Exception as e:
@@ -1744,7 +1747,7 @@ async def view_data_plane():
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
         view = builder.build_data_plane()
         return view.to_dict()
     except Exception as e:
@@ -2661,6 +2664,7 @@ async def extract_lineage_with_llm(request: LLMExtractRequest):
                 except ImportError:
                     from lineage.graph import LineageGraph
                 store.graph = LineageGraph.from_dict(graph)
+                store.tool_nodes = request.tool_nodes or []
 
                 import json
                 yield f"data: {json.dumps({'type': 'persisted', 'data': {'run_id': run_id}})}\n\n"

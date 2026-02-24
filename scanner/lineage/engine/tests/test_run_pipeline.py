@@ -321,14 +321,15 @@ class TestPipelineStepOrdering:
         assert "data_plane" in record.artifacts.views
         assert "pipeline_overview" in record.artifacts.views
 
-        # The lane view should contain bridge-added inferred nodes
+        # The lane view should contain tool-level nodes (including n8n from bridge)
         lane_view = record.artifacts.views["lane_pipeline_overview"]
-        inferred_nodes = [
-            n for n in lane_view["nodes"] if n.get("inferred")
+        n8n_tools = [
+            n for n in lane_view["nodes"] if n.get("platform") == "n8n"
         ]
-        # Bridge should have created an inferred n8n loader
-        assert len(inferred_nodes) >= 1, (
-            f"Expected bridge inferred nodes, got {len(inferred_nodes)}"
+        # n8n should appear as a tool in the overview (bridge adds inferred loader)
+        assert len(n8n_tools) >= 1, (
+            f"Expected n8n tool in lane view, got platforms: "
+            f"{[n.get('platform') for n in lane_view['nodes']]}"
         )
 
     @pytest.mark.asyncio

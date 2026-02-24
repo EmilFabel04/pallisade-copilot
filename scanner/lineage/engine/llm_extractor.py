@@ -895,6 +895,77 @@ class LLMLineageExtractor:
     # Query tools (delegate to adapters)
     # -------------------------------------------------------------------
 
+    async def _fetch_airflow_dags_from_github(
+        self, adapter_config: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """
+        For Airflow static mode, try to fetch DAG .py files from GitHub.
+        First checks the Airflow config itself for github_repo/github_token,
+        then falls back to a connected GitHub integration.
+        Returns {filename: content} or empty dict.
+        """
+        # 1. Check Airflow config for inline GitHub credentials
+        repo = adapter_config.get("github_repo")
+        token = adapter_config.get("github_token")
+        branch = adapter_config.get("github_branch") or "main"
+        dag_directory = adapter_config.get("dag_directory", "dags")
+
+        # 2. Fallback: find a separate GitHub integration in tool configs
+        if not repo or not token:
+            for tc in self._tool_configs.values():
+                if tc.tool_type.lower() in ("github", "gitlab"):
+                    repo = repo or tc.config.get("repo") or tc.config.get("github_repo")
+                    token = token or tc.config.get("token") or tc.config.get("github_token")
+                    branch = branch or tc.config.get("branch") or tc.config.get("github_branch") or "main"
+                    break
+
+        if not repo or not token:
+            return {}
+
+        try:
+            import aiohttp
+            import base64
+
+            headers = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+            api_base = "https://api.github.com"
+            dag_files: Dict[str, str] = {}
+
+            async with aiohttp.ClientSession() as session:
+                list_url = f"{api_base}/repos/{repo}/contents/{dag_directory}?ref={branch}"
+                async with session.get(list_url, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.warning("[LLMExtractor] GitHub DAG listing failed: %s", resp.status)
+                        return {}
+                    items = await resp.json()
+
+                py_files = [
+                    item for item in items
+                    if item.get("name", "").endswith(".py") and item.get("type") == "file"
+                ]
+
+                for item in py_files:
+                    file_url = f"{api_base}/repos/{repo}/contents/{item['path']}?ref={branch}"
+                    async with session.get(file_url, headers=headers) as resp:
+                        if resp.status != 200:
+                            continue
+                        file_data = await resp.json()
+                        content_b64 = file_data.get("content", "")
+                        content = base64.b64decode(content_b64).decode("utf-8")
+                        dag_files[item["name"]] = content
+
+            logger.info("[LLMExtractor] Fetched %d DAG files from GitHub (%s/%s)", len(dag_files), repo, dag_directory)
+            return dag_files
+
+        except ImportError:
+            logger.warning("[LLMExtractor] aiohttp not available for GitHub DAG fetch")
+            return {}
+        except Exception as e:
+            logger.warning("[LLMExtractor] GitHub DAG fetch failed: %s", e)
+            return {}
+
     def _tool_list_integrations(self) -> Dict[str, Any]:
         """List all available integrations."""
         integrations = []
@@ -943,6 +1014,23 @@ class LLMLineageExtractor:
             return {"success": False, "error": "No config found", "summary": "Config not found"}
 
         adapter_config = _build_adapter_config(tc)
+
+        # Airflow static mode: fetch DAG files from connected GitHub integration
+        if (tc.tool_type.lower() == "airflow"
+                and adapter_config.get("mode") == "static"
+                and not adapter_config.get("dag_files")):
+            dag_files = await self._fetch_airflow_dags_from_github(adapter_config)
+            if dag_files:
+                adapter_config["dag_files"] = dag_files
+            else:
+                return {
+                    "success": False,
+                    "error": (
+                        "Airflow is in static mode (no API host configured) but no DAG files available. "
+                        "Either set an Airflow API host URL or connect a GitHub repo containing DAG files."
+                    ),
+                    "summary": "No Airflow DAG files available",
+                }
 
         # Discover assets
         try:
