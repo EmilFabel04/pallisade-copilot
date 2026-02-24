@@ -507,6 +507,18 @@ export async function DELETE(
       where: { organizationId },
     });
 
+    // Clear in-memory engine graph and run registry so stale views aren't served
+    const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+    try {
+      await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/clear-cache`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      console.warn('[LINEAGE] Failed to clear engine cache (non-fatal)');
+    }
+
     console.log(`[LINEAGE] Cleared: ${deletedNodes.count} nodes, ${deletedEdges.count} edges, ${deletedSnapshots.count} snapshots`);
 
     return NextResponse.json({

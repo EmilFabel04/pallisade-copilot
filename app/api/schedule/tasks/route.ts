@@ -103,6 +103,22 @@ export async function POST(request: NextRequest) {
       // Will be computed by the scheduler
     }
 
+    // For infrastructure monitors, the integrationId is a PipelineNode ID — store in config.
+    // For other monitors, validate integrationId is a real Integration before using as FK.
+    const isInfraMonitor = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType);
+    let validIntegrationId: string | undefined;
+    if (integrationId && !isInfraMonitor) {
+      const integration = await prisma.integration.findUnique({
+        where: { id: integrationId },
+        select: { id: true },
+      });
+      if (integration) {
+        validIntegrationId = integrationId;
+      } else {
+        console.warn(`[Schedule] integrationId ${integrationId} is not a valid Integration — storing in config`);
+      }
+    }
+
     const task = await prisma.monitor.create({
       data: {
         name,
@@ -111,9 +127,11 @@ export async function POST(request: NextRequest) {
         description,
         monitorType: monitorType || null,
         targetFqn: targetFqn || null,
-        config: integrationId && ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType)
+        config: (isInfraMonitor && integrationId)
           ? { ...(config || {}), serverNodeId: integrationId }
-          : (config || undefined),
+          : (!validIntegrationId && integrationId)
+            ? { ...(config || {}), nodeId: integrationId }
+            : (config || undefined),
         schedule,
         timezone,
         enabled: true,
@@ -124,12 +142,7 @@ export async function POST(request: NextRequest) {
         createdBy: userId,
         source: 'pallisade',
         organizationId,
-        // For infrastructure monitors (CERTIFICATE, SERVER_HEALTH, LOG_ANALYSIS),
-        // the integrationId from the form is a PipelineNode ID, not an Integration ID.
-        // Store it in config.serverNodeId instead to avoid FK violation.
-        ...(integrationId && !['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType)
-          ? { integrationId }
-          : {}),
+        ...(validIntegrationId ? { integrationId: validIntegrationId } : {}),
       },
     });
 

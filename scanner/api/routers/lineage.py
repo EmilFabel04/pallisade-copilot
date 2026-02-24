@@ -1203,10 +1203,23 @@ async def engine_clear_cache():
 
     The frontend calls this before looping over pipeline nodes so that
     stale data from a previous extraction run doesn't accumulate.
+    Also clears the in-memory graph and run registry so stale views
+    are never served after lineage is deleted.
     """
     import logging
     _clear_engine_cache()
-    logging.getLogger(__name__).info("[Engine] clear-cache: Reset engine collected results")
+
+    # Clear in-memory graph
+    store = _get_engine_store()
+    store.graph = None
+    store.tool_nodes = []
+
+    # Clear run registry so stale pre-computed views are not served
+    registry = _get_run_registry()
+    registry._runs.clear()
+    registry._current_run_id = None
+
+    logging.getLogger(__name__).info("[Engine] clear-cache: Reset engine store, run registry, and collected results")
     return {"success": True, "message": "Engine cache cleared"}
 
 

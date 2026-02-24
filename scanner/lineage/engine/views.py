@@ -42,10 +42,12 @@ from .zones import (
     DatasetZone,
     PipelineLane,
     LANE_ORDER,
+    INFRA_PLATFORMS,
     INGESTION_PLATFORMS,
-    TRANSFORM_PLATFORMS,
     ORCHESTRATION_PLATFORMS,
     REPORTING_PLATFORMS,
+    TRANSFORM_PLATFORMS,
+    WAREHOUSE_PLATFORMS,
     assign_lane,
     classify_actor_capability,
     classify_dataset_zone,
@@ -488,6 +490,65 @@ class ViewBuilder:
                 },
             ))
             node_id_set.add(node.id)
+
+        # Step 1b: Include pipeline tool_nodes not covered by engine graph nodes
+        covered_integrations: Set[str] = set()
+        for vn in view_nodes:
+            int_id = vn.metadata.get("integrationId")
+            if int_id:
+                covered_integrations.add(int_id)
+        for orch_node in orchestrator_nodes:
+            if orch_node.integration_id:
+                covered_integrations.add(orch_node.integration_id)
+
+        for tn in self.tool_nodes:
+            int_id = tn.get("integrationId") or tn.get("integration_id")
+            tn_id = tn.get("id", "")
+            if int_id and int_id in covered_integrations:
+                continue
+            if tn_id in node_id_set:
+                continue
+
+            tool_type = (tn.get("toolType") or tn.get("tool_type") or "unknown").lower()
+
+            # Determine lane based on tool type
+            if tool_type in INFRA_PLATFORMS:
+                lane = PipelineLane.INGESTION.value
+            elif tool_type in INGESTION_PLATFORMS:
+                lane = PipelineLane.INGESTION.value
+            elif tool_type in TRANSFORM_PLATFORMS:
+                lane = PipelineLane.TRANSFORMATION.value
+            elif tool_type in REPORTING_PLATFORMS:
+                lane = PipelineLane.REPORTING.value
+            elif tool_type in WAREHOUSE_PLATFORMS:
+                lane = PipelineLane.WAREHOUSE_RAW.value
+            elif tool_type in ORCHESTRATION_PLATFORMS:
+                continue  # orchestration → overlay, not a lane node
+            else:
+                lane = PipelineLane.WAREHOUSE_RAW.value
+
+            display_name = tn.get("name") or tool_type.title()
+            node_view_id = tn_id or f"tool:{tool_type}:{int_id or 'default'}"
+            view_nodes.append(ViewNode(
+                id=node_view_id,
+                name=display_name,
+                canonical_type="service",
+                original_type="service",
+                platform=tool_type,
+                platform_domain="other",
+                layer=lane,
+                cluster_id=lane,
+                x=0, y=0,
+                inferred=False,
+                needs_mapping=False,
+                metadata={
+                    "lane": lane,
+                    "badges": {"capability": tool_type},
+                    "integrationId": int_id,
+                    "fromPipelineStack": True,
+                },
+            ))
+            node_id_set.add(node_view_id)
 
         # Step 2: Build edges (data-plane only)
         view_edges: List[ViewEdge] = []

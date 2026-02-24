@@ -44,16 +44,13 @@ async function fetchEngineGraph(plane?: string): Promise<{
  */
 async function tryRestoreEngineFromSnapshot(
   organizationId: string,
-  integrationIds: string[],
 ): Promise<{ nodes: any[]; edges: any[] } | null> {
   try {
-    // Find the latest snapshot with graphData
+    // Find the latest snapshot with graphData (org-scoped, no integrationId filter
+    // because save-snapshot stores with integrationId=null)
     const snapshot = await prisma.lineageSnapshot.findFirst({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}),
         graphData: { not: null as any },
       },
       orderBy: { createdAt: 'desc' },
@@ -354,7 +351,7 @@ export async function GET(
 
     // If engine graph is empty (e.g., after server restart), try restoring from DB snapshot
     if (!engineGraph) {
-      const restored = await tryRestoreEngineFromSnapshot(organizationId, integrationIds);
+      const restored = await tryRestoreEngineFromSnapshot(organizationId);
       if (restored) {
         // Re-fetch with plane filter now that the graph is restored
         [engineGraph, engineStats] = await Promise.all([

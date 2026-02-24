@@ -144,15 +144,22 @@ class BridgeRuleEngine:
                 continue
             raw_datasets += 1
 
-            # Check if any upstream edge is a WRITES edge from an actor
+            # Check if any edge connects this raw dataset to an ingestion actor
             upstream_ids = self.graph._upstream.get(node.id, set())
+            downstream_ids = self.graph._downstream.get(node.id, set())
             has_writer = False
+            # Check upstream: service/job writes to this dataset
             for up_id in upstream_ids:
                 up_node = self.graph.nodes.get(up_id)
                 if not up_node:
                     continue
                 up_canonical = up_node.canonical_type or ""
+                up_platform = (up_node.platform or "").lower()
                 if up_canonical in ("service", "job"):
+                    has_writer = True
+                    break
+                # Also count ingestion-platform nodes as writers
+                if up_platform in INGESTION_PLATFORMS:
                     has_writer = True
                     break
                 # Also check edge type
@@ -164,6 +171,31 @@ class BridgeRuleEngine:
                         break
                 if has_writer:
                     break
+            # Check downstream: LLM may have created edge in reverse direction
+            if not has_writer:
+                for down_id in downstream_ids:
+                    down_node = self.graph.nodes.get(down_id)
+                    if not down_node:
+                        continue
+                    down_platform = (down_node.platform or "").lower()
+                    if down_platform in INGESTION_PLATFORMS:
+                        has_writer = True
+                        break
+
+            # Check if this raw dataset derives from other datasets (e.g. a BQ view).
+            # Views that derive from other tables don't need an inferred ingestion writer.
+            if not has_writer:
+                for up_id in upstream_ids:
+                    up_node = self.graph.nodes.get(up_id)
+                    if not up_node:
+                        continue
+                    if up_node.canonical_type == CanonicalNodeType.DATASET.value:
+                        has_writer = True
+                        logger.info(
+                            "[Bridge] %s derives from dataset %s — not an orphan",
+                            node.name, up_node.name,
+                        )
+                        break
 
             if has_writer:
                 raw_with_writer.append(node.name)

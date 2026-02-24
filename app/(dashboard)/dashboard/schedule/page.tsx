@@ -68,6 +68,8 @@ export default function SchedulePage() {
             .filter((n: any) => ['CONNECTED', 'HEALTHY', 'WARNING'].includes(n.status))
             .map((n: any) => ({
               id: n.integrationId || n.id,
+              integrationId: n.integrationId || null,
+              nodeId: n.id,
               name: n.name,
               type: n.toolType || n.type,
             }));

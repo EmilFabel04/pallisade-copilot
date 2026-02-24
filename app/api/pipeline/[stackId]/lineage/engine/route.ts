@@ -118,12 +118,47 @@ export async function GET(
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
 
-    const res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
+    let res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(30000),
     });
 
-    const data = await res.json();
+    let data = await res.json();
+
+    // For view actions: if engine returned empty (no graph in memory after restart),
+    // try restoring from the DB snapshot and retry once.
+    const isViewAction = action.startsWith('view-') || action === 'stats';
+    const isEmpty = !data.nodes || (Array.isArray(data.nodes) && data.nodes.length === 0);
+    if (isViewAction && isEmpty) {
+      const organizationId = (session.user as any).organizationId;
+      if (organizationId) {
+        const snapshot = await prisma.lineageSnapshot.findFirst({
+          where: { organizationId, graphData: { not: null as any } },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, graphData: true },
+        });
+
+        if (snapshot?.graphData) {
+          console.log(`[ENGINE PROXY] Restoring graph from snapshot ${snapshot.id}`);
+          const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ graph_data: snapshot.graphData }),
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (restoreRes.ok) {
+            // Retry the original request now that the graph is loaded
+            res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
+              headers: { 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(30000),
+            });
+            data = await res.json();
+          }
+        }
+      }
+    }
+
     return NextResponse.json(data, { status: res.status });
   } catch (error) {
     console.error('[ENGINE PROXY] Error:', error);
@@ -194,7 +229,12 @@ export async function POST(
       if (snapshot) {
         await prisma.lineageSnapshot.update({
           where: { id: snapshot.id },
-          data: { graphData: snapshotData.graph_data },
+          data: {
+            graphData: snapshotData.graph_data,
+            nodeCount: snapshotData.graph_data.stats?.node_count || 0,
+            edgeCount: snapshotData.graph_data.stats?.edge_count || 0,
+            source: 'llm_extractor',
+          },
         });
       } else {
         snapshot = await prisma.lineageSnapshot.create({
