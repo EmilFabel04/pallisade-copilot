@@ -712,6 +712,7 @@ class ViewBuilder:
                     "owner": node.owner,
                     "criticality": node.criticality,
                     "rowCount": node.row_count,
+                    "columnCount": len(node.columns) if node.columns else 0,
                     "upstreamCount": node.upstream_count,
                     "downstreamCount": node.downstream_count,
                     "integrationId": node.integration_id,
@@ -719,6 +720,7 @@ class ViewBuilder:
                     "healthStatus": node.health_status.value,
                     "tags": node.tags,
                     "platforms": node.raw_metadata.get("discovered_platforms"),
+                    "materialization": node.raw_metadata.get("materialized"),
                 },
             ))
             node_id_set.add(node.id)

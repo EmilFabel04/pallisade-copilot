@@ -78,6 +78,9 @@ interface DataAssetNodeData {
   tags?: string[];
   // Multi-platform provenance
   platforms?: string[];
+  // Enrichment indicators
+  columnCount?: number;
+  materialization?: string;
   // Overlay mode (orchestration overlay on data tab)
   isOverlay?: boolean;
   // Inferred node (bridge node from investigator)
@@ -479,6 +482,12 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
         {(data.downstreamCount ?? 0) > 0 && <span>↓{data.downstreamCount}</span>}
         {data.rowCount !== undefined && data.rowCount > 0 && (
           <span>{data.rowCount.toLocaleString()} rows</span>
+        )}
+        {(data.columnCount ?? 0) > 0 && (
+          <span>{data.columnCount} cols</span>
+        )}
+        {data.materialization && (
+          <span className="capitalize">{data.materialization}</span>
         )}
       </div>
 

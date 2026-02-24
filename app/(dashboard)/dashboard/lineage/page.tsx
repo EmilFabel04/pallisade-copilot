@@ -931,7 +931,16 @@ export default function LineagePage() {
             } else if (type === 'complete') {
               setLlmProgress(prev => [...prev.slice(-29), { type: 'complete', message: `Done: ${data.stats?.total_nodes || 0} nodes, ${data.stats?.total_edges || 0} edges` }]);
             } else if (type === 'persisted') {
-              // Extraction persisted — refresh views
+              // Extraction persisted — save snapshot to DB for restart recovery, then refresh
+              try {
+                await fetch(`/api/pipeline/${stackId}/lineage/engine?action=save-snapshot`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({}),
+                });
+              } catch {
+                console.warn('[LLM-EXTRACT] Failed to save snapshot (non-fatal)');
+              }
               await fetchLineage();
             }
           } catch {
@@ -1033,6 +1042,8 @@ export default function LineagePage() {
           owner: vn.metadata?.owner,
           tags: vn.metadata?.tags,
           platforms: vn.metadata?.platforms,
+          columnCount: vn.metadata?.columnCount,
+          materialization: vn.metadata?.materialization,
           // Visual flags
           isInferred: vn.inferred,
           isOverlay: vn.inferred,
@@ -1112,6 +1123,8 @@ export default function LineagePage() {
         owner: node.owner,
         tags: node.tags,
         platforms: node.platforms,
+        columnCount: node.columns?.length || 0,
+        materialization: node.materialization,
       },
     }));
 
@@ -1286,7 +1299,9 @@ export default function LineagePage() {
           });
         }
       } else {
-        const unifiedNode = lineageData?.nodes.find((n) => n.id === node.id);
+        // Rendered view uses raw engine IDs, unified data uses `lineage-` prefix
+        const unifiedNode = lineageData?.nodes.find((n) => n.id === node.id)
+          || lineageData?.nodes.find((n) => n.id === `lineage-${node.id}`);
         setSelectedNode(unifiedNode || null);
       }
       setSelectedEdge(null);
@@ -1306,7 +1321,8 @@ export default function LineagePage() {
   // Navigate to a node from the detail panel (e.g. clicking an upstream/downstream node)
   const handleNavigateToNode = useCallback(
     (nodeId: string) => {
-      const targetNode = lineageData?.nodes.find((n) => n.id === nodeId);
+      const targetNode = lineageData?.nodes.find((n) => n.id === nodeId)
+        || lineageData?.nodes.find((n) => n.id === `lineage-${nodeId}`);
       if (targetNode) {
         setSelectedNode(targetNode);
         setSelectedEdge(null);

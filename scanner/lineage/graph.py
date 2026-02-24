@@ -729,6 +729,7 @@ class LineageGraph:
         # Add nodes first
         for node_data in data.get("nodes", []):
             observed_at = node_data.get("observed_at")
+            last_updated = node_data.get("last_updated")
             node = LineageNode(
                 id=node_data["id"],
                 name=node_data["name"],
@@ -743,7 +744,14 @@ class LineageGraph:
                 tags=node_data.get("tags", []),
                 domain=node_data.get("domain"),
                 criticality=node_data.get("criticality", "medium"),
+                columns=node_data.get("columns", []),
+                row_count=node_data.get("row_count"),
+                last_updated=datetime.fromisoformat(last_updated) if last_updated else None,
                 health_status=HealthStatus(node_data.get("health_status", "unknown")),
+                active_findings=node_data.get("active_findings", []),
+                depth=node_data.get("depth", 0),
+                upstream_count=node_data.get("upstream_count", 0),
+                downstream_count=node_data.get("downstream_count", 0),
                 platform_domain=PlatformDomain(node_data.get("platform_domain", "other")),
                 asset_kind=AssetKind(node_data.get("asset_kind", "unknown")),
                 namespace=node_data.get("namespace"),

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
+import prisma from '@/lib/db';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -140,6 +141,7 @@ export async function GET(
  *   ?action=build (default) → /api/v1/lineage/engine/build
  *   ?action=reconcile       → /api/v1/lineage/engine/reconcile
  *   ?action=reconcile-apply → /api/v1/lineage/engine/reconcile/apply
+ *   ?action=save-snapshot   → Persist engine graph to LineageSnapshot.graphData
  *
  * Body: action-specific payload
  */
@@ -153,8 +155,67 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const organizationId = (session.user as any).organizationId;
+    const { stackId } = await params;
     const { searchParams } = new URL(request.url);
     const action = searchParams.get('action') || 'build';
+
+    // save-snapshot: Persist engine graph to DB for restart recovery
+    if (action === 'save-snapshot') {
+      if (!organizationId) {
+        return NextResponse.json({ error: 'No organization found' }, { status: 400 });
+      }
+
+      // Fetch the serialized graph from FastAPI
+      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!snapshotRes.ok) {
+        return NextResponse.json({ error: 'Failed to fetch engine snapshot' }, { status: 502 });
+      }
+      const snapshotData = await snapshotRes.json();
+      if (!snapshotData.has_graph || !snapshotData.graph_data) {
+        return NextResponse.json({ error: 'No graph to persist' }, { status: 404 });
+      }
+
+      // Get integration IDs from pipeline stack
+      const stack = await prisma.pipelineStack.findFirst({
+        where: { id: stackId, organizationId },
+        include: { nodes: { select: { integrationId: true, toolType: true } } },
+      });
+      const toolTypes = stack?.nodes.map(n => n.toolType).filter(Boolean).join(',') || 'unknown';
+
+      // Find or create a snapshot record and update with graphData
+      let snapshot = await prisma.lineageSnapshot.findFirst({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (snapshot) {
+        await prisma.lineageSnapshot.update({
+          where: { id: snapshot.id },
+          data: { graphData: snapshotData.graph_data },
+        });
+      } else {
+        snapshot = await prisma.lineageSnapshot.create({
+          data: {
+            organizationId,
+            source: 'llm_extractor',
+            dialect: toolTypes,
+            status: 'ready',
+            nodeCount: snapshotData.graph_data.stats?.node_count || 0,
+            edgeCount: snapshotData.graph_data.stats?.edge_count || 0,
+            rootCount: 0,
+            leafCount: 0,
+            graphData: snapshotData.graph_data,
+          },
+        });
+      }
+
+      console.log(`[ENGINE] Persisted engine graph to snapshot ${snapshot.id}`);
+      return NextResponse.json({ success: true, snapshotId: snapshot.id });
+    }
+
     const body = await request.json();
 
     let endpoint: string;

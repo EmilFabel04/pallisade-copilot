@@ -901,6 +901,13 @@ class EngineNodeResponse(BaseModel):
     dbt_resource_type: Optional[str] = None
     upstream_count: int = 0
     downstream_count: int = 0
+    # Rich metadata for detail panel
+    columns: List[Dict[str, Any]] = []
+    row_count: Optional[int] = None
+    tags: List[str] = []
+    criticality: str = "medium"
+    canonical_type: Optional[str] = None
+    raw_metadata: Dict[str, Any] = {}
 
     class Config:
         populate_by_name = True
@@ -970,6 +977,12 @@ def _node_to_engine_response(node) -> EngineNodeResponse:
         dbt_resource_type=node.raw_metadata.get("dbt_resource_type"),
         upstream_count=node.upstream_count,
         downstream_count=node.downstream_count,
+        columns=node.columns or [],
+        row_count=node.row_count,
+        tags=node.tags or [],
+        criticality=getattr(node, "criticality", "medium") or "medium",
+        canonical_type=node.canonical_type,
+        raw_metadata=node.raw_metadata or {},
     )
 
 
