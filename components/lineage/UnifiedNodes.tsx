@@ -203,7 +203,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         className="relative px-5 py-4 rounded-xl border-2 min-w-[220px] max-w-[260px] shadow-lg transition-all hover:shadow-xl hover:scale-[1.02]"
         style={{
           borderColor: layerColor,
-          backgroundColor: 'rgba(0,0,0,0.7)',
+          backgroundColor: 'var(--surface-raised)',
           backdropFilter: 'blur(8px)',
         }}
       >
@@ -274,7 +274,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
       className="relative px-4 py-3 rounded-lg border-2 min-w-[200px] max-w-[240px] shadow-lg transition-all hover:shadow-xl hover:scale-[1.02]"
       style={{
         borderColor: layerColor,
-        backgroundColor: 'rgba(0,0,0,0.6)',
+        backgroundColor: 'var(--surface-raised)',
         backdropFilter: 'blur(8px)',
       }}
     >

@@ -124,7 +124,7 @@ function LineageNode({ data }: { data: any }) {
       </div>
       
       {/* Table name */}
-      <div className={`text-sm font-mono truncate ${isCenter ? 'text-white font-semibold' : 'text-white/90'}`}>
+      <div className={`text-sm font-mono truncate ${isCenter ? 'text-[var(--text)] font-semibold' : 'text-[var(--text-secondary)]'}`}>
         {shortName}
       </div>
       
@@ -353,11 +353,11 @@ export function LineageCanvas({
           maskColor="rgba(0, 0, 0, 0.8)"
           className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg"
         />
-        <Background color="#ffffff10" gap={20} />
+        <Background color="var(--text-faint)" gap={20} />
       </ReactFlow>
       
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
+      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
         <div className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-emerald-500" />
           <span className="text-[var(--muted)]">Healthy</span>

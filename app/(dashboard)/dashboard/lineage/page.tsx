@@ -18,7 +18,6 @@ import dagre from 'dagre';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { unifiedNodeTypes } from '@/components/lineage/UnifiedNodes';
-import { LineageFilterBar } from '@/components/lineage/LineageFilterBar';
 import { DataAssetDetailPanel } from '@/components/lineage/DataAssetDetailPanel';
 import { EdgeDetailPanel } from '@/components/lineage/EdgeDetailPanel';
 import {
@@ -289,7 +288,7 @@ function LaneOverviewCanvas({
         {/* Flow arrows between tool boxes */}
         <defs>
           <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="rgba(255,255,255,0.35)" />
+            <polygon points="0 0, 8 3, 0 6" fill="var(--text-faint)" />
           </marker>
         </defs>
         {edges.map((edge) => {
@@ -309,7 +308,7 @@ function LaneOverviewCanvas({
               key={edge.id}
               d={path}
               fill="none"
-              stroke="rgba(255,255,255,0.15)"
+              stroke="var(--text-faint)"
               strokeWidth={2}
               markerEnd="url(#arrowhead)"
             />
@@ -336,7 +335,7 @@ function LaneOverviewCanvas({
                 width={BOX_W}
                 height={BOX_H}
                 rx={10}
-                fill={isOrch ? 'rgba(251,146,60,0.06)' : 'rgba(255,255,255,0.04)'}
+                fill={isOrch ? 'rgba(251,146,60,0.06)' : 'var(--overlay-faint)'}
                 stroke={`${accentColor}50`}
                 strokeWidth={1.5}
                 strokeDasharray={isOrch ? '5,3' : undefined}
@@ -354,7 +353,7 @@ function LaneOverviewCanvas({
               <text
                 x={node.x + 16}
                 y={node.y + 24}
-                fill="white"
+                fill="var(--text)"
                 fontSize={13}
                 fontWeight={600}
                 fontFamily="system-ui, sans-serif"
@@ -365,7 +364,7 @@ function LaneOverviewCanvas({
               <text
                 x={node.x + 16}
                 y={node.y + 42}
-                fill="rgba(255,255,255,0.35)"
+                fill="var(--muted)"
                 fontSize={10}
                 fontFamily="system-ui, sans-serif"
               >
@@ -379,7 +378,7 @@ function LaneOverviewCanvas({
       </svg>
 
       {/* Legend — only show lanes present */}
-      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
+      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
         {lanes.map((lane) => {
           const color = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
           return (
@@ -393,7 +392,7 @@ function LaneOverviewCanvas({
 
       {/* Stats overlay */}
       {data.stats && (
-        <div className="absolute top-4 right-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] space-y-1">
+        <div className="absolute top-4 right-4 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] space-y-1">
           <div className="text-[var(--muted)]">
             <span className="text-[var(--text)] font-medium">{data.stats.totalNodes}</span> tools
             {data.stats.totalEdges > 0 && (
@@ -966,13 +965,13 @@ export default function LineagePage() {
             type: 'smoothstep',
             animated: !isInferred,
             style: {
-              stroke: isInferred ? '#ffffff30' : confidenceColor,
+              stroke: isInferred ? 'var(--text-faint)' : confidenceColor,
               strokeWidth: isInferred ? 1.5 : 2,
               strokeDasharray: isInferred ? '6,4' : undefined,
             },
             markerEnd: {
               type: MarkerType.ArrowClosed,
-              color: isInferred ? '#ffffff30' : confidenceColor,
+              color: isInferred ? 'var(--text-faint)' : confidenceColor,
             },
             label: ve.confidence !== undefined
               ? `${Math.round(ve.confidence * 100)}%`
@@ -1110,7 +1109,7 @@ export default function LineagePage() {
         animated: ve.evidenceCount > 0,
         label: ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : 'connected',
         style: {
-          stroke: ve.evidenceCount > 0 ? '#6366F180' : '#ffffff20',
+          stroke: ve.evidenceCount > 0 ? '#6366F180' : 'var(--text-faint)',
           strokeWidth: ve.evidenceCount > 0
             ? Math.min(2 + Math.log2(ve.evidenceCount + 1), 6)
             : 2,
@@ -1118,7 +1117,7 @@ export default function LineagePage() {
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: ve.evidenceCount > 0 ? '#6366F1' : '#ffffff40',
+          color: ve.evidenceCount > 0 ? '#6366F1' : 'var(--text-faint)',
         },
       }));
 
@@ -1152,7 +1151,7 @@ export default function LineagePage() {
       animated: e.dataFlowCount > 0,
       label: e.dataFlowCount > 0 ? `${e.dataFlowCount} flows` : 'connected',
       style: {
-        stroke: e.dataFlowCount > 0 ? '#6366F180' : '#ffffff20',
+        stroke: e.dataFlowCount > 0 ? '#6366F180' : 'var(--text-faint)',
         strokeWidth: e.dataFlowCount > 0
           ? Math.min(2 + Math.log2(e.dataFlowCount + 1), 6)
           : 2,
@@ -1160,7 +1159,7 @@ export default function LineagePage() {
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        color: e.dataFlowCount > 0 ? '#6366F1' : '#ffffff40',
+        color: e.dataFlowCount > 0 ? '#6366F1' : 'var(--text-faint)',
       },
     }));
 
@@ -1379,15 +1378,6 @@ export default function LineagePage() {
           </button>
         </div>
 
-        {/* Filter bar */}
-        <LineageFilterBar
-          filters={filters}
-          onChange={setFilters}
-          availableLayers={lineageData?.availableLayers || []}
-          stats={filteredStats}
-          activeTab={activeTab}
-        />
-
         {/* Stats */}
         <div className="flex items-center gap-6 mt-4 pt-4 border-t border-[var(--border-faint)]">
           {activeTab === 'control-plane' ? (
@@ -1428,53 +1418,6 @@ export default function LineagePage() {
             <div className="text-[11px] text-[var(--muted)]">Dependencies</div>
           </div>
 
-          {/* Rendered view stats (when available) */}
-          {activeTab === 'data' && renderedView?.stats && (
-            <>
-              <div className="w-px h-8 bg-[var(--overlay-medium)]" />
-              {renderedView.stats.inferredNodeCount > 0 && (
-                <div className="text-center">
-                  <div className="text-xl font-semibold text-amber-400">
-                    {renderedView.stats.inferredNodeCount}
-                  </div>
-                  <div className="text-[11px] text-[var(--muted)]">Inferred</div>
-                </div>
-              )}
-              {renderedView.stats.needsMappingCount > 0 && (
-                <div className="text-center">
-                  <div className="text-xl font-semibold text-orange-400">
-                    {renderedView.stats.needsMappingCount}
-                  </div>
-                  <div className="text-[11px] text-[var(--muted)]">Needs Mapping</div>
-                </div>
-              )}
-            </>
-          )}
-
-          {/* Engine coverage stats (when available, data tab only) */}
-          {activeTab === 'data' && lineageData?.engineStats && (
-            <>
-              <div className="w-px h-8 bg-[var(--overlay-medium)]" />
-              <div className="text-center">
-                <div className="text-xl font-semibold text-emerald-400">
-                  {Math.round(lineageData.engineStats.coverageTable * 100)}%
-                </div>
-                <div className="text-[11px] text-[var(--muted)]">Table Coverage</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-violet-400">
-                  {Math.round(lineageData.engineStats.coverageColumn * 100)}%
-                </div>
-                <div className="text-[11px] text-[var(--muted)]">Column Coverage</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-emerald-400">
-                  {Math.round(lineageData.engineStats.highConfidencePct * 100)}%
-                </div>
-                <div className="text-[11px] text-[var(--muted)]">High Confidence</div>
-              </div>
-            </>
-          )}
         </div>
       </div>
 
@@ -1576,21 +1519,21 @@ export default function LineagePage() {
                   }
                   return '#6366F1';
                 }}
-                maskColor="rgba(0,0,0,0.8)"
+                maskColor="var(--overlay-strong)"
                 className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg"
               />
               <Background
                 variant={BackgroundVariant.Dots}
                 gap={20}
                 size={2}
-                color="rgba(255,255,255,0.15)"
+                color="var(--text-faint)"
               />
             </ReactFlow>
           )}
 
           {/* Legend */}
           {nodes.length > 0 && (
-            <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] max-w-md">
+            <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] max-w-md">
               {activeTab === 'control-plane' ? (
                 <>
                   <div className="flex items-center gap-1">

@@ -145,7 +145,7 @@ function FindingLineageNode({ data, selected }: { data: any; selected?: boolean 
       </div>
       
       {/* Table name */}
-      <div className={`text-sm font-mono truncate ${isSource ? 'text-white font-semibold' : 'text-white/90'}`}>
+      <div className={`text-sm font-mono truncate ${isSource ? 'text-[var(--text)] font-semibold' : 'text-[var(--text-secondary)]'}`}>
         {shortName}
       </div>
       
@@ -441,11 +441,11 @@ export function FindingLineageCanvas({
           className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg"
           nodeStrokeWidth={3}
         />
-        <Background color="#ffffff08" gap={24} />
+        <Background color="var(--text-faint)" gap={24} />
       </ReactFlow>
       
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-black/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
+      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-3 rounded border-2 border-red-500 bg-purple-500/30" />
           <span className="text-[var(--muted)]">Issue Source</span>
