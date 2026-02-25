@@ -243,12 +243,16 @@ def assign_lane(
     # Datasets → zone-based lane
     if canonical_type == "dataset":
         zone = dataset_zone or classify_dataset_zone(node)
+        platform = (node.platform or "").lower()
+        is_warehouse = platform in WAREHOUSE_PLATFORMS
+
         if zone in (DatasetZone.RAW, DatasetZone.UNKNOWN):
             return PipelineLane.WAREHOUSE_RAW.value
         if zone == DatasetZone.STAGING:
-            return PipelineLane.TRANSFORMATION.value
+            # Warehouse-stored staging data stays in warehouse_raw
+            return PipelineLane.WAREHOUSE_RAW.value if is_warehouse else PipelineLane.TRANSFORMATION.value
         if zone == DatasetZone.INTERMEDIATE:
-            return PipelineLane.TRANSFORMATION.value
+            return PipelineLane.WAREHOUSE_RAW.value if is_warehouse else PipelineLane.TRANSFORMATION.value
         if zone in (DatasetZone.MART, DatasetZone.ANALYTICS):
             return PipelineLane.WAREHOUSE_ANALYTICS.value
 

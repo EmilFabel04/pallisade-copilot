@@ -1186,7 +1186,7 @@ function AssistantPageInner() {
               <div className="space-y-1">
                 {loadingSessions ? (
                   <div className="flex items-center justify-center py-8">
-                    <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                    <div className="w-5 h-5 red-spinner" />
                   </div>
                 ) : sessions.length === 0 ? (
                   <div className="text-center py-8 text-sm text-[var(--muted)]">
@@ -1262,7 +1262,7 @@ function AssistantPageInner() {
                 <TooltipContent>{showHistory ? 'Hide history' : 'Show history'}</TooltipContent>
               </Tooltip>
               <Avatar className="w-7 h-7">
-                <AvatarImage src="/pallisade_scout.svg" alt="Scout" />
+                <AvatarImage src="/pallisade_scoutt.svg" alt="Scout" />
                 <AvatarFallback className="text-xs">AI</AvatarFallback>
               </Avatar>
               <h1 className="text-sm font-semibold">Pallisade Scout</h1>
@@ -1316,7 +1316,7 @@ function AssistantPageInner() {
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-4">
                 <Avatar className="w-14 h-14 mb-3">
-                  <AvatarImage src="/pallisade_scout.svg" alt="Scout" />
+                  <AvatarImage src="/pallisade_scoutt.svg" alt="Scout" />
                   <AvatarFallback className="text-xl">AI</AvatarFallback>
                 </Avatar>
                 <h2 className="text-base font-semibold mb-1">How can I help?</h2>
@@ -1349,7 +1349,7 @@ function AssistantPageInner() {
                   <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
                     {message.role === 'assistant' && (
                       <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                        <AvatarImage src="/pallisade_scout.svg" alt="AI" />
+                        <AvatarImage src="/pallisade_scoutt.svg" alt="AI" />
                         <AvatarFallback className="text-[10px]">AI</AvatarFallback>
                       </Avatar>
                     )}
@@ -1467,7 +1467,7 @@ function AssistantPageInner() {
                 {streamingMessage && (
                   <div className="flex gap-2">
                     <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                      <AvatarImage src="/pallisade_scout.svg" alt="AI" />
+                      <AvatarImage src="/pallisade_scoutt.svg" alt="AI" />
                       <AvatarFallback className="text-[10px]">AI</AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1">
@@ -1524,7 +1524,7 @@ function AssistantPageInner() {
                                 className="flex items-center gap-2 px-3 py-1.5 bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-lg text-[11px]"
                               >
                                 {tc.isExecuting ? (
-                                  <div className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                                  <div className="w-3 h-3 red-spinner flex-shrink-0" />
                                 ) : tc.result?.success ? (
                                   <svg className="w-3 h-3 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -1561,7 +1561,7 @@ function AssistantPageInner() {
                 {isLoading && !streamingMessage && (
                   <div className="flex gap-2">
                     <Avatar className="w-6 h-6 flex-shrink-0">
-                      <AvatarImage src="/pallisade_scout.svg" alt="AI" />
+                      <AvatarImage src="/pallisade_scoutt.svg" alt="AI" />
                       <AvatarFallback className="text-[10px]">AI</AvatarFallback>
                     </Avatar>
                     <div className="px-1 py-1">
@@ -1630,7 +1630,7 @@ function AssistantPageInner() {
                         className="h-7 w-7 p-0"
                         variant="ghost"
                       >
-                        <div className="w-4 h-4 border-2 border-[var(--text-faint)] border-t-[var(--text)] rounded-full animate-spin" />
+                        <div className="w-4 h-4 red-spinner" />
                       </Button>
                     ) : (
                       <Button
@@ -1705,7 +1705,7 @@ function AssistantPageInner() {
             <ScrollArea className="flex-1 pb-4">
               {loadingSources ? (
                 <div className="flex items-center justify-center py-8">
-                  <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                  <div className="w-5 h-5 red-spinner" />
                 </div>
               ) : sourceData.nodes.length === 0 ? (
                 <div className="text-center py-8">
@@ -2222,7 +2222,7 @@ export default function AssistantPage() {
   return (
     <Suspense fallback={
       <div className="flex items-center justify-center h-full bg-[var(--surface-inset)]">
-        <div className="w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
+        <div className="w-6 h-6 red-spinner" />
       </div>
     }>
       <AssistantPageInner />

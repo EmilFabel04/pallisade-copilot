@@ -139,7 +139,7 @@ export default function AuditLogsPage() {
       {/* Logs List */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full" />
+          <div className="w-8 h-8 red-spinner" />
         </div>
       ) : logs.length === 0 ? (
         <div className="dashboard-card p-12 text-center">

@@ -284,7 +284,7 @@ export default function SettingsPage() {
 
             {loadingIntegrations ? (
               <div className="flex items-center justify-center py-8">
-                <div className="w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
+                <div className="w-6 h-6 red-spinner" />
               </div>
             ) : oauthIntegrations.length === 0 ? (
               <div className="text-center py-8">

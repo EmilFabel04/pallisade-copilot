@@ -197,7 +197,7 @@ function LaneOverviewCanvas({
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
+          <div className="w-10 h-10 red-spinner" />
           <p className="text-sm text-[var(--muted)]">Loading lane overview...</p>
         </div>
       </div>
@@ -904,6 +904,55 @@ export default function LineagePage() {
     };
   }, [filteredNodes]);
 
+  // Build merged edges/nodes for the detail panel
+  // Falls back to rendered-view edges when unified data has no data-level edges
+  const panelEdges = useMemo(() => {
+    const unifiedEdges = lineageData?.edges || [];
+    // Check if unified edges include actual data edges (not just synthetic tool edges)
+    const hasDataEdges = unifiedEdges.some(
+      (e) =>
+        e.edgeType !== 'pipeline_flow' &&
+        e.edgeType !== 'contains' &&
+        e.edgeType !== 'produces' &&
+        e.edgeType !== 'reads_from'
+    );
+    if (hasDataEdges) return unifiedEdges;
+
+    // Fallback: adapt rendered view edges to unified format with lineage- prefix
+    if (!renderedView?.edges?.length) return unifiedEdges;
+
+    const adaptedEdges: UnifiedLineageEdge[] = renderedView.edges.map((ve) => ({
+      id: ve.id,
+      source: `lineage-${ve.sourceId}`,
+      target: `lineage-${ve.targetId}`,
+      edgeType: ve.canonicalType || 'derives',
+      animated: true,
+      confidence: ve.confidence,
+      columns: [],
+    }));
+    return [...unifiedEdges, ...adaptedEdges];
+  }, [lineageData?.edges, renderedView?.edges]);
+
+  const panelNodes = useMemo(() => {
+    const unifiedNodes = lineageData?.nodes || [];
+    if (unifiedNodes.length > 0) return unifiedNodes;
+
+    // Fallback: adapt rendered view nodes to unified format
+    if (!renderedView?.nodes?.length) return unifiedNodes;
+
+    return renderedView.nodes.map((vn): UnifiedLineageNode => ({
+      id: `lineage-${vn.id}`,
+      name: vn.name,
+      fullName: vn.metadata?.fqn as string || vn.name,
+      category: _viewNodeToCategory(vn),
+      layer: (vn.layer || 'WAREHOUSE') as any,
+      toolType: vn.platform || undefined,
+      database: (vn.metadata?.database as string) || undefined,
+      schema: (vn.metadata?.schema as string) || undefined,
+      tableName: vn.name,
+    }));
+  }, [lineageData?.nodes, renderedView?.nodes]);
+
   // Build React Flow nodes and edges
   // Uses pre-positioned rendered view when available, falls back to Dagre
   const { flowNodes, flowEdges } = useMemo(() => {
@@ -1237,7 +1286,7 @@ export default function LineagePage() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+          <div className="w-10 h-10 red-spinner" />
           <p className="text-sm text-[var(--muted)]">Loading lineage...</p>
         </div>
       </div>
@@ -1268,7 +1317,7 @@ export default function LineagePage() {
             >
               {extracting ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <div className="w-4 h-4 red-spinner" />
                   Extracting...
                 </>
               ) : (
@@ -1297,7 +1346,7 @@ export default function LineagePage() {
             >
               {llmExtracting ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <div className="w-4 h-4 red-spinner" />
                   AI Extracting...
                 </>
               ) : (
@@ -1383,11 +1432,11 @@ export default function LineagePage() {
           {activeTab === 'control-plane' ? (
             <>
               <div className="text-center">
-                <div className="text-xl font-semibold text-emerald-400">{controlPlaneData?.stats?.tool_count || 0}</div>
+                <div className="text-xl font-semibold text-emerald-400">{laneOverview?.stats?.totalNodes ?? controlPlaneData?.stats?.tool_count ?? 0}</div>
                 <div className="text-[11px] text-[var(--muted)]">Tools</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-[var(--text)]">{controlPlaneData?.stats?.flow_count || 0}</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{laneOverview?.stats?.totalEdges ?? controlPlaneData?.stats?.flow_count ?? 0}</div>
                 <div className="text-[11px] text-[var(--muted)]">Data Flows</div>
               </div>
             </>
@@ -1443,7 +1492,7 @@ export default function LineagePage() {
           ) : controlPlaneLoading && activeTab === 'control-plane' ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex flex-col items-center gap-4">
-                <div className="w-10 h-10 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                <div className="w-10 h-10 red-spinner" />
                 <p className="text-sm text-[var(--muted)]">Loading pipeline overview...</p>
               </div>
             </div>
@@ -2121,8 +2170,8 @@ export default function LineagePage() {
             <DataAssetDetailPanel
               key={selectedNode.id}
               node={selectedNode}
-              allNodes={lineageData?.nodes || []}
-              allEdges={lineageData?.edges || []}
+              allNodes={panelNodes}
+              allEdges={panelEdges}
               stackId={stackId || ''}
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}

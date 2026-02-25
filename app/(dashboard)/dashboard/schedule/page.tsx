@@ -359,7 +359,7 @@ export default function SchedulePage() {
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
+            <div className="w-6 h-6 red-spinner" />
           </div>
         ) : tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">

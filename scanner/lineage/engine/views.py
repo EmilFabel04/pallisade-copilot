@@ -468,6 +468,13 @@ class ViewBuilder:
             if info["integration_id"]
         }
 
+        # Track which platforms already exist per lane to avoid duplicates
+        platform_per_lane: Dict[Tuple[str, str], Tuple[str, str]] = {}
+        for tk, info in tool_info.items():
+            lane_plat_key = (tk[0], info["platform"])
+            if lane_plat_key not in platform_per_lane:
+                platform_per_lane[lane_plat_key] = tk
+
         for tn in self.tool_nodes:
             int_id = tn.get("integrationId") or tn.get("integration_id") or ""
             if int_id and int_id in covered_integration_ids:
@@ -491,6 +498,16 @@ class ViewBuilder:
             else:
                 lane = PipelineLane.WAREHOUSE_RAW.value
 
+            # If same platform already exists in this lane, merge instead of duplicate
+            existing_key = platform_per_lane.get((lane, tool_type))
+            if existing_key and existing_key in tool_info:
+                existing = tool_info[existing_key]
+                if not existing["integration_id"] and int_id:
+                    existing["integration_id"] = int_id
+                if int_id:
+                    covered_integration_ids.add(int_id)
+                continue
+
             tool_id = f"{tool_type}:{int_id}" if int_id else tool_type
             tk = (lane, tool_id)
             if tk not in tool_info:
@@ -504,6 +521,7 @@ class ViewBuilder:
                     "is_infra": tool_type in INFRA_PLATFORMS,
                     "from_pipeline_stack": True,
                 }
+                platform_per_lane[(lane, tool_type)] = tk
                 if int_id:
                     covered_integration_ids.add(int_id)
 
@@ -571,16 +589,34 @@ class ViewBuilder:
                 evidence_count=count,
             ))
 
+        # ── Step 4b: Compute topological order per tool ─────────────────
+        # Tools receiving data from earlier lanes appear first within their lane
+        tool_topo_order: Dict[str, float] = {}
+        for (lane, tool_id) in tool_info:
+            node_view_id = f"tool:{lane}:{tool_id}"
+            upstream_lane_orders: List[float] = []
+            for pair_key in tool_edge_counts:
+                src_id, tgt_id = pair_key.split("→")
+                if tgt_id == node_view_id:
+                    # Extract source lane order from the source tool's lane
+                    src_lane = src_id.split(":")[1] if src_id.count(":") >= 2 else ""
+                    upstream_lane_orders.append(LANE_ORDER.get(src_lane, 99))
+            if upstream_lane_orders:
+                tool_topo_order[node_view_id] = sum(upstream_lane_orders) / len(upstream_lane_orders)
+            else:
+                tool_topo_order[node_view_id] = -1  # source tools first
+
         # ── Step 5: Skip empty lanes, compact positions ───────────────
         by_lane: Dict[str, List[ViewNode]] = defaultdict(list)
         for vn in view_nodes:
             by_lane[vn.layer].append(vn)
 
-        # Sort within each lane: orchestrators/infra last, then alphabetical
+        # Sort within each lane: orchestrators/infra last, then by pipeline flow order, then alphabetical
         for lane_name in by_lane:
             by_lane[lane_name].sort(key=lambda n: (
                 1 if n.metadata.get("isOrchestrator") else 0,
                 1 if n.metadata.get("isInfra") else 0,
+                tool_topo_order.get(n.id, 0),
                 n.name,
             ))
 

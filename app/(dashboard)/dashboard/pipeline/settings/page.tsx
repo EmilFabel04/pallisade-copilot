@@ -260,7 +260,7 @@ export default function PipelineSettingsPage() {
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto py-8 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 red-spinner" />
       </div>
     );
   }

@@ -23,7 +23,7 @@ const navigation = [
     name: 'AI Chat',
     href: '/dashboard/assistant',
     icon: (
-      <img src="/pallisade_scout.svg" alt="AI" className="w-6 h-6" />
+      <img src="/pallisade_scoutt.svg" alt="AI" className="w-6 h-6" />
     ),
     description: 'Ask questions & debug',
   },
