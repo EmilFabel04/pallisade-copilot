@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { useTheme } from '@/contexts/ThemeContext';
+import { Settings as SettingsIcon, Plug, Bell, Key, CreditCard, MessageSquare, ClipboardList, Link, AlertTriangle, User, SlidersHorizontal } from 'lucide-react';
 
 interface OAuthIntegration {
   id: string;
@@ -136,20 +137,20 @@ export default function SettingsPage() {
           </svg>
         );
       case 'SLACK':
-        return <span className="text-xl">💬</span>;
+        return <MessageSquare size={20} />;
       case 'JIRA':
-        return <span className="text-xl">📋</span>;
+        return <ClipboardList size={20} />;
       default:
-        return <span className="text-xl">🔗</span>;
+        return <Link size={20} />;
     }
   };
 
-  const tabs = [
-    { id: 'general', name: 'General', icon: '⚙️' },
-    { id: 'integrations', name: 'Integrations', icon: '🔗' },
-    { id: 'notifications', name: 'Notifications', icon: '🔔' },
-    { id: 'api', name: 'API Keys', icon: '🔑' },
-    { id: 'billing', name: 'Billing', icon: '💳' },
+  const tabs: { id: string; name: string; icon: ReactNode }[] = [
+    { id: 'general', name: 'General', icon: <SettingsIcon size={16} /> },
+    { id: 'integrations', name: 'Integrations', icon: <Plug size={16} /> },
+    { id: 'notifications', name: 'Notifications', icon: <Bell size={16} /> },
+    { id: 'api', name: 'API Keys', icon: <Key size={16} /> },
+    { id: 'billing', name: 'Billing', icon: <CreditCard size={16} /> },
   ];
 
   return (
@@ -163,20 +164,20 @@ export default function SettingsPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-[var(--subtle-border)]">
+      <div className="flex gap-1 p-1 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`
-              flex items-center gap-2 px-4 py-3 text-[13px] font-medium border-b-2 -mb-px transition-colors
+              flex items-center gap-2 px-4 py-2 text-[13px] font-medium rounded-lg transition-all
               ${activeTab === tab.id
-                ? 'border-[var(--accent)] text-[var(--text)]'
-                : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'
+                ? 'bg-[var(--subtle-bg)] text-[var(--text)] shadow-sm'
+                : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-faint)]'
               }
             `}
           >
-            <span>{tab.icon}</span>
+            {tab.icon}
             {tab.name}
           </button>
         ))}
@@ -187,7 +188,7 @@ export default function SettingsPage() {
         <div className="space-y-6">
           {/* Profile Section */}
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Profile</h2>
+            <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4 flex items-center gap-2"><User size={16} className="text-[var(--muted)]" /> Profile</h2>
             <div className="flex items-start gap-6">
               <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-2xl font-semibold">
                 {session?.user?.name?.[0]?.toUpperCase() || 'U'}
@@ -198,7 +199,7 @@ export default function SettingsPage() {
                   <input
                     type="text"
                     defaultValue={session?.user?.name || ''}
-                    className="w-full max-w-md px-4 py-2.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] text-[14px]"
+                    className="w-full max-w-md px-4 py-2.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 text-[14px] transition-all"
                   />
                 </div>
                 <div>
@@ -216,14 +217,14 @@ export default function SettingsPage() {
 
           {/* Preferences Section */}
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Preferences</h2>
+            <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4 flex items-center gap-2"><SlidersHorizontal size={16} className="text-[var(--muted)]" /> Preferences</h2>
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[14px] font-medium text-[var(--text)]">Default AI Model</p>
                   <p className="text-[12px] text-[var(--muted)]">Choose the default model for new chats</p>
                 </div>
-                <select className="px-4 py-2 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] text-[13px] focus:outline-none focus:border-[var(--overlay-strong)]">
+                <select className="px-4 py-2 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] text-[13px] focus:outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 transition-all">
                   <option value="gpt-5.2">GPT-5.2 (Recommended)</option>
                   <option value="gpt-5.2-mini">GPT-5.2 Mini (Fast)</option>
                   <option value="claude-sonnet">Claude Sonnet</option>
@@ -238,12 +239,12 @@ export default function SettingsPage() {
                 </div>
                 <button
                   onClick={toggleTheme}
-                  className={`relative w-11 h-6 rounded-full transition-colors ${
-                    theme === 'light' ? 'bg-[var(--accent)]' : 'bg-[var(--subtle-bg)]'
+                  className={`relative w-9 h-5 rounded-full transition-colors ${
+                    theme === 'light' ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'
                   }`}
                 >
-                  <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
-                    theme === 'light' ? 'translate-x-[22px]' : 'translate-x-1'
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
+                    theme === 'light' ? 'translate-x-4' : 'translate-x-0'
                   }`} />
                 </button>
               </div>
@@ -252,8 +253,8 @@ export default function SettingsPage() {
                   <p className="text-[14px] font-medium text-[var(--text)]">Compact Mode</p>
                   <p className="text-[12px] text-[var(--muted)]">Use a more compact UI layout</p>
                 </div>
-                <button className="relative w-11 h-6 rounded-full bg-[var(--subtle-bg)] transition-colors">
-                  <span className="absolute left-1 top-1 w-4 h-4 rounded-full bg-[var(--muted)] transition-transform" />
+                <button className="relative w-9 h-5 rounded-full bg-[var(--overlay-medium)] transition-colors">
+                  <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform translate-x-0" />
                 </button>
               </div>
             </div>
@@ -261,7 +262,7 @@ export default function SettingsPage() {
 
           <button
             onClick={showSaved}
-            className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] text-white text-[13px] font-medium transition-colors"
+            className="px-6 py-2.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] text-white text-[13px] font-medium transition-all shadow-sm hover:shadow-md"
           >
             Save Changes
           </button>
@@ -274,7 +275,7 @@ export default function SettingsPage() {
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-[15px] font-medium text-[var(--text)]">Connected Accounts</h2>
+                <h2 className="text-[15px] font-semibold text-[var(--text)] flex items-center gap-2"><Plug size={16} className="text-[var(--muted)]" /> Connected Accounts</h2>
                 <p className="text-[12px] text-[var(--muted)] mt-1">
                   Manage OAuth connections for GitHub, Slack, and other services
                 </p>
@@ -370,7 +371,7 @@ export default function SettingsPage() {
 
           <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
             <div className="flex items-start gap-3">
-              <span className="text-amber-400 text-lg">⚠️</span>
+              <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
               <div>
                 <p className="text-[13px] font-medium text-amber-400">Disconnecting an integration</p>
                 <p className="text-[12px] text-[var(--muted)] mt-1">
@@ -389,7 +390,7 @@ export default function SettingsPage() {
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                <h2 className="text-[15px] font-medium text-[var(--text)]">Slack Notifications</h2>
+                <h2 className="text-[15px] font-semibold text-[var(--text)]">Slack Notifications</h2>
                 {slackLoading ? (
                   <div className="w-4 h-4 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
                 ) : slackConfig?.connected ? (
@@ -430,11 +431,11 @@ export default function SettingsPage() {
                     <button
                       onClick={() => !disabled && handleSlackToggle(item.key, !enabled)}
                       disabled={disabled}
-                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                      className={`relative w-9 h-5 rounded-full transition-colors ${
                         enabled ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'
                       } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'left-6' : 'left-1'}`} />
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0'}`} />
                     </button>
                   </div>
                 );
@@ -445,7 +446,7 @@ export default function SettingsPage() {
           {/* Email Notifications */}
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-medium text-[var(--text)]">Email Notifications</h2>
+              <h2 className="text-[15px] font-semibold text-[var(--text)]">Email Notifications</h2>
               <span className="text-[11px] text-[var(--text-faint)] px-2 py-0.5 rounded bg-[var(--overlay-bg)]">Coming soon</span>
             </div>
             <div className="space-y-4 opacity-50">
@@ -461,9 +462,9 @@ export default function SettingsPage() {
                   </div>
                   <button
                     disabled
-                    className={`relative w-11 h-6 rounded-full transition-colors cursor-not-allowed ${item.enabled ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'}`}
+                    className={`relative w-9 h-5 rounded-full transition-colors cursor-not-allowed ${item.enabled ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'}`}
                   >
-                    <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${item.enabled ? 'left-6' : 'left-1'}`} />
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${item.enabled ? 'translate-x-4' : 'translate-x-0'}`} />
                   </button>
                 </div>
               ))}
@@ -477,7 +478,7 @@ export default function SettingsPage() {
         <div className="space-y-6">
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-medium text-[var(--text)]">API Keys</h2>
+              <h2 className="text-[15px] font-semibold text-[var(--text)] flex items-center gap-2"><Key size={16} className="text-[var(--muted)]" /> API Keys</h2>
               <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--hover-bg)] text-[var(--text)] text-[12px] font-medium transition-colors">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -501,7 +502,7 @@ export default function SettingsPage() {
       {activeTab === 'billing' && (
         <div className="space-y-6">
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Current Plan</h2>
+            <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4 flex items-center gap-2"><CreditCard size={16} className="text-[var(--muted)]" /> Current Plan</h2>
             <div className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-br from-[var(--accent)]/10 to-[var(--accent)]/5 border border-[var(--accent)]/20">
               <div>
                 <p className="text-[18px] font-semibold text-[var(--text)] mb-1">Pro Plan</p>
@@ -514,7 +515,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Usage This Month</h2>
+            <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4">Usage This Month</h2>
             <div className="space-y-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
