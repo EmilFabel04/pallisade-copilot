@@ -58,7 +58,7 @@ export function GlowCard({
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
       className={cn(
-        'relative overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[#0c0c0c]/90 transition-all duration-200 hover:shadow-[0_20px_60px_rgba(139,11,16,0.22)] p-6 md:p-7 will-change-transform',
+        'relative overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[var(--surface-raised)] transition-all duration-200 hover:shadow-[0_20px_60px_rgba(139,11,16,0.22)] p-6 md:p-7 will-change-transform',
         className
       )}
       style={{

@@ -200,17 +200,17 @@ export default function SchedulePage() {
   // Task detail view
   if (selectedTask) {
     const statusColor = selectedTask.lastStatus
-      ? RUN_STATUS_COLORS[selectedTask.lastStatus] || 'bg-white/10 text-white/40'
-      : 'bg-white/10 text-white/40';
+      ? RUN_STATUS_COLORS[selectedTask.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
+      : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
 
     return (
-      <div className="flex flex-col h-full bg-[#050508]">
+      <div className="flex flex-col h-full bg-[var(--surface-inset)]">
         {/* Detail header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSelectedTask(null)}
-              className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/[0.06]"
+              className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)]"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -218,12 +218,12 @@ export default function SchedulePage() {
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-[16px] font-semibold text-white">{selectedTask.name}</h2>
+                <h2 className="text-[16px] font-semibold text-[var(--text)]">{selectedTask.name}</h2>
                 <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', statusColor)}>
                   {selectedTask.lastStatus || 'NEW'}
                 </span>
               </div>
-              <p className="text-[12px] text-white/40 mt-0.5">
+              <p className="text-[12px] text-[var(--muted)] mt-0.5">
                 {selectedTask.taskMode === 'prompt' ? 'AI Prompt' : (selectedTask.monitorType || 'Monitor')}
                 {' · '}
                 {selectedTask.schedule}
@@ -258,44 +258,44 @@ export default function SchedulePage() {
         </div>
 
         {/* Task config summary */}
-        <div className="px-6 py-4 border-b border-white/[0.04]">
+        <div className="px-6 py-4 border-b border-[var(--border-faint)]">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div>
-              <p className="text-[11px] text-white/30 uppercase tracking-wider mb-1">Type</p>
-              <p className="text-[13px] text-white/80">
+              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Type</p>
+              <p className="text-[13px] text-[var(--text-secondary)]">
                 {selectedTask.taskMode === 'prompt' ? 'AI Prompt' : selectedTask.monitorType}
               </p>
             </div>
             <div>
-              <p className="text-[11px] text-white/30 uppercase tracking-wider mb-1">Schedule</p>
-              <p className="text-[13px] text-white/80">{selectedTask.schedule}</p>
+              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Schedule</p>
+              <p className="text-[13px] text-[var(--text-secondary)]">{selectedTask.schedule}</p>
             </div>
             <div>
-              <p className="text-[11px] text-white/30 uppercase tracking-wider mb-1">Alerts</p>
-              <p className="text-[13px] text-white/80">
+              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Alerts</p>
+              <p className="text-[13px] text-[var(--text-secondary)]">
                 {selectedTask.alertChannels.length > 0
                   ? selectedTask.alertChannels.join(', ')
                   : 'None'}
               </p>
             </div>
             <div>
-              <p className="text-[11px] text-white/30 uppercase tracking-wider mb-1">Status</p>
-              <p className="text-[13px] text-white/80">
+              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Status</p>
+              <p className="text-[13px] text-[var(--text-secondary)]">
                 {selectedTask.enabled ? 'Enabled' : 'Disabled'}
               </p>
             </div>
           </div>
           {selectedTask.prompt && (
-            <div className="mt-3 p-3 bg-white/[0.03] rounded-lg border border-white/[0.06]">
-              <p className="text-[11px] text-white/30 uppercase tracking-wider mb-1">Prompt</p>
-              <p className="text-[13px] text-white/60">{selectedTask.prompt}</p>
+            <div className="mt-3 p-3 bg-[var(--overlay-bg)] rounded-lg border border-[var(--subtle-border)]">
+              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Prompt</p>
+              <p className="text-[13px] text-[var(--text-tertiary)]">{selectedTask.prompt}</p>
             </div>
           )}
         </div>
 
         {/* Run history */}
         <div className="flex-1 px-6 py-4 overflow-y-auto">
-          <h3 className="text-[14px] font-medium text-white mb-3">Run History</h3>
+          <h3 className="text-[14px] font-medium text-[var(--text)] mb-3">Run History</h3>
           <RunHistoryTable
             runs={taskRuns}
             loading={runsLoading}
@@ -320,12 +320,12 @@ export default function SchedulePage() {
 
   // Task list view
   return (
-    <div className="flex flex-col h-full bg-[#050508]">
+    <div className="flex flex-col h-full bg-[var(--surface-inset)]">
       {/* Page header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
         <div>
-          <h1 className="text-[18px] font-semibold text-white">Scheduled Tasks</h1>
-          <p className="text-[13px] text-white/40 mt-0.5">
+          <h1 className="text-[18px] font-semibold text-[var(--text)]">Scheduled Tasks</h1>
+          <p className="text-[13px] text-[var(--muted)] mt-0.5">
             Schedule quality checks, anomaly detection, and pipeline monitoring
           </p>
         </div>
@@ -335,7 +335,7 @@ export default function SchedulePage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-2 px-6 py-3 border-b border-white/[0.04]">
+      <div className="flex items-center gap-2 px-6 py-3 border-b border-[var(--border-faint)]">
         {(['all', 'passing', 'failing', 'disabled'] as FilterStatus[]).map((f) => (
           <button
             key={f}
@@ -343,14 +343,14 @@ export default function SchedulePage() {
             className={cn(
               'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors capitalize',
               filter === f
-                ? 'bg-white/[0.1] text-white'
-                : 'text-white/40 hover:text-white/60 hover:bg-white/[0.04]'
+                ? 'bg-[var(--overlay-medium)] text-[var(--text)]'
+                : 'text-[var(--muted)] hover:text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)]'
             )}
           >
             {f}
           </button>
         ))}
-        <span className="text-[12px] text-white/20 ml-2">
+        <span className="text-[12px] text-[var(--text-faint)] ml-2">
           {tasks.length} task{tasks.length !== 1 ? 's' : ''}
         </span>
       </div>
@@ -359,15 +359,15 @@ export default function SchedulePage() {
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+            <div className="w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
           </div>
         ) : tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
-            <svg className="w-12 h-12 text-white/10 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-12 h-12 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <h3 className="text-[15px] font-medium text-white/50 mb-1">No scheduled tasks</h3>
-            <p className="text-[13px] text-white/30 mb-4">
+            <h3 className="text-[15px] font-medium text-[var(--muted)] mb-1">No scheduled tasks</h3>
+            <p className="text-[13px] text-[var(--text-faint)] mb-4">
               Create your first task to start monitoring your data pipeline
             </p>
             <Button size="sm" onClick={() => setShowCreateModal(true)}>

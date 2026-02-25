@@ -129,7 +129,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="w-5 h-5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+        <div className="w-5 h-5 border-2 border-[var(--overlay-strong)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
       </div>
     );
   }
@@ -137,7 +137,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
   if (runs.length === 0) {
     return (
       <div className="text-center py-12">
-        <p className="text-[13px] text-white/30">No runs yet</p>
+        <p className="text-[13px] text-[var(--text-faint)]">No runs yet</p>
       </div>
     );
   }
@@ -147,24 +147,24 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
   };
 
   return (
-    <div className="overflow-hidden rounded-lg border border-white/[0.06]">
+    <div className="overflow-hidden rounded-lg border border-[var(--subtle-border)]">
       <table className="w-full">
         <thead>
-          <tr className="border-b border-white/[0.06]">
+          <tr className="border-b border-[var(--subtle-border)]">
             <th className="w-8 px-2 py-2.5" />
-            <th className="text-left text-[11px] font-medium text-white/40 uppercase tracking-wider px-4 py-2.5">
+            <th className="text-left text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider px-4 py-2.5">
               Status
             </th>
-            <th className="text-left text-[11px] font-medium text-white/40 uppercase tracking-wider px-4 py-2.5">
+            <th className="text-left text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider px-4 py-2.5">
               Time
             </th>
-            <th className="text-left text-[11px] font-medium text-white/40 uppercase tracking-wider px-4 py-2.5">
+            <th className="text-left text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider px-4 py-2.5">
               Value
             </th>
-            <th className="text-left text-[11px] font-medium text-white/40 uppercase tracking-wider px-4 py-2.5">
+            <th className="text-left text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider px-4 py-2.5">
               Duration
             </th>
-            <th className="text-left text-[11px] font-medium text-white/40 uppercase tracking-wider px-4 py-2.5">
+            <th className="text-left text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider px-4 py-2.5">
               Message
             </th>
           </tr>
@@ -182,14 +182,14 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                 <tr
                   onClick={() => toggleExpand(run.id)}
                   className={cn(
-                    'border-b border-white/[0.04] last:border-0 cursor-pointer transition-colors',
-                    isExpanded ? 'bg-white/[0.03]' : 'hover:bg-white/[0.02]'
+                    'border-b border-[var(--border-faint)] last:border-0 cursor-pointer transition-colors',
+                    isExpanded ? 'bg-[var(--overlay-bg)]' : 'hover:bg-[var(--overlay-faint)]'
                   )}
                 >
                   <td className="px-2 py-2.5">
                     <svg
                       className={cn(
-                        'w-3.5 h-3.5 text-white/30 transition-transform duration-200',
+                        'w-3.5 h-3.5 text-[var(--text-faint)] transition-transform duration-200',
                         isExpanded && 'rotate-90'
                       )}
                       fill="none"
@@ -203,22 +203,22 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                     <span
                       className={cn(
                         'px-2 py-0.5 rounded text-[11px] font-medium',
-                        RUN_STATUS_COLORS[run.status] || 'bg-white/10 text-white/40'
+                        RUN_STATUS_COLORS[run.status] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
                       )}
                     >
                       {run.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-[12px] text-white/60">
+                  <td className="px-4 py-2.5 text-[12px] text-[var(--text-tertiary)]">
                     {formatTime(run.startedAt)}
                   </td>
-                  <td className="px-4 py-2.5 text-[12px] text-white/60 font-mono">
+                  <td className="px-4 py-2.5 text-[12px] text-[var(--text-tertiary)] font-mono">
                     {run.value != null ? run.value.toFixed(2) : '-'}
                   </td>
-                  <td className="px-4 py-2.5 text-[12px] text-white/40">
+                  <td className="px-4 py-2.5 text-[12px] text-[var(--muted)]">
                     {formatDuration(run.durationMs)}
                   </td>
-                  <td className="px-4 py-2.5 text-[12px] text-white/40 max-w-[300px] truncate">
+                  <td className="px-4 py-2.5 text-[12px] text-[var(--muted)] max-w-[300px] truncate">
                     {run.message || '-'}
                   </td>
                 </tr>
@@ -229,7 +229,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                     <td colSpan={6} className="p-0">
                       <div
                         className={cn(
-                          'mx-4 mb-3 rounded-lg bg-white/[0.02] border border-white/[0.06] border-l-2 overflow-hidden',
+                          'mx-4 mb-3 rounded-lg bg-[var(--overlay-faint)] border border-[var(--subtle-border)] border-l-2 overflow-hidden',
                           STATUS_BORDER_COLORS[run.status] || 'border-l-white/20'
                         )}
                       >
@@ -237,10 +237,10 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                           {/* Message */}
                           {run.message && (
                             <div>
-                              <h4 className="text-[11px] font-medium text-white/40 uppercase tracking-wider mb-1.5">
+                              <h4 className="text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider mb-1.5">
                                 Message
                               </h4>
-                              <p className="text-[13px] text-white/70 leading-relaxed">
+                              <p className="text-[13px] text-[var(--text-tertiary)] leading-relaxed">
                                 {run.message}
                               </p>
                             </div>
@@ -249,7 +249,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                           {/* Details */}
                           {hasDetails && (
                             <div>
-                              <h4 className="text-[11px] font-medium text-white/40 uppercase tracking-wider mb-1.5">
+                              <h4 className="text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider mb-1.5">
                                 Details
                               </h4>
                               <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1.5">
@@ -258,13 +258,13 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                                   const isComplex = typeof val === 'object' && val !== null;
                                   return (
                                     <div key={key} className={isComplex ? 'col-span-2 md:col-span-3' : ''}>
-                                      <span className="text-[11px] text-white/30">{key.replace(/_/g, ' ')}: </span>
+                                      <span className="text-[11px] text-[var(--text-faint)]">{key.replace(/_/g, ' ')}: </span>
                                       {isComplex ? (
-                                        <pre className="mt-1 text-[11px] text-white/50 font-mono bg-black/40 rounded p-2 overflow-x-auto">
+                                        <pre className="mt-1 text-[11px] text-[var(--muted)] font-mono bg-black/40 rounded p-2 overflow-x-auto">
                                           {JSON.stringify(val, null, 2)}
                                         </pre>
                                       ) : (
-                                        <span className="text-[12px] text-white/60 font-mono">
+                                        <span className="text-[12px] text-[var(--text-tertiary)] font-mono">
                                           {formatDetailValue(val)}
                                         </span>
                                       )}
@@ -278,10 +278,10 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                           {/* SQL Executed */}
                           {hasSql && (
                             <div>
-                              <h4 className="text-[11px] font-medium text-white/40 uppercase tracking-wider mb-1.5">
+                              <h4 className="text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider mb-1.5">
                                 SQL Executed
                               </h4>
-                              <pre className="text-[11px] text-white/50 font-mono bg-black/40 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">
+                              <pre className="text-[11px] text-[var(--muted)] font-mono bg-black/40 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">
                                 {run.sqlExecuted}
                               </pre>
                             </div>
@@ -290,29 +290,29 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                           {/* AI Assessment */}
                           {hasLlmValidation && (
                             <div>
-                              <h4 className="text-[11px] font-medium text-white/40 uppercase tracking-wider mb-1.5">
+                              <h4 className="text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider mb-1.5">
                                 AI Assessment
                               </h4>
-                              <div className="bg-black/30 rounded-lg p-3 space-y-2">
+                              <div className="bg-[var(--overlay-bg)] rounded-lg p-3 space-y-2">
                                 {hasLlmValidation.explanation && (
-                                  <p className="text-[12px] text-white/60 leading-relaxed">
+                                  <p className="text-[12px] text-[var(--text-tertiary)] leading-relaxed">
                                     {hasLlmValidation.explanation}
                                   </p>
                                 )}
                                 <div className="flex items-center gap-3 text-[11px]">
                                   {hasLlmValidation.original_status && (
-                                    <span className="text-white/30">
-                                      Original: <span className="text-white/50 font-medium">{hasLlmValidation.original_status}</span>
+                                    <span className="text-[var(--text-faint)]">
+                                      Original: <span className="text-[var(--muted)] font-medium">{hasLlmValidation.original_status}</span>
                                     </span>
                                   )}
                                   {hasLlmValidation.adjusted_status && (
-                                    <span className="text-white/30">
-                                      Adjusted: <span className="text-white/50 font-medium">{hasLlmValidation.adjusted_status}</span>
+                                    <span className="text-[var(--text-faint)]">
+                                      Adjusted: <span className="text-[var(--muted)] font-medium">{hasLlmValidation.adjusted_status}</span>
                                     </span>
                                   )}
                                   {hasLlmValidation.confidence_pct != null && (
-                                    <span className="text-white/30">
-                                      Confidence: <span className="text-white/50 font-medium">{hasLlmValidation.confidence_pct}%</span>
+                                    <span className="text-[var(--text-faint)]">
+                                      Confidence: <span className="text-[var(--muted)] font-medium">{hasLlmValidation.confidence_pct}%</span>
                                     </span>
                                   )}
                                 </div>
@@ -347,7 +347,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                                     e.stopPropagation();
                                     navigateToScout(router, chip.type, run, taskName, monitorType, targetFqn);
                                   }}
-                                  className="px-2.5 py-1 rounded-full text-[11px] text-white/50 bg-white/[0.06] hover:bg-white/[0.1] hover:text-white/70 transition-colors"
+                                  className="px-2.5 py-1 rounded-full text-[11px] text-[var(--muted)] bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] hover:text-[var(--text-tertiary)] transition-colors"
                                 >
                                   {chip.label}
                                 </button>

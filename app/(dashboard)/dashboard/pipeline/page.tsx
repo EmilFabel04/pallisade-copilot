@@ -397,7 +397,7 @@ export default function PipelinePage() {
               className={`px-3 py-2 rounded-lg text-sm border transition-all ${
                 editMode
                   ? 'border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--accent-2)] shadow-accent'
-                  : 'border-white/10 bg-white/[0.04] text-white hover:border-white/20'
+                  : 'border-[var(--border-medium)] bg-[var(--overlay-bg)] text-[var(--text)] hover:border-[var(--overlay-strong)]'
               }`}
             >
               {editMode ? 'Edit mode' : 'Inspect mode'}
@@ -409,7 +409,7 @@ export default function PipelinePage() {
         </div>
 
         {/* Setup Progress */}
-        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+        <div className="rounded-xl border border-[var(--border-medium)] bg-[var(--overlay-faint)] p-4">
           <div className="flex items-center justify-between gap-4 mb-3">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-[var(--accent-2)]" />
@@ -419,7 +419,7 @@ export default function PipelinePage() {
           </div>
 
           {/* Progress bar */}
-          <div className="h-1.5 rounded-full bg-white/[0.06] mb-3 overflow-hidden">
+          <div className="h-1.5 rounded-full bg-[var(--hover-bg)] mb-3 overflow-hidden">
             <div
               className="h-full rounded-full transition-all duration-700 ease-out"
               style={{ width: `${checklistProgress.percent}%`, background: checklistProgress.percent === 100 ? '#10B981' : 'var(--accent-2)' }}
@@ -435,7 +435,7 @@ export default function PipelinePage() {
                   className={`px-3 py-2 rounded-lg border text-xs transition-all ${
                     connected
                       ? 'border-emerald-500/30 bg-emerald-500/10'
-                      : 'border-white/10 bg-white/[0.02]'
+                      : 'border-[var(--border-medium)] bg-[var(--overlay-faint)]'
                   }`}
                 >
                   <div className="flex items-center gap-2">
@@ -455,7 +455,7 @@ export default function PipelinePage() {
         </div>
 
         {/* Stack Templates */}
-        <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
+        <div className="rounded-xl border border-[var(--border-medium)] bg-[var(--overlay-faint)] p-4">
           <div className="flex items-center justify-between gap-4 mb-3">
             <h3 className="text-sm font-medium">Stack templates</h3>
             <span className="text-xs text-[var(--muted)]">One-click starter bundles</span>
@@ -470,7 +470,7 @@ export default function PipelinePage() {
                   className={`text-left rounded-lg border p-3 transition-all ${
                     active
                       ? 'border-[var(--accent)] bg-[var(--accent)]/10 shadow-accent'
-                      : 'border-white/10 bg-white/[0.01] hover:bg-white/[0.04] hover:border-white/20'
+                      : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--overlay-bg)] hover:border-[var(--overlay-strong)]'
                   }`}
                 >
                   <div className="text-sm font-medium">{template.name}</div>
@@ -502,10 +502,10 @@ export default function PipelinePage() {
                 onClick={() => setSelectedGroup(group as ConnectorGroup | 'ALL')}
                 className={`px-3 py-2 rounded-lg text-xs border transition-all ${
                   active
-                    ? 'text-white font-medium'
-                    : 'border-white/10 bg-white/[0.02] text-[var(--muted)] hover:text-white hover:border-white/20'
+                    ? 'text-[var(--text)] font-medium'
+                    : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--overlay-strong)]'
                 }`}
-                style={active ? { borderColor: `${color}50`, backgroundColor: `${color}18`, color: 'white' } : undefined}
+                style={active ? { borderColor: `${color}50`, backgroundColor: `${color}18`, color: 'var(--text)' } : undefined}
               >
                 {group === 'ALL' ? 'All' : groupLabel(group as ConnectorGroup)}
               </button>
@@ -542,7 +542,7 @@ export default function PipelinePage() {
                           ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07]'
                           : recommended
                           ? 'border-[var(--accent)]/40 bg-[var(--accent)]/[0.04] hover:bg-[var(--accent)]/[0.08] hover:border-[var(--accent)]/60'
-                          : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/20'
+                          : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)]'
                       }`}
                       onClick={() => setExpandedConnector(isExpanded ? null : connector.id)}
                     >
@@ -578,12 +578,12 @@ export default function PipelinePage() {
                       </div>
 
                       {/* Action buttons — always visible at bottom */}
-                      <div className="mt-3 pt-3 border-t border-white/[0.06] flex items-center gap-2">
+                      <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] flex items-center gap-2">
                         {status === 'CONNECTED' ? (
                           <>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}
-                              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-white/10 hover:bg-white/[0.06] hover:border-white/20 transition-all"
+                              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] hover:bg-[var(--hover-bg)] hover:border-[var(--overlay-strong)] transition-all"
                             >
                               <Pencil className="w-3 h-3" />
                               Edit config
@@ -627,7 +627,7 @@ export default function PipelinePage() {
 
                       {/* Expanded details */}
                       {isExpanded && status === 'CONNECTED' && (
-                        <div className="mt-3 pt-3 border-t border-white/[0.06] text-xs text-[var(--muted)]">
+                        <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] text-xs text-[var(--muted)]">
                           <div className="flex items-center gap-2">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             <span>Active connection — credentials stored securely</span>
@@ -653,7 +653,7 @@ export default function PipelinePage() {
           <div className={`text-xs px-2.5 py-1 rounded-full border ${
             editMode
               ? 'border-[var(--accent)]/30 bg-[var(--accent)]/10 text-[var(--accent-2)]'
-              : 'border-white/10 bg-white/[0.03] text-[var(--muted)]'
+              : 'border-[var(--border-medium)] bg-[var(--overlay-bg)] text-[var(--muted)]'
           }`}>
             {editMode ? 'Edit mode' : 'Inspect mode'}
           </div>
@@ -661,7 +661,7 @@ export default function PipelinePage() {
 
         <div className="flex gap-4 h-[620px]">
           {/* Filter Sidebar */}
-          <div className="w-72 flex-shrink-0 rounded-xl border border-white/10 bg-white/[0.02] p-3 space-y-3 overflow-y-auto">
+          <div className="w-72 flex-shrink-0 rounded-xl border border-[var(--border-medium)] bg-[var(--overlay-faint)] p-3 space-y-3 overflow-y-auto">
             <div>
               <div className="text-xs uppercase tracking-wide text-[var(--muted)] mb-2">Plane filter</div>
               <div className="flex items-center gap-1">
@@ -671,8 +671,8 @@ export default function PipelinePage() {
                     onClick={() => setPlaneFilter(f)}
                     className={`px-2.5 py-1.5 rounded-md text-xs border transition-all ${
                       planeFilter === f
-                        ? 'border-[var(--accent)] bg-[var(--accent)]/15 text-white'
-                        : 'border-white/10 bg-white/[0.02] text-[var(--muted)] hover:text-white'
+                        ? 'border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--text)]'
+                        : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] text-[var(--muted)] hover:text-[var(--text)]'
                     }`}
                   >
                     {f === 'all' ? 'All planes' : `${f.charAt(0).toUpperCase()}${f.slice(1)} plane`}
@@ -682,7 +682,7 @@ export default function PipelinePage() {
             </div>
 
             <label className="flex items-center justify-between text-xs cursor-pointer group/toggle">
-              <span className="text-[var(--muted)] group-hover/toggle:text-white transition-colors">Only impacted assets</span>
+              <span className="text-[var(--muted)] group-hover/toggle:text-[var(--text)] transition-colors">Only impacted assets</span>
               <input
                 type="checkbox"
                 checked={onlyImpacted}
@@ -692,7 +692,7 @@ export default function PipelinePage() {
             </label>
 
             <label className="flex items-center justify-between text-xs cursor-pointer group/toggle">
-              <span className="text-[var(--muted)] group-hover/toggle:text-white transition-colors">Only critical paths</span>
+              <span className="text-[var(--muted)] group-hover/toggle:text-[var(--text)] transition-colors">Only critical paths</span>
               <input
                 type="checkbox"
                 checked={onlyCriticalPaths}
@@ -711,12 +711,12 @@ export default function PipelinePage() {
               />
             </div>
 
-            <div className="pt-2 border-t border-white/10 text-xs text-[var(--muted)]">
-              Environment: <span className="text-white font-medium">{environment}</span>
+            <div className="pt-2 border-t border-[var(--border-medium)] text-xs text-[var(--muted)]">
+              Environment: <span className="text-[var(--text)] font-medium">{environment}</span>
             </div>
 
             {/* Map legend */}
-            <div className="pt-2 border-t border-white/10">
+            <div className="pt-2 border-t border-[var(--border-medium)]">
               <div className="text-xs text-[var(--muted)] mb-2">Legend</div>
               <div className="space-y-1.5">
                 {(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'] as PipelineLayer[]).map((layer) => (
@@ -729,14 +729,14 @@ export default function PipelinePage() {
             </div>
 
             {editMode && (
-              <div className="pt-2 border-t border-white/10 text-[11px] text-[var(--muted)]">
+              <div className="pt-2 border-t border-[var(--border-medium)] text-[11px] text-[var(--muted)]">
                 Drag nodes to reposition. Connect handles to create edges.
               </div>
             )}
           </div>
 
           {/* Canvas */}
-          <div className="flex-1 rounded-xl overflow-hidden border border-white/10">
+          <div className="flex-1 rounded-xl overflow-hidden border border-[var(--border-medium)]">
             <PipelineCanvas
               nodes={filteredMapNodes}
               edges={filteredMapEdges}

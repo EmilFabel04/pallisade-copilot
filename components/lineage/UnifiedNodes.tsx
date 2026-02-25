@@ -211,7 +211,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
           type="target"
           position={Position.Left}
           className="!w-3 !h-3 !border-2"
-          style={{ backgroundColor: layerColor, borderColor: 'rgba(255,255,255,0.3)' }}
+          style={{ backgroundColor: layerColor, borderColor: 'var(--border-medium)' }}
         />
 
         <div className="flex items-center gap-3 mb-3">
@@ -222,7 +222,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
             {toolInitial}
           </div>
           <div className="flex-1 min-w-0">
-            <span className="text-white font-semibold text-[14px] truncate block">{data.name}</span>
+            <span className="text-[var(--text)] font-semibold text-[14px] truncate block">{data.name}</span>
             <span className="text-[10px] uppercase tracking-wide" style={{ color: layerColor }}>
               {data.toolType || data.category}
             </span>
@@ -232,19 +232,19 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         {/* Asset count */}
         {data.assetCount !== undefined && (
           <div className="flex items-center justify-between text-[11px] mb-2">
-            <span className="text-white/50">Data Assets</span>
-            <span className="text-white font-semibold">{data.assetCount}</span>
+            <span className="text-[var(--muted)]">Data Assets</span>
+            <span className="text-[var(--text)] font-semibold">{data.assetCount}</span>
           </div>
         )}
 
         {/* Health bar */}
         {total > 0 && (
           <div>
-            <div className="flex items-center justify-between text-[10px] text-white/50 mb-1">
+            <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
               <span>Health</span>
               <span>{healthPct}%</span>
             </div>
-            <div className="h-1.5 bg-white/10 rounded-full overflow-hidden flex">
+            <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden flex">
               {health!.healthy > 0 && (
                 <div className="h-full bg-emerald-400" style={{ width: `${(health!.healthy / total) * 100}%` }} />
               )}
@@ -262,7 +262,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
           type="source"
           position={Position.Right}
           className="!w-3 !h-3 !border-2"
-          style={{ backgroundColor: layerColor, borderColor: 'rgba(255,255,255,0.3)' }}
+          style={{ backgroundColor: layerColor, borderColor: 'var(--border-medium)' }}
         />
       </div>
     );
@@ -285,7 +285,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         className="!w-3 !h-3 !border-2"
         style={{
           backgroundColor: layerColor,
-          borderColor: 'rgba(255,255,255,0.3)',
+          borderColor: 'var(--border-medium)',
         }}
       />
 
@@ -300,7 +300,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-white font-medium text-sm truncate">{data.name}</span>
+            <span className="text-[var(--text)] font-medium text-sm truncate">{data.name}</span>
             <div className="flex items-center gap-1" style={{ color: statusConfig.color }}>
               {statusConfig.icon}
             </div>
@@ -314,7 +314,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
               <span>{data.category}</span>
             </div>
             {data.toolType && (
-              <span className="text-[10px] text-white/40">{data.toolType}</span>
+              <span className="text-[10px] text-[var(--muted)]">{data.toolType}</span>
             )}
           </div>
         </div>
@@ -323,11 +323,11 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
       {/* Health score bar */}
       {data.healthScore !== undefined && (
         <div className="mt-2">
-          <div className="flex items-center justify-between text-[10px] text-white/50 mb-1">
+          <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
             <span>Health</span>
             <span>{Math.round(data.healthScore)}%</span>
           </div>
-          <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+          <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
             <div
               className="h-full rounded-full transition-all"
               style={{
@@ -358,7 +358,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
             </span>
           )}
           {(data.findingsCount ?? 0) > (data.criticalCount ?? 0) + (data.highCount ?? 0) && (
-            <span className="px-1.5 py-0.5 text-[10px] font-medium bg-white/10 text-white/50 rounded">
+            <span className="px-1.5 py-0.5 text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)] rounded">
               +{(data.findingsCount ?? 0) - (data.criticalCount ?? 0) - (data.highCount ?? 0)}
             </span>
           )}
@@ -372,7 +372,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         className="!w-3 !h-3 !border-2"
         style={{
           backgroundColor: layerColor,
-          borderColor: 'rgba(255,255,255,0.3)',
+          borderColor: 'var(--border-medium)',
         }}
       />
     </div>
@@ -420,7 +420,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
         className="!w-2.5 !h-2.5 !border-2"
         style={{
           backgroundColor: visuals.color,
-          borderColor: 'rgba(255,255,255,0.2)',
+          borderColor: 'var(--subtle-border)',
         }}
       />
 
@@ -435,7 +435,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
             {visuals.label}
           </span>
           {data.category === 'model' && data.nodeType && data.nodeType !== 'model' && (
-            <span className="text-[9px] text-white/30 lowercase">
+            <span className="text-[9px] text-[var(--text-faint)] lowercase">
               · {data.nodeType}
             </span>
           )}
@@ -472,12 +472,12 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
       </div>
 
       {/* Name */}
-      <div className="text-sm font-mono text-white truncate" title={data.fullName || data.name}>
+      <div className="text-sm font-mono text-[var(--text)] truncate" title={data.fullName || data.name}>
         {shortName}
       </div>
 
       {/* Metadata row */}
-      <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-white/40">
+      <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-[var(--muted)]">
         {(data.upstreamCount ?? 0) > 0 && <span>↑{data.upstreamCount}</span>}
         {(data.downstreamCount ?? 0) > 0 && <span>↓{data.downstreamCount}</span>}
         {data.rowCount !== undefined && data.rowCount > 0 && (
@@ -497,7 +497,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
           {data.platforms.map((p) => (
             <span
               key={p}
-              className="px-1 py-0.5 text-[8px] font-medium uppercase tracking-wide rounded bg-white/[0.06] text-white/40 border border-white/[0.06]"
+              className="px-1 py-0.5 text-[8px] font-medium uppercase tracking-wide rounded bg-[var(--hover-bg)] text-[var(--muted)] border border-[var(--subtle-border)]"
             >
               {p}
             </span>
@@ -519,7 +519,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
             </span>
           )}
           {(data.issues!.medium > 0 || data.issues!.low > 0) && (
-            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-white/10 text-white/50 rounded">
+            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)] rounded">
               +{data.issues!.medium + data.issues!.low}
             </span>
           )}
@@ -533,7 +533,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
         className="!w-2.5 !h-2.5 !border-2"
         style={{
           backgroundColor: visuals.color,
-          borderColor: 'rgba(255,255,255,0.2)',
+          borderColor: 'var(--subtle-border)',
         }}
       />
     </div>

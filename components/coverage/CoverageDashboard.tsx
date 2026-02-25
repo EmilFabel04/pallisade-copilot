@@ -54,13 +54,13 @@ export function CoverageDashboard({
   const overallPercent = Math.round(report.overall_score * 100);
 
   return (
-    <div className="flex h-full flex-col bg-zinc-950 text-zinc-200">
+    <div className="flex h-full flex-col bg-[var(--bg)] text-[var(--text)]">
       {/* Header */}
-      <div className="border-b border-zinc-800 px-6 py-4">
+      <div className="border-b border-[var(--subtle-border)] px-6 py-4">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-lg font-semibold">Lineage Coverage</h1>
-            <p className="mt-0.5 text-xs text-zinc-500">
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
               Tech-agnostic observability coverage analysis across{" "}
               {report.total_nodes} data assets
             </p>
@@ -75,10 +75,10 @@ export function CoverageDashboard({
               {overallPercent}
             </div>
             <div className="text-right text-xs">
-              <div className="font-medium text-zinc-300">
+              <div className="font-medium text-[var(--text-secondary)]">
                 Overall Score
               </div>
-              <div className="text-zinc-500">
+              <div className="text-[var(--muted)]">
                 {report.nodes_with_full_coverage} fully covered
               </div>
             </div>
@@ -95,8 +95,8 @@ export function CoverageDashboard({
               onClick={() => setActiveTab(tab)}
               className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                 activeTab === tab
-                  ? "bg-zinc-800 text-white"
-                  : "text-zinc-500 hover:text-zinc-300"
+                  ? "bg-[var(--surface-inset)] text-[var(--text)]"
+                  : "text-[var(--muted)] hover:text-[var(--text-secondary)]"
               }`}
             >
               {tab === "overview" && "Overview"}
@@ -177,7 +177,7 @@ function OverviewTab({ report }: { report: CoverageReportDetailed }) {
 
       {/* Category scores */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold text-zinc-300">
+        <h3 className="mb-3 text-sm font-semibold text-[var(--text-secondary)]">
           Coverage by Category
         </h3>
         <div className="grid grid-cols-2 gap-3">
@@ -191,7 +191,7 @@ function OverviewTab({ report }: { report: CoverageReportDetailed }) {
             return (
               <div
                 key={cat}
-                className="rounded-lg border border-zinc-800 bg-zinc-900 p-3"
+                className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] p-3"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -201,7 +201,7 @@ function OverviewTab({ report }: { report: CoverageReportDetailed }) {
                         backgroundColor: CATEGORY_COLORS[cat],
                       }}
                     />
-                    <span className="text-xs font-medium text-zinc-300">
+                    <span className="text-xs font-medium text-[var(--text-secondary)]">
                       {CATEGORY_LABELS[cat]}
                     </span>
                   </div>
@@ -212,7 +212,7 @@ function OverviewTab({ report }: { report: CoverageReportDetailed }) {
                     {pct}%
                   </span>
                 </div>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-inset)]">
                   <div
                     className="h-full rounded-full transition-all"
                     style={{
@@ -229,7 +229,7 @@ function OverviewTab({ report }: { report: CoverageReportDetailed }) {
 
       {/* Top gaps preview */}
       <div>
-        <h3 className="mb-3 text-sm font-semibold text-zinc-300">
+        <h3 className="mb-3 text-sm font-semibold text-[var(--text-secondary)]">
           Top Priority Gaps
         </h3>
         <div className="space-y-2">
@@ -299,7 +299,7 @@ function GapsTab({
           />
         ))}
         {gaps.length === 0 && (
-          <div className="py-8 text-center text-xs text-zinc-600">
+          <div className="py-8 text-center text-xs text-[var(--muted)]">
             No gaps match the current filter.
           </div>
         )}
@@ -324,7 +324,7 @@ function RecommendationsTab({
       {recommendations.map((rec, i) => (
         <div
           key={`${rec.target_node_id}-${rec.monitor_type}-${i}`}
-          className="rounded-lg border border-zinc-800 bg-zinc-900 p-4"
+          className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] p-4"
         >
           <div className="flex items-start justify-between">
             <div>
@@ -337,14 +337,14 @@ function RecommendationsTab({
                 >
                   {rec.priority}
                 </span>
-                <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                <span className="rounded bg-[var(--surface-inset)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
                   {rec.monitor_type.replace(/_/g, " ")}
                 </span>
               </div>
-              <div className="mt-1.5 text-xs text-zinc-300">
+              <div className="mt-1.5 text-xs text-[var(--text-secondary)]">
                 {rec.description}
               </div>
-              <div className="mt-1 text-[10px] text-zinc-600">
+              <div className="mt-1 text-[10px] text-[var(--muted)]">
                 Target: {rec.target_node_name}
               </div>
             </div>
@@ -361,10 +361,10 @@ function RecommendationsTab({
           {/* SQL template preview */}
           {rec.sql_template && (
             <details className="mt-3">
-              <summary className="cursor-pointer text-[10px] text-zinc-500 hover:text-zinc-400">
+              <summary className="cursor-pointer text-[10px] text-[var(--muted)] hover:text-[var(--text-tertiary)]">
                 SQL Template
               </summary>
-              <pre className="mt-1 overflow-x-auto rounded bg-zinc-950 p-2 text-[10px] text-zinc-400">
+              <pre className="mt-1 overflow-x-auto rounded bg-[var(--bg)] p-2 text-[10px] text-[var(--muted)]">
                 {rec.sql_template}
               </pre>
             </details>
@@ -384,7 +384,7 @@ function RecommendationsTab({
         </div>
       ))}
       {recommendations.length === 0 && (
-        <div className="py-8 text-center text-xs text-zinc-600">
+        <div className="py-8 text-center text-xs text-[var(--muted)]">
           No recommendations — all coverage gaps are non-monitorable
           (ownership, documentation, etc.).
         </div>
@@ -429,15 +429,15 @@ function NodesTab({
     <div>
       {/* Sort controls */}
       <div className="mb-3 flex gap-2">
-        <span className="text-[10px] text-zinc-500">Sort by:</span>
+        <span className="text-[10px] text-[var(--muted)]">Sort by:</span>
         {(["score", "gaps", "name"] as const).map((s) => (
           <button
             key={s}
             onClick={() => setSortBy(s)}
             className={`text-[10px] ${
               sortBy === s
-                ? "font-medium text-white"
-                : "text-zinc-500 hover:text-zinc-300"
+                ? "font-medium text-[var(--text)]"
+                : "text-[var(--muted)] hover:text-[var(--text-secondary)]"
             }`}
           >
             {s === "score"
@@ -450,10 +450,10 @@ function NodesTab({
       </div>
 
       {/* Node table */}
-      <div className="overflow-hidden rounded-lg border border-zinc-800">
+      <div className="overflow-hidden rounded-lg border border-[var(--subtle-border)]">
         <table className="w-full text-xs">
           <thead>
-            <tr className="bg-zinc-900 text-zinc-500">
+            <tr className="bg-[var(--surface)] text-[var(--muted)]">
               <th className="px-3 py-2 text-left font-medium">Asset</th>
               <th className="px-3 py-2 text-left font-medium">Type</th>
               <th className="px-3 py-2 text-center font-medium">
@@ -472,19 +472,19 @@ function NodesTab({
                 <tr
                   key={nc.node_id}
                   onClick={() => onNodeSelect?.(nc.node_id)}
-                  className="cursor-pointer border-t border-zinc-800 transition-colors hover:bg-zinc-900/50"
+                  className="cursor-pointer border-t border-[var(--subtle-border)] transition-colors hover:bg-[var(--surface)]/50"
                 >
                   <td className="px-3 py-2">
-                    <div className="font-medium text-zinc-300">
+                    <div className="font-medium text-[var(--text-secondary)]">
                       {nc.node_name}
                     </div>
                     {nc.platform && (
-                      <div className="text-[10px] text-zinc-600">
+                      <div className="text-[10px] text-[var(--muted)]">
                         {nc.platform}
                       </div>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-zinc-500">
+                  <td className="px-3 py-2 text-[var(--muted)]">
                     {nc.node_type}
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -501,7 +501,7 @@ function NodesTab({
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-center gap-1.5">
-                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-zinc-800">
+                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--surface-inset)]">
                         <div
                           className="h-full rounded-full"
                           style={{
@@ -510,10 +510,10 @@ function NodesTab({
                           }}
                         />
                       </div>
-                      <span className="text-zinc-500">{pct}%</span>
+                      <span className="text-[var(--muted)]">{pct}%</span>
                     </div>
                   </td>
-                  <td className="px-3 py-2 text-center text-zinc-500">
+                  <td className="px-3 py-2 text-center text-[var(--muted)]">
                     {nc.uncovered_dimensions.length}
                   </td>
                 </tr>
@@ -542,13 +542,13 @@ function SummaryCard({
   color: string;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
-      <div className="text-[10px] text-zinc-500">{label}</div>
+    <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] p-3">
+      <div className="text-[10px] text-[var(--muted)]">{label}</div>
       <div className="mt-1 flex items-baseline gap-1">
         <span className="text-xl font-bold" style={{ color }}>
           {value}
         </span>
-        <span className="text-xs text-zinc-600">/ {total}</span>
+        <span className="text-xs text-[var(--muted)]">/ {total}</span>
       </div>
     </div>
   );
@@ -564,20 +564,20 @@ function GapRow({
   onNodeClick?: (nodeId: string) => void;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2">
+    <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] px-3 py-2">
       <div className="flex items-center gap-2">
         <div
           className="h-2 w-2 shrink-0 rounded-full"
           style={{ backgroundColor: SEVERITY_COLORS[gap.severity] }}
         />
-        <span className="text-xs font-medium text-zinc-300">
+        <span className="text-xs font-medium text-[var(--text-secondary)]">
           {gap.title}
         </span>
-        <span className="ml-auto rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-500">
+        <span className="ml-auto rounded bg-[var(--surface-inset)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]">
           {gap.category}
         </span>
       </div>
-      <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-500">
+      <div className="mt-1 flex items-center gap-2 text-[10px] text-[var(--muted)]">
         <button
           onClick={() => onNodeClick?.(gap.node_id)}
           className="text-blue-400 hover:underline"
@@ -595,10 +595,10 @@ function GapRow({
       </div>
       {expanded && (
         <>
-          <div className="mt-1.5 text-[10px] text-zinc-600">
+          <div className="mt-1.5 text-[10px] text-[var(--muted)]">
             {gap.description}
           </div>
-          <div className="mt-1 rounded bg-zinc-950 px-2 py-1 text-[10px] text-zinc-500">
+          <div className="mt-1 rounded bg-[var(--bg)] px-2 py-1 text-[10px] text-[var(--muted)]">
             {gap.recommendation}
           </div>
         </>
@@ -623,8 +623,8 @@ function FilterPill({
       onClick={onClick}
       className={`rounded-full px-2.5 py-1 text-[10px] font-medium capitalize transition-colors ${
         active
-          ? "bg-zinc-700 text-white"
-          : "bg-zinc-900 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+          ? "bg-[var(--hover-bg)] text-[var(--text)]"
+          : "bg-[var(--surface)] text-[var(--muted)] hover:bg-[var(--surface-inset)] hover:text-[var(--text-secondary)]"
       }`}
       style={active && color ? { backgroundColor: color } : undefined}
     >

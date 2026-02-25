@@ -80,7 +80,7 @@ export function CoverageSummaryBar({
   const overallColor = getCoverageColor(overallPercent);
 
   return (
-    <div className="flex items-center gap-4 rounded-lg border border-zinc-800 bg-zinc-900/80 px-4 py-2 text-xs backdrop-blur">
+    <div className="flex items-center gap-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] px-4 py-2 text-xs backdrop-blur">
       {/* Overall score */}
       <div className="flex items-center gap-2">
         <div
@@ -90,14 +90,14 @@ export function CoverageSummaryBar({
           {overallPercent}
         </div>
         <div>
-          <div className="font-medium text-zinc-300">Coverage</div>
-          <div className="text-zinc-500">
+          <div className="font-medium text-[var(--text-secondary)]">Coverage</div>
+          <div className="text-[var(--muted)]">
             {report.total_nodes} assets
           </div>
         </div>
       </div>
 
-      <div className="h-6 w-px bg-zinc-700" />
+      <div className="h-6 w-px bg-[var(--subtle-border)]" />
 
       {/* Category breakdown */}
       <div className="flex gap-3">
@@ -112,14 +112,14 @@ export function CoverageSummaryBar({
             <button
               key={cat}
               onClick={() => onCategoryClick?.(cat)}
-              className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-zinc-800"
+              className="flex items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:bg-[var(--surface-inset)]"
               title={`${CATEGORY_LABELS[cat]}: ${pct}%`}
             >
               <div
                 className="h-2 w-2 rounded-full"
                 style={{ backgroundColor: CATEGORY_COLORS[cat] }}
               />
-              <span className="text-zinc-400">
+              <span className="text-[var(--text-tertiary)]">
                 {CATEGORY_LABELS[cat]}
               </span>
               <span
@@ -133,7 +133,7 @@ export function CoverageSummaryBar({
         })}
       </div>
 
-      <div className="h-6 w-px bg-zinc-700" />
+      <div className="h-6 w-px bg-[var(--subtle-border)]" />
 
       {/* Gap counts */}
       <div className="flex gap-2">
@@ -158,7 +158,7 @@ export function CoverageSummaryBar({
             className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
             style={{
               backgroundColor: SEVERITY_COLORS.medium,
-              color: "#1a1a1a",
+              color: "var(--bg)",
             }}
           >
             {report.gaps_summary.medium} Medium
@@ -199,15 +199,15 @@ export function CoverageGapPanel({
   }, [gaps]);
 
   return (
-    <div className="flex h-full w-80 flex-col border-l border-zinc-800 bg-zinc-950">
+    <div className="flex h-full w-80 flex-col border-l border-[var(--subtle-border)] bg-[var(--bg)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-        <h3 className="text-sm font-semibold text-zinc-200">
+      <div className="flex items-center justify-between border-b border-[var(--subtle-border)] px-4 py-3">
+        <h3 className="text-sm font-semibold text-[var(--text)]">
           Coverage Gaps ({gaps.length})
         </h3>
         <button
           onClick={onClose}
-          className="text-zinc-500 hover:text-zinc-300"
+          className="text-[var(--muted)] hover:text-[var(--text-secondary)]"
         >
           &times;
         </button>
@@ -221,7 +221,7 @@ export function CoverageGapPanel({
             if (gapList.length === 0) return null;
             return (
               <div key={severity} className="mb-3">
-                <div className="mb-1 flex items-center gap-2 px-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                <div className="mb-1 flex items-center gap-2 px-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">
                   <div
                     className="h-1.5 w-1.5 rounded-full"
                     style={{
@@ -234,15 +234,15 @@ export function CoverageGapPanel({
                   <button
                     key={`${gap.node_id}-${gap.dimension}-${i}`}
                     onClick={() => onGapClick?.(gap)}
-                    className="mb-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-left transition-colors hover:border-zinc-700 hover:bg-zinc-800/80"
+                    className="mb-1 w-full rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] px-3 py-2 text-left transition-colors hover:border-[var(--border-medium)] hover:bg-[var(--surface-inset)]"
                   >
-                    <div className="text-xs font-medium text-zinc-300">
+                    <div className="text-xs font-medium text-[var(--text-secondary)]">
                       {gap.title}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                    <div className="mt-0.5 text-[10px] text-[var(--muted)]">
                       {gap.node_name}
                     </div>
-                    <div className="mt-1 text-[10px] text-zinc-600 line-clamp-2">
+                    <div className="mt-1 text-[10px] text-[var(--muted)] line-clamp-2">
                       {gap.recommendation}
                     </div>
                   </button>
@@ -274,27 +274,27 @@ export function NodeCoverageDetail({
   const percent = Math.round(coverage.coverage_percent);
 
   return (
-    <div className="flex h-full w-80 flex-col border-l border-zinc-800 bg-zinc-950">
+    <div className="flex h-full w-80 flex-col border-l border-[var(--subtle-border)] bg-[var(--bg)]">
       {/* Header */}
-      <div className="border-b border-zinc-800 px-4 py-3">
+      <div className="border-b border-[var(--subtle-border)] px-4 py-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-zinc-200">
+          <h3 className="text-sm font-semibold text-[var(--text)]">
             Node Coverage
           </h3>
           <button
             onClick={onClose}
-            className="text-zinc-500 hover:text-zinc-300"
+            className="text-[var(--muted)] hover:text-[var(--text-secondary)]"
           >
             &times;
           </button>
         </div>
-        <div className="mt-1 text-xs text-zinc-500">
+        <div className="mt-1 text-xs text-[var(--muted)]">
           {coverage.node_name}
         </div>
       </div>
 
       {/* Score ring */}
-      <div className="flex items-center gap-4 border-b border-zinc-800 px-4 py-3">
+      <div className="flex items-center gap-4 border-b border-[var(--subtle-border)] px-4 py-3">
         <div
           className="flex h-14 w-14 items-center justify-center rounded-full text-lg font-bold text-white"
           style={{ backgroundColor: getCoverageColor(percent) }}
@@ -302,11 +302,11 @@ export function NodeCoverageDetail({
           {percent}%
         </div>
         <div className="text-xs">
-          <div className="text-zinc-300">
+          <div className="text-[var(--text-secondary)]">
             {coverage.covered_count} / {coverage.applicable_dimensions}{" "}
             dimensions covered
           </div>
-          <div className="mt-1 text-zinc-500">
+          <div className="mt-1 text-[var(--muted)]">
             {coverage.node_type} &middot; {coverage.criticality} criticality
           </div>
         </div>
@@ -314,7 +314,7 @@ export function NodeCoverageDetail({
 
       {/* Category breakdown */}
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-3 text-xs font-semibold text-zinc-400">
+        <div className="mb-3 text-xs font-semibold text-[var(--text-tertiary)]">
           Category Scores
         </div>
         {(
@@ -328,14 +328,14 @@ export function NodeCoverageDetail({
           return (
             <div key={cat} className="mb-2">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-zinc-400">
+                <span className="text-[var(--text-tertiary)]">
                   {CATEGORY_LABELS[catKey] || cat}
                 </span>
                 <span style={{ color: getCoverageColor(pct) }}>
                   {cs.dimensions_covered}/{cs.dimensions_total}
                 </span>
               </div>
-              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-inset)]">
                 <div
                   className="h-full rounded-full transition-all"
                   style={{
@@ -352,7 +352,7 @@ export function NodeCoverageDetail({
         {/* Uncovered dimensions */}
         {coverage.uncovered_dimensions.length > 0 && (
           <>
-            <div className="mb-2 mt-4 text-xs font-semibold text-zinc-400">
+            <div className="mb-2 mt-4 text-xs font-semibold text-[var(--text-tertiary)]">
               Missing Coverage ({coverage.uncovered_dimensions.length})
             </div>
             {coverage.uncovered_dimensions.map((dim) => (
@@ -369,13 +369,13 @@ export function NodeCoverageDetail({
         {/* Node-specific gaps */}
         {gaps.length > 0 && (
           <>
-            <div className="mb-2 mt-4 text-xs font-semibold text-zinc-400">
+            <div className="mb-2 mt-4 text-xs font-semibold text-[var(--text-tertiary)]">
               Gaps ({gaps.length})
             </div>
             {gaps.map((gap, i) => (
               <div
                 key={`${gap.dimension}-${i}`}
-                className="mb-2 rounded border border-zinc-800 bg-zinc-900 p-2"
+                className="mb-2 rounded border border-[var(--subtle-border)] bg-[var(--surface)] p-2"
               >
                 <div className="flex items-center gap-1.5">
                   <div
@@ -384,11 +384,11 @@ export function NodeCoverageDetail({
                       backgroundColor: SEVERITY_COLORS[gap.severity],
                     }}
                   />
-                  <span className="text-[10px] font-medium text-zinc-300">
+                  <span className="text-[10px] font-medium text-[var(--text-secondary)]">
                     {gap.title}
                   </span>
                 </div>
-                <div className="mt-1 text-[10px] text-zinc-600">
+                <div className="mt-1 text-[10px] text-[var(--muted)]">
                   {gap.recommendation}
                 </div>
               </div>

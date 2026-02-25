@@ -50,20 +50,20 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="border-t border-white/[0.06] pt-3">
+    <div className="border-t border-[var(--subtle-border)] pt-3">
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center justify-between w-full group"
       >
-        <span className="text-[11px] text-white/40 uppercase tracking-wide group-hover:text-white/60 transition-colors">
+        <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide group-hover:text-[var(--text-tertiary)] transition-colors">
           {title}
         </span>
         <div className="flex items-center gap-1.5">
           {count !== undefined && (
-            <span className="text-[10px] text-white/30">{count}</span>
+            <span className="text-[10px] text-[var(--text-faint)]">{count}</span>
           )}
           <ChevronDown
-            className={`w-3.5 h-3.5 text-white/30 transition-transform ${open ? 'rotate-180' : ''}`}
+            className={`w-3.5 h-3.5 text-[var(--text-faint)] transition-transform ${open ? 'rotate-180' : ''}`}
           />
         </div>
       </button>
@@ -108,13 +108,13 @@ function RelationshipItem({
   return (
     <button
       onClick={() => onNavigate(relNode.id)}
-      className="w-full text-left p-2 rounded-lg bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.04] hover:border-white/[0.08] transition-all"
+      className="w-full text-left p-2 rounded-lg bg-[var(--overlay-faint)] hover:bg-[var(--hover-bg)] border border-[var(--border-faint)] hover:border-[var(--subtle-border)] transition-all"
     >
       <div className="flex items-center gap-2">
         <div style={{ color: visuals.color }}>
           <CategoryIcon category={relNode.category} />
         </div>
-        <span className="text-[12px] text-white font-mono truncate flex-1" title={relNode.fullName || relNode.name}>
+        <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1" title={relNode.fullName || relNode.name}>
           {shortName}
         </span>
         {edge.lineageLevel && edge.lineageLevel !== 'table' && (
@@ -126,7 +126,7 @@ function RelationshipItem({
       <div className="flex items-center gap-2 mt-1.5">
         {edge.confidence !== undefined && (
           <>
-            <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+            <div className="flex-1 h-1 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full"
                 style={{
@@ -135,12 +135,12 @@ function RelationshipItem({
                 }}
               />
             </div>
-            <span className="text-[10px] text-white/40 shrink-0">
+            <span className="text-[10px] text-[var(--muted)] shrink-0">
               {Math.round(edge.confidence * 100)}%
             </span>
           </>
         )}
-        <span className="text-[10px] text-white/30 truncate shrink-0 max-w-[80px]" title={evidenceSource}>
+        <span className="text-[10px] text-[var(--text-faint)] truncate shrink-0 max-w-[80px]" title={evidenceSource}>
           {evidenceSource}
         </span>
       </div>
@@ -288,12 +288,12 @@ export function DataAssetDetailPanel({
   const isStale = node.freshnessStatus === 'stale';
 
   return (
-    <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+    <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-inset)] p-4 overflow-y-auto">
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
-        <h3 className="text-[15px] font-medium text-white">Data Asset Details</h3>
-        <button onClick={onClose} className="p-1 hover:bg-white/[0.05] rounded">
-          <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <h3 className="text-[15px] font-medium text-[var(--text)]">Data Asset Details</h3>
+        <button onClick={onClose} className="p-1 hover:bg-[var(--subtle-bg)] rounded">
+          <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -302,8 +302,8 @@ export function DataAssetDetailPanel({
       <div className="space-y-4">
         {/* Name */}
         <div>
-          <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
-          <p className="text-[13px] text-white font-mono mt-1 break-all">
+          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Name</label>
+          <p className="text-[13px] text-[var(--text)] font-mono mt-1 break-all">
             {node.fullName || node.name}
           </p>
         </div>
@@ -311,19 +311,19 @@ export function DataAssetDetailPanel({
         {/* Type and Layer */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
-            <p className="text-[13px] text-white mt-1 capitalize">{node.category}</p>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Type</label>
+            <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{node.category}</p>
           </div>
           <div>
-            <label className="text-[11px] text-white/40 uppercase tracking-wide">Layer</label>
-            <p className="text-[13px] text-white mt-1">{node.layer}</p>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Layer</label>
+            <p className="text-[13px] text-[var(--text)] mt-1">{node.layer}</p>
           </div>
         </div>
 
         {/* Health Status Card */}
-        <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+        <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
           <div className="flex items-center justify-between mb-3">
-            <span className="text-[11px] text-white/40 uppercase tracking-wide">Health Status</span>
+            <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Health Status</span>
             {node.freshnessStatus === 'fresh' && (
               <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-medium">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -337,15 +337,15 @@ export function DataAssetDetailPanel({
               </span>
             )}
             {node.freshnessStatus === 'unknown' && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-white/10 text-white/50 text-[10px] font-medium">
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--overlay-medium)] text-[var(--muted)] text-[10px] font-medium">
                 Unknown
               </span>
             )}
           </div>
           <div className="grid grid-cols-2 gap-2 text-[12px]">
             <div>
-              <span className="text-white/40">Last Updated</span>
-              <p className="text-white mt-0.5">
+              <span className="text-[var(--muted)]">Last Updated</span>
+              <p className="text-[var(--text)] mt-0.5">
                 {node.lastUpdated
                   ? node.freshnessHours !== undefined
                     ? node.freshnessHours < 1
@@ -358,8 +358,8 @@ export function DataAssetDetailPanel({
               </p>
             </div>
             <div>
-              <span className="text-white/40">Row Count</span>
-              <p className="text-white mt-0.5">
+              <span className="text-[var(--muted)]">Row Count</span>
+              <p className="text-[var(--text)] mt-0.5">
                 {node.rowCount?.toLocaleString() ?? '\u2014'}
               </p>
             </div>
@@ -368,10 +368,10 @@ export function DataAssetDetailPanel({
 
         {/* Issues Section */}
         {hasIssues && (
-          <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] text-white/40 uppercase tracking-wide">Issues</span>
-              <span className="text-[12px] text-white font-medium">{node.issues!.open} open</span>
+              <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Issues</span>
+              <span className="text-[12px] text-[var(--text)] font-medium">{node.issues!.open} open</span>
             </div>
             <div className="flex items-center gap-2 mb-3">
               {node.issues!.critical > 0 && (
@@ -393,17 +393,17 @@ export function DataAssetDetailPanel({
                 </div>
               )}
               {node.issues!.low > 0 && (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-white/10">
-                  <span className="w-2 h-2 rounded-full bg-white/50" />
-                  <span className="text-[11px] text-white/60 font-medium">{node.issues!.low} Low</span>
+                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-[var(--overlay-medium)]">
+                  <span className="w-2 h-2 rounded-full bg-[var(--muted)]" />
+                  <span className="text-[11px] text-[var(--text-tertiary)] font-medium">{node.issues!.low} Low</span>
                 </div>
               )}
             </div>
             {Object.keys(node.issues!.byType).length > 0 && (
-              <div className="pt-2 border-t border-white/[0.06]">
+              <div className="pt-2 border-t border-[var(--subtle-border)]">
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(node.issues!.byType).map(([type, count]) => (
-                    <span key={type} className="px-2 py-0.5 text-[10px] bg-white/5 text-white/60 rounded capitalize">
+                    <span key={type} className="px-2 py-0.5 text-[10px] bg-[var(--subtle-bg)] text-[var(--text-tertiary)] rounded capitalize">
                       {type}: {count}
                     </span>
                   ))}
@@ -438,8 +438,8 @@ export function DataAssetDetailPanel({
                   const visible = showAllUpstream ? items : items.slice(0, VISIBLE_LIMIT);
                   return (
                     <div key={hop}>
-                      <div className="text-[10px] text-white/30 uppercase tracking-wide mb-1.5">
-                        Hop {hop} <span className="text-white/20">({items.length})</span>
+                      <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide mb-1.5">
+                        Hop {hop} <span className="text-[var(--text-faint)]">({items.length})</span>
                       </div>
                       <div className="space-y-1.5">
                         {visible.map(({ node: relNode, edge }) => (
@@ -455,7 +455,7 @@ export function DataAssetDetailPanel({
                       {!showAllUpstream && items.length > VISIBLE_LIMIT && (
                         <button
                           onClick={() => setShowAllUpstream(true)}
-                          className="w-full text-center text-[11px] text-white/40 hover:text-white/60 py-1.5 transition-colors"
+                          className="w-full text-center text-[11px] text-[var(--muted)] hover:text-[var(--text-tertiary)] py-1.5 transition-colors"
                         >
                           Show all {items.length} at hop {hop}
                         </button>
@@ -482,8 +482,8 @@ export function DataAssetDetailPanel({
                   const visible = showAllDownstream ? items : items.slice(0, VISIBLE_LIMIT);
                   return (
                     <div key={hop}>
-                      <div className="text-[10px] text-white/30 uppercase tracking-wide mb-1.5">
-                        Hop {hop} <span className="text-white/20">({items.length})</span>
+                      <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide mb-1.5">
+                        Hop {hop} <span className="text-[var(--text-faint)]">({items.length})</span>
                       </div>
                       <div className="space-y-1.5">
                         {visible.map(({ node: relNode, edge }) => (
@@ -499,7 +499,7 @@ export function DataAssetDetailPanel({
                       {!showAllDownstream && items.length > VISIBLE_LIMIT && (
                         <button
                           onClick={() => setShowAllDownstream(true)}
-                          className="w-full text-center text-[11px] text-white/40 hover:text-white/60 py-1.5 transition-colors"
+                          className="w-full text-center text-[11px] text-[var(--muted)] hover:text-[var(--text-tertiary)] py-1.5 transition-colors"
                         >
                           Show all {items.length} at hop {hop}
                         </button>
@@ -516,14 +516,14 @@ export function DataAssetDetailPanel({
           <Section title="Column Lineage" count={allColumnMappings.length}>
             <div className="space-y-1">
               {allColumnMappings.map((m, i) => (
-                <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono py-1 px-2 rounded bg-white/[0.02]">
-                  <span className="text-white/40 truncate max-w-[70px]" title={m.sourceName}>
+                <div key={i} className="flex items-center gap-1.5 text-[11px] font-mono py-1 px-2 rounded bg-[var(--overlay-faint)]">
+                  <span className="text-[var(--muted)] truncate max-w-[70px]" title={m.sourceName}>
                     {m.sourceName}
                   </span>
-                  <span className="text-white/30">.</span>
-                  <span className="text-white/60">{m.from}</span>
-                  <ArrowRight className="w-3 h-3 text-white/20 shrink-0" />
-                  <span className="text-white/80">{m.to}</span>
+                  <span className="text-[var(--text-faint)]">.</span>
+                  <span className="text-[var(--text-tertiary)]">{m.from}</span>
+                  <ArrowRight className="w-3 h-3 text-[var(--text-faint)] shrink-0" />
+                  <span className="text-[var(--text-secondary)]">{m.to}</span>
                 </div>
               ))}
             </div>
@@ -535,23 +535,23 @@ export function DataAssetDetailPanel({
           {!blastRadius && !blastLoading && (
             <button
               onClick={fetchBlastRadius}
-              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] hover:border-white/[0.1] transition-all text-[12px] text-white/60 hover:text-white/80"
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] hover:border-[var(--border-medium)] transition-all text-[12px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
             >
               <Zap className="w-3.5 h-3.5" />
               Calculate Blast Radius
             </button>
           )}
           {blastLoading && (
-            <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-white/40">
-              <div className="w-3.5 h-3.5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+            <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
+              <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
               Calculating...
             </div>
           )}
           {blastRadius && (
             <div className="space-y-2">
-              <div className="p-2.5 rounded-lg bg-white/[0.03] border border-white/[0.04]">
-                <span className="text-[10px] text-white/40 uppercase tracking-wide">Total Downstream</span>
-                <p className="text-[18px] text-white font-medium mt-0.5">
+              <div className="p-2.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--border-faint)]">
+                <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Total Downstream</span>
+                <p className="text-[18px] text-[var(--text)] font-medium mt-0.5">
                   {blastRadius.total_downstream}
                 </p>
               </div>
@@ -560,7 +560,7 @@ export function DataAssetDetailPanel({
                   {Object.entries(blastRadius.by_kind).map(([kind, count]) => (
                     <span
                       key={kind}
-                      className="px-2 py-0.5 text-[10px] bg-white/5 text-white/60 rounded capitalize"
+                      className="px-2 py-0.5 text-[10px] bg-[var(--subtle-bg)] text-[var(--text-tertiary)] rounded capitalize"
                     >
                       {count} {kind}{count !== 1 ? 's' : ''}
                     </span>
@@ -602,7 +602,7 @@ export function DataAssetDetailPanel({
                       ) : (
                         <Workflow className="w-3.5 h-3.5 text-orange-300" />
                       )}
-                      <span className="text-[12px] text-white font-mono truncate flex-1">
+                      <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1">
                         {orchNode.name}
                       </span>
                       <span className="text-[10px] text-orange-300/60 capitalize">
@@ -615,7 +615,7 @@ export function DataAssetDetailPanel({
                       <div className="space-y-1.5 mt-2 pt-2 border-t border-orange-500/[0.08]">
                         {ctx.runSummary.lastRunState && (
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-white/40">Last Run</span>
+                            <span className="text-[10px] text-[var(--muted)]">Last Run</span>
                             <span className={`
                               px-1.5 py-0.5 text-[10px] font-medium rounded
                               ${ctx.runSummary.lastRunState === 'success'
@@ -630,16 +630,16 @@ export function DataAssetDetailPanel({
                         )}
                         {ctx.runSummary.lastRunDate && (
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-white/40">When</span>
-                            <span className="text-[10px] text-white/60">
+                            <span className="text-[10px] text-[var(--muted)]">When</span>
+                            <span className="text-[10px] text-[var(--text-tertiary)]">
                               {new Date(ctx.runSummary.lastRunDate).toLocaleString()}
                             </span>
                           </div>
                         )}
                         {ctx.runSummary.successRate !== undefined && (
                           <div className="flex items-center justify-between">
-                            <span className="text-[10px] text-white/40">Success Rate</span>
-                            <span className="text-[10px] text-white/60">
+                            <span className="text-[10px] text-[var(--muted)]">Success Rate</span>
+                            <span className="text-[10px] text-[var(--text-tertiary)]">
                               {Math.round(ctx.runSummary.successRate)}%
                             </span>
                           </div>
@@ -654,17 +654,17 @@ export function DataAssetDetailPanel({
         )}
 
         {/* ─── Location ──────────────────────────────────────── */}
-        <div className="space-y-3 border-t border-white/[0.06] pt-3">
+        <div className="space-y-3 border-t border-[var(--subtle-border)] pt-3">
           {node.database && (
             <div>
-              <label className="text-[11px] text-white/40 uppercase tracking-wide">Database</label>
-              <p className="text-[13px] text-white font-mono mt-1">{node.database}</p>
+              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Database</label>
+              <p className="text-[13px] text-[var(--text)] font-mono mt-1">{node.database}</p>
             </div>
           )}
           {node.schema && (
             <div>
-              <label className="text-[11px] text-white/40 uppercase tracking-wide">Schema/Dataset</label>
-              <p className="text-[13px] text-white font-mono mt-1">{node.schema}</p>
+              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Schema/Dataset</label>
+              <p className="text-[13px] text-[var(--text)] font-mono mt-1">{node.schema}</p>
             </div>
           )}
         </div>
@@ -672,7 +672,7 @@ export function DataAssetDetailPanel({
         {/* ─── Platforms (multi-platform provenance) ────────── */}
         {node.platforms && node.platforms.length > 0 && (
           <div>
-            <label className="text-[11px] text-white/40 uppercase tracking-wide">Discovered In</label>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Discovered In</label>
             <div className="flex flex-wrap gap-1.5 mt-1.5">
               {node.platforms.map((p) => (
                 <span
@@ -690,14 +690,14 @@ export function DataAssetDetailPanel({
         <div className="grid grid-cols-2 gap-3">
           {node.criticality && (
             <div>
-              <label className="text-[11px] text-white/40 uppercase tracking-wide">Criticality</label>
+              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Criticality</label>
               <p
                 className={`text-[13px] mt-1 font-medium ${
                   node.criticality === 'HIGH' || node.criticality === 'CRITICAL'
                     ? 'text-red-400'
                     : node.criticality === 'MEDIUM'
                     ? 'text-amber-400'
-                    : 'text-white/70'
+                    : 'text-[var(--text-tertiary)]'
                 }`}
               >
                 {node.criticality}
@@ -706,8 +706,8 @@ export function DataAssetDetailPanel({
           )}
           {node.owner && (
             <div>
-              <label className="text-[11px] text-white/40 uppercase tracking-wide">Owner</label>
-              <p className="text-[13px] text-white mt-1">{node.owner}</p>
+              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Owner</label>
+              <p className="text-[13px] text-[var(--text)] mt-1">{node.owner}</p>
             </div>
           )}
         </div>
@@ -715,7 +715,7 @@ export function DataAssetDetailPanel({
         {/* Tags */}
         {node.tags && node.tags.length > 0 && (
           <div>
-            <label className="text-[11px] text-white/40 uppercase tracking-wide">Tags</label>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Tags</label>
             <div className="flex flex-wrap gap-1.5 mt-1.5">
               {node.tags.map((tag, i) => (
                 <span
@@ -732,8 +732,8 @@ export function DataAssetDetailPanel({
         {/* Description */}
         {node.description && (
           <div>
-            <label className="text-[11px] text-white/40 uppercase tracking-wide">Description</label>
-            <p className="text-[13px] text-white/70 mt-1">{node.description}</p>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Description</label>
+            <p className="text-[13px] text-[var(--text-tertiary)] mt-1">{node.description}</p>
           </div>
         )}
 
@@ -742,10 +742,10 @@ export function DataAssetDetailPanel({
           <Section title="Columns" count={node.columns.length}>
             <div className="space-y-0.5 max-h-48 overflow-y-auto">
               {node.columns.map((col, i) => (
-                <div key={i} className="flex items-center justify-between py-1 px-2 rounded bg-white/[0.02]">
-                  <span className="text-[11px] text-white/80 font-mono">{col.name}</span>
+                <div key={i} className="flex items-center justify-between py-1 px-2 rounded bg-[var(--overlay-faint)]">
+                  <span className="text-[11px] text-[var(--text-secondary)] font-mono">{col.name}</span>
                   {col.type && (
-                    <span className="text-[10px] text-white/30 font-mono">{col.type}</span>
+                    <span className="text-[10px] text-[var(--text-faint)] font-mono">{col.type}</span>
                   )}
                 </div>
               ))}
@@ -756,7 +756,7 @@ export function DataAssetDetailPanel({
         {/* ─── SQL Definition ─────────────────────────────── */}
         {node.sqlDefinition && (
           <Section title="SQL Definition">
-            <pre className="text-[11px] text-white/60 font-mono bg-white/[0.03] p-2 rounded overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all">
+            <pre className="text-[11px] text-[var(--text-tertiary)] font-mono bg-[var(--overlay-bg)] p-2 rounded overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap break-all">
               {node.sqlDefinition}
             </pre>
           </Section>

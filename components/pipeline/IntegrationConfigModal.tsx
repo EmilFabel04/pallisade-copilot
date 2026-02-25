@@ -295,27 +295,27 @@ export function IntegrationConfigModal({
       {/* Drawer */}
       <div className="fixed inset-0 z-50 flex items-stretch justify-end">
         <div
-          className="h-full w-full max-w-xl bg-[#13131a] border-l border-[rgba(255,255,255,0.1)] shadow-2xl overflow-hidden"
+          className="h-full w-full max-w-xl bg-[var(--surface)] border-l border-[var(--border-medium)] shadow-2xl overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
           <div
-            className="px-6 py-4 border-b border-[rgba(255,255,255,0.1)]"
+            className="px-6 py-4 border-b border-[var(--border-medium)]"
             style={{ borderTopColor: color, borderTopWidth: '3px' }}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <IntegrationIcon id={integration.id} />
                 <div>
-                  <h2 className="text-lg font-semibold text-white">{integration.name}</h2>
+                  <h2 className="text-lg font-semibold text-[var(--text)]">{integration.name}</h2>
                   <p className="text-sm text-[var(--muted)]">{integration.description}</p>
                 </div>
               </div>
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+                className="p-2 rounded-lg hover:bg-[var(--subtle-bg)] transition-colors"
               >
-                <X className="w-5 h-5 text-gray-400" />
+                <X className="w-5 h-5 text-[var(--muted)]" />
               </button>
             </div>
           </div>
@@ -328,11 +328,11 @@ export function IntegrationConfigModal({
                 <>
                   {loadingGithub ? (
                     <div className="flex items-center justify-center py-8">
-                      <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                      <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)]" />
                     </div>
                   ) : githubInfo?.connected ? (
                     <div className="text-center">
-                      <div className="w-16 h-16 mx-auto mb-4 rounded-full overflow-hidden bg-[rgba(255,255,255,0.05)]">
+                      <div className="w-16 h-16 mx-auto mb-4 rounded-full overflow-hidden bg-[var(--subtle-bg)]">
                         {githubInfo.avatar ? (
                           <img src={githubInfo.avatar} alt="" className="w-full h-full object-cover" />
                         ) : (
@@ -345,11 +345,11 @@ export function IntegrationConfigModal({
                         <Check className="w-5 h-5" />
                         <span className="font-medium">Connected</span>
                       </div>
-                      <p className="text-white font-medium">@{githubInfo.username}</p>
-                      <p className="text-sm text-gray-400 mt-1">
+                      <p className="text-[var(--text)] font-medium">@{githubInfo.username}</p>
+                      <p className="text-sm text-[var(--muted)] mt-1">
                         {githubInfo.repoCount} repositories available
                       </p>
-                      <div className="mt-6 pt-6 border-t border-[rgba(255,255,255,0.1)]">
+                      <div className="mt-6 pt-6 border-t border-[var(--border-medium)]">
                         <button onClick={handleGitHubConnect} className="btn btn-secondary text-sm">
                           Reconnect with different account
                         </button>
@@ -360,8 +360,8 @@ export function IntegrationConfigModal({
                       <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#24292e] flex items-center justify-center">
                         <GitHubIcon className="w-8 h-8 text-white" />
                       </div>
-                      <h3 className="text-lg font-medium text-white mb-2">Connect to GitHub</h3>
-                      <p className="text-sm text-gray-400 mb-6">
+                      <h3 className="text-lg font-medium text-[var(--text)] mb-2">Connect to GitHub</h3>
+                      <p className="text-sm text-[var(--muted)] mb-6">
                         Authorize Pallisade to access your repositories for creating issues and pull requests.
                       </p>
                       <button
@@ -372,7 +372,7 @@ export function IntegrationConfigModal({
                         Connect with GitHub
                         <ExternalLink className="w-4 h-4 ml-1 opacity-50" />
                       </button>
-                      <p className="text-xs text-gray-500 mt-4">
+                      <p className="text-xs text-[var(--muted)] mt-4">
                         We&apos;ll request access to read your repositories and create issues/PRs.
                       </p>
                     </div>
@@ -385,7 +385,7 @@ export function IntegrationConfigModal({
                 <>
                   {loadingSlack ? (
                     <div className="flex items-center justify-center py-8">
-                      <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                      <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)]" />
                     </div>
                   ) : slackInfo?.connected && !slackManualMode ? (
                     // Connected state
@@ -398,12 +398,12 @@ export function IntegrationConfigModal({
                         <span className="font-medium">Connected</span>
                       </div>
                       {slackInfo.teamName && (
-                        <p className="text-white font-medium">Workspace: {slackInfo.teamName}</p>
+                        <p className="text-[var(--text)] font-medium">Workspace: {slackInfo.teamName}</p>
                       )}
                       {slackInfo.channel && (
-                        <p className="text-sm text-gray-400 mt-1">Channel: {slackInfo.channel}</p>
+                        <p className="text-sm text-[var(--muted)] mt-1">Channel: {slackInfo.channel}</p>
                       )}
-                      <div className="mt-6 pt-6 border-t border-[rgba(255,255,255,0.1)] flex justify-center gap-3">
+                      <div className="mt-6 pt-6 border-t border-[var(--border-medium)] flex justify-center gap-3">
                         {slackInfo.hasOAuth && (
                           <button onClick={handleSlackOAuth} className="btn btn-secondary text-sm">
                             Reconnect via OAuth
@@ -424,15 +424,15 @@ export function IntegrationConfigModal({
                         <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#4A154B] flex items-center justify-center">
                           <SlackIcon className="w-8 h-8 text-white" />
                         </div>
-                        <h3 className="text-lg font-medium text-white mb-1">Manual Bot Token</h3>
-                        <p className="text-sm text-gray-400">
+                        <h3 className="text-lg font-medium text-[var(--text)] mb-1">Manual Bot Token</h3>
+                        <p className="text-sm text-[var(--muted)]">
                           Paste your Slack App&apos;s Bot Token below
                         </p>
                       </div>
 
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-sm font-medium text-white mb-1.5">
+                          <label className="block text-sm font-medium text-[var(--text)] mb-1.5">
                             Bot Token <span className="text-red-400">*</span>
                           </label>
                           <input
@@ -440,9 +440,9 @@ export function IntegrationConfigModal({
                             value={slackBotToken}
                             onChange={(e) => { setSlackBotToken(e.target.value); setSlackTestResult(null); }}
                             placeholder="xoxb-..."
-                            className="w-full px-3 py-2.5 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.1)] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] transition-colors"
+                            className="w-full px-3 py-2.5 bg-[var(--overlay-bg)] border border-[var(--border-medium)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] transition-colors"
                           />
-                          <p className="mt-1 text-xs text-gray-500">
+                          <p className="mt-1 text-xs text-[var(--muted)]">
                             Create a Slack App, add bot scopes (chat:write, channels:read, groups:read), then paste the Bot Token.
                           </p>
                         </div>
@@ -465,8 +465,8 @@ export function IntegrationConfigModal({
                       <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#4A154B] flex items-center justify-center">
                         <SlackIcon className="w-8 h-8 text-white" />
                       </div>
-                      <h3 className="text-lg font-medium text-white mb-2">Connect to Slack</h3>
-                      <p className="text-sm text-gray-400 mb-6">
+                      <h3 className="text-lg font-medium text-[var(--text)] mb-2">Connect to Slack</h3>
+                      <p className="text-sm text-[var(--muted)] mb-6">
                         Add Pallisade to your Slack workspace to receive alerts and notifications.
                       </p>
 
@@ -482,21 +482,21 @@ export function IntegrationConfigModal({
                           </button>
 
                           <div className="my-6 flex items-center gap-3">
-                            <div className="flex-1 border-t border-[rgba(255,255,255,0.08)]" />
-                            <span className="text-xs text-gray-500">or</span>
-                            <div className="flex-1 border-t border-[rgba(255,255,255,0.08)]" />
+                            <div className="flex-1 border-t border-[var(--subtle-border)]" />
+                            <span className="text-xs text-[var(--muted)]">or</span>
+                            <div className="flex-1 border-t border-[var(--subtle-border)]" />
                           </div>
                         </>
                       )}
 
                       <button
                         onClick={() => setSlackManualMode(true)}
-                        className="inline-flex items-center gap-2 px-4 py-2 bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.08)] text-white/70 font-medium rounded-lg transition-colors text-sm"
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-[var(--subtle-bg)] hover:bg-[var(--hover-bg)] text-[var(--text-tertiary)] font-medium rounded-lg transition-colors text-sm"
                       >
                         Enter Bot Token Manually
                       </button>
 
-                      <p className="text-xs text-gray-500 mt-4">
+                      <p className="text-xs text-[var(--muted)] mt-4">
                         {slackInfo?.hasOAuth
                           ? 'OAuth is recommended. Manual tokens work if you manage your own Slack App.'
                           : 'Create a Slack App and paste the Bot Token to connect.'}
@@ -539,7 +539,7 @@ export function IntegrationConfigModal({
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.2)] flex items-center justify-between">
+              <div className="px-6 py-4 border-t border-[var(--border-medium)] bg-[var(--overlay-bg)] flex items-center justify-between">
                 <button
                   onClick={handleTestConnection}
                   disabled={testing}
@@ -583,7 +583,7 @@ export function IntegrationConfigModal({
 
           {/* Footer for GitHub OAuth when connected */}
           {isGitHubIntegration && githubInfo?.connected && (
-            <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.2)] flex justify-end">
+            <div className="px-6 py-4 border-t border-[var(--border-medium)] bg-[var(--overlay-bg)] flex justify-end">
               <button onClick={onClose} className="btn btn-primary text-sm">
                 Done
               </button>
@@ -592,7 +592,7 @@ export function IntegrationConfigModal({
 
           {/* Footer for Slack connected state (no manual mode) */}
           {isSlackIntegration && slackInfo?.connected && !slackManualMode && (
-            <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.2)] flex justify-end">
+            <div className="px-6 py-4 border-t border-[var(--border-medium)] bg-[var(--overlay-bg)] flex justify-end">
               <button onClick={onClose} className="btn btn-primary text-sm">
                 Done
               </button>
@@ -601,7 +601,7 @@ export function IntegrationConfigModal({
 
           {/* Footer for Slack manual token mode */}
           {isSlackIntegration && slackManualMode && (
-            <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.1)] bg-[rgba(0,0,0,0.2)] flex items-center justify-between">
+            <div className="px-6 py-4 border-t border-[var(--border-medium)] bg-[var(--overlay-bg)] flex items-center justify-between">
               <button
                 onClick={handleSlackTest}
                 disabled={!slackBotToken.startsWith('xoxb-') || slackTesting}
@@ -669,11 +669,11 @@ function ConfigFieldInput({
   onChange: (value: string) => void;
 }) {
   const baseInputClass =
-    'w-full px-3 py-2.5 bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.1)] rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] transition-colors';
+    'w-full px-3 py-2.5 bg-[var(--overlay-bg)] border border-[var(--border-medium)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] transition-colors';
 
   return (
     <div>
-      <label className="block text-sm font-medium text-white mb-1.5">
+      <label className="block text-sm font-medium text-[var(--text)] mb-1.5">
         {field.label}
         {field.required && <span className="text-red-400 ml-1">*</span>}
       </label>
@@ -710,7 +710,8 @@ function ConfigFieldInput({
       )}
 
       {field.helperText && (
-        <p className="mt-1 text-xs text-gray-500">{field.helperText}</p>
+        <p className="mt-1 text-xs text-[var(--muted)]">{field.helperText}</p>
+
       )}
     </div>
   );

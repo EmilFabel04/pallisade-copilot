@@ -82,8 +82,8 @@ const STATUS_STYLES: Record<string, { bg: string; text: string; icon: string }> 
     icon: "!"
   },
   skipped: { 
-    bg: "bg-gray-500/20", 
-    text: "text-gray-400",
+    bg: "bg-[var(--subtle-bg)]", 
+    text: "text-[var(--muted)]",
     icon: "○"
   },
 };
@@ -237,7 +237,7 @@ export function TestFixModal({
               </div>
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+                className="p-2 rounded-lg hover:bg-[var(--subtle-bg)] transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -255,24 +255,24 @@ export function TestFixModal({
                 <span className={`text-xs px-2 py-0.5 rounded-full ${
                   fix.confidence === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
                   fix.confidence === 'medium' ? 'bg-amber-500/20 text-amber-400' :
-                  'bg-gray-500/20 text-gray-400'
+                  'bg-[var(--subtle-bg)] text-[var(--muted)]'
                 }`}>
                   {fix.confidence} confidence
                 </span>
               </div>
               
-              <pre className="text-xs bg-[rgba(0,0,0,0.3)] p-4 rounded-xl overflow-x-auto max-h-40">
+              <pre className="text-xs bg-[var(--overlay-bg)] p-4 rounded-xl overflow-x-auto max-h-40">
                 <code className="text-green-400">{fix.code}</code>
               </pre>
             </div>
 
             {/* Test Context */}
             <div className="grid grid-cols-2 gap-4 text-sm">
-              <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+              <div className="p-3 rounded-xl bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                 <span className="text-[var(--muted)]">Table:</span>
                 <span className="ml-2 font-mono">{table}</span>
               </div>
-              <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+              <div className="p-3 rounded-xl bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                 <span className="text-[var(--muted)]">Dialect:</span>
                 <span className="ml-2 capitalize">{sourceDialect}</span>
               </div>
@@ -331,7 +331,7 @@ export function TestFixModal({
 
                 {/* Confidence Breakdown */}
                 {result.confidenceReasons.length > 0 && (
-                  <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+                  <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                     <h4 className="text-sm font-medium mb-2">Confidence Breakdown</h4>
                     <ul className="space-y-1">
                       {result.confidenceReasons.map((reason, i) => (
@@ -346,7 +346,7 @@ export function TestFixModal({
 
                 {/* Validations */}
                 {result.validations.length > 0 && (
-                  <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+                  <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                     <h4 className="text-sm font-medium mb-3">Validation Results</h4>
                     <div className="space-y-2">
                       {result.validations.map((v, i) => (
@@ -374,11 +374,11 @@ export function TestFixModal({
 
                 {/* Changes */}
                 {Object.keys(result.changes).length > 0 && (
-                  <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+                  <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                     <h4 className="text-sm font-medium mb-3">Changes Applied</h4>
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       {Object.entries(result.changes).map(([key, value]) => (
-                        <div key={key} className="p-2 rounded bg-[rgba(0,0,0,0.2)]">
+                        <div key={key} className="p-2 rounded bg-[var(--overlay-faint)]">
                           <span className="text-[var(--muted)]">{key.replace(/_/g, ' ')}:</span>
                           <span className="ml-2 font-mono">{String(value)}</span>
                         </div>
@@ -415,7 +415,7 @@ export function TestFixModal({
                 <div className="flex gap-3">
                   <button
                     onClick={() => setResult(null)}
-                    className="flex-1 py-2.5 px-4 rounded-xl bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] transition-colors"
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)] transition-colors"
                   >
                     Test Again
                   </button>

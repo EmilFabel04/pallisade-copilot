@@ -46,11 +46,11 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
       <div
         className="rounded-lg p-3 text-sm"
         style={{
-          backgroundColor: 'rgba(255, 255, 255, 0.03)',
-          border: '1px solid rgba(255, 255, 255, 0.06)',
+          backgroundColor: 'var(--overlay-bg)',
+          border: '1px solid var(--subtle-border)',
         }}
       >
-        <div className="flex items-center gap-2 text-white/50">
+        <div className="flex items-center gap-2 text-[var(--muted)]">
           <div className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin" />
           <span>Executing {toolName}...</span>
         </div>
@@ -79,7 +79,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
           </svg>
           <span className="font-medium">Error</span>
         </div>
-        <p className="mt-1 text-white/70">{result.error}</p>
+        <p className="mt-1 text-[var(--text-tertiary)]">{result.error}</p>
       </div>
     );
   }
@@ -144,11 +144,11 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
             </svg>
             <span className="font-medium">Change Plan Created</span>
           </div>
-          <div className="text-sm text-white/70 space-y-1">
-            <div><span className="text-white/50">ID:</span> <span className="font-mono">{createResult.plan_id}</span></div>
-            {createResult.title && <div><span className="text-white/50">Title:</span> {createResult.title}</div>}
+          <div className="text-sm text-[var(--text-tertiary)] space-y-1">
+            <div><span className="text-[var(--muted)]">ID:</span> <span className="font-mono">{createResult.plan_id}</span></div>
+            {createResult.title && <div><span className="text-[var(--muted)]">Title:</span> {createResult.title}</div>}
             {createResult.patches_count !== undefined && (
-              <div><span className="text-white/50">Files:</span> {createResult.patches_count}</div>
+              <div><span className="text-[var(--muted)]">Files:</span> {createResult.patches_count}</div>
             )}
           </div>
         </div>
@@ -210,7 +210,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
           {validateResult.errors && validateResult.errors.length > 0 && (
             <div className="mb-2">
               <span className="text-xs text-red-400 font-medium">Errors:</span>
-              <ul className="text-sm text-white/70 mt-1 space-y-0.5">
+              <ul className="text-sm text-[var(--text-tertiary)] mt-1 space-y-0.5">
                 {validateResult.errors.map((err, i) => (
                   <li key={i} className="pl-2 border-l-2 border-red-400/30">{err}</li>
                 ))}
@@ -221,7 +221,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
           {validateResult.warnings && validateResult.warnings.length > 0 && (
             <div>
               <span className="text-xs text-yellow-400 font-medium">Warnings:</span>
-              <ul className="text-sm text-white/70 mt-1 space-y-0.5">
+              <ul className="text-sm text-[var(--text-tertiary)] mt-1 space-y-0.5">
                 {validateResult.warnings.map((warn, i) => (
                   <li key={i} className="pl-2 border-l-2 border-yellow-400/30">{warn}</li>
                 ))}
@@ -270,7 +270,7 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
       if (!listResult.plans || listResult.plans.length === 0) {
         return (
           <div
-            className="rounded-lg p-3 text-sm text-white/60"
+            className="rounded-lg p-3 text-sm text-[var(--text-tertiary)]"
             style={{
               backgroundColor: 'rgba(255, 255, 255, 0.02)',
               border: '1px solid rgba(255, 255, 255, 0.06)',
@@ -283,19 +283,19 @@ export function ChangePlanToolResult({ toolName, result, onValidate, onApply, on
 
       return (
         <div className="space-y-2">
-          <div className="text-xs text-white/50">{listResult.count} change plan{listResult.count !== 1 ? 's' : ''}</div>
+          <div className="text-xs text-[var(--muted)]">{listResult.count} change plan{listResult.count !== 1 ? 's' : ''}</div>
           {listResult.plans.map((plan) => (
             <div
               key={plan.id}
               className="flex items-center justify-between p-3 rounded-lg"
               style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                border: '1px solid rgba(255, 255, 255, 0.06)',
+                backgroundColor: 'var(--overlay-faint)',
+                border: '1px solid var(--subtle-border)',
               }}
             >
               <div className="min-w-0">
-                <div className="text-sm font-medium text-white/90 truncate">{plan.title}</div>
-                <div className="text-xs text-white/50 font-mono">{plan.id}</div>
+                <div className="text-sm font-medium text-[var(--text-secondary)] truncate">{plan.title}</div>
+                <div className="text-xs text-[var(--muted)] font-mono">{plan.id}</div>
               </div>
               <div className="flex items-center gap-2">
                 <span

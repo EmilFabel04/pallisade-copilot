@@ -88,14 +88,14 @@ export function ScanSummary({
   return (
     <div className="space-y-4">
       {/* Header with scan info */}
-      <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4">
+      <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-4">
         <div className="flex items-center justify-between mb-4">
-          <div className="text-xs text-white/40">Scan Details</div>
+          <div className="text-xs text-[var(--muted)]">Scan Details</div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowLog(!showLog)}
               className={`px-2 py-1 text-xs rounded transition-colors ${
-                showLog ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'
+                showLog ? 'bg-[var(--overlay-medium)] text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
               }`}
             >
               Log
@@ -103,7 +103,7 @@ export function ScanSummary({
             <button
               onClick={() => setShowConfig(!showConfig)}
               className={`px-2 py-1 text-xs rounded transition-colors ${
-                showConfig ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'
+                showConfig ? 'bg-[var(--overlay-medium)] text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
               }`}
             >
               Config
@@ -114,57 +114,57 @@ export function ScanSummary({
         {/* Main info grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div>
-            <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Integration</div>
+            <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Integration</div>
             <div className="flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${
                 integrationType === 'bigquery' ? 'bg-blue-500' :
                 integrationType === 'snowflake' ? 'bg-cyan-500' :
-                integrationType === 'postgres' ? 'bg-blue-600' : 'bg-white/50'
+                integrationType === 'postgres' ? 'bg-blue-600' : 'bg-[var(--muted)]'
               }`} />
-              <span className="text-white/80">{integrationName}</span>
+              <span className="text-[var(--text-secondary)]">{integrationName}</span>
             </div>
           </div>
           <div>
-            <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Scan Type</div>
-            <div className="text-white/80 capitalize">{scanType.replace(/_/g, ' ')}</div>
+            <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Scan Type</div>
+            <div className="text-[var(--text-secondary)] capitalize">{scanType.replace(/_/g, ' ')}</div>
           </div>
           <div>
-            <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Duration</div>
-            <div className="text-white/80 font-mono">{(duration / 1000).toFixed(2)}s</div>
+            <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Duration</div>
+            <div className="text-[var(--text-secondary)] font-mono">{(duration / 1000).toFixed(2)}s</div>
           </div>
           <div>
-            <div className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Scan ID</div>
-            <div className="text-white/50 font-mono text-xs truncate">{scanId.slice(0, 12)}...</div>
+            <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Scan ID</div>
+            <div className="text-[var(--muted)] font-mono text-xs truncate">{scanId.slice(0, 12)}...</div>
           </div>
         </div>
 
         {/* Expanded config */}
         {showConfig && scanConfig && (
-          <div className="mt-4 pt-4 border-t border-white/5">
-            <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Scan Configuration</div>
+          <div className="mt-4 pt-4 border-t border-[var(--subtle-border)]">
+            <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Scan Configuration</div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
               {scanConfig.freshnessThreshold && (
-                <div className="p-2 rounded bg-white/[0.02]">
-                  <div className="text-white/40">Freshness SLO</div>
-                  <div className="text-white/80 font-mono">{scanConfig.freshnessThreshold}h</div>
+                <div className="p-2 rounded bg-[var(--overlay-faint)]">
+                  <div className="text-[var(--muted)]">Freshness SLO</div>
+                  <div className="text-[var(--text-secondary)] font-mono">{scanConfig.freshnessThreshold}h</div>
                 </div>
               )}
               {scanConfig.nullRateThreshold && (
-                <div className="p-2 rounded bg-white/[0.02]">
-                  <div className="text-white/40">Null Threshold</div>
-                  <div className="text-white/80 font-mono">{(scanConfig.nullRateThreshold * 100).toFixed(0)}%</div>
+                <div className="p-2 rounded bg-[var(--overlay-faint)]">
+                  <div className="text-[var(--muted)]">Null Threshold</div>
+                  <div className="text-[var(--text-secondary)] font-mono">{(scanConfig.nullRateThreshold * 100).toFixed(0)}%</div>
                 </div>
               )}
               {scanConfig.duplicateThreshold && (
-                <div className="p-2 rounded bg-white/[0.02]">
-                  <div className="text-white/40">Duplicate Threshold</div>
-                  <div className="text-white/80 font-mono">{(scanConfig.duplicateThreshold * 100).toFixed(0)}%</div>
+                <div className="p-2 rounded bg-[var(--overlay-faint)]">
+                  <div className="text-[var(--muted)]">Duplicate Threshold</div>
+                  <div className="text-[var(--text-secondary)] font-mono">{(scanConfig.duplicateThreshold * 100).toFixed(0)}%</div>
                 </div>
               )}
               {scanConfig.samplingEnabled && (
-                <div className="p-2 rounded bg-white/[0.02]">
-                  <div className="text-white/40">Sample Size</div>
-                  <div className="text-white/80 font-mono">{formatNumber(scanConfig.sampleSize || 0)}</div>
+                <div className="p-2 rounded bg-[var(--overlay-faint)]">
+                  <div className="text-[var(--muted)]">Sample Size</div>
+                  <div className="text-[var(--text-secondary)] font-mono">{formatNumber(scanConfig.sampleSize || 0)}</div>
                 </div>
               )}
             </div>
@@ -173,9 +173,9 @@ export function ScanSummary({
 
         {/* Expanded log */}
         {showLog && scanLog.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-white/5">
-            <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">Scan Log</div>
-            <div className="bg-black/30 rounded-lg p-3 max-h-48 overflow-y-auto">
+          <div className="mt-4 pt-4 border-t border-[var(--subtle-border)]">
+            <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Scan Log</div>
+            <div className="bg-[var(--overlay-bg)] rounded-lg p-3 max-h-48 overflow-y-auto">
               <TypewriterLog lines={scanLog} speed={10} />
             </div>
           </div>
@@ -183,16 +183,16 @@ export function ScanSummary({
       </div>
 
       {/* Data Overview */}
-      <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4">
+      <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-4">
         <div className="flex items-center justify-between mb-4">
-          <div className="text-xs text-white/40">Data Scanned</div>
+          <div className="text-xs text-[var(--muted)]">Data Scanned</div>
           <div className="flex items-center gap-1">
             {(['grid', 'list', 'compact'] as const).map(mode => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
                 className={`p-1.5 rounded transition-colors ${
-                  viewMode === mode ? 'bg-white/10 text-white' : 'text-white/30 hover:text-white/50'
+                  viewMode === mode ? 'bg-[var(--overlay-medium)] text-[var(--text)]' : 'text-[var(--text-faint)] hover:text-[var(--muted)]'
                 }`}
               >
                 {mode === 'grid' ? (
@@ -215,24 +215,24 @@ export function ScanSummary({
 
         {/* Summary stats */}
         <div className="grid grid-cols-4 gap-3 mb-4">
-          <div className="text-center p-3 rounded-lg bg-white/[0.02]">
-            <div className="text-2xl font-light text-white/90">{tablesScanned}</div>
-            <div className="text-[10px] text-white/40 uppercase">Tables</div>
+          <div className="text-center p-3 rounded-lg bg-[var(--overlay-faint)]">
+            <div className="text-2xl font-light text-[var(--text-secondary)]">{tablesScanned}</div>
+            <div className="text-[10px] text-[var(--muted)] uppercase">Tables</div>
           </div>
-          <div className="text-center p-3 rounded-lg bg-white/[0.02]">
-            <div className="text-2xl font-light text-white/90">{formatNumber(totalRows)}</div>
-            <div className="text-[10px] text-white/40 uppercase">Rows</div>
+          <div className="text-center p-3 rounded-lg bg-[var(--overlay-faint)]">
+            <div className="text-2xl font-light text-[var(--text-secondary)]">{formatNumber(totalRows)}</div>
+            <div className="text-[10px] text-[var(--muted)] uppercase">Rows</div>
           </div>
           {totalColumns && (
-            <div className="text-center p-3 rounded-lg bg-white/[0.02]">
-              <div className="text-2xl font-light text-white/90">{totalColumns}</div>
-              <div className="text-[10px] text-white/40 uppercase">Columns</div>
+            <div className="text-center p-3 rounded-lg bg-[var(--overlay-faint)]">
+              <div className="text-2xl font-light text-[var(--text-secondary)]">{totalColumns}</div>
+              <div className="text-[10px] text-[var(--muted)] uppercase">Columns</div>
             </div>
           )}
           {database && (
-            <div className="text-center p-3 rounded-lg bg-white/[0.02]">
-              <div className="text-sm font-mono text-white/70 truncate">{database}</div>
-              <div className="text-[10px] text-white/40 uppercase">Database</div>
+            <div className="text-center p-3 rounded-lg bg-[var(--overlay-faint)]">
+              <div className="text-sm font-mono text-[var(--text-tertiary)] truncate">{database}</div>
+              <div className="text-[10px] text-[var(--muted)] uppercase">Database</div>
             </div>
           )}
         </div>
@@ -243,18 +243,18 @@ export function ScanSummary({
             {tableDetails.map((table, idx) => (
               <div
                 key={idx}
-                className={`rounded-lg transition-colors hover:bg-white/[0.02] ${
-                  viewMode === 'compact' ? 'flex items-center gap-2 px-2 py-1' : 'p-3 bg-white/[0.01]'
+                className={`rounded-lg transition-colors hover:bg-[var(--overlay-faint)] ${
+                  viewMode === 'compact' ? 'flex items-center gap-2 px-2 py-1' : 'p-3 bg-[var(--overlay-faint)]'
                 }`}
               >
                 <div className="flex items-center gap-2">
                   <span className={`w-1.5 h-1.5 rounded-full ${getSeverityColor(table.severity)}`} />
-                  <span className="font-mono text-xs text-white/70 truncate">
+                  <span className="font-mono text-xs text-[var(--text-tertiary)] truncate">
                     {table.name.split('.').pop()}
                   </span>
                 </div>
                 {viewMode !== 'compact' && (
-                  <div className="mt-2 flex items-center gap-3 text-[10px] text-white/40">
+                  <div className="mt-2 flex items-center gap-3 text-[10px] text-[var(--muted)]">
                     <span>{formatNumber(table.rows)} rows</span>
                     <span>{table.columns} cols</span>
                     {table.issues > 0 && (

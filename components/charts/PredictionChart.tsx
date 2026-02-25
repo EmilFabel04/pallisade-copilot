@@ -41,9 +41,9 @@ export function PredictionChart({
 
   if (!data || data.length === 0) {
     return (
-      <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4">
-        <div className="text-xs text-white/40 mb-2">{title}</div>
-        <div className="h-32 flex items-center justify-center text-white/30 text-sm">
+      <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-4">
+        <div className="text-xs text-[var(--muted)] mb-2">{title}</div>
+        <div className="h-32 flex items-center justify-center text-[var(--text-faint)] text-sm">
           No data available
         </div>
       </div>
@@ -92,22 +92,22 @@ export function PredictionChart({
     : null;
 
   return (
-    <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4">
+    <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-4">
       <div className="flex items-center justify-between mb-4">
-        <div className="text-xs text-white/40">{title}</div>
+        <div className="text-xs text-[var(--muted)]">{title}</div>
         <div className="flex items-center gap-4 text-[10px]">
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-0.5 bg-emerald-400 rounded" />
-            <span className="text-white/40">Actual</span>
+            <span className="text-[var(--muted)]">Actual</span>
           </div>
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-0.5 bg-blue-400 rounded" style={{ strokeDasharray: '4 2' }} />
-            <span className="text-white/40">Predicted</span>
+            <span className="text-[var(--muted)]">Predicted</span>
           </div>
           {anomalies.length > 0 && (
             <div className="flex items-center gap-1.5">
               <div className="w-2 h-2 bg-red-400 rounded-full" />
-              <span className="text-white/40">Anomaly</span>
+              <span className="text-[var(--muted)]">Anomaly</span>
             </div>
           )}
         </div>
@@ -117,14 +117,14 @@ export function PredictionChart({
       {deviation !== null && (
         <div className="flex items-center gap-4 mb-3 text-xs">
           <div>
-            <span className="text-white/40">Actual vs Predicted: </span>
+            <span className="text-[var(--muted)]">Actual vs Predicted: </span>
             <span className={`font-mono ${Math.abs(deviation) > 10 ? 'text-red-400' : Math.abs(deviation) > 5 ? 'text-amber-400' : 'text-emerald-400'}`}>
               {deviation > 0 ? '+' : ''}{deviation.toFixed(1)}%
             </span>
           </div>
           {anomalies.length > 0 && (
             <div>
-              <span className="text-white/40">Anomalies: </span>
+              <span className="text-[var(--muted)]">Anomalies: </span>
               <span className="text-red-400 font-mono">{anomalies.length}</span>
             </div>
           )}
@@ -155,7 +155,7 @@ export function PredictionChart({
               y1={height * ratio}
               x2="100"
               y2={height * ratio}
-              stroke="rgba(255,255,255,0.05)"
+              stroke="var(--subtle-border)"
               strokeWidth="0.5"
             />
           ))}
@@ -236,7 +236,7 @@ export function PredictionChart({
                     y1={0}
                     x2={getX(i)}
                     y2={height}
-                    stroke="rgba(255,255,255,0.2)"
+                    stroke="var(--text-faint)"
                     strokeWidth="0.5"
                     strokeDasharray="2 2"
                   />
@@ -255,28 +255,28 @@ export function PredictionChart({
         {/* Tooltip */}
         {hoveredPoint !== null && data[hoveredPoint] && (
           <div 
-            className="absolute bg-black/90 border border-white/10 rounded-lg px-3 py-2 text-xs pointer-events-none z-10"
+            className="absolute bg-[var(--surface)] border border-[var(--border-medium)] rounded-lg px-3 py-2 text-xs pointer-events-none z-10"
             style={{
               left: `${getX(hoveredPoint)}%`,
               top: '50%',
               transform: 'translate(-50%, -50%)'
             }}
           >
-            <div className="text-white/50 mb-1">
+            <div className="text-[var(--muted)] mb-1">
               {new Date(data[hoveredPoint].timestamp).toLocaleString()}
             </div>
             {data[hoveredPoint].actual !== undefined && (
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span className="text-white/70">Actual:</span>
-                <span className="font-mono text-white">{data[hoveredPoint].actual!.toLocaleString()}</span>
+                <span className="text-[var(--text-tertiary)]">Actual:</span>
+                <span className="font-mono text-[var(--text)]">{data[hoveredPoint].actual!.toLocaleString()}</span>
               </div>
             )}
             {data[hoveredPoint].predicted !== undefined && (
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-blue-400" />
-                <span className="text-white/70">Predicted:</span>
-                <span className="font-mono text-white">{data[hoveredPoint].predicted!.toLocaleString()}</span>
+                <span className="text-[var(--text-tertiary)]">Predicted:</span>
+                <span className="font-mono text-[var(--text)]">{data[hoveredPoint].predicted!.toLocaleString()}</span>
               </div>
             )}
             {data[hoveredPoint].isAnomaly && (
@@ -286,7 +286,7 @@ export function PredictionChart({
         )}
 
         {/* Y-axis labels */}
-        <div className="absolute left-0 top-0 bottom-0 w-12 flex flex-col justify-between text-[9px] text-white/30 font-mono -ml-14">
+        <div className="absolute left-0 top-0 bottom-0 w-12 flex flex-col justify-between text-[9px] text-[var(--text-faint)] font-mono -ml-14">
           <span>{maxVal.toFixed(0)}</span>
           <span>{((maxVal + minVal) / 2).toFixed(0)}</span>
           <span>{minVal.toFixed(0)}</span>
@@ -294,7 +294,7 @@ export function PredictionChart({
       </div>
 
       {/* X-axis labels */}
-      <div className="flex justify-between mt-2 text-[9px] text-white/30 font-mono">
+      <div className="flex justify-between mt-2 text-[9px] text-[var(--text-faint)] font-mono">
         <span>{new Date(data[0].timestamp).toLocaleDateString()}</span>
         <span>{new Date(data[data.length - 1].timestamp).toLocaleDateString()}</span>
       </div>

@@ -77,9 +77,9 @@ const severityConfig = {
     ),
   },
   info: {
-    bg: 'bg-gray-500/10',
-    border: 'border-gray-500/30',
-    text: 'text-gray-400',
+    bg: 'bg-[var(--subtle-bg)]',
+    border: 'border-[var(--subtle-border)]',
+    text: 'text-[var(--muted)]',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -128,7 +128,7 @@ export function FindingCard({
     <div className={`rounded-lg border ${config.border} ${config.bg} overflow-hidden`}>
       {/* Header */}
       <div 
-        className="p-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
+        className="p-4 cursor-pointer hover:bg-[var(--overlay-faint)] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
         <div className="flex items-start gap-3">
@@ -140,7 +140,7 @@ export function FindingCard({
           {/* Content */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="text-sm font-medium text-white">{finding.title}</h3>
+              <h3 className="text-sm font-medium text-[var(--text)]">{finding.title}</h3>
               <span className={`px-1.5 py-0.5 text-xs rounded ${config.text} ${config.bg} border ${config.border}`}>
                 {displaySeverity}
               </span>
@@ -191,7 +191,7 @@ export function FindingCard({
 
       {/* Expanded content */}
       {expanded && (
-        <div className="border-t border-[var(--border-dim)] bg-black/20">
+        <div className="border-t border-[var(--border-dim)] bg-[var(--overlay-faint)]">
           {/* Suppression Reason (for suppressed findings) */}
           {finding.suppressed && finding.suppressionReason && (
             <div className="p-4 border-b border-[var(--border-dim)] bg-purple-500/5">
@@ -224,9 +224,9 @@ export function FindingCard({
               </h4>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {Object.entries(finding.aiContext).slice(0, 6).map(([key, value]) => (
-                  <div key={key} className="bg-black/20 rounded p-2">
+                  <div key={key} className="bg-[var(--overlay-faint)] rounded p-2">
                     <p className="text-xs text-[var(--muted)]">{key.replace(/_/g, ' ')}</p>
-                    <p className="text-sm text-white font-medium truncate">
+                    <p className="text-sm text-[var(--text)] font-medium truncate">
                       {typeof value === 'number' ? value.toLocaleString() : String(value)}
                     </p>
                   </div>
@@ -244,7 +244,7 @@ export function FindingCard({
                 </h4>
                 <button
                   onClick={handleCopyFix}
-                  className="text-xs text-[var(--accent)] hover:text-white transition-colors flex items-center gap-1"
+                  className="text-xs text-[var(--accent)] hover:text-[var(--text)] transition-colors flex items-center gap-1"
                 >
                   {copied ? (
                     <>
@@ -266,7 +266,7 @@ export function FindingCard({
               {finding.autoFix.description && (
                 <p className="text-xs text-[var(--muted)] mb-2">{finding.autoFix.description}</p>
               )}
-              <pre className="bg-black/40 rounded-lg p-3 overflow-x-auto text-xs text-green-400 font-mono">
+              <pre className="bg-[var(--overlay-bg)] rounded-lg p-3 overflow-x-auto text-xs text-green-400 font-mono">
                 {finding.autoFix.code}
               </pre>
             </div>
@@ -277,7 +277,7 @@ export function FindingCard({
             <div className="p-4 border-b border-[var(--border-dim)]">
               <button
                 onClick={() => setShowNLP(!showNLP)}
-                className="flex items-center gap-2 text-sm text-[var(--accent)] hover:text-white transition-colors"
+                className="flex items-center gap-2 text-sm text-[var(--accent)] hover:text-[var(--text)] transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
@@ -349,13 +349,13 @@ export function FindingCard({
             {!finding.suppressed && onDismiss && (
               <button
                 onClick={() => onDismiss(finding)}
-                className="px-3 py-1.5 bg-white/5 text-[var(--muted)] text-sm rounded hover:bg-white/10 hover:text-white transition-colors"
+                className="px-3 py-1.5 bg-[var(--subtle-bg)] text-[var(--muted)] text-sm rounded hover:bg-[var(--overlay-medium)] hover:text-[var(--text)] transition-colors"
               >
                 Dismiss
               </button>
             )}
             
-            <button className="px-3 py-1.5 text-[var(--muted)] text-sm hover:text-white transition-colors ml-auto">
+            <button className="px-3 py-1.5 text-[var(--muted)] text-sm hover:text-[var(--text)] transition-colors ml-auto">
               View in Table →
             </button>
           </div>

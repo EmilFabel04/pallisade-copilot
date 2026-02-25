@@ -124,7 +124,7 @@ function MultiSelectField({
               <button 
                 type="button"
                 onClick={() => removeValue(v)}
-                className="hover:bg-white/10 rounded p-0.5"
+                className="hover:bg-[var(--overlay-medium)] rounded p-0.5"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -137,7 +137,7 @@ function MultiSelectField({
 
       {/* Options checkboxes or manual input */}
       {loading ? (
-        <div className="flex items-center gap-2 text-gray-400 text-sm py-3">
+        <div className="flex items-center gap-2 text-[var(--muted)] text-sm py-3">
           <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
@@ -145,14 +145,14 @@ function MultiSelectField({
           Loading {field.optionsEndpoint}...
         </div>
       ) : options.length > 0 ? (
-        <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+        <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
           {options.map(opt => (
             <label 
               key={opt.value}
               className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
                 value.includes(opt.value) 
                   ? 'bg-[var(--accent)]/10 border border-[var(--accent)]/30' 
-                  : 'hover:bg-[rgba(255,255,255,0.04)] border border-transparent'
+                  : 'hover:bg-[var(--overlay-bg)] border border-transparent'
               }`}
             >
               <input
@@ -161,7 +161,7 @@ function MultiSelectField({
                 onChange={() => toggleOption(opt.value)}
                 className="w-4 h-4 rounded border-gray-600 text-[var(--accent)] focus:ring-[var(--accent)] focus:ring-offset-0 bg-transparent"
               />
-              <span className="text-sm text-white truncate">{opt.label}</span>
+              <span className="text-sm text-[var(--text)] truncate">{opt.label}</span>
             </label>
           ))}
         </div>
@@ -173,7 +173,7 @@ function MultiSelectField({
             onChange={(e) => setManualInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addManualValue())}
             placeholder={field.placeholder || 'Enter value and press Enter'}
-            className="flex-1 px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white placeholder:text-gray-500 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+            className="flex-1 px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
           />
           <button
             type="button"
@@ -196,7 +196,7 @@ function MultiSelectField({
         <button
           type="button"
           onClick={fetchOptions}
-          className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+          className="text-xs text-[var(--muted)] hover:text-[var(--text)] flex items-center gap-1"
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -206,7 +206,7 @@ function MultiSelectField({
       )}
 
       {field.helperText && (
-        <p className="text-xs text-gray-500">{field.helperText}</p>
+        <p className="text-xs text-[var(--muted)]">{field.helperText}</p>
       )}
     </div>
   );
@@ -403,12 +403,12 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
       onClick={onClose}
     >
       <div 
-        className="h-full w-full max-w-xl bg-[#0A0A0F] border-l border-[rgba(255,255,255,0.08)] shadow-2xl overflow-hidden"
+        className="h-full w-full max-w-xl bg-[var(--surface)] border-l border-[var(--subtle-border)] shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div
-          className="px-6 py-5 border-b border-[rgba(255,255,255,0.06)]"
+          className="px-6 py-5 border-b border-[var(--subtle-border)]"
           style={{ background: `linear-gradient(135deg, ${layerColor}10, transparent)` }}
         >
           <div className="flex items-center justify-between">
@@ -429,15 +429,15 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                 </svg>
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">
+                <h2 className="text-lg font-semibold text-[var(--text)]">
                   Configure {node.name}
                 </h2>
-                <p className="text-sm text-gray-400">{tool?.description || 'Connect this tool to Pallisade'}</p>
+                <p className="text-sm text-[var(--muted)]">{tool?.description || 'Connect this tool to Pallisade'}</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.06)] text-gray-400 hover:text-white transition-colors"
+              className="p-2 rounded-lg hover:bg-[var(--hover-bg)] text-[var(--muted)] hover:text-[var(--text)] transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -453,7 +453,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
             <div className="mb-6">
               {loadingGithub ? (
                 <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                  <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)]" />
                 </div>
               ) : githubInfo?.connected ? (
                 // Already connected via OAuth
@@ -471,12 +471,12 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                         <Check className="w-4 h-4" />
                         <span className="font-medium text-sm">GitHub Connected</span>
                       </div>
-                      <p className="text-white text-sm">@{githubInfo.username}</p>
-                      <p className="text-xs text-gray-400">{githubInfo.repoCount} repositories available</p>
+                      <p className="text-[var(--text)] text-sm">@{githubInfo.username}</p>
+                      <p className="text-xs text-[var(--muted)]">{githubInfo.repoCount} repositories available</p>
                     </div>
                     <button
                       onClick={handleGitHubConnect}
-                      className="text-xs text-gray-400 hover:text-white underline"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--text)] underline"
                     >
                       Reconnect
                     </button>
@@ -488,8 +488,8 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#24292e] flex items-center justify-center">
                     <GitHubIcon className="w-8 h-8 text-white" />
                   </div>
-                  <h3 className="text-lg font-medium text-white mb-2">Connect to GitHub</h3>
-                  <p className="text-sm text-gray-400 mb-6 max-w-sm mx-auto">
+                  <h3 className="text-lg font-medium text-[var(--text)] mb-2">Connect to GitHub</h3>
+                  <p className="text-sm text-[var(--muted)] mb-6 max-w-sm mx-auto">
                     Sign in with GitHub to access your repositories for creating PRs and tracking changes.
                   </p>
 
@@ -502,10 +502,10 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                     <ExternalLink className="w-4 h-4 ml-1 opacity-50" />
                   </button>
 
-                  <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)]">
+                  <div className="mt-4 pt-4 border-t border-[var(--subtle-border)]">
                     <button
                       onClick={() => setUseOAuth(false)}
-                      className="text-xs text-gray-500 hover:text-gray-300"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--text-tertiary)]"
                     >
                       Or configure manually with Personal Access Token →
                     </button>
@@ -520,7 +520,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
             <div className="mb-4">
               {loadingGithub ? (
                 <div className="flex items-center justify-center py-4">
-                  <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+                  <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
                 </div>
               ) : githubInfo?.connected ? (
                 <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
@@ -538,12 +538,12 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                         <span className="font-medium text-xs">GitHub Connected — @{githubInfo.username}</span>
                       </div>
                     </div>
-                    <button onClick={handleGitHubConnect} className="text-xs text-gray-400 hover:text-white underline">Reconnect</button>
+                    <button onClick={handleGitHubConnect} className="text-xs text-[var(--muted)] hover:text-[var(--text)] underline">Reconnect</button>
                   </div>
                 </div>
               ) : (
-                <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.08)] text-center">
-                  <p className="text-sm text-gray-400 mb-3">
+                <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)] text-center">
+                  <p className="text-sm text-[var(--muted)] mb-3">
                     Connect GitHub to read your dbt project files from a repository.
                   </p>
                   <button
@@ -568,7 +568,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
             return true;
           }).map(field => (
             <div key={field.name}>
-              <label className="block text-sm font-medium text-white mb-2">
+              <label className="block text-sm font-medium text-[var(--text)] mb-2">
                 {field.label}
                 {field.required && <span className="text-red-400 ml-1">*</span>}
               </label>
@@ -588,7 +588,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[rgba(255,255,255,0.1)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
+                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[var(--border-medium)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
                   >
                     {config[field.name] ? (
                       <span className="flex items-center justify-center gap-2 text-emerald-400">
@@ -598,7 +598,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                         File uploaded successfully
                       </span>
                     ) : (
-                      <span className="flex items-center justify-center gap-2 text-gray-400">
+                      <span className="flex items-center justify-center gap-2 text-[var(--muted)]">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
@@ -607,7 +607,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                     )}
                   </button>
                   {field.helperText && (
-                    <p className="text-xs text-gray-500 mt-2">{field.helperText}</p>
+                    <p className="text-xs text-[var(--muted)] mt-2">{field.helperText}</p>
                   )}
                 </div>
               ) : field.type === 'folder' ? (
@@ -628,7 +628,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   <button
                     type="button"
                     onClick={() => folderInputRef.current?.click()}
-                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[rgba(255,255,255,0.1)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
+                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[var(--border-medium)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
                   >
                     {config[field.name] && typeof config[field.name] === 'object' ? (
                       <span className="flex items-center justify-center gap-2 text-emerald-400">
@@ -638,7 +638,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                         {Object.keys(config[field.name]).length} project files loaded
                       </span>
                     ) : (
-                      <span className="flex items-center justify-center gap-2 text-gray-400">
+                      <span className="flex items-center justify-center gap-2 text-[var(--muted)]">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                         </svg>
@@ -647,7 +647,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                     )}
                   </button>
                   {field.helperText && (
-                    <p className="text-xs text-gray-500 mt-2">{field.helperText}</p>
+                    <p className="text-xs text-[var(--muted)] mt-2">{field.helperText}</p>
                   )}
                 </div>
               ) : field.type === 'multi-select' ? (
@@ -664,7 +664,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                 <select
                   value={config[field.name] || ''}
                   onChange={(e) => handleFieldChange(field.name, e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
                 >
                   <option value="">Select...</option>
                   {field.options?.map(opt => (
@@ -677,7 +677,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   onChange={(e) => handleFieldChange(field.name, e.target.value)}
                   placeholder={field.placeholder}
                   rows={4}
-                  className="w-full px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white placeholder:text-gray-500 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all resize-none"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all resize-none"
                 />
               ) : (
                 <input
@@ -685,7 +685,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   value={config[field.name] || ''}
                   onChange={(e) => handleFieldChange(field.name, e.target.value)}
                   placeholder={field.placeholder}
-                  className="w-full px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white placeholder:text-gray-500 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
                 />
               )}
             </div>
@@ -715,11 +715,11 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-[var(--subtle-border)] bg-[var(--overlay-bg)] flex items-center justify-between">
           <button
             onClick={testConnection}
             disabled={!isValid || testing}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl bg-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.08)] text-white border border-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.12)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {testing ? (
               <>
@@ -742,7 +742,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
           <div className="flex items-center gap-3">
             <button 
               onClick={onClose} 
-              className="px-4 py-2.5 text-sm font-medium rounded-xl text-gray-400 hover:text-white hover:bg-[rgba(255,255,255,0.04)] transition-all"
+              className="px-4 py-2.5 text-sm font-medium rounded-xl text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-all"
             >
               Cancel
             </button>

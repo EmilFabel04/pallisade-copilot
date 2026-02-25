@@ -137,10 +137,10 @@ const quickNavCards = [
     description: 'Workspace config',
     href: '/dashboard/settings',
     icon: Settings,
-    color: 'from-white/5 to-white/[0.02]',
-    borderColor: 'border-white/[0.08] hover:border-white/[0.15]',
-    iconBg: 'bg-white/[0.06]',
-    iconColor: 'text-white/60',
+    color: 'from-[var(--subtle-bg)] to-[var(--overlay-faint)]',
+    borderColor: 'border-[var(--subtle-border)] hover:border-[var(--overlay-strong)]',
+    iconBg: 'bg-[var(--hover-bg)]',
+    iconColor: 'text-[var(--text-tertiary)]',
     highlighted: false,
   },
 ];
@@ -341,7 +341,7 @@ export default function DashboardPage() {
       <div className="max-w-6xl mx-auto flex items-center justify-center min-h-[400px]">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-white/50">Loading dashboard...</p>
+          <p className="text-sm text-[var(--muted)]">Loading dashboard...</p>
         </div>
       </div>
     );
@@ -355,10 +355,10 @@ export default function DashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <h1 className="text-2xl font-semibold text-white mb-1">{getGreeting()}</h1>
-        <p className="text-white/50 text-[15px]">
+        <h1 className="text-2xl font-semibold text-[var(--text)] mb-1">{getGreeting()}</h1>
+        <p className="text-[var(--muted)] text-[15px]">
           {selectedPipeline
-            ? <>Working on <span className="text-white/70 font-medium">{selectedPipeline.name}</span></>
+            ? <>Working on <span className="text-[var(--text-tertiary)] font-medium">{selectedPipeline.name}</span></>
             : "Here\u2019s an overview of your data stack"
           }
         </p>
@@ -394,14 +394,14 @@ export default function DashboardPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <p className="text-[14px] font-medium text-white truncate">{card.name}</p>
+                    <p className="text-[14px] font-medium text-[var(--text)] truncate">{card.name}</p>
                     {card.highlighted && (
                       <Sparkles className="w-3.5 h-3.5 text-[var(--accent-2)] flex-shrink-0" />
                     )}
                   </div>
-                  <p className="text-[12px] text-white/40 truncate">{card.description}</p>
+                  <p className="text-[12px] text-[var(--muted)] truncate">{card.description}</p>
                 </div>
-                <ArrowUpRight className="w-4 h-4 text-white/0 group-hover:text-white/40 transition-colors flex-shrink-0" />
+                <ArrowUpRight className="w-4 h-4 text-transparent group-hover:text-[var(--muted)] transition-colors flex-shrink-0" />
               </Link>
             </motion.div>
           );
@@ -418,14 +418,14 @@ export default function DashboardPage() {
         <motion.div variants={itemVariants}>
           <Link
             href="/dashboard/pipeline"
-            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+            className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] transition-all group"
           >
             <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
               <CheckCircle2 className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.healthyIntegrations}</span>
-              <p className="text-[12px] text-white/40">Connected Sources</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.healthyIntegrations}</span>
+              <p className="text-[12px] text-[var(--muted)]">Connected Sources</p>
             </div>
           </Link>
         </motion.div>
@@ -433,14 +433,14 @@ export default function DashboardPage() {
         <motion.div variants={itemVariants}>
           <Link
             href="/dashboard/sources"
-            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+            className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] transition-all group"
           >
             <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
               <Database className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.totalTables || '\u2014'}</span>
-              <p className="text-[12px] text-white/40">Total Tables</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.totalTables || '\u2014'}</span>
+              <p className="text-[12px] text-[var(--muted)]">Total Tables</p>
             </div>
           </Link>
         </motion.div>
@@ -448,14 +448,14 @@ export default function DashboardPage() {
         <motion.div variants={itemVariants}>
           <Link
             href="/dashboard/assistant"
-            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+            className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] transition-all group"
           >
             <div className="w-9 h-9 rounded-lg bg-purple-500/10 flex items-center justify-center">
               <MessageSquare className="w-5 h-5 text-purple-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.totalChats}</span>
-              <p className="text-[12px] text-white/40">AI Conversations</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.totalChats}</span>
+              <p className="text-[12px] text-[var(--muted)]">AI Conversations</p>
             </div>
           </Link>
         </motion.div>
@@ -463,14 +463,14 @@ export default function DashboardPage() {
         <motion.div variants={itemVariants}>
           <Link
             href="/dashboard/pipeline"
-            className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] hover:border-white/[0.12] transition-all group"
+            className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] transition-all group"
           >
             <div className="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center">
               <BarChart3 className="w-5 h-5 text-indigo-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.totalIntegrations}</span>
-              <p className="text-[12px] text-white/40">Pipeline Nodes</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.totalIntegrations}</span>
+              <p className="text-[12px] text-[var(--muted)]">Pipeline Nodes</p>
             </div>
           </Link>
         </motion.div>
@@ -484,10 +484,10 @@ export default function DashboardPage() {
         className="grid grid-cols-1 lg:grid-cols-5 gap-6"
       >
         {/* Recent Conversations */}
-        <div className="lg:col-span-3 bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+        <div className="lg:col-span-3 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[15px] font-medium text-white">Recent Conversations</h2>
-            <Link href="/dashboard/assistant" className="text-[12px] text-white/40 hover:text-white/70 transition-colors">
+            <h2 className="text-[15px] font-medium text-[var(--text)]">Recent Conversations</h2>
+            <Link href="/dashboard/assistant" className="text-[12px] text-[var(--muted)] hover:text-[var(--text-tertiary)] transition-colors">
               View all
             </Link>
           </div>
@@ -496,7 +496,7 @@ export default function DashboardPage() {
               <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-[var(--accent)]/10 flex items-center justify-center">
                 <MessageSquare className="w-6 h-6 text-[var(--accent-2)]" />
               </div>
-              <p className="text-[13px] text-white/50 mb-3">No conversations yet</p>
+              <p className="text-[13px] text-[var(--muted)] mb-3">No conversations yet</p>
               <Link href="/dashboard/assistant" className="text-[12px] text-[var(--accent-2)] hover:underline">
                 Start your first chat &rarr;
               </Link>
@@ -507,16 +507,16 @@ export default function DashboardPage() {
                 <Link
                   key={chat.id}
                   href={`/dashboard/assistant?session=${chat.id}`}
-                  className="flex items-center gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] hover:border-white/[0.10] transition-colors"
+                  className="flex items-center gap-3 p-3 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)] hover:border-[var(--border-medium)] transition-colors"
                 >
                   <div className="w-8 h-8 rounded-lg bg-[var(--accent)]/10 flex items-center justify-center flex-shrink-0">
                     <MessageSquare className="w-4 h-4 text-[var(--accent-2)]" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium text-white truncate">{chat.title}</p>
-                    <p className="text-[11px] text-white/40">{chat.updatedAt}</p>
+                    <p className="text-[13px] font-medium text-[var(--text)] truncate">{chat.title}</p>
+                    <p className="text-[11px] text-[var(--muted)]">{chat.updatedAt}</p>
                   </div>
-                  <ArrowUpRight className="w-3.5 h-3.5 text-white/0 group-hover:text-white/30 flex-shrink-0" />
+                  <ArrowUpRight className="w-3.5 h-3.5 text-transparent group-hover:text-[var(--text-faint)] flex-shrink-0" />
                 </Link>
               ))}
             </div>
@@ -524,19 +524,19 @@ export default function DashboardPage() {
         </div>
 
         {/* Connected Sources */}
-        <div className="lg:col-span-2 bg-white/[0.03] border border-white/[0.06] rounded-xl p-5">
+        <div className="lg:col-span-2 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[15px] font-medium text-white">Connected Sources</h2>
-            <Link href="/dashboard/pipeline" className="text-[12px] text-white/40 hover:text-white/70 transition-colors">
+            <h2 className="text-[15px] font-medium text-[var(--text)]">Connected Sources</h2>
+            <Link href="/dashboard/pipeline" className="text-[12px] text-[var(--muted)] hover:text-[var(--text-tertiary)] transition-colors">
               Manage
             </Link>
           </div>
           {integrations.length === 0 ? (
             <div className="text-center py-8">
-              <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-white/[0.05] flex items-center justify-center">
-                <Plus className="w-6 h-6 text-white/30" />
+              <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-[var(--subtle-bg)] flex items-center justify-center">
+                <Plus className="w-6 h-6 text-[var(--text-faint)]" />
               </div>
-              <p className="text-[13px] text-white/50 mb-3">No sources connected</p>
+              <p className="text-[13px] text-[var(--muted)] mb-3">No sources connected</p>
               <Link href="/dashboard/pipeline" className="text-[12px] text-[var(--accent-2)] hover:underline">
                 Add your first source &rarr;
               </Link>
@@ -546,14 +546,14 @@ export default function DashboardPage() {
               {integrations.map((integration) => (
                 <div
                   key={integration.id}
-                  className="flex items-center gap-3 p-3 rounded-lg bg-white/[0.02] border border-white/[0.04]"
+                  className="flex items-center gap-3 p-3 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)]"
                 >
-                  <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-white/60">
+                  <div className="w-8 h-8 rounded-lg bg-[var(--subtle-bg)] flex items-center justify-center text-[var(--text-tertiary)]">
                     {integrationIcons[integration.type] || <Database className="w-4 h-4" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium text-white truncate">{integration.name}</p>
-                    <p className="text-[11px] text-white/40">{integration.lastSync}</p>
+                    <p className="text-[13px] font-medium text-[var(--text)] truncate">{integration.name}</p>
+                    <p className="text-[11px] text-[var(--muted)]">{integration.lastSync}</p>
                   </div>
                   <div className={`w-2 h-2 rounded-full ${integration.status === 'CONNECTED' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                 </div>

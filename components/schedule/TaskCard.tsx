@@ -36,19 +36,19 @@ function timeAgo(dateStr?: string): string {
 
 export function TaskCard({ task, onClick, onToggleEnabled, onRunNow }: TaskCardProps) {
   const statusColor = task.lastStatus
-    ? RUN_STATUS_COLORS[task.lastStatus] || 'bg-white/10 text-white/40'
-    : 'bg-white/10 text-white/40';
+    ? RUN_STATUS_COLORS[task.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
+    : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
 
   return (
     <div
-      className="group relative bg-[#0a0a12] border border-white/[0.06] rounded-xl p-4 hover:border-white/[0.12] transition-all cursor-pointer"
+      className="group relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl p-4 hover:border-[var(--overlay-strong)] transition-all cursor-pointer"
       onClick={onClick}
     >
       <div className="flex items-start justify-between gap-3">
         {/* Left: Name + type */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <h3 className="text-[14px] font-medium text-white truncate">{task.name}</h3>
+            <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{task.name}</h3>
             <span className={cn(
               'px-1.5 py-0.5 rounded text-[10px] font-medium uppercase',
               statusColor
@@ -56,7 +56,7 @@ export function TaskCard({ task, onClick, onToggleEnabled, onRunNow }: TaskCardP
               {task.lastStatus || 'NEW'}
             </span>
           </div>
-          <div className="flex items-center gap-3 text-[12px] text-white/40">
+          <div className="flex items-center gap-3 text-[12px] text-[var(--muted)]">
             <span className="flex items-center gap-1">
               {task.taskMode === 'prompt' ? (
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -88,7 +88,7 @@ export function TaskCard({ task, onClick, onToggleEnabled, onRunNow }: TaskCardP
           {/* Run Now */}
           <button
             onClick={onRunNow}
-            className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/[0.06] transition-colors opacity-0 group-hover:opacity-100"
+            className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors opacity-0 group-hover:opacity-100"
             title="Run now"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -102,7 +102,7 @@ export function TaskCard({ task, onClick, onToggleEnabled, onRunNow }: TaskCardP
             onClick={() => onToggleEnabled(!task.enabled)}
             className={cn(
               'relative w-8 h-[18px] rounded-full transition-colors',
-              task.enabled ? 'bg-emerald-500/40' : 'bg-white/10'
+              task.enabled ? 'bg-emerald-500/40' : 'bg-[var(--overlay-medium)]'
             )}
           >
             <div className={cn(
@@ -114,7 +114,7 @@ export function TaskCard({ task, onClick, onToggleEnabled, onRunNow }: TaskCardP
       </div>
 
       {/* Bottom: Last run + alerts */}
-      <div className="flex items-center gap-3 mt-2.5 text-[11px] text-white/30">
+      <div className="flex items-center gap-3 mt-2.5 text-[11px] text-[var(--text-faint)]">
         <span>Last run: {timeAgo(task.lastRunAt)}</span>
         {task.alertChannels.length > 0 && (
           <span className="flex items-center gap-1">

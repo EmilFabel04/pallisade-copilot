@@ -51,7 +51,7 @@ export function AlertChannelPicker({
     <div className="space-y-4">
       {/* Channels */}
       <div>
-        <label className="block text-[12px] font-medium text-white/50 mb-2">
+        <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
           Alert Channels
         </label>
         <div className="flex flex-wrap gap-2">
@@ -66,8 +66,8 @@ export function AlertChannelPicker({
                 className={cn(
                   'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
                   isSelected
-                    ? 'bg-white/[0.12] text-white border border-white/[0.15]'
-                    : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:bg-white/[0.08]'
+                    ? 'bg-[var(--overlay-strong)] text-[var(--text)] border border-[var(--overlay-strong)]'
+                    : 'bg-[var(--overlay-bg)] text-[var(--muted)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
                 )}
               >
                 <span>{ch.icon}</span>
@@ -84,7 +84,7 @@ export function AlertChannelPicker({
       {/* Alert on status */}
       {channels.length > 0 && (
         <div>
-          <label className="block text-[12px] font-medium text-white/50 mb-2">
+          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
             Alert when status is
           </label>
           <div className="flex flex-wrap gap-2">
@@ -96,8 +96,8 @@ export function AlertChannelPicker({
                 className={cn(
                   'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
                   alertOnStatus.includes(st.id)
-                    ? `bg-white/[0.12] border border-white/[0.15] ${st.color}`
-                    : 'bg-white/[0.04] text-white/40 border border-white/[0.06] hover:bg-white/[0.08]'
+                    ? `bg-[var(--overlay-strong)] border border-[var(--overlay-strong)] ${st.color}`
+                    : 'bg-[var(--overlay-bg)] text-[var(--muted)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
                 )}
               >
                 {st.label}

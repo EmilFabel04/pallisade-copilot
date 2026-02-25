@@ -118,8 +118,8 @@ export function ModeSelector({ selected, onSelect, compact = false }: ModeSelect
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 bottom-full mb-2 w-64 bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] rounded-xl shadow-xl z-50 overflow-hidden">
-          <div className="p-3 border-b border-[rgba(255,255,255,0.06)]">
+        <div className="absolute left-0 bottom-full mb-2 w-64 bg-[var(--surface)] border border-[var(--border-medium)] rounded-xl shadow-xl z-50 overflow-hidden">
+          <div className="p-3 border-b border-[var(--subtle-border)]">
             <h4 className="text-sm font-medium">Select Mode</h4>
             <p className="text-xs text-[var(--muted)] mt-0.5">Choose how Scout should respond</p>
           </div>
@@ -131,8 +131,8 @@ export function ModeSelector({ selected, onSelect, compact = false }: ModeSelect
                   onSelect(mode.id);
                   setIsOpen(false);
                 }}
-                className={`w-full p-3 text-left hover:bg-[rgba(255,255,255,0.04)] transition-colors flex items-center gap-3 ${
-                  selected === mode.id ? 'bg-[rgba(255,255,255,0.06)]' : ''
+                className={`w-full p-3 text-left hover:bg-[var(--overlay-bg)] transition-colors flex items-center gap-3 ${
+                  selected === mode.id ? 'bg-[var(--hover-bg)]' : ''
                 }`}
               >
                 <div
@@ -148,7 +148,7 @@ export function ModeSelector({ selected, onSelect, compact = false }: ModeSelect
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium">{mode.name}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[rgba(255,255,255,0.08)] text-[var(--muted)]">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--hover-bg)] text-[var(--muted)]">
                       /{mode.id}
                     </span>
                   </div>

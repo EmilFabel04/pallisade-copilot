@@ -124,10 +124,10 @@ function LoginForm() {
         <div className="mt-6">
           <div className="relative">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-white/10" />
+              <div className="w-full border-t border-[var(--subtle-border)]" />
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className="px-2 bg-[#0c0c0c] text-[var(--muted)]">Or continue with</span>
+              <span className="px-2 bg-[var(--surface)] text-[var(--muted)]">Or continue with</span>
             </div>
           </div>
 
@@ -171,15 +171,15 @@ function LoginFallback() {
   return (
     <div className="w-full max-w-md">
       <div className="text-center mb-8">
-        <div className="w-16 h-16 mx-auto mb-4 bg-white/5 rounded-full animate-pulse" />
-        <div className="h-8 w-48 mx-auto bg-white/5 rounded animate-pulse" />
-        <div className="h-4 w-64 mx-auto mt-2 bg-white/5 rounded animate-pulse" />
+        <div className="w-16 h-16 mx-auto mb-4 bg-[var(--overlay-bg)] rounded-full animate-pulse" />
+        <div className="h-8 w-48 mx-auto bg-[var(--overlay-bg)] rounded animate-pulse" />
+        <div className="h-4 w-64 mx-auto mt-2 bg-[var(--overlay-bg)] rounded animate-pulse" />
       </div>
       <div className="auth-card">
         <div className="space-y-5">
-          <div className="h-20 bg-white/5 rounded animate-pulse" />
-          <div className="h-20 bg-white/5 rounded animate-pulse" />
-          <div className="h-12 bg-white/5 rounded animate-pulse" />
+          <div className="h-20 bg-[var(--overlay-bg)] rounded animate-pulse" />
+          <div className="h-20 bg-[var(--overlay-bg)] rounded animate-pulse" />
+          <div className="h-12 bg-[var(--overlay-bg)] rounded animate-pulse" />
         </div>
       </div>
     </div>

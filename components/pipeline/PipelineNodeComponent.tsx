@@ -25,12 +25,12 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
       className={`
         pipeline-node
         min-w-[220px] rounded-xl overflow-hidden
-        bg-[#1a1a24] border-2 transition-all duration-200
+        bg-[var(--surface-inset)] border-2 transition-all duration-200
         ${selected ? 'shadow-2xl scale-[1.02]' : 'shadow-xl'}
         hover:shadow-2xl
       `}
       style={{
-        borderColor: selected ? layerColor : 'rgba(255,255,255,0.1)',
+        borderColor: selected ? layerColor : 'var(--border-medium)',
         boxShadow: selected ? `0 0 30px ${layerColor}30` : undefined,
       }}
     >
@@ -39,7 +39,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
         <Handle
           type="target"
           position={Position.Left}
-          className="!w-4 !h-4 !-left-2 !border-2 !border-[#1a1a24] !rounded-full"
+          className="!w-4 !h-4 !-left-2 !border-2 !border-[var(--surface-inset)] !rounded-full"
           style={{ backgroundColor: layerColor }}
         />
       )}
@@ -58,8 +58,8 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
         </div>
         
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-sm text-white truncate">{data.name}</div>
-          <div className="text-[10px] text-gray-400 uppercase tracking-wider mt-0.5">
+          <div className="font-semibold text-sm text-[var(--text)] truncate">{data.name}</div>
+          <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider mt-0.5">
             {data.layer}
           </div>
         </div>
@@ -73,7 +73,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
       </div>
 
       {/* Body */}
-      <div className="px-4 py-3 space-y-3 border-t border-[rgba(255,255,255,0.06)]">
+      <div className="px-4 py-3 space-y-3 border-t border-[var(--subtle-border)]">
         {/* Config Status */}
         {!data.config ? (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
@@ -95,7 +95,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
         {data.healthScore !== null && (
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-gray-400">Health</span>
+              <span className="text-[var(--muted)]">Health</span>
               <span className={`font-semibold ${
                 data.healthScore >= 80 ? 'text-emerald-400' :
                 data.healthScore >= 60 ? 'text-amber-400' : 'text-red-400'
@@ -103,7 +103,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
                 {data.healthScore.toFixed(0)}%
               </span>
             </div>
-            <div className="h-1.5 bg-[rgba(255,255,255,0.06)] rounded-full overflow-hidden">
+            <div className="h-1.5 bg-[var(--subtle-border)] rounded-full overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
                 style={{
@@ -140,7 +140,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
               e.stopPropagation();
               data.onConfigure();
             }}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-white/5 hover:bg-white/10 text-white border border-white/10 hover:border-white/20 transition-all"
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)] text-[var(--text)] border border-[var(--border-medium)] hover:border-[var(--overlay-strong)] transition-all"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -153,7 +153,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
               e.stopPropagation();
               data.onDelete();
             }}
-            className="p-2 rounded-lg bg-white/5 hover:bg-red-500/20 text-gray-400 hover:text-red-400 border border-white/10 hover:border-red-500/30 transition-all"
+            className="p-2 rounded-lg bg-[var(--subtle-bg)] hover:bg-red-500/20 text-[var(--muted)] hover:text-red-400 border border-[var(--border-medium)] hover:border-red-500/30 transition-all"
             title="Remove"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -168,7 +168,7 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
         <Handle
           type="source"
           position={Position.Right}
-          className="!w-4 !h-4 !-right-2 !border-2 !border-[#1a1a24] !rounded-full"
+          className="!w-4 !h-4 !-right-2 !border-2 !border-[var(--surface-inset)] !rounded-full"
           style={{ backgroundColor: layerColor }}
         />
       )}

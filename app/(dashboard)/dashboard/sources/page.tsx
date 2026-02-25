@@ -251,7 +251,7 @@ export default function SourcesPage() {
       case 'TESTING':
         return <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />;
       default:
-        return <span className="w-2 h-2 rounded-full bg-white/20" />;
+        return <span className="w-2 h-2 rounded-full bg-[var(--overlay-strong)]" />;
     }
   };
 
@@ -314,7 +314,7 @@ export default function SourcesPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full" />
+        <div className="animate-spin w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full" />
       </div>
     );
   }
@@ -322,13 +322,13 @@ export default function SourcesPage() {
   if (nodes.length === 0) {
     return (
       <div className="max-w-2xl mx-auto text-center py-20">
-        <div className="w-14 h-14 rounded-xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mx-auto mb-5">
-          <svg className="w-7 h-7 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="w-14 h-14 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] flex items-center justify-center mx-auto mb-5">
+          <svg className="w-7 h-7 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />
           </svg>
         </div>
-        <h1 className="text-xl font-semibold text-white mb-2">No data sources configured</h1>
-        <p className="text-white/50 text-[14px] mb-6 max-w-md mx-auto">
+        <h1 className="text-xl font-semibold text-[var(--text)] mb-2">No data sources configured</h1>
+        <p className="text-[var(--muted)] text-[14px] mb-6 max-w-md mx-auto">
           Configure your data warehouse, transformation tools, and other integrations in the Pipeline Builder to see what data is available.
         </p>
         <Link
@@ -347,10 +347,10 @@ export default function SourcesPage() {
   return (
     <div className="flex h-[calc(100vh-56px)] -m-6">
       {/* Left Panel - Source List */}
-      <div className="w-64 flex-shrink-0 border-r border-white/[0.04] bg-[#030303] flex flex-col">
-        <div className="p-4 border-b border-white/[0.04]">
-          <h1 className="text-[15px] font-medium text-white">Data Sources</h1>
-          <p className="text-[12px] text-white/40 mt-0.5">
+      <div className="w-64 flex-shrink-0 border-r border-[var(--border-faint)] bg-[var(--surface-sunken)] flex flex-col">
+        <div className="p-4 border-b border-[var(--border-faint)]">
+          <h1 className="text-[15px] font-medium text-[var(--text)]">Data Sources</h1>
+          <p className="text-[12px] text-[var(--muted)] mt-0.5">
             {nodes.filter((n) => n.status === 'ACTIVE' || n.status === 'CONNECTED').length} of {nodes.length} connected
           </p>
         </div>
@@ -359,7 +359,7 @@ export default function SourcesPage() {
           {/* Warehouses */}
           {warehouses.length > 0 && (
             <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
+              <div className="px-4 py-1.5 text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">
                 Warehouses
               </div>
               {warehouses.map((node) => (
@@ -368,14 +368,14 @@ export default function SourcesPage() {
                   onClick={() => handleSelectNode(node)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                     selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
+                      ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                      : 'text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)]'
                   }`}
                 >
                   {getStatusIndicator(node.status)}
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
+                    <p className="text-[11px] text-[var(--muted)] truncate">{getToolName(node.toolType)}</p>
                   </div>
                 </button>
               ))}
@@ -385,7 +385,7 @@ export default function SourcesPage() {
           {/* Transformation */}
           {transformations.length > 0 && (
             <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
+              <div className="px-4 py-1.5 text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">
                 Transformation
               </div>
               {transformations.map((node) => (
@@ -394,14 +394,14 @@ export default function SourcesPage() {
                   onClick={() => handleSelectNode(node)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                     selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
+                      ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                      : 'text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)]'
                   }`}
                 >
                   {getStatusIndicator(node.status)}
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
+                    <p className="text-[11px] text-[var(--muted)] truncate">{getToolName(node.toolType)}</p>
                   </div>
                 </button>
               ))}
@@ -411,7 +411,7 @@ export default function SourcesPage() {
           {/* Ingestion */}
           {ingestion.length > 0 && (
             <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
+              <div className="px-4 py-1.5 text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">
                 Ingestion
               </div>
               {ingestion.map((node) => (
@@ -420,14 +420,14 @@ export default function SourcesPage() {
                   onClick={() => handleSelectNode(node)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                     selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
+                      ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                      : 'text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)]'
                   }`}
                 >
                   {getStatusIndicator(node.status)}
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
+                    <p className="text-[11px] text-[var(--muted)] truncate">{getToolName(node.toolType)}</p>
                   </div>
                 </button>
               ))}
@@ -437,7 +437,7 @@ export default function SourcesPage() {
           {/* Reporting */}
           {reporting.length > 0 && (
             <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
+              <div className="px-4 py-1.5 text-[10px] font-medium text-[var(--muted)] uppercase tracking-wider">
                 Reporting
               </div>
               {reporting.map((node) => (
@@ -446,14 +446,14 @@ export default function SourcesPage() {
                   onClick={() => handleSelectNode(node)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                     selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
+                      ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                      : 'text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)]'
                   }`}
                 >
                   {getStatusIndicator(node.status)}
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
+                    <p className="text-[11px] text-[var(--muted)] truncate">{getToolName(node.toolType)}</p>
                   </div>
                 </button>
               ))}
@@ -462,10 +462,10 @@ export default function SourcesPage() {
         </div>
 
         {/* Configure Link */}
-        <div className="p-3 border-t border-white/[0.04]">
+        <div className="p-3 border-t border-[var(--border-faint)]">
           <Link
             href="/dashboard/pipeline"
-            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.06] text-white/60 hover:text-white text-[12px] font-medium transition-colors"
+            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-[var(--text-tertiary)] hover:text-[var(--text)] text-[12px] font-medium transition-colors"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.204-.107-.397.165-.71.505-.78.929l-.15.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
@@ -477,15 +477,15 @@ export default function SourcesPage() {
       </div>
 
       {/* Right Panel - Details */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[#020202]">
+      <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg)]">
         {selectedNodeObj ? (
           <>
             {/* Source Header */}
-            <div className="px-6 py-4 border-b border-white/[0.04]">
+            <div className="px-6 py-4 border-b border-[var(--border-faint)]">
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <div className="flex items-center gap-3 mb-1">
-                    <h2 className="text-lg font-medium text-white">{selectedNodeObj.name}</h2>
+                    <h2 className="text-lg font-medium text-[var(--text)]">{selectedNodeObj.name}</h2>
                     {getStatusIndicator(selectedNodeObj.status)}
                     {currentData?.source === 'demo' && (
                       <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400" title="Scanner service unavailable - showing sample data">
@@ -518,7 +518,7 @@ export default function SourcesPage() {
                       </span>
                     )}
                   </div>
-                  <p className="text-[13px] text-white/40">
+                  <p className="text-[13px] text-[var(--muted)]">
                     {getToolName(selectedNodeObj.toolType)}
                     {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).project_id ? (
                       <span> · {String((selectedNodeObj.config as Record<string, unknown>).project_id)}</span>
@@ -530,14 +530,14 @@ export default function SourcesPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   {getCacheAge() && (
-                    <span className="text-[11px] text-white/30">
+                    <span className="text-[11px] text-[var(--text-faint)]">
                       Updated {getCacheAge()}
                     </span>
                   )}
                   <button
                     onClick={handleRefresh}
                     disabled={loadingData === selectedNode}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-white/50 hover:text-white hover:bg-white/[0.04] transition-colors disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-colors disabled:opacity-50"
                   >
                     <svg className={`w-4 h-4 ${loadingData === selectedNode ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
@@ -546,7 +546,7 @@ export default function SourcesPage() {
                   </button>
                   <Link
                     href="/dashboard/pipeline"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-white/50 hover:text-white hover:bg-white/[0.04] transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-colors"
                   >
                     Edit
                   </Link>
@@ -557,7 +557,7 @@ export default function SourcesPage() {
               {selectedNodeObj.config && getConfiguredDatasets(selectedNodeObj).length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
                   {getConfiguredDatasets(selectedNodeObj).map((ds, i) => (
-                    <span key={i} className="px-2 py-1 rounded bg-white/[0.04] text-[11px] text-white/60 font-mono">
+                    <span key={i} className="px-2 py-1 rounded bg-[var(--overlay-bg)] text-[11px] text-[var(--text-tertiary)] font-mono">
                       {ds}
                     </span>
                   ))}
@@ -591,8 +591,8 @@ export default function SourcesPage() {
                     onClick={() => setActiveTab('tables')}
                     className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
                       activeTab === 'tables'
-                        ? 'bg-white/[0.08] text-white'
-                        : 'text-white/50 hover:text-white hover:bg-white/[0.04]'
+                        ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                        : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                     }`}
                   >
                     Tables {currentData?.tables && currentData.tables.length > 0 && `(${currentData.tables.length})`}
@@ -602,8 +602,8 @@ export default function SourcesPage() {
                       onClick={() => setActiveTab('models')}
                       className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
                         activeTab === 'models'
-                          ? 'bg-white/[0.08] text-white'
-                          : 'text-white/50 hover:text-white hover:bg-white/[0.04]'
+                          ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                          : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                       }`}
                     >
                       Models {currentData?.models && currentData.models.length > 0 && `(${currentData.models.length})`}
@@ -614,8 +614,8 @@ export default function SourcesPage() {
                       onClick={() => setActiveTab('connectors')}
                       className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
                         activeTab === 'connectors'
-                          ? 'bg-white/[0.08] text-white'
-                          : 'text-white/50 hover:text-white hover:bg-white/[0.04]'
+                          ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                          : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                       }`}
                     >
                       Connectors {currentData?.connectors && currentData.connectors.length > 0 && `(${currentData.connectors.length})`}
@@ -626,7 +626,7 @@ export default function SourcesPage() {
                 {/* Search */}
                 <div className="flex-1 max-w-xs">
                   <div className="relative">
-                    <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
                     <input
@@ -634,7 +634,7 @@ export default function SourcesPage() {
                       placeholder="Search..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-3 py-1.5 rounded-md bg-white/[0.04] border border-white/[0.06] text-[12px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.12]"
+                      className="w-full pl-9 pr-3 py-1.5 rounded-md bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[12px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                     />
                   </div>
                 </div>
@@ -645,8 +645,8 @@ export default function SourcesPage() {
             <div className="flex-1 overflow-y-auto">
               {loadingData === selectedNode ? (
                 <div className="flex items-center justify-center h-64">
-                  <div className="flex items-center gap-3 text-white/50">
-                    <div className="animate-spin w-5 h-5 border-2 border-white/20 border-t-white/60 rounded-full" />
+                  <div className="flex items-center gap-3 text-[var(--muted)]">
+                    <div className="animate-spin w-5 h-5 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full" />
                     <span className="text-[13px]">Loading data...</span>
                   </div>
                 </div>
@@ -656,10 +656,10 @@ export default function SourcesPage() {
                     <svg className="w-10 h-10 text-red-500/50 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
                     </svg>
-                    <p className="text-[13px] text-white/50">{currentData.error}</p>
+                    <p className="text-[13px] text-[var(--muted)]">{currentData.error}</p>
                     <button
                       onClick={handleRefresh}
-                      className="mt-3 text-[12px] text-white/40 hover:text-white underline"
+                      className="mt-3 text-[12px] text-[var(--muted)] hover:text-[var(--text)] underline"
                     >
                       Try again
                     </button>
@@ -671,43 +671,43 @@ export default function SourcesPage() {
                   {activeTab === 'tables' && (
                     <div className="p-6">
                       {filteredTables.length > 0 ? (
-                        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
+                        <div className="border border-[var(--subtle-border)] rounded-lg overflow-hidden">
                           <table className="w-full">
                             <thead>
-                              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Table Name</th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">
+                              <tr className="border-b border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
+                                <th className="text-left px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Table Name</th>
+                                <th className="text-left px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">
                                   {selectedNodeObj.toolType === 'bigquery' ? 'Dataset' : 'Schema'}
                                 </th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Type</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Columns</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Row Count</th>
+                                <th className="text-left px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Type</th>
+                                <th className="text-right px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Columns</th>
+                                <th className="text-right px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Row Count</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-white/[0.04]">
                               {filteredTables.map((table, i) => (
-                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                                <tr key={i} className="hover:bg-[var(--overlay-faint)] transition-colors">
                                   <td className="px-4 py-3">
-                                    <code className="text-[13px] text-white">{table.name}</code>
+                                    <code className="text-[13px] text-[var(--text)]">{table.name}</code>
                                   </td>
                                   <td className="px-4 py-3">
-                                    <code className="text-[13px] text-white/50">{table.dataset || table.schema}</code>
+                                    <code className="text-[13px] text-[var(--muted)]">{table.dataset || table.schema}</code>
                                   </td>
                                   <td className="px-4 py-3">
                                     <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${
                                       table.type === 'VIEW' ? 'bg-purple-500/10 text-purple-400' :
                                       table.type === 'MATERIALIZED VIEW' ? 'bg-blue-500/10 text-blue-400' :
                                       table.type === 'EXTERNAL' ? 'bg-amber-500/10 text-amber-400' :
-                                      'bg-white/[0.06] text-white/50'
+                                      'bg-[var(--hover-bg)] text-[var(--muted)]'
                                     }`}>
                                       {table.type || 'TABLE'}
                                     </span>
                                   </td>
                                   <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">{table.columns ?? '—'}</span>
+                                    <span className="text-[13px] text-[var(--muted)]">{table.columns ?? '—'}</span>
                                   </td>
                                   <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">
+                                    <span className="text-[13px] text-[var(--muted)]">
                                       {formatRowCount(table.rowCount)}
                                     </span>
                                   </td>
@@ -717,15 +717,15 @@ export default function SourcesPage() {
                           </table>
                         </div>
                       ) : (
-                        <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
-                          <svg className="w-10 h-10 text-white/15 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="text-center py-16 border border-[var(--border-faint)] border-dashed rounded-lg">
+                          <svg className="w-10 h-10 text-[var(--text-faint)] mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125" />
                           </svg>
-                          <p className="text-[13px] text-white/40">
+                          <p className="text-[13px] text-[var(--muted)]">
                             {searchQuery ? 'No tables match your search' : 'No tables found'}
                           </p>
                           {!searchQuery && (
-                            <p className="text-[12px] text-white/25 mt-1">
+                            <p className="text-[12px] text-[var(--text-faint)] mt-1">
                               Configure datasets in Pipeline Builder to discover tables
                             </p>
                           )}
@@ -740,8 +740,8 @@ export default function SourcesPage() {
                       {filteredModels.length > 0 ? (
                         <DbtModelsVisual models={filteredModels} />
                       ) : (
-                        <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
-                          <p className="text-[13px] text-white/40">No dbt models found</p>
+                        <div className="text-center py-16 border border-[var(--border-faint)] border-dashed rounded-lg">
+                          <p className="text-[13px] text-[var(--muted)]">No dbt models found</p>
                         </div>
                       )}
                     </div>
@@ -751,20 +751,20 @@ export default function SourcesPage() {
                   {activeTab === 'connectors' && (
                     <div className="p-6">
                       {currentData?.connectors && currentData.connectors.length > 0 ? (
-                        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
+                        <div className="border border-[var(--subtle-border)] rounded-lg overflow-hidden">
                           <table className="w-full">
                             <thead>
-                              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Connector</th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Status</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Last Sync</th>
+                              <tr className="border-b border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
+                                <th className="text-left px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Connector</th>
+                                <th className="text-left px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Status</th>
+                                <th className="text-right px-4 py-3 text-[11px] font-medium text-[var(--muted)] uppercase tracking-wider">Last Sync</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-white/[0.04]">
                               {currentData.connectors.map((connector, i) => (
-                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
+                                <tr key={i} className="hover:bg-[var(--overlay-faint)] transition-colors">
                                   <td className="px-4 py-3">
-                                    <span className="text-[13px] text-white">{connector.name}</span>
+                                    <span className="text-[13px] text-[var(--text)]">{connector.name}</span>
                                   </td>
                                   <td className="px-4 py-3">
                                     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium ${
@@ -785,7 +785,7 @@ export default function SourcesPage() {
                                     </span>
                                   </td>
                                   <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">{connector.lastSync ?? '—'}</span>
+                                    <span className="text-[13px] text-[var(--muted)]">{connector.lastSync ?? '—'}</span>
                                   </td>
                                 </tr>
                               ))}
@@ -793,8 +793,8 @@ export default function SourcesPage() {
                           </table>
                         </div>
                       ) : (
-                        <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
-                          <p className="text-[13px] text-white/40">No connectors found</p>
+                        <div className="text-center py-16 border border-[var(--border-faint)] border-dashed rounded-lg">
+                          <p className="text-[13px] text-[var(--muted)]">No connectors found</p>
                         </div>
                       )}
                     </div>
@@ -806,7 +806,7 @@ export default function SourcesPage() {
         ) : (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <p className="text-[13px] text-white/40">Select a source to view details</p>
+              <p className="text-[13px] text-[var(--muted)]">Select a source to view details</p>
             </div>
           </div>
         )}
@@ -848,20 +848,20 @@ function DbtModelsVisual({ models }: { models: DbtModel[] }) {
     <div className="space-y-6">
       {/* Summary row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Models</div>
-          <div className="text-2xl font-semibold text-white">{models.length}</div>
+        <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)] p-4">
+          <div className="text-[11px] text-[var(--muted)] uppercase tracking-wider mb-1">Models</div>
+          <div className="text-2xl font-semibold text-[var(--text)]">{models.length}</div>
         </div>
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Schemas</div>
-          <div className="text-2xl font-semibold text-white">{schemaNames.length}</div>
+        <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)] p-4">
+          <div className="text-[11px] text-[var(--muted)] uppercase tracking-wider mb-1">Schemas</div>
+          <div className="text-2xl font-semibold text-[var(--text)]">{schemaNames.length}</div>
         </div>
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Tests</div>
-          <div className="text-2xl font-semibold text-white">{totalTests}</div>
+        <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)] p-4">
+          <div className="text-[11px] text-[var(--muted)] uppercase tracking-wider mb-1">Tests</div>
+          <div className="text-2xl font-semibold text-[var(--text)]">{totalTests}</div>
         </div>
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Materialization</div>
+        <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)] p-4">
+          <div className="text-[11px] text-[var(--muted)] uppercase tracking-wider mb-1">Materialization</div>
           <div className="flex flex-wrap gap-1.5 mt-1">
             {Object.entries(matCounts).map(([mat, count]) => {
               const cfg = MATERIALIZATION_CONFIG[mat] || MATERIALIZATION_CONFIG.table;
@@ -881,19 +881,19 @@ function DbtModelsVisual({ models }: { models: DbtModel[] }) {
         const isExpanded = expandedSchema === null || expandedSchema === schema;
 
         return (
-          <div key={schema} className="rounded-lg border border-white/[0.06] overflow-hidden">
+          <div key={schema} className="rounded-lg border border-[var(--subtle-border)] overflow-hidden">
             {/* Schema header */}
             <button
               onClick={() => setExpandedSchema(expandedSchema === schema ? null : schema)}
-              className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
+              className="w-full flex items-center justify-between px-5 py-3.5 bg-[var(--overlay-faint)] hover:bg-[var(--overlay-bg)] transition-colors"
             >
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center">
                   <span className="text-[10px] font-bold text-orange-400">dbt</span>
                 </div>
                 <div className="text-left">
-                  <div className="text-[13px] font-medium text-white">{schema}</div>
-                  <div className="text-[11px] text-white/40">{schemaModels.length} model{schemaModels.length !== 1 ? 's' : ''}</div>
+                  <div className="text-[13px] font-medium text-[var(--text)]">{schema}</div>
+                  <div className="text-[11px] text-[var(--muted)]">{schemaModels.length} model{schemaModels.length !== 1 ? 's' : ''}</div>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -913,7 +913,7 @@ function DbtModelsVisual({ models }: { models: DbtModel[] }) {
                     );
                   })}
                 </div>
-                <svg className={`w-4 h-4 text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className={`w-4 h-4 text-[var(--text-faint)] transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </div>
@@ -927,27 +927,27 @@ function DbtModelsVisual({ models }: { models: DbtModel[] }) {
                   return (
                     <div
                       key={model.name}
-                      className={`rounded-lg border p-4 hover:bg-white/[0.02] transition-colors ${cfg.bg}`}
+                      className={`rounded-lg border p-4 hover:bg-[var(--overlay-faint)] transition-colors ${cfg.bg}`}
                     >
                       <div className="flex items-start justify-between gap-2 mb-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <svg className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={cfg.icon} />
                           </svg>
-                          <code className="text-[13px] font-medium text-white truncate">{model.name}</code>
+                          <code className="text-[13px] font-medium text-[var(--text)] truncate">{model.name}</code>
                         </div>
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${cfg.color} bg-black/20`}>
+                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${cfg.color} bg-[var(--overlay-bg)]`}>
                           {model.materialization}
                         </span>
                       </div>
                       {model.description && (
-                        <p className="text-[11px] text-white/40 mb-2 line-clamp-2">{model.description}</p>
+                        <p className="text-[11px] text-[var(--muted)] mb-2 line-clamp-2">{model.description}</p>
                       )}
                       <div className="flex items-center gap-3 mt-auto">
                         {model.tags && model.tags.length > 0 && (
                           <div className="flex gap-1 flex-wrap">
                             {model.tags.slice(0, 3).map((tag) => (
-                              <span key={tag} className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] text-white/50">{tag}</span>
+                              <span key={tag} className="px-1.5 py-0.5 rounded bg-[var(--hover-bg)] text-[10px] text-[var(--muted)]">{tag}</span>
                             ))}
                           </div>
                         )}

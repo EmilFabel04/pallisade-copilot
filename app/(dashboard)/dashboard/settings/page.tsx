@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useSession } from 'next-auth/react';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface OAuthIntegration {
   id: string;
@@ -29,6 +30,7 @@ interface SlackConfig {
 
 export default function SettingsPage() {
   const { data: session } = useSession();
+  const { theme, toggleTheme } = useTheme();
   const [activeTab, setActiveTab] = useState('general');
   const [savedNotification, setSavedNotification] = useState(false);
   const [oauthIntegrations, setOauthIntegrations] = useState<OAuthIntegration[]>([]);
@@ -154,14 +156,14 @@ export default function SettingsPage() {
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold text-white mb-1">Settings</h1>
-        <p className="text-white/50 text-[14px]">
+        <h1 className="text-2xl font-semibold text-[var(--text)] mb-1">Settings</h1>
+        <p className="text-[var(--muted)] text-[14px]">
           Manage your account and preferences
         </p>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-white/[0.06]">
+      <div className="flex gap-1 border-b border-[var(--subtle-border)]">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -169,8 +171,8 @@ export default function SettingsPage() {
             className={`
               flex items-center gap-2 px-4 py-3 text-[13px] font-medium border-b-2 -mb-px transition-colors
               ${activeTab === tab.id
-                ? 'border-[var(--accent)] text-white'
-                : 'border-transparent text-white/50 hover:text-white'
+                ? 'border-[var(--accent)] text-[var(--text)]'
+                : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]'
               }
             `}
           >
@@ -184,28 +186,28 @@ export default function SettingsPage() {
       {activeTab === 'general' && (
         <div className="space-y-6">
           {/* Profile Section */}
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-white mb-4">Profile</h2>
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
+            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Profile</h2>
             <div className="flex items-start gap-6">
               <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-2xl font-semibold">
                 {session?.user?.name?.[0]?.toUpperCase() || 'U'}
               </div>
               <div className="flex-1 space-y-4">
                 <div>
-                  <label className="block text-[13px] font-medium text-white/70 mb-2">Full Name</label>
+                  <label className="block text-[13px] font-medium text-[var(--text-tertiary)] mb-2">Full Name</label>
                   <input
                     type="text"
                     defaultValue={session?.user?.name || ''}
-                    className="w-full max-w-md px-4 py-2.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-white focus:outline-none focus:border-white/[0.15] text-[14px]"
+                    className="w-full max-w-md px-4 py-2.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] text-[14px]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[13px] font-medium text-white/70 mb-2">Email</label>
+                  <label className="block text-[13px] font-medium text-[var(--text-tertiary)] mb-2">Email</label>
                   <input
                     type="email"
                     defaultValue={session?.user?.email || ''}
                     disabled
-                    className="w-full max-w-md px-4 py-2.5 rounded-lg bg-white/[0.02] border border-white/[0.04] text-white/50 text-[14px] cursor-not-allowed"
+                    className="w-full max-w-md px-4 py-2.5 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)] text-[var(--muted)] text-[14px] cursor-not-allowed"
                   />
                 </div>
               </div>
@@ -213,15 +215,15 @@ export default function SettingsPage() {
           </div>
 
           {/* Preferences Section */}
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-white mb-4">Preferences</h2>
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
+            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Preferences</h2>
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-[14px] font-medium text-white">Default AI Model</p>
-                  <p className="text-[12px] text-white/40">Choose the default model for new chats</p>
+                  <p className="text-[14px] font-medium text-[var(--text)]">Default AI Model</p>
+                  <p className="text-[12px] text-[var(--muted)]">Choose the default model for new chats</p>
                 </div>
-                <select className="px-4 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-white text-[13px] focus:outline-none focus:border-white/[0.15]">
+                <select className="px-4 py-2 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] text-[13px] focus:outline-none focus:border-[var(--overlay-strong)]">
                   <option value="gpt-5.2">GPT-5.2 (Recommended)</option>
                   <option value="gpt-5.2-mini">GPT-5.2 Mini (Fast)</option>
                   <option value="claude-sonnet">Claude Sonnet</option>
@@ -231,11 +233,27 @@ export default function SettingsPage() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-[14px] font-medium text-white">Compact Mode</p>
-                  <p className="text-[12px] text-white/40">Use a more compact UI layout</p>
+                  <p className="text-[14px] font-medium text-[var(--text)]">Light Mode</p>
+                  <p className="text-[12px] text-[var(--muted)]">Use a lighter background</p>
                 </div>
-                <button className="relative w-11 h-6 rounded-full bg-white/[0.1] transition-colors">
-                  <span className="absolute left-1 top-1 w-4 h-4 rounded-full bg-white/50 transition-transform" />
+                <button
+                  onClick={toggleTheme}
+                  className={`relative w-11 h-6 rounded-full transition-colors ${
+                    theme === 'light' ? 'bg-[var(--accent)]' : 'bg-[var(--subtle-bg)]'
+                  }`}
+                >
+                  <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${
+                    theme === 'light' ? 'translate-x-[22px]' : 'translate-x-1'
+                  }`} />
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[14px] font-medium text-[var(--text)]">Compact Mode</p>
+                  <p className="text-[12px] text-[var(--muted)]">Use a more compact UI layout</p>
+                </div>
+                <button className="relative w-11 h-6 rounded-full bg-[var(--subtle-bg)] transition-colors">
+                  <span className="absolute left-1 top-1 w-4 h-4 rounded-full bg-[var(--muted)] transition-transform" />
                 </button>
               </div>
             </div>
@@ -253,11 +271,11 @@ export default function SettingsPage() {
       {/* Integrations Tab */}
       {activeTab === 'integrations' && (
         <div className="space-y-6">
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h2 className="text-[15px] font-medium text-white">Connected Accounts</h2>
-                <p className="text-[12px] text-white/40 mt-1">
+                <h2 className="text-[15px] font-medium text-[var(--text)]">Connected Accounts</h2>
+                <p className="text-[12px] text-[var(--muted)] mt-1">
                   Manage OAuth connections for GitHub, Slack, and other services
                 </p>
               </div>
@@ -265,17 +283,17 @@ export default function SettingsPage() {
 
             {loadingIntegrations ? (
               <div className="flex items-center justify-center py-8">
-                <div className="w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+                <div className="w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
               </div>
             ) : oauthIntegrations.length === 0 ? (
               <div className="text-center py-8">
-                <div className="w-12 h-12 rounded-xl bg-white/[0.05] flex items-center justify-center mx-auto mb-3">
-                  <svg className="w-6 h-6 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="w-12 h-12 rounded-xl bg-[var(--subtle-bg)] flex items-center justify-center mx-auto mb-3">
+                  <svg className="w-6 h-6 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                   </svg>
                 </div>
-                <p className="text-white/50 text-[14px]">No OAuth integrations connected</p>
-                <p className="text-white/30 text-[12px] mt-1">
+                <p className="text-[var(--muted)] text-[14px]">No OAuth integrations connected</p>
+                <p className="text-[var(--text-faint)] text-[12px] mt-1">
                   Connect GitHub, Slack, or other services from the Pipeline page
                 </p>
               </div>
@@ -284,10 +302,10 @@ export default function SettingsPage() {
                 {oauthIntegrations.map((integration) => (
                   <div
                     key={integration.id}
-                    className="flex items-center justify-between p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]"
+                    className="flex items-center justify-between p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]"
                   >
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-lg bg-white/[0.05] flex items-center justify-center text-white">
+                      <div className="w-10 h-10 rounded-lg bg-[var(--subtle-bg)] flex items-center justify-center text-[var(--text)]">
                         {integration.metadata?.avatar ? (
                           <img
                             src={integration.metadata.avatar}
@@ -300,7 +318,7 @@ export default function SettingsPage() {
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <p className="text-[14px] font-medium text-white">{integration.type}</p>
+                          <p className="text-[14px] font-medium text-[var(--text)]">{integration.type}</p>
                           <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
                             integration.status === 'ACTIVE'
                               ? 'bg-emerald-500/20 text-emerald-400'
@@ -310,10 +328,10 @@ export default function SettingsPage() {
                           </span>
                         </div>
                         {integration.metadata?.username && (
-                          <p className="text-[12px] text-white/50">@{integration.metadata.username}</p>
+                          <p className="text-[12px] text-[var(--muted)]">@{integration.metadata.username}</p>
                         )}
                         {integration.metadata?.repoCount && (
-                          <p className="text-[11px] text-white/30">{integration.metadata.repoCount} repositories</p>
+                          <p className="text-[11px] text-[var(--text-faint)]">{integration.metadata.repoCount} repositories</p>
                         )}
                       </div>
                     </div>
@@ -323,7 +341,7 @@ export default function SettingsPage() {
                         <>
                           <button
                             onClick={() => setConfirmDelete(null)}
-                            className="px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.08] text-white/70 text-[12px] font-medium transition-colors"
+                            className="px-3 py-1.5 rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--hover-bg)] text-[var(--text-tertiary)] text-[12px] font-medium transition-colors"
                           >
                             Cancel
                           </button>
@@ -338,7 +356,7 @@ export default function SettingsPage() {
                       ) : (
                         <button
                           onClick={() => setConfirmDelete(integration.id)}
-                          className="px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-red-500/10 text-white/50 hover:text-red-400 text-[12px] font-medium transition-colors"
+                          className="px-3 py-1.5 rounded-lg bg-[var(--subtle-bg)] hover:bg-red-500/10 text-[var(--muted)] hover:text-red-400 text-[12px] font-medium transition-colors"
                         >
                           Disconnect
                         </button>
@@ -355,7 +373,7 @@ export default function SettingsPage() {
               <span className="text-amber-400 text-lg">⚠️</span>
               <div>
                 <p className="text-[13px] font-medium text-amber-400">Disconnecting an integration</p>
-                <p className="text-[12px] text-white/50 mt-1">
+                <p className="text-[12px] text-[var(--muted)] mt-1">
                   Disconnecting will remove the OAuth token and revoke access. The AI assistant will no longer be able to access repositories or create pull requests using this connection.
                 </p>
               </div>
@@ -368,12 +386,12 @@ export default function SettingsPage() {
       {activeTab === 'notifications' && (
         <div className="space-y-6">
           {/* Slack Notifications */}
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
-                <h2 className="text-[15px] font-medium text-white">Slack Notifications</h2>
+                <h2 className="text-[15px] font-medium text-[var(--text)]">Slack Notifications</h2>
                 {slackLoading ? (
-                  <div className="w-4 h-4 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+                  <div className="w-4 h-4 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
                 ) : slackConfig?.connected ? (
                   <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/20 text-emerald-400">
                     Connected
@@ -387,7 +405,7 @@ export default function SettingsPage() {
               {!slackConfig?.connected && (
                 <a
                   href="/dashboard/pipeline"
-                  className="text-[12px] text-white/40 hover:text-white/60 underline transition-colors"
+                  className="text-[12px] text-[var(--muted)] hover:text-[var(--text-tertiary)] underline transition-colors"
                 >
                   Connect on Pipeline page
                 </a>
@@ -406,14 +424,14 @@ export default function SettingsPage() {
                 return (
                   <div key={item.key} className={`flex items-center justify-between ${disabled ? 'opacity-40' : ''}`}>
                     <div>
-                      <p className="text-[14px] font-medium text-white">{item.label}</p>
-                      <p className="text-[12px] text-white/40">{item.desc}</p>
+                      <p className="text-[14px] font-medium text-[var(--text)]">{item.label}</p>
+                      <p className="text-[12px] text-[var(--muted)]">{item.desc}</p>
                     </div>
                     <button
                       onClick={() => !disabled && handleSlackToggle(item.key, !enabled)}
                       disabled={disabled}
                       className={`relative w-11 h-6 rounded-full transition-colors ${
-                        enabled ? 'bg-[var(--accent)]' : 'bg-white/[0.1]'
+                        enabled ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'
                       } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
                       <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'left-6' : 'left-1'}`} />
@@ -425,10 +443,10 @@ export default function SettingsPage() {
           </div>
 
           {/* Email Notifications */}
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-medium text-white">Email Notifications</h2>
-              <span className="text-[11px] text-white/30 px-2 py-0.5 rounded bg-white/[0.04]">Coming soon</span>
+              <h2 className="text-[15px] font-medium text-[var(--text)]">Email Notifications</h2>
+              <span className="text-[11px] text-[var(--text-faint)] px-2 py-0.5 rounded bg-[var(--overlay-bg)]">Coming soon</span>
             </div>
             <div className="space-y-4 opacity-50">
               {[
@@ -438,12 +456,12 @@ export default function SettingsPage() {
               ].map((item) => (
                 <div key={item.id} className="flex items-center justify-between">
                   <div>
-                    <p className="text-[14px] font-medium text-white">{item.label}</p>
-                    <p className="text-[12px] text-white/40">{item.desc}</p>
+                    <p className="text-[14px] font-medium text-[var(--text)]">{item.label}</p>
+                    <p className="text-[12px] text-[var(--muted)]">{item.desc}</p>
                   </div>
                   <button
                     disabled
-                    className={`relative w-11 h-6 rounded-full transition-colors cursor-not-allowed ${item.enabled ? 'bg-[var(--accent)]' : 'bg-white/[0.1]'}`}
+                    className={`relative w-11 h-6 rounded-full transition-colors cursor-not-allowed ${item.enabled ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'}`}
                   >
                     <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform ${item.enabled ? 'left-6' : 'left-1'}`} />
                   </button>
@@ -457,10 +475,10 @@ export default function SettingsPage() {
       {/* API Keys Tab */}
       {activeTab === 'api' && (
         <div className="space-y-6">
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-medium text-white">API Keys</h2>
-              <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.05] hover:bg-white/[0.08] text-white text-[12px] font-medium transition-colors">
+              <h2 className="text-[15px] font-medium text-[var(--text)]">API Keys</h2>
+              <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--hover-bg)] text-[var(--text)] text-[12px] font-medium transition-colors">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
@@ -468,12 +486,12 @@ export default function SettingsPage() {
               </button>
             </div>
             <div className="text-center py-8">
-              <div className="w-12 h-12 rounded-xl bg-white/[0.05] flex items-center justify-center mx-auto mb-3">
-                <svg className="w-6 h-6 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-12 h-12 rounded-xl bg-[var(--subtle-bg)] flex items-center justify-center mx-auto mb-3">
+                <svg className="w-6 h-6 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
                 </svg>
               </div>
-              <p className="text-white/50 text-[14px]">No API keys created yet</p>
+              <p className="text-[var(--muted)] text-[14px]">No API keys created yet</p>
             </div>
           </div>
         </div>
@@ -482,37 +500,37 @@ export default function SettingsPage() {
       {/* Billing Tab */}
       {activeTab === 'billing' && (
         <div className="space-y-6">
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-white mb-4">Current Plan</h2>
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
+            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Current Plan</h2>
             <div className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-br from-[var(--accent)]/10 to-[var(--accent)]/5 border border-[var(--accent)]/20">
               <div>
-                <p className="text-[18px] font-semibold text-white mb-1">Pro Plan</p>
-                <p className="text-[13px] text-white/50">Unlimited sources, priority support</p>
+                <p className="text-[18px] font-semibold text-[var(--text)] mb-1">Pro Plan</p>
+                <p className="text-[13px] text-[var(--muted)]">Unlimited sources, priority support</p>
               </div>
               <div className="text-right">
-                <p className="text-[24px] font-bold text-white">$99<span className="text-[14px] font-normal text-white/50">/mo</span></p>
+                <p className="text-[24px] font-bold text-[var(--text)]">$99<span className="text-[14px] font-normal text-[var(--muted)]">/mo</span></p>
               </div>
             </div>
           </div>
 
-          <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-6">
-            <h2 className="text-[15px] font-medium text-white mb-4">Usage This Month</h2>
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
+            <h2 className="text-[15px] font-medium text-[var(--text)] mb-4">Usage This Month</h2>
             <div className="space-y-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[13px] text-white/70">AI Queries</span>
-                  <span className="text-[13px] text-white">1,247 / 5,000</span>
+                  <span className="text-[13px] text-[var(--text-tertiary)]">AI Queries</span>
+                  <span className="text-[13px] text-[var(--text)]">1,247 / 5,000</span>
                 </div>
-                <div className="h-2 rounded-full bg-white/[0.1]">
+                <div className="h-2 rounded-full bg-[var(--overlay-medium)]">
                   <div className="h-full w-[25%] rounded-full bg-[var(--accent)]" />
                 </div>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[13px] text-white/70">Data Sources</span>
-                  <span className="text-[13px] text-white">3 / 10</span>
+                  <span className="text-[13px] text-[var(--text-tertiary)]">Data Sources</span>
+                  <span className="text-[13px] text-[var(--text)]">3 / 10</span>
                 </div>
-                <div className="h-2 rounded-full bg-white/[0.1]">
+                <div className="h-2 rounded-full bg-[var(--overlay-medium)]">
                   <div className="h-full w-[30%] rounded-full bg-blue-500" />
                 </div>
               </div>

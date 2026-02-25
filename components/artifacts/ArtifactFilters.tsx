@@ -51,7 +51,7 @@ export function ArtifactFilters({
       {/* Search */}
       <div className="relative flex-1 min-w-[200px] max-w-[400px]">
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-          <svg className="w-4 h-4 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </div>
@@ -60,12 +60,12 @@ export function ArtifactFilters({
           value={search}
           onChange={(e) => onSearchChange(e.target.value)}
           placeholder="Search artifacts..."
-          className="w-full h-9 pl-9 pr-4 bg-white/[0.03] border border-white/[0.06] rounded-lg text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.12] focus:ring-1 focus:ring-white/[0.06] transition-colors"
+          className="w-full h-9 pl-9 pr-4 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] focus:ring-1 focus:ring-[var(--subtle-border)] transition-colors"
         />
         {search && (
           <button
             onClick={() => onSearchChange('')}
-            className="absolute inset-y-0 right-0 pr-3 flex items-center text-white/30 hover:text-white/50"
+            className="absolute inset-y-0 right-0 pr-3 flex items-center text-[var(--text-faint)] hover:text-[var(--muted)]"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -78,7 +78,7 @@ export function ArtifactFilters({
       <div className="relative" ref={dropdownRef}>
         <button
           onClick={() => setIsTypeOpen(!isTypeOpen)}
-          className="h-9 px-3 flex items-center gap-2 bg-white/[0.03] border border-white/[0.06] rounded-lg text-[13px] text-white/70 hover:border-white/[0.12] transition-colors"
+          className="h-9 px-3 flex items-center gap-2 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[13px] text-[var(--text-tertiary)] hover:border-[var(--overlay-strong)] transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
@@ -90,7 +90,7 @@ export function ArtifactFilters({
         </button>
 
         {isTypeOpen && (
-          <div className="absolute left-0 top-full mt-1 z-20 w-40 bg-[#1a1a24] border border-white/[0.06] rounded-lg shadow-xl overflow-hidden">
+          <div className="absolute left-0 top-full mt-1 z-20 w-40 bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg shadow-xl overflow-hidden">
             {typeOptions.map((option) => (
               <button
                 key={option.value || 'all'}
@@ -100,8 +100,8 @@ export function ArtifactFilters({
                 }}
                 className={`w-full px-3 py-2 text-left text-[13px] transition-colors ${
                   selectedType === option.value
-                    ? 'bg-white/[0.08] text-white'
-                    : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
+                    ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                    : 'text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)]'
                 }`}
               >
                 {option.label}
@@ -117,7 +117,7 @@ export function ArtifactFilters({
         className={`h-9 px-3 flex items-center gap-2 border rounded-lg text-[13px] transition-colors ${
           showPinnedOnly
             ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-            : 'bg-white/[0.03] border-white/[0.06] text-white/70 hover:border-white/[0.12]'
+            : 'bg-[var(--overlay-bg)] border-[var(--subtle-border)] text-[var(--text-tertiary)] hover:border-[var(--overlay-strong)]'
         }`}
       >
         <svg className="w-4 h-4" fill={showPinnedOnly ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">

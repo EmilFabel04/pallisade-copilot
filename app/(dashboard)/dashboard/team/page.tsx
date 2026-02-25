@@ -82,33 +82,33 @@ const ROLE_CONFIG = {
   ADMIN: {
     label: 'Admin',
     icon: Shield,
-    color: 'text-white/80',
-    bg: 'bg-white/[0.06]',
-    border: 'border-white/[0.10]',
+    color: 'text-[var(--text-secondary)]',
+    bg: 'bg-[var(--hover-bg)]',
+    border: 'border-[var(--border-medium)]',
     description: 'Manage team, integrations, and settings',
   },
   MANAGER: {
     label: 'Manager',
     icon: Briefcase,
-    color: 'text-white/70',
-    bg: 'bg-white/[0.05]',
-    border: 'border-white/[0.08]',
+    color: 'text-[var(--text-tertiary)]',
+    bg: 'bg-[var(--subtle-bg)]',
+    border: 'border-[var(--subtle-border)]',
     description: 'Run scans, manage contracts and findings',
   },
   ENGINEER: {
     label: 'Engineer',
     icon: Code2,
-    color: 'text-white/70',
-    bg: 'bg-white/[0.05]',
-    border: 'border-white/[0.08]',
+    color: 'text-[var(--text-tertiary)]',
+    bg: 'bg-[var(--subtle-bg)]',
+    border: 'border-[var(--subtle-border)]',
     description: 'Run scans, use sandbox, apply fixes',
   },
   VIEWER: {
     label: 'Viewer',
     icon: Eye,
-    color: 'text-white/50',
-    bg: 'bg-white/[0.03]',
-    border: 'border-white/[0.06]',
+    color: 'text-[var(--muted)]',
+    bg: 'bg-[var(--overlay-bg)]',
+    border: 'border-[var(--subtle-border)]',
     description: 'Read-only access to dashboards',
   },
 };
@@ -412,7 +412,7 @@ export default function TeamPage() {
       <div className="max-w-6xl mx-auto flex items-center justify-center min-h-[400px]">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-white/50">Loading team data...</p>
+          <p className="text-sm text-[var(--muted)]">Loading team data...</p>
         </div>
       </div>
     );
@@ -428,8 +428,8 @@ export default function TeamPage() {
         className="flex items-center justify-between"
       >
         <div>
-          <h1 className="text-2xl font-semibold text-white">Team</h1>
-          <p className="text-white/50 text-[15px] mt-1">Manage members and pipeline access</p>
+          <h1 className="text-2xl font-semibold text-[var(--text)]">Team</h1>
+          <p className="text-[var(--muted)] text-[15px] mt-1">Manage members and pipeline access</p>
         </div>
         {isAdmin && (
           <button
@@ -450,49 +450,49 @@ export default function TeamPage() {
         className="grid grid-cols-2 md:grid-cols-4 gap-3"
       >
         <motion.div variants={itemVariants}>
-          <div className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-            <div className="w-9 h-9 rounded-lg bg-white/[0.06] flex items-center justify-center">
-              <Users className="w-5 h-5 text-white/60" />
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            <div className="w-9 h-9 rounded-lg bg-[var(--hover-bg)] flex items-center justify-center">
+              <Users className="w-5 h-5 text-[var(--text-tertiary)]" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.totalMembers}</span>
-              <p className="text-[12px] text-white/40">Members</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.totalMembers}</span>
+              <p className="text-[12px] text-[var(--muted)]">Members</p>
             </div>
           </div>
         </motion.div>
 
         <motion.div variants={itemVariants}>
-          <div className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <div className="w-9 h-9 rounded-lg bg-emerald-500/10 flex items-center justify-center">
               <Activity className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.activeMembers}</span>
-              <p className="text-[12px] text-white/40">Active</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.activeMembers}</span>
+              <p className="text-[12px] text-[var(--muted)]">Active</p>
             </div>
           </div>
         </motion.div>
 
         <motion.div variants={itemVariants}>
-          <div className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <div className="w-9 h-9 rounded-lg bg-amber-500/10 flex items-center justify-center">
               <Mail className="w-5 h-5 text-amber-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.pendingInvites}</span>
-              <p className="text-[12px] text-white/40">Pending</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.pendingInvites}</span>
+              <p className="text-[12px] text-[var(--muted)]">Pending</p>
             </div>
           </div>
         </motion.div>
 
         <motion.div variants={itemVariants}>
-          <div className="flex items-center gap-3 p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+          <div className="flex items-center gap-3 p-4 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <div className="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center">
               <Workflow className="w-5 h-5 text-indigo-400" />
             </div>
             <div>
-              <span className="text-xl font-semibold text-white">{stats.totalPipelines}</span>
-              <p className="text-[12px] text-white/40">Pipelines</p>
+              <span className="text-xl font-semibold text-[var(--text)]">{stats.totalPipelines}</span>
+              <p className="text-[12px] text-[var(--muted)]">Pipelines</p>
             </div>
           </div>
         </motion.div>
@@ -505,14 +505,14 @@ export default function TeamPage() {
         transition={{ duration: 0.35, delay: 0.15 }}
         className="flex items-center justify-between gap-4"
       >
-        <div className="flex items-center gap-1 p-1 bg-white/[0.03] rounded-lg border border-white/[0.06]">
+        <div className="flex items-center gap-1 p-1 bg-[var(--overlay-bg)] rounded-lg border border-[var(--subtle-border)]">
           <button
             onClick={() => setActiveTab('members')}
             className={cn(
               'px-4 py-2 text-sm font-medium rounded-md transition-all',
               activeTab === 'members'
-                ? 'bg-white/[0.08] text-white'
-                : 'text-white/40 hover:text-white/60'
+                ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
             )}
           >
             Members ({members.length})
@@ -522,8 +522,8 @@ export default function TeamPage() {
             className={cn(
               'px-4 py-2 text-sm font-medium rounded-md transition-all',
               activeTab === 'invites'
-                ? 'bg-white/[0.08] text-white'
-                : 'text-white/40 hover:text-white/60'
+                ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
             )}
           >
             Invites ({pendingInvites.length})
@@ -531,13 +531,13 @@ export default function TeamPage() {
         </div>
 
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-faint)]" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search members..."
-            className="w-64 pl-10 pr-4 py-2 bg-white/[0.03] border border-white/[0.06] rounded-lg text-white placeholder-white/30 focus:outline-none focus:border-white/[0.15] text-sm transition-colors"
+            className="w-64 pl-10 pr-4 py-2 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] text-sm transition-colors"
           />
         </div>
       </motion.div>
@@ -548,10 +548,10 @@ export default function TeamPage() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden"
+          className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl overflow-hidden"
         >
           {/* Table Header */}
-          <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-white/[0.06] text-[11px] font-medium text-white/30 uppercase tracking-wider">
+          <div className="grid grid-cols-12 gap-4 px-6 py-3 border-b border-[var(--subtle-border)] text-[11px] font-medium text-[var(--text-faint)] uppercase tracking-wider">
             <div className="col-span-4">Member</div>
             <div className="col-span-2">Role</div>
             <div className="col-span-2">Pipelines</div>
@@ -563,8 +563,8 @@ export default function TeamPage() {
           <div className="divide-y divide-white/[0.04]">
             {filteredMembers.length === 0 ? (
               <div className="px-6 py-12 text-center">
-                <Users className="w-8 h-8 text-white/20 mx-auto mb-3" />
-                <p className="text-[13px] text-white/40">No members found</p>
+                <Users className="w-8 h-8 text-[var(--text-faint)] mx-auto mb-3" />
+                <p className="text-[13px] text-[var(--muted)]">No members found</p>
               </div>
             ) : (
               filteredMembers.map((member) => {
@@ -573,7 +573,7 @@ export default function TeamPage() {
                 return (
                   <div
                     key={member.id}
-                    className="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-white/[0.02] transition-colors"
+                    className="grid grid-cols-12 gap-4 px-6 py-4 items-center hover:bg-[var(--overlay-faint)] transition-colors"
                   >
                     {/* Member Info */}
                     <div className="col-span-4 flex items-center gap-3">
@@ -582,10 +582,10 @@ export default function TeamPage() {
                           <img
                             src={member.image}
                             alt=""
-                            className="w-9 h-9 rounded-full object-cover ring-1 ring-white/[0.08]"
+                            className="w-9 h-9 rounded-full object-cover ring-1 ring-[var(--subtle-border)]"
                           />
                         ) : (
-                          <div className="w-9 h-9 rounded-full bg-white/[0.08] flex items-center justify-center text-white/70 text-sm font-medium ring-1 ring-white/[0.08]">
+                          <div className="w-9 h-9 rounded-full bg-[var(--hover-bg)] flex items-center justify-center text-[var(--text-tertiary)] text-sm font-medium ring-1 ring-[var(--subtle-border)]">
                             {(member.name || member.email)[0].toUpperCase()}
                           </div>
                         )}
@@ -594,10 +594,10 @@ export default function TeamPage() {
                         )}
                       </div>
                       <div className="min-w-0">
-                        <p className="text-[13px] font-medium text-white truncate">
+                        <p className="text-[13px] font-medium text-[var(--text)] truncate">
                           {member.name || 'Unnamed'}
                         </p>
-                        <p className="text-[11px] text-white/40 truncate">{member.email}</p>
+                        <p className="text-[11px] text-[var(--muted)] truncate">{member.email}</p>
                       </div>
                     </div>
 
@@ -615,11 +615,11 @@ export default function TeamPage() {
                     {/* Pipeline Access */}
                     <div className="col-span-2">
                       {member.pipelineAccess && member.pipelineAccess.length > 0 ? (
-                        <span className="text-[13px] text-white/50">
+                        <span className="text-[13px] text-[var(--muted)]">
                           {member.pipelineAccess.length} pipeline{member.pipelineAccess.length !== 1 ? 's' : ''}
                         </span>
                       ) : (
-                        <span className="text-[12px] text-white/25">
+                        <span className="text-[12px] text-[var(--text-faint)]">
                           {member.role === 'OWNER' || member.role === 'ADMIN' ? 'Full access' : 'None'}
                         </span>
                       )}
@@ -627,7 +627,7 @@ export default function TeamPage() {
 
                     {/* Last Active */}
                     <div className="col-span-2">
-                      <span className="text-[13px] text-white/40">
+                      <span className="text-[13px] text-[var(--muted)]">
                         {formatRelativeTime(member.lastActiveAt)}
                       </span>
                     </div>
@@ -638,14 +638,14 @@ export default function TeamPage() {
                         <>
                           <button
                             onClick={() => openMemberModal(member)}
-                            className="p-2 rounded-lg text-white/25 hover:text-white/70 hover:bg-white/[0.04] transition-colors"
+                            className="p-2 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] transition-colors"
                             title="Edit member"
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => handleRemoveMember(member.id, member.name || member.email)}
-                            className="p-2 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                            className="p-2 rounded-lg text-[var(--text-faint)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
                             title="Remove member"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -667,15 +667,15 @@ export default function TeamPage() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="bg-white/[0.03] border border-white/[0.06] rounded-xl overflow-hidden"
+          className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl overflow-hidden"
         >
           {pendingInvites.length === 0 ? (
             <div className="px-6 py-16 text-center">
-              <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-white/[0.05] flex items-center justify-center">
-                <Mail className="w-6 h-6 text-white/20" />
+              <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-[var(--subtle-bg)] flex items-center justify-center">
+                <Mail className="w-6 h-6 text-[var(--text-faint)]" />
               </div>
-              <p className="text-[13px] text-white/50 font-medium">No pending invites</p>
-              <p className="text-[12px] text-white/30 mt-1">Send invitations to grow your team</p>
+              <p className="text-[13px] text-[var(--muted)] font-medium">No pending invites</p>
+              <p className="text-[12px] text-[var(--text-faint)] mt-1">Send invitations to grow your team</p>
             </div>
           ) : (
             <div className="divide-y divide-white/[0.04]">
@@ -685,15 +685,15 @@ export default function TeamPage() {
                 return (
                   <div
                     key={invite.id}
-                    className="flex items-center justify-between px-6 py-4 hover:bg-white/[0.02] transition-colors"
+                    className="flex items-center justify-between px-6 py-4 hover:bg-[var(--overlay-faint)] transition-colors"
                   >
                     <div className="flex items-center gap-3">
                       <div className="w-9 h-9 rounded-full bg-amber-500/10 flex items-center justify-center">
                         <Clock className="w-4 h-4 text-amber-400" />
                       </div>
                       <div>
-                        <p className="text-[13px] font-medium text-white">{invite.email}</p>
-                        <p className="text-[11px] text-white/35">
+                        <p className="text-[13px] font-medium text-[var(--text)]">{invite.email}</p>
+                        <p className="text-[11px] text-[var(--text-faint)]">
                           Invited by {invite.inviterName || 'team member'} &middot; Expires {formatDate(invite.expiresAt)}
                         </p>
                       </div>
@@ -711,7 +711,7 @@ export default function TeamPage() {
                       {isAdmin && (
                         <button
                           onClick={() => handleRevokeInvite(invite.id)}
-                          className="p-2 rounded-lg text-white/25 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                          className="p-2 rounded-lg text-[var(--text-faint)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Revoke invite"
                         >
                           <X className="w-4 h-4" />
@@ -731,9 +731,9 @@ export default function TeamPage() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="bg-white/[0.03] border border-white/[0.06] rounded-xl p-5"
+        className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-5"
       >
-        <h3 className="text-[13px] font-medium text-white/50 mb-4 uppercase tracking-wider">Roles</h3>
+        <h3 className="text-[13px] font-medium text-[var(--muted)] mb-4 uppercase tracking-wider">Roles</h3>
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {Object.entries(ROLE_CONFIG).map(([role, config]) => {
             const Icon = config.icon;
@@ -746,7 +746,7 @@ export default function TeamPage() {
                   <Icon className={cn('w-3.5 h-3.5', config.color)} />
                   <p className={cn('text-[13px] font-medium', config.color)}>{config.label}</p>
                 </div>
-                <p className="text-[11px] text-white/35 leading-relaxed">{config.description}</p>
+                <p className="text-[11px] text-[var(--text-faint)] leading-relaxed">{config.description}</p>
               </div>
             );
           })}
@@ -757,16 +757,16 @@ export default function TeamPage() {
       {showInviteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowInviteModal(false)} />
-          <div className="relative bg-[var(--bg-soft)] border border-white/[0.08] rounded-xl w-full max-w-lg shadow-2xl">
+          <div className="relative bg-[var(--bg-soft)] border border-[var(--subtle-border)] rounded-xl w-full max-w-lg shadow-2xl">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
               <div>
-                <h2 className="text-lg font-semibold text-white">Invite Member</h2>
-                <p className="text-[13px] text-white/40 mt-0.5">Add a new member to your organization</p>
+                <h2 className="text-lg font-semibold text-[var(--text)]">Invite Member</h2>
+                <p className="text-[13px] text-[var(--muted)] mt-0.5">Add a new member to your organization</p>
               </div>
               <button
                 onClick={() => setShowInviteModal(false)}
-                className="p-2 rounded-lg text-white/30 hover:text-white hover:bg-white/[0.04] transition-colors"
+                className="p-2 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -776,23 +776,23 @@ export default function TeamPage() {
             <div className="p-6 space-y-5">
               {/* Email */}
               <div>
-                <label className="block text-[13px] font-medium text-white/50 mb-2">Email Address</label>
+                <label className="block text-[13px] font-medium text-[var(--muted)] mb-2">Email Address</label>
                 <input
                   type="email"
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
                   placeholder="colleague@company.com"
-                  className="w-full px-4 py-2.5 bg-white/[0.03] border border-white/[0.08] rounded-lg text-white placeholder-white/25 focus:outline-none focus:border-white/[0.15] text-sm transition-colors"
+                  className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] text-sm transition-colors"
                 />
               </div>
 
               {/* Role */}
               <div>
-                <label className="block text-[13px] font-medium text-white/50 mb-2">Role</label>
+                <label className="block text-[13px] font-medium text-[var(--muted)] mb-2">Role</label>
                 <select
                   value={inviteRole}
                   onChange={(e) => setInviteRole(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-white/[0.03] border border-white/[0.08] rounded-lg text-white focus:outline-none focus:border-white/[0.15] text-sm transition-colors"
+                  className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] text-sm transition-colors"
                 >
                   <option value="ADMIN">Admin — Full management access</option>
                   <option value="MANAGER">Manager — Run scans, manage contracts</option>
@@ -803,8 +803,8 @@ export default function TeamPage() {
 
               {/* Pipeline Access */}
               <div>
-                <label className="block text-[13px] font-medium text-white/50 mb-2">Pipeline Access</label>
-                <p className="text-[11px] text-white/30 mb-3">
+                <label className="block text-[13px] font-medium text-[var(--muted)] mb-2">Pipeline Access</label>
+                <p className="text-[11px] text-[var(--text-faint)] mb-3">
                   {inviteRole === 'ADMIN'
                     ? 'Admins automatically have access to all pipelines'
                     : 'Configure which pipelines this member can access'}
@@ -817,16 +817,16 @@ export default function TeamPage() {
                       return (
                         <div
                           key={pipeline.id}
-                          className="flex items-center justify-between p-3 bg-white/[0.02] border border-white/[0.04] rounded-lg"
+                          className="flex items-center justify-between p-3 bg-[var(--overlay-faint)] border border-[var(--border-faint)] rounded-lg"
                         >
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                            <span className="text-[13px] text-white/70">{pipeline.name}</span>
+                            <span className="text-[13px] text-[var(--text-tertiary)]">{pipeline.name}</span>
                           </div>
                           <select
                             value={access?.accessLevel || ''}
                             onChange={(e) => toggleInvitePipelineAccess(pipeline.id, e.target.value)}
-                            className="px-3 py-1.5 bg-white/[0.03] border border-white/[0.06] rounded-md text-[11px] text-white/60 focus:outline-none focus:border-white/[0.12] transition-colors"
+                            className="px-3 py-1.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[11px] text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--overlay-strong)] transition-colors"
                           >
                             <option value="">No access</option>
                             <option value="VIEWER">Viewer</option>
@@ -840,16 +840,16 @@ export default function TeamPage() {
                 )}
 
                 {pipelines.length === 0 && inviteRole !== 'ADMIN' && (
-                  <p className="text-[11px] text-white/25 italic">No pipelines available</p>
+                  <p className="text-[11px] text-[var(--text-faint)] italic">No pipelines available</p>
                 )}
               </div>
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/[0.06]">
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--subtle-border)]">
               <button
                 onClick={() => setShowInviteModal(false)}
-                className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-colors"
+                className="px-4 py-2 text-sm text-[var(--muted)] hover:text-[var(--text-tertiary)] transition-colors"
               >
                 Cancel
               </button>
@@ -869,25 +869,25 @@ export default function TeamPage() {
       {showMemberModal && selectedMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowMemberModal(false)} />
-          <div className="relative bg-[var(--bg-soft)] border border-white/[0.08] rounded-xl w-full max-w-lg shadow-2xl">
+          <div className="relative bg-[var(--bg-soft)] border border-[var(--subtle-border)] rounded-xl w-full max-w-lg shadow-2xl">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
               <div className="flex items-center gap-3">
                 {selectedMember.image ? (
-                  <img src={selectedMember.image} alt="" className="w-9 h-9 rounded-full ring-1 ring-white/[0.08]" />
+                  <img src={selectedMember.image} alt="" className="w-9 h-9 rounded-full ring-1 ring-[var(--subtle-border)]" />
                 ) : (
-                  <div className="w-9 h-9 rounded-full bg-white/[0.08] flex items-center justify-center text-white/70 text-sm font-medium ring-1 ring-white/[0.08]">
+                  <div className="w-9 h-9 rounded-full bg-[var(--hover-bg)] flex items-center justify-center text-[var(--text-tertiary)] text-sm font-medium ring-1 ring-[var(--subtle-border)]">
                     {(selectedMember.name || selectedMember.email)[0].toUpperCase()}
                   </div>
                 )}
                 <div>
-                  <h2 className="text-[15px] font-semibold text-white">{selectedMember.name || 'Edit Member'}</h2>
-                  <p className="text-[12px] text-white/40">{selectedMember.email}</p>
+                  <h2 className="text-[15px] font-semibold text-[var(--text)]">{selectedMember.name || 'Edit Member'}</h2>
+                  <p className="text-[12px] text-[var(--muted)]">{selectedMember.email}</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowMemberModal(false)}
-                className="p-2 rounded-lg text-white/30 hover:text-white hover:bg-white/[0.04] transition-colors"
+                className="p-2 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -897,7 +897,7 @@ export default function TeamPage() {
             <div className="p-6 space-y-5">
               {/* Role */}
               <div>
-                <label className="block text-[13px] font-medium text-white/50 mb-3">Role</label>
+                <label className="block text-[13px] font-medium text-[var(--muted)] mb-3">Role</label>
                 <div className="space-y-2">
                   {Object.entries(ROLE_CONFIG)
                     .filter(([role]) => role !== 'OWNER')
@@ -911,15 +911,15 @@ export default function TeamPage() {
                             'w-full flex items-center gap-3 p-3 rounded-lg border transition-all text-left',
                             editRole === role
                               ? `${config.border} ${config.bg}`
-                              : 'border-white/[0.04] hover:border-white/[0.08] bg-white/[0.01]'
+                              : 'border-[var(--border-faint)] hover:border-[var(--subtle-border)] bg-[var(--overlay-faint)]'
                           )}
                         >
-                          <Icon className={cn('w-4 h-4 flex-shrink-0', editRole === role ? config.color : 'text-white/30')} />
+                          <Icon className={cn('w-4 h-4 flex-shrink-0', editRole === role ? config.color : 'text-[var(--text-faint)]')} />
                           <div>
-                            <p className={cn('text-[13px] font-medium', editRole === role ? config.color : 'text-white/60')}>
+                            <p className={cn('text-[13px] font-medium', editRole === role ? config.color : 'text-[var(--text-tertiary)]')}>
                               {config.label}
                             </p>
-                            <p className="text-[11px] text-white/35">{config.description}</p>
+                            <p className="text-[11px] text-[var(--text-faint)]">{config.description}</p>
                           </div>
                         </button>
                       );
@@ -930,23 +930,23 @@ export default function TeamPage() {
               {/* Pipeline Access */}
               {editRole !== 'ADMIN' && (
                 <div>
-                  <label className="block text-[13px] font-medium text-white/50 mb-2">Pipeline Access</label>
+                  <label className="block text-[13px] font-medium text-[var(--muted)] mb-2">Pipeline Access</label>
                   <div className="space-y-2 max-h-40 overflow-y-auto">
                     {pipelines.map((pipeline) => {
                       const access = editPipelineAccess.find(p => p.pipelineId === pipeline.id);
                       return (
                         <div
                           key={pipeline.id}
-                          className="flex items-center justify-between p-3 bg-white/[0.02] border border-white/[0.04] rounded-lg"
+                          className="flex items-center justify-between p-3 bg-[var(--overlay-faint)] border border-[var(--border-faint)] rounded-lg"
                         >
                           <div className="flex items-center gap-2">
                             <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                            <span className="text-[13px] text-white/70">{pipeline.name}</span>
+                            <span className="text-[13px] text-[var(--text-tertiary)]">{pipeline.name}</span>
                           </div>
                           <select
                             value={access?.accessLevel || ''}
                             onChange={(e) => toggleEditPipelineAccess(pipeline.id, e.target.value)}
-                            className="px-3 py-1.5 bg-white/[0.03] border border-white/[0.06] rounded-md text-[11px] text-white/60 focus:outline-none focus:border-white/[0.12] transition-colors"
+                            className="px-3 py-1.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[11px] text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--overlay-strong)] transition-colors"
                           >
                             <option value="">No access</option>
                             <option value="VIEWER">Viewer</option>
@@ -962,10 +962,10 @@ export default function TeamPage() {
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-white/[0.06]">
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--subtle-border)]">
               <button
                 onClick={() => setShowMemberModal(false)}
-                className="px-4 py-2 text-sm text-white/40 hover:text-white/70 transition-colors"
+                className="px-4 py-2 text-sm text-[var(--muted)] hover:text-[var(--text-tertiary)] transition-colors"
               >
                 Cancel
               </button>

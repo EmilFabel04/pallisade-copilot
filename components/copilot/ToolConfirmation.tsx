@@ -55,7 +55,7 @@ export function ToolConfirmation({
         </span>
       </div>
 
-      <p style={{ fontSize: '13px', color: 'rgba(255,255,255,0.8)', marginBottom: '8px' }}>
+      <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
         {description}
       </p>
 
@@ -63,8 +63,8 @@ export function ToolConfirmation({
         <div
           style={{
             fontSize: '11px',
-            color: 'rgba(255,255,255,0.5)',
-            background: 'rgba(0,0,0,0.2)',
+            color: 'var(--muted)',
+            background: 'var(--overlay-bg)',
             borderRadius: '6px',
             padding: '8px',
             marginBottom: '12px',
@@ -103,8 +103,8 @@ export function ToolConfirmation({
           disabled={isLoading}
           style={{
             background: 'transparent',
-            color: 'rgba(255,255,255,0.6)',
-            border: '1px solid rgba(255,255,255,0.15)',
+            color: 'var(--text-tertiary)',
+            border: '1px solid var(--overlay-strong)',
             borderRadius: '6px',
             padding: '6px 14px',
             fontSize: '12px',

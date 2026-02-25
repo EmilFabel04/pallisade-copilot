@@ -124,7 +124,7 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
   };
 
   return (
-    <div className="group relative bg-[#0a0a0f] border border-white/[0.06] rounded-lg p-4 hover:border-white/[0.12] transition-all">
+    <div className="group relative bg-[var(--surface-inset)] border border-[var(--subtle-border)] rounded-lg p-4 hover:border-[var(--overlay-strong)] transition-all">
       {/* Pin indicator */}
       {artifact.isPinned && (
         <div className="absolute top-2 left-2">
@@ -138,9 +138,9 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
       <div className="absolute top-2 right-2">
         <button
           onClick={() => setIsMenuOpen(!isMenuOpen)}
-          className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] transition-opacity"
+          className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-[var(--hover-bg)] transition-opacity"
         >
-          <svg className="w-4 h-4 text-white/40" fill="currentColor" viewBox="0 0 20 20">
+          <svg className="w-4 h-4 text-[var(--muted)]" fill="currentColor" viewBox="0 0 20 20">
             <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
           </svg>
         </button>
@@ -151,10 +151,10 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
               className="fixed inset-0 z-10"
               onClick={() => setIsMenuOpen(false)}
             />
-            <div className="absolute right-0 top-8 z-20 w-40 bg-[#1a1a24] border border-white/[0.06] rounded-lg shadow-xl overflow-hidden">
+            <div className="absolute right-0 top-8 z-20 w-40 bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg shadow-xl overflow-hidden">
               <button
                 onClick={handleCopy}
-                className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-white/70 hover:bg-white/[0.04] hover:text-white transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)] transition-colors"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -163,7 +163,7 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
               </button>
               <button
                 onClick={handleTogglePin}
-                className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-white/70 hover:bg-white/[0.04] hover:text-white transition-colors"
+                className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)] transition-colors"
               >
                 <svg className="w-4 h-4" fill={artifact.isPinned ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
@@ -176,7 +176,7 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
                     onViewSource?.(artifact.sourceSession!.id);
                     setIsMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-white/70 hover:bg-white/[0.04] hover:text-white transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)] transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -184,7 +184,7 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
                   View source
                 </button>
               )}
-              <div className="h-px bg-white/[0.06]" />
+              <div className="h-px bg-[var(--hover-bg)]" />
               <button
                 onClick={handleDelete}
                 disabled={isDeleting}
@@ -207,12 +207,12 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
       </div>
 
       {/* Title */}
-      <h3 className="mt-3 text-[15px] font-medium text-white line-clamp-1">
+      <h3 className="mt-3 text-[15px] font-medium text-[var(--text)] line-clamp-1">
         {artifact.title}
       </h3>
 
       {/* Preview */}
-      <p className="mt-2 text-[13px] text-white/50 line-clamp-3 font-mono">
+      <p className="mt-2 text-[13px] text-[var(--muted)] line-clamp-3 font-mono">
         {getPreview(artifact.content)}
       </p>
 
@@ -222,13 +222,13 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
           {artifact.tags.slice(0, 3).map((tag) => (
             <span
               key={tag}
-              className="px-2 py-0.5 bg-white/[0.04] text-white/50 text-[11px] rounded-md"
+              className="px-2 py-0.5 bg-[var(--overlay-bg)] text-[var(--muted)] text-[11px] rounded-md"
             >
               {tag}
             </span>
           ))}
           {artifact.tags.length > 3 && (
-            <span className="px-2 py-0.5 text-white/30 text-[11px]">
+            <span className="px-2 py-0.5 text-[var(--text-faint)] text-[11px]">
               +{artifact.tags.length - 3}
             </span>
           )}
@@ -236,7 +236,7 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
       )}
 
       {/* Footer */}
-      <div className="mt-3 pt-3 border-t border-white/[0.04] flex items-center justify-between text-[11px] text-white/30">
+      <div className="mt-3 pt-3 border-t border-[var(--border-faint)] flex items-center justify-between text-[11px] text-[var(--text-faint)]">
         <span>{formatDate(artifact.createdAt)}</span>
         {artifact.sourceSession && (
           <span className="truncate max-w-[150px]">

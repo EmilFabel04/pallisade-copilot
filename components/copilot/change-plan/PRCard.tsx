@@ -48,8 +48,8 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
     <div
       className="rounded-xl overflow-hidden"
       style={{
-        backgroundColor: 'rgba(26, 26, 36, 0.8)',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
+        backgroundColor: 'var(--surface)',
+        border: '1px solid var(--hover-bg)',
       }}
     >
       {/* Header */}
@@ -57,15 +57,15 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             {/* GitHub Icon */}
-            <div className="w-10 h-10 rounded-lg bg-white/[0.06] flex items-center justify-center flex-shrink-0">
-              <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <div className="w-10 h-10 rounded-lg bg-[var(--hover-bg)] flex items-center justify-center flex-shrink-0">
+              <svg className="w-6 h-6 text-[var(--text)]" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
               </svg>
             </div>
 
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-medium text-white">Pull Request Created</h3>
+                <h3 className="text-sm font-medium text-[var(--text)]">Pull Request Created</h3>
                 {/* Status Badge */}
                 <span
                   className="px-2 py-0.5 rounded-full text-[10px] font-medium"
@@ -78,8 +78,8 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
                   {statusConfig.label}
                 </span>
               </div>
-              <div className="text-xs text-white/50 mt-0.5">
-                #{result.pr_number} on branch <code className="font-mono text-white/60">{result.branch}</code>
+              <div className="text-xs text-[var(--muted)] mt-0.5">
+                #{result.pr_number} on branch <code className="font-mono text-[var(--text-tertiary)]">{result.branch}</code>
               </div>
             </div>
           </div>
@@ -88,10 +88,10 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
           {plan && (plan.root_cause || plan.description || (plan.patches && plan.patches.length > 0)) && (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="p-1.5 hover:bg-white/[0.04] rounded transition-colors"
+              className="p-1.5 hover:bg-[var(--overlay-bg)] rounded transition-colors"
             >
               <svg
-                className={`w-4 h-4 text-white/50 transition-transform ${expanded ? 'rotate-180' : ''}`}
+                className={`w-4 h-4 text-[var(--muted)] transition-transform ${expanded ? 'rotate-180' : ''}`}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -103,10 +103,10 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
         </div>
 
         {/* PR Title */}
-        <h4 className="mt-3 text-[13px] font-medium text-white/80">{prTitle}</h4>
+        <h4 className="mt-3 text-[13px] font-medium text-[var(--text-secondary)]">{prTitle}</h4>
 
         {/* Quick Stats */}
-        <div className="flex items-center gap-4 mt-2 text-xs text-white/50">
+        <div className="flex items-center gap-4 mt-2 text-xs text-[var(--muted)]">
           <span className="flex items-center gap-1">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -123,22 +123,22 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
 
       {/* Expanded Content: Deep Reasoning */}
       {expanded && plan && (
-        <div className="px-4 pb-3 space-y-3 border-t border-white/[0.06] pt-3">
+        <div className="px-4 pb-3 space-y-3 border-t border-[var(--subtle-border)] pt-3">
           {plan.description && (
             <div>
-              <span className="text-xs text-white/40 font-medium">Description</span>
-              <p className="text-sm text-white/70 mt-1">{plan.description}</p>
+              <span className="text-xs text-[var(--muted)] font-medium">Description</span>
+              <p className="text-sm text-[var(--text-tertiary)] mt-1">{plan.description}</p>
             </div>
           )}
 
           {plan.root_cause && (
             <div>
-              <span className="text-xs text-white/40 font-medium">Root Cause</span>
+              <span className="text-xs text-[var(--muted)] font-medium">Root Cause</span>
               <p
-                className="text-sm text-white/60 mt-1 p-2 rounded"
+                className="text-sm text-[var(--text-tertiary)] mt-1 p-2 rounded"
                 style={{
-                  backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                  border: '1px solid rgba(255, 255, 255, 0.04)',
+                  backgroundColor: 'var(--overlay-faint)',
+                  border: '1px solid var(--border-faint)',
                 }}
               >
                 {plan.root_cause}
@@ -148,13 +148,13 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
 
           {plan.patches && plan.patches.length > 0 && (
             <div>
-              <span className="text-xs text-white/40 font-medium">Files Changed</span>
+              <span className="text-xs text-[var(--muted)] font-medium">Files Changed</span>
               <ul className="mt-1 space-y-1">
                 {plan.patches.map((patch, i) => (
-                  <li key={i} className="text-xs text-white/60 flex items-start gap-2">
+                  <li key={i} className="text-xs text-[var(--text-tertiary)] flex items-start gap-2">
                     <span className="font-mono text-emerald-400">{patch.file_path}</span>
                     {patch.rationale && (
-                      <span className="text-white/40">- {patch.rationale}</span>
+                      <span className="text-[var(--muted)]">- {patch.rationale}</span>
                     )}
                   </li>
                 ))}
@@ -165,7 +165,7 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
       )}
 
       {/* Actions */}
-      <div className="px-4 py-3 border-t border-white/[0.06] flex items-center gap-2">
+      <div className="px-4 py-3 border-t border-[var(--subtle-border)] flex items-center gap-2">
         {/* Open in GitHub */}
         {result.pr_url && (
           <a
@@ -195,7 +195,7 @@ ${plan?.patches?.map(p => `- \`${p.file_path}\`: ${p.rationale}`).join('\n') || 
         {onSaveToArtifacts && (
           <button
             onClick={() => onSaveToArtifacts(artifactContent)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.06] hover:bg-white/[0.1] transition-colors text-white/80"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] transition-colors text-[var(--text-secondary)]"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path

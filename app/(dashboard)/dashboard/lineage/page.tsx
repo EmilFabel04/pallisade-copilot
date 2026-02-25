@@ -199,7 +199,7 @@ function LaneOverviewCanvas({
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 border-2 border-violet-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-white/50">Loading lane overview...</p>
+          <p className="text-sm text-[var(--muted)]">Loading lane overview...</p>
         </div>
       </div>
     );
@@ -208,11 +208,11 @@ function LaneOverviewCanvas({
   if (!data || !data.nodes || data.nodes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full">
-        <svg className="w-16 h-16 text-white/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-16 h-16 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
         </svg>
-        <p className="text-white/50 text-[15px] mb-2">No lane overview available</p>
-        <p className="text-white/30 text-[13px] mb-4">
+        <p className="text-[var(--muted)] text-[15px] mb-2">No lane overview available</p>
+        <p className="text-[var(--text-faint)] text-[13px] mb-4">
           Extract lineage from the Data Lineage tab first
         </p>
         <button
@@ -250,7 +250,7 @@ function LaneOverviewCanvas({
   const viewHeight = maxY - minY;
 
   return (
-    <div className="w-full h-full overflow-auto relative bg-[#030303]">
+    <div className="w-full h-full overflow-auto relative bg-[var(--surface-sunken)]">
       <svg
         width="100%"
         height="100%"
@@ -379,13 +379,13 @@ function LaneOverviewCanvas({
       </svg>
 
       {/* Legend — only show lanes present */}
-      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px]">
+      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
         {lanes.map((lane) => {
           const color = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
           return (
             <div key={lane.name} className="flex items-center gap-1">
               <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
-              <span className="text-white/50">{lane.label}</span>
+              <span className="text-[var(--muted)]">{lane.label}</span>
             </div>
           );
         })}
@@ -393,13 +393,13 @@ function LaneOverviewCanvas({
 
       {/* Stats overlay */}
       {data.stats && (
-        <div className="absolute top-4 right-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] space-y-1">
-          <div className="text-white/50">
-            <span className="text-white font-medium">{data.stats.totalNodes}</span> tools
+        <div className="absolute top-4 right-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] space-y-1">
+          <div className="text-[var(--muted)]">
+            <span className="text-[var(--text)] font-medium">{data.stats.totalNodes}</span> tools
             {data.stats.totalEdges > 0 && (
               <>
                 {' / '}
-                <span className="text-white font-medium">{data.stats.totalEdges}</span> flows
+                <span className="text-[var(--text)] font-medium">{data.stats.totalEdges}</span> flows
               </>
             )}
           </div>
@@ -1239,7 +1239,7 @@ export default function LineagePage() {
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-white/50">Loading lineage...</p>
+          <p className="text-sm text-[var(--muted)]">Loading lineage...</p>
         </div>
       </div>
     );
@@ -1248,17 +1248,17 @@ export default function LineagePage() {
   return (
     <div className="h-[calc(100vh-56px)] flex flex-col -m-6">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-white/[0.06] bg-[#030303]">
+      <div className="px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)]">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-lg font-semibold text-white">Pipeline Lineage</h1>
-            <p className="text-[13px] text-white/50">
+            <h1 className="text-lg font-semibold text-[var(--text)]">Pipeline Lineage</h1>
+            <p className="text-[13px] text-[var(--muted)]">
               Visualize your complete data pipeline from ingestion to reporting
             </p>
           </div>
           <div className="flex items-center gap-3">
             {lineageData?.lastExtracted && (
-              <span className="text-[12px] text-white/40">
+              <span className="text-[12px] text-[var(--muted)]">
                 Last extracted: {formatDate(lineageData.lastExtracted)}
               </span>
             )}
@@ -1324,7 +1324,7 @@ export default function LineagePage() {
             <div className="flex items-center gap-3 mb-3">
               <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
               <span className="text-[13px] font-medium text-violet-300">AI is analyzing your pipeline...</span>
-              <span className="ml-auto text-[12px] text-white/40">
+              <span className="ml-auto text-[12px] text-[var(--muted)]">
                 {llmNodeCount} nodes &middot; {llmEdgeCount} edges
               </span>
             </div>
@@ -1335,7 +1335,7 @@ export default function LineagePage() {
                   entry.type === 'node' ? 'text-emerald-400/70' :
                   entry.type === 'error' ? 'text-red-400/80' :
                   entry.type === 'complete' ? 'text-violet-300' :
-                  'text-white/40'
+                  'text-[var(--muted)]'
                 }`}>
                   <span className="shrink-0 mt-0.5">
                     {entry.type === 'tool' ? '>' : entry.type === 'node' ? '+' : entry.type === 'error' ? '!' : entry.type === 'complete' ? '*' : '-'}
@@ -1355,7 +1355,7 @@ export default function LineagePage() {
               flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all border
               ${activeTab === 'data'
                 ? 'bg-indigo-500/15 border-indigo-500/30 text-indigo-300'
-                : 'border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]'}
+                : 'border-transparent text-[var(--muted)] hover:text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)]'}
             `}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1369,7 +1369,7 @@ export default function LineagePage() {
               flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-medium transition-all border
               ${activeTab === 'control-plane'
                 ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-                : 'border-transparent text-white/40 hover:text-white/60 hover:bg-white/[0.04]'}
+                : 'border-transparent text-[var(--muted)] hover:text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)]'}
             `}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1389,55 +1389,55 @@ export default function LineagePage() {
         />
 
         {/* Stats */}
-        <div className="flex items-center gap-6 mt-4 pt-4 border-t border-white/[0.04]">
+        <div className="flex items-center gap-6 mt-4 pt-4 border-t border-[var(--border-faint)]">
           {activeTab === 'control-plane' ? (
             <>
               <div className="text-center">
                 <div className="text-xl font-semibold text-emerald-400">{controlPlaneData?.stats?.tool_count || 0}</div>
-                <div className="text-[11px] text-white/40">Tools</div>
+                <div className="text-[11px] text-[var(--muted)]">Tools</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-white">{controlPlaneData?.stats?.flow_count || 0}</div>
-                <div className="text-[11px] text-white/40">Data Flows</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{controlPlaneData?.stats?.flow_count || 0}</div>
+                <div className="text-[11px] text-[var(--muted)]">Data Flows</div>
               </div>
             </>
           ) : (
             <>
               <div className="text-center">
-                <div className="text-xl font-semibold text-white">{filteredStats.toolNodes}</div>
-                <div className="text-[11px] text-white/40">Tools</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.toolNodes}</div>
+                <div className="text-[11px] text-[var(--muted)]">Tools</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-white">{filteredStats.tableNodes}</div>
-                <div className="text-[11px] text-white/40">Tables</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.tableNodes}</div>
+                <div className="text-[11px] text-[var(--muted)]">Tables</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-white">{filteredStats.viewNodes}</div>
-                <div className="text-[11px] text-white/40">Views</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.viewNodes}</div>
+                <div className="text-[11px] text-[var(--muted)]">Views</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-white">{filteredStats.modelNodes}</div>
-                <div className="text-[11px] text-white/40">Models</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.modelNodes}</div>
+                <div className="text-[11px] text-[var(--muted)]">Models</div>
               </div>
             </>
           )}
           <div className="text-center">
-            <div className="text-xl font-semibold text-white">
+            <div className="text-xl font-semibold text-[var(--text)]">
               {renderedView?.stats?.edgeCount || lineageData?.stats?.totalEdges || 0}
             </div>
-            <div className="text-[11px] text-white/40">Dependencies</div>
+            <div className="text-[11px] text-[var(--muted)]">Dependencies</div>
           </div>
 
           {/* Rendered view stats (when available) */}
           {activeTab === 'data' && renderedView?.stats && (
             <>
-              <div className="w-px h-8 bg-white/10" />
+              <div className="w-px h-8 bg-[var(--overlay-medium)]" />
               {renderedView.stats.inferredNodeCount > 0 && (
                 <div className="text-center">
                   <div className="text-xl font-semibold text-amber-400">
                     {renderedView.stats.inferredNodeCount}
                   </div>
-                  <div className="text-[11px] text-white/40">Inferred</div>
+                  <div className="text-[11px] text-[var(--muted)]">Inferred</div>
                 </div>
               )}
               {renderedView.stats.needsMappingCount > 0 && (
@@ -1445,7 +1445,7 @@ export default function LineagePage() {
                   <div className="text-xl font-semibold text-orange-400">
                     {renderedView.stats.needsMappingCount}
                   </div>
-                  <div className="text-[11px] text-white/40">Needs Mapping</div>
+                  <div className="text-[11px] text-[var(--muted)]">Needs Mapping</div>
                 </div>
               )}
             </>
@@ -1454,24 +1454,24 @@ export default function LineagePage() {
           {/* Engine coverage stats (when available, data tab only) */}
           {activeTab === 'data' && lineageData?.engineStats && (
             <>
-              <div className="w-px h-8 bg-white/10" />
+              <div className="w-px h-8 bg-[var(--overlay-medium)]" />
               <div className="text-center">
                 <div className="text-xl font-semibold text-emerald-400">
                   {Math.round(lineageData.engineStats.coverageTable * 100)}%
                 </div>
-                <div className="text-[11px] text-white/40">Table Coverage</div>
+                <div className="text-[11px] text-[var(--muted)]">Table Coverage</div>
               </div>
               <div className="text-center">
                 <div className="text-xl font-semibold text-violet-400">
                   {Math.round(lineageData.engineStats.coverageColumn * 100)}%
                 </div>
-                <div className="text-[11px] text-white/40">Column Coverage</div>
+                <div className="text-[11px] text-[var(--muted)]">Column Coverage</div>
               </div>
               <div className="text-center">
                 <div className="text-xl font-semibold text-emerald-400">
                   {Math.round(lineageData.engineStats.highConfidencePct * 100)}%
                 </div>
-                <div className="text-[11px] text-white/40">High Confidence</div>
+                <div className="text-[11px] text-[var(--muted)]">High Confidence</div>
               </div>
             </>
           )}
@@ -1501,13 +1501,13 @@ export default function LineagePage() {
             <div className="flex items-center justify-center h-full">
               <div className="flex flex-col items-center gap-4">
                 <div className="w-10 h-10 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                <p className="text-sm text-white/50">Loading pipeline overview...</p>
+                <p className="text-sm text-[var(--muted)]">Loading pipeline overview...</p>
               </div>
             </div>
           ) : nodes.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full">
               <svg
-                className="w-16 h-16 text-white/20 mb-4"
+                className="w-16 h-16 text-[var(--text-faint)] mb-4"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -1521,22 +1521,22 @@ export default function LineagePage() {
               </svg>
               {activeTab === 'control-plane' ? (
                 <>
-                  <p className="text-white/50 text-[15px] mb-2">No pipeline overview available</p>
-                  <p className="text-white/30 text-[13px] mb-4">
+                  <p className="text-[var(--muted)] text-[15px] mb-2">No pipeline overview available</p>
+                  <p className="text-[var(--text-faint)] text-[13px] mb-4">
                     Extract lineage from the Data Lineage tab first to generate the pipeline overview
                   </p>
                 </>
               ) : lineageData && lineageData.nodes.length > 0 ? (
                 <>
-                  <p className="text-white/50 text-[15px] mb-2">No nodes match current filters</p>
-                  <p className="text-white/30 text-[13px]">
+                  <p className="text-[var(--muted)] text-[15px] mb-2">No nodes match current filters</p>
+                  <p className="text-[var(--text-faint)] text-[13px]">
                     Try adjusting the layer or node type filters
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-white/50 text-[15px] mb-2">No lineage data yet</p>
-                  <p className="text-white/30 text-[13px] mb-4">
+                  <p className="text-[var(--muted)] text-[15px] mb-2">No lineage data yet</p>
+                  <p className="text-[var(--text-faint)] text-[13px] mb-4">
                     Configure your pipeline and click &quot;Extract Lineage&quot; to discover dependencies
                   </p>
                   <button
@@ -1567,7 +1567,7 @@ export default function LineagePage() {
               }}
               proOptions={{ hideAttribution: true }}
             >
-              <Controls className="!bg-white/5 !border-white/10 !rounded-lg [&>button]:!bg-white/5 [&>button]:!border-white/10 [&>button]:!text-white/60" />
+              <Controls className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg [&>button]:!bg-[var(--subtle-bg)] [&>button]:!border-[var(--border-medium)] [&>button]:!text-[var(--text-tertiary)]" />
               <MiniMap
                 nodeColor={(n) => {
                   const category = n.data.category as string;
@@ -1577,7 +1577,7 @@ export default function LineagePage() {
                   return '#6366F1';
                 }}
                 maskColor="rgba(0,0,0,0.8)"
-                className="!bg-white/5 !border-white/10 !rounded-lg"
+                className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg"
               />
               <Background
                 variant={BackgroundVariant.Dots}
@@ -1590,33 +1590,33 @@ export default function LineagePage() {
 
           {/* Legend */}
           {nodes.length > 0 && (
-            <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px] max-w-md">
+            <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] max-w-md">
               {activeTab === 'control-plane' ? (
                 <>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#10B981' }} />
-                    <span className="text-white/50">Ingestion</span>
+                    <span className="text-[var(--muted)]">Ingestion</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#6366F1' }} />
-                    <span className="text-white/50">Warehouse</span>
+                    <span className="text-[var(--muted)]">Warehouse</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#F59E0B' }} />
-                    <span className="text-white/50">Transform</span>
+                    <span className="text-[var(--muted)]">Transform</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#F97316' }} />
-                    <span className="text-white/50">Orchestration</span>
+                    <span className="text-[var(--muted)]">Orchestration</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: '#06B6D4' }} />
-                    <span className="text-white/50">BI</span>
+                    <span className="text-[var(--muted)]">BI</span>
                   </div>
-                  <div className="w-px h-3 bg-white/20" />
+                  <div className="w-px h-3 bg-[var(--overlay-strong)]" />
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#6366F1' }} />
-                    <span className="text-white/50">Data Flow</span>
+                    <span className="text-[var(--muted)]">Data Flow</span>
                   </div>
                 </>
               ) : (
@@ -1624,56 +1624,56 @@ export default function LineagePage() {
                   {/* Layer colors */}
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.INGESTION }} />
-                    <span className="text-white/50">Ingestion</span>
+                    <span className="text-[var(--muted)]">Ingestion</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.TRANSFORMATION }} />
-                    <span className="text-white/50">Transform</span>
+                    <span className="text-[var(--muted)]">Transform</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.WAREHOUSE }} />
-                    <span className="text-white/50">Warehouse</span>
+                    <span className="text-[var(--muted)]">Warehouse</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.REPORTING }} />
-                    <span className="text-white/50">Reporting</span>
+                    <span className="text-[var(--muted)]">Reporting</span>
                   </div>
-                  <div className="w-px h-3 bg-white/20" />
+                  <div className="w-px h-3 bg-[var(--overlay-strong)]" />
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.table.color }} />
-                    <span className="text-white/50">Table</span>
+                    <span className="text-[var(--muted)]">Table</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.view.color }} />
-                    <span className="text-white/50">View</span>
+                    <span className="text-[var(--muted)]">View</span>
                   </div>
                 </>
               )}
               {/* Inferred legend (shows when rendered view has inferred nodes) */}
               {activeTab === 'data' && renderedView?.stats?.inferredNodeCount > 0 && (
                 <>
-                  <div className="w-px h-3 bg-white/20" />
+                  <div className="w-px h-3 bg-[var(--overlay-strong)]" />
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-0.5 rounded" style={{ borderTop: '1.5px dashed #F59E0B' }} />
-                    <span className="text-white/50">Inferred</span>
+                    <span className="text-[var(--muted)]">Inferred</span>
                   </div>
                 </>
               )}
               {/* Confidence legend (shows when engine data present, data tab) */}
               {activeTab === 'data' && lineageData?.engineStats && (
                 <>
-                  <div className="w-px h-3 bg-white/20" />
+                  <div className="w-px h-3 bg-[var(--overlay-strong)]" />
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#10B981' }} />
-                    <span className="text-white/50">&ge;80%</span>
+                    <span className="text-[var(--muted)]">&ge;80%</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#F59E0B' }} />
-                    <span className="text-white/50">50-80%</span>
+                    <span className="text-[var(--muted)]">50-80%</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="w-4 h-0.5 rounded" style={{ backgroundColor: '#EF4444' }} />
-                    <span className="text-white/50">&lt;50%</span>
+                    <span className="text-[var(--muted)]">&lt;50%</span>
                   </div>
                 </>
               )}
@@ -1697,60 +1697,60 @@ export default function LineagePage() {
           const health = cpNode.healthSummary;
           const totalHealth = health.healthy + health.degraded + health.failing + health.unknown;
           return (
-            <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+            <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-sunken)] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-[15px] font-medium text-white">Tool Details</h3>
-                <button onClick={() => setSelectedNode(null)} className="p-1 hover:bg-white/[0.05] rounded">
-                  <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <h3 className="text-[15px] font-medium text-[var(--text)]">Tool Details</h3>
+                <button onClick={() => setSelectedNode(null)} className="p-1 hover:bg-[var(--subtle-bg)] rounded">
+                  <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
-                  <p className="text-[13px] text-white font-mono mt-1">{cpNode.name}</p>
+                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Name</label>
+                  <p className="text-[13px] text-[var(--text)] font-mono mt-1">{cpNode.name}</p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
-                    <p className="text-[13px] text-white mt-1 capitalize">{cpNode.toolType}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Type</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{cpNode.toolType}</p>
                   </div>
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Domain</label>
-                    <p className="text-[13px] text-white mt-1 capitalize">{cpNode.platformDomain}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Domain</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{cpNode.platformDomain}</p>
                   </div>
                 </div>
                 <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Assets</label>
-                  <p className="text-2xl font-semibold text-white mt-1">{cpNode.assetCount}</p>
+                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data Assets</label>
+                  <p className="text-2xl font-semibold text-[var(--text)] mt-1">{cpNode.assetCount}</p>
                 </div>
                 {totalHealth > 0 && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Health Summary</label>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Health Summary</label>
                     <div className="mt-2 space-y-2">
                       {health.healthy > 0 && (
                         <div className="flex items-center justify-between">
                           <span className="text-[12px] text-emerald-400">Healthy</span>
-                          <span className="text-[12px] text-white">{health.healthy}</span>
+                          <span className="text-[12px] text-[var(--text)]">{health.healthy}</span>
                         </div>
                       )}
                       {health.degraded > 0 && (
                         <div className="flex items-center justify-between">
                           <span className="text-[12px] text-amber-400">Degraded</span>
-                          <span className="text-[12px] text-white">{health.degraded}</span>
+                          <span className="text-[12px] text-[var(--text)]">{health.degraded}</span>
                         </div>
                       )}
                       {health.failing > 0 && (
                         <div className="flex items-center justify-between">
                           <span className="text-[12px] text-red-400">Failing</span>
-                          <span className="text-[12px] text-white">{health.failing}</span>
+                          <span className="text-[12px] text-[var(--text)]">{health.failing}</span>
                         </div>
                       )}
                       {health.unknown > 0 && (
                         <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-white/40">Unknown</span>
-                          <span className="text-[12px] text-white">{health.unknown}</span>
+                          <span className="text-[12px] text-[var(--muted)]">Unknown</span>
+                          <span className="text-[12px] text-[var(--text)]">{health.unknown}</span>
                         </div>
                       )}
                     </div>
@@ -1765,18 +1765,18 @@ export default function LineagePage() {
                   const cpNodeMap = new Map((controlPlaneData?.nodes || []).map((n: CPNode) => [n.id, n]));
                   return (
                     <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Flows ({connEdges.length})</label>
+                      <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data Flows ({connEdges.length})</label>
                       <div className="mt-2 space-y-1.5">
                         {connEdges.map((e: CPEdge) => {
                           const otherId = e.source === cpNode.id ? e.target : e.source;
                           const other = cpNodeMap.get(otherId);
                           const direction = e.source === cpNode.id ? '\u2192' : '\u2190';
                           return (
-                            <div key={e.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-white/[0.03]">
-                              <span className="text-[12px] text-white font-mono truncate">
+                            <div key={e.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-[var(--overlay-bg)]">
+                              <span className="text-[12px] text-[var(--text)] font-mono truncate">
                                 {direction} {other?.name || otherId}
                               </span>
-                              <span className="text-[10px] text-white/40 shrink-0 ml-2">{e.dataFlowCount} flows</span>
+                              <span className="text-[10px] text-[var(--muted)] shrink-0 ml-2">{e.dataFlowCount} flows</span>
                             </div>
                           );
                         })}
@@ -1792,40 +1792,40 @@ export default function LineagePage() {
         {/* Side panel - Node details */}
         {activeTab !== 'control-plane' && selectedNode && !selectedEdge && (
           (selectedNode.category === 'dag' || selectedNode.category === 'task') ? (
-            <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+            <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-sunken)] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-[15px] font-medium text-white">
+                <h3 className="text-[15px] font-medium text-[var(--text)]">
                   {selectedNode.category === 'dag' ? 'DAG Details' : 'Task Details'}
                 </h3>
                 <button
                   onClick={() => setSelectedNode(null)}
-                  className="p-1 hover:bg-white/[0.05] rounded"
+                  className="p-1 hover:bg-[var(--subtle-bg)] rounded"
                 >
-                  <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
-                  <p className="text-[13px] text-white font-mono mt-1 break-all">{selectedNode.name}</p>
+                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Name</label>
+                  <p className="text-[13px] text-[var(--text)] font-mono mt-1 break-all">{selectedNode.name}</p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
-                    <p className="text-[13px] text-white mt-1 capitalize">{selectedNode.category}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Type</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{selectedNode.category}</p>
                   </div>
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Layer</label>
-                    <p className="text-[13px] text-white mt-1">{selectedNode.layer}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Layer</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1">{selectedNode.layer}</p>
                   </div>
                 </div>
 
                 {/* Run summary */}
                 {selectedNode.runSummary && (
-                  <div className="p-3 rounded-lg bg-white/[0.03] border border-white/[0.06] space-y-3">
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Run Summary</label>
+                  <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] space-y-3">
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Run Summary</label>
                     {selectedNode.runSummary.lastRunState && (
                       <div className="flex items-center gap-2 mt-1">
                         <span className={`
@@ -1839,7 +1839,7 @@ export default function LineagePage() {
                           {selectedNode.runSummary.lastRunState}
                         </span>
                         {selectedNode.runSummary.lastRunDate && (
-                          <span className="text-[11px] text-white/40">
+                          <span className="text-[11px] text-[var(--muted)]">
                             {new Date(selectedNode.runSummary.lastRunDate).toLocaleString()}
                           </span>
                         )}
@@ -1847,11 +1847,11 @@ export default function LineagePage() {
                     )}
                     {selectedNode.runSummary.successRate !== undefined && (
                       <div>
-                        <div className="flex items-center justify-between text-[11px] text-white/50 mb-1">
+                        <div className="flex items-center justify-between text-[11px] text-[var(--muted)] mb-1">
                           <span>Success Rate</span>
                           <span>{Math.round(selectedNode.runSummary.successRate)}%</span>
                         </div>
-                        <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
                           <div
                             className="h-full rounded-full"
                             style={{
@@ -1864,8 +1864,8 @@ export default function LineagePage() {
                     )}
                     {selectedNode.runSummary.avgDurationMinutes !== undefined && (
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] text-white/40">Avg Duration</span>
-                        <span className="text-[11px] text-white">{selectedNode.runSummary.avgDurationMinutes.toFixed(1)} min</span>
+                        <span className="text-[11px] text-[var(--muted)]">Avg Duration</span>
+                        <span className="text-[11px] text-[var(--text)]">{selectedNode.runSummary.avgDurationMinutes.toFixed(1)} min</span>
                       </div>
                     )}
                   </div>
@@ -1892,16 +1892,16 @@ export default function LineagePage() {
                     if (tasks.length === 0) return null;
                     return (
                       <div>
-                        <label className="text-[11px] text-white/40 uppercase tracking-wide">Tasks ({tasks.length})</label>
+                        <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Tasks ({tasks.length})</label>
                         <div className="mt-2 space-y-1.5">
                           {tasks.map(task => (
                             <button
                               key={task.id}
                               onClick={() => handleNavigateToNode(task.id)}
-                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                              className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-left transition-colors"
                             >
                               <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
-                              <span className="text-[12px] text-white font-mono truncate flex-1">{task.name}</span>
+                              <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1">{task.name}</span>
                               {task.runSummary?.lastRunState && (
                                 <span className={`
                                   px-1.5 py-0.5 text-[10px] font-medium rounded
@@ -1942,28 +1942,28 @@ export default function LineagePage() {
                     <div className="space-y-3">
                       {parentDag && (
                         <div>
-                          <label className="text-[11px] text-white/40 uppercase tracking-wide">Parent DAG</label>
+                          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Parent DAG</label>
                           <button
                             onClick={() => handleNavigateToNode(parentDag.id)}
-                            className="w-full flex items-center gap-2 px-2 py-1.5 mt-1 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                            className="w-full flex items-center gap-2 px-2 py-1.5 mt-1 rounded bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-left transition-colors"
                           >
                             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.dag.color }} />
-                            <span className="text-[12px] text-white font-mono truncate flex-1">{parentDag.name}</span>
+                            <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1">{parentDag.name}</span>
                           </button>
                         </div>
                       )}
                       {upstreamTasks.length > 0 && (
                         <div>
-                          <label className="text-[11px] text-white/40 uppercase tracking-wide">Depends On ({upstreamTasks.length})</label>
+                          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Depends On ({upstreamTasks.length})</label>
                           <div className="mt-2 space-y-1.5">
                             {upstreamTasks.map(task => (
                               <button
                                 key={task.id}
                                 onClick={() => handleNavigateToNode(task.id)}
-                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-left transition-colors"
                               >
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
-                                <span className="text-[12px] text-white font-mono truncate flex-1">{task.name}</span>
+                                <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1">{task.name}</span>
                               </button>
                             ))}
                           </div>
@@ -1971,16 +1971,16 @@ export default function LineagePage() {
                       )}
                       {downstreamTasks.length > 0 && (
                         <div>
-                          <label className="text-[11px] text-white/40 uppercase tracking-wide">Required By ({downstreamTasks.length})</label>
+                          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Required By ({downstreamTasks.length})</label>
                           <div className="mt-2 space-y-1.5">
                             {downstreamTasks.map(task => (
                               <button
                                 key={task.id}
                                 onClick={() => handleNavigateToNode(task.id)}
-                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-white/[0.03] hover:bg-white/[0.06] text-left transition-colors"
+                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-left transition-colors"
                               >
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS.task.color }} />
-                                <span className="text-[12px] text-white font-mono truncate flex-1">{task.name}</span>
+                                <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1">{task.name}</span>
                               </button>
                             ))}
                           </div>
@@ -2000,7 +2000,7 @@ export default function LineagePage() {
                   const nodeMap = new Map((lineageData?.nodes || []).map(n => [n.id, n]));
                   return (
                     <div>
-                      <label className="text-[11px] text-white/40 uppercase tracking-wide">Data Assets ({crossEdges.length})</label>
+                      <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data Assets ({crossEdges.length})</label>
                       <div className="mt-2 space-y-2">
                         {crossEdges.map(edge => {
                           const linkedId = edge.source === selectedNode.id ? edge.target : edge.source;
@@ -2018,21 +2018,21 @@ export default function LineagePage() {
                             .filter((n): n is UnifiedLineageNode => !!n);
 
                           return (
-                            <div key={edge.id} className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.06]">
+                            <div key={edge.id} className="p-2 rounded-lg bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                               <button
                                 onClick={() => handleNavigateToNode(linkedId)}
                                 className="w-full flex items-center gap-2 text-left"
                               >
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: CATEGORY_VISUALS[linked.category]?.color || '#6366F1' }} />
-                                <span className="text-[12px] text-white font-mono truncate flex-1">{linked.name}</span>
-                                <span className="text-[10px] text-white/30 capitalize">{edge.edgeType.replace(/_/g, ' ')}</span>
+                                <span className="text-[12px] text-[var(--text)] font-mono truncate flex-1">{linked.name}</span>
+                                <span className="text-[10px] text-[var(--text-faint)] capitalize">{edge.edgeType.replace(/_/g, ' ')}</span>
                               </button>
                               {/* Data-plane lineage for this asset */}
                               {(dataUpstream.length > 0 || dataDownstream.length > 0) && (
-                                <div className="mt-1.5 pt-1.5 border-t border-white/[0.04] space-y-1">
+                                <div className="mt-1.5 pt-1.5 border-t border-[var(--border-faint)] space-y-1">
                                   {dataUpstream.length > 0 && (
                                     <div className="flex items-start gap-1.5">
-                                      <span className="text-[10px] text-white/30 shrink-0 mt-0.5">from</span>
+                                      <span className="text-[10px] text-[var(--text-faint)] shrink-0 mt-0.5">from</span>
                                       <div className="flex flex-wrap gap-1">
                                         {dataUpstream.map(n => (
                                           <button
@@ -2048,7 +2048,7 @@ export default function LineagePage() {
                                   )}
                                   {dataDownstream.length > 0 && (
                                     <div className="flex items-start gap-1.5">
-                                      <span className="text-[10px] text-white/30 shrink-0 mt-0.5">to</span>
+                                      <span className="text-[10px] text-[var(--text-faint)] shrink-0 mt-0.5">to</span>
                                       <div className="flex flex-wrap gap-1">
                                         {dataDownstream.map(n => (
                                           <button
@@ -2074,22 +2074,22 @@ export default function LineagePage() {
 
                 {selectedNode.description && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Description</label>
-                    <p className="text-[13px] text-white/70 mt-1">{selectedNode.description}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Description</label>
+                    <p className="text-[13px] text-[var(--text-tertiary)] mt-1">{selectedNode.description}</p>
                   </div>
                 )}
                 {selectedNode.owner && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Owner</label>
-                    <p className="text-[13px] text-white mt-1">{selectedNode.owner}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Owner</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1">{selectedNode.owner}</p>
                   </div>
                 )}
                 {selectedNode.tags && selectedNode.tags.length > 0 && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Tags</label>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Tags</label>
                     <div className="flex flex-wrap gap-1 mt-1">
                       {selectedNode.tags.map(tag => (
-                        <span key={tag} className="px-2 py-0.5 text-[10px] bg-white/10 text-white/60 rounded">{tag}</span>
+                        <span key={tag} className="px-2 py-0.5 text-[10px] bg-[var(--overlay-medium)] text-[var(--text-tertiary)] rounded">{tag}</span>
                       ))}
                     </div>
                   </div>
@@ -2097,50 +2097,50 @@ export default function LineagePage() {
               </div>
             </div>
           ) : isToolCategory(selectedNode.category) ? (
-            <div className="w-80 border-l border-white/[0.06] bg-[#030303] p-4 overflow-y-auto">
+            <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-sunken)] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-[15px] font-medium text-white">Tool Details</h3>
+                <h3 className="text-[15px] font-medium text-[var(--text)]">Tool Details</h3>
                 <button
                   onClick={() => setSelectedNode(null)}
-                  className="p-1 hover:bg-white/[0.05] rounded"
+                  className="p-1 hover:bg-[var(--subtle-bg)] rounded"
                 >
-                  <svg className="w-4 h-4 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
               <div className="space-y-4">
                 <div>
-                  <label className="text-[11px] text-white/40 uppercase tracking-wide">Name</label>
-                  <p className="text-[13px] text-white font-mono mt-1 break-all">{selectedNode.fullName || selectedNode.name}</p>
+                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Name</label>
+                  <p className="text-[13px] text-[var(--text)] font-mono mt-1 break-all">{selectedNode.fullName || selectedNode.name}</p>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Type</label>
-                    <p className="text-[13px] text-white mt-1 capitalize">{selectedNode.category}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Type</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{selectedNode.category}</p>
                   </div>
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Layer</label>
-                    <p className="text-[13px] text-white mt-1">{selectedNode.layer}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Layer</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1">{selectedNode.layer}</p>
                   </div>
                 </div>
                 {selectedNode.toolType && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Tool Type</label>
-                    <p className="text-[13px] text-white mt-1">{selectedNode.toolType}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Tool Type</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1">{selectedNode.toolType}</p>
                   </div>
                 )}
                 {selectedNode.status && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Status</label>
-                    <p className="text-[13px] text-white mt-1">{selectedNode.status}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Status</label>
+                    <p className="text-[13px] text-[var(--text)] mt-1">{selectedNode.status}</p>
                   </div>
                 )}
                 {selectedNode.healthScore !== undefined && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Health Score</label>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Health Score</label>
                     <div className="flex items-center gap-2 mt-1">
-                      <div className="flex-1 h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div className="flex-1 h-2 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
                         <div
                           className="h-full rounded-full"
                           style={{
@@ -2149,13 +2149,13 @@ export default function LineagePage() {
                           }}
                         />
                       </div>
-                      <span className="text-[13px] text-white">{Math.round(selectedNode.healthScore)}%</span>
+                      <span className="text-[13px] text-[var(--text)]">{Math.round(selectedNode.healthScore)}%</span>
                     </div>
                   </div>
                 )}
                 {(selectedNode.findingsCount ?? 0) > 0 && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Findings</label>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Findings</label>
                     <div className="flex items-center gap-2 mt-1">
                       {(selectedNode.criticalCount ?? 0) > 0 && (
                         <span className="px-2 py-1 text-[11px] bg-red-500/20 text-red-400 rounded">{selectedNode.criticalCount} Critical</span>
@@ -2168,8 +2168,8 @@ export default function LineagePage() {
                 )}
                 {selectedNode.description && (
                   <div>
-                    <label className="text-[11px] text-white/40 uppercase tracking-wide">Description</label>
-                    <p className="text-[13px] text-white/70 mt-1">{selectedNode.description}</p>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Description</label>
+                    <p className="text-[13px] text-[var(--text-tertiary)] mt-1">{selectedNode.description}</p>
                   </div>
                 )}
               </div>

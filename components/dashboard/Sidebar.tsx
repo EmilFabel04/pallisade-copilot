@@ -107,14 +107,14 @@ export function Sidebar() {
     <aside 
       className={`
         fixed left-0 top-0 h-screen z-40
-        bg-[#050505] border-r border-white/[0.04]
+        bg-[var(--surface-inset)] border-r border-[var(--border-faint)]
         flex flex-col
         transition-all duration-300 ease-in-out
         ${isCollapsed ? 'w-[68px]' : 'w-[240px]'}
       `}
     >
       {/* Logo */}
-      <div className={`h-14 flex items-center border-b border-white/[0.04] ${isCollapsed ? 'justify-center px-3' : 'px-4'}`}>
+      <div className={`h-14 flex items-center border-b border-[var(--border-faint)] ${isCollapsed ? 'justify-center px-3' : 'px-4'}`}>
         <Link href="/dashboard" className="flex items-center gap-2.5 group">
           <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
             <img 
@@ -124,7 +124,7 @@ export function Sidebar() {
             />
           </div>
           {!isCollapsed && (
-            <span className="font-semibold text-[15px] text-white tracking-tight">
+            <span className="font-semibold text-[15px] text-[var(--text)] tracking-tight">
               Pallisade
             </span>
           )}
@@ -144,8 +144,8 @@ export function Sidebar() {
                   flex items-center gap-3 px-3 py-2 rounded-lg
                   transition-all duration-150
                   ${active 
-                    ? 'bg-white/[0.08] text-white' 
-                    : 'text-white/60 hover:text-white hover:bg-white/[0.04]'
+                    ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                    : 'text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                   }
                   ${isCollapsed ? 'justify-center' : ''}
                 `}
@@ -163,7 +163,7 @@ export function Sidebar() {
         </div>
 
         {/* Divider */}
-        <div className="my-4 mx-3 h-px bg-white/[0.06]" />
+        <div className="my-4 mx-3 h-px bg-[var(--hover-bg)]" />
 
         {/* Secondary Navigation */}
         <div className="space-y-0.5">
@@ -177,8 +177,8 @@ export function Sidebar() {
                   flex items-center gap-3 px-3 py-2 rounded-lg
                   transition-all duration-150
                   ${active 
-                    ? 'bg-white/[0.08] text-white' 
-                    : 'text-white/60 hover:text-white hover:bg-white/[0.04]'
+                    ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                    : 'text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                   }
                   ${isCollapsed ? 'justify-center' : ''}
                 `}
@@ -197,13 +197,13 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="p-2 border-t border-white/[0.06]">
+      <div className="p-2 border-t border-[var(--subtle-border)]">
         {/* Collapse Toggle */}
         <button
           onClick={toggleSidebar}
           className={`
             w-full flex items-center gap-3 px-3 py-2 rounded-lg
-            text-white/50 hover:text-white hover:bg-white/[0.04]
+            text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]
             transition-all duration-150
             ${isCollapsed ? 'justify-center' : ''}
           `}
@@ -225,7 +225,7 @@ export function Sidebar() {
           onClick={() => signOut({ callbackUrl: '/' })}
           className={`
             w-full flex items-center gap-3 px-3 py-2 rounded-lg
-            text-white/50 hover:text-white hover:bg-white/[0.04]
+            text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]
             transition-all duration-150
             ${isCollapsed ? 'justify-center' : ''}
           `}

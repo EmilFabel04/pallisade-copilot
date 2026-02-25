@@ -57,18 +57,18 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
     <div
       className="rounded-lg overflow-hidden"
       style={{
-        backgroundColor: 'rgba(255, 255, 255, 0.02)',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
+        backgroundColor: 'var(--overlay-faint)',
+        border: '1px solid var(--hover-bg)',
       }}
     >
       {/* Header */}
       <div
-        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/[0.02] transition-colors"
+        className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-[var(--overlay-faint)] transition-colors"
         onClick={() => setCollapsed(!collapsed)}
-        style={{ borderBottom: collapsed ? 'none' : '1px solid rgba(255, 255, 255, 0.06)' }}
+        style={{ borderBottom: collapsed ? 'none' : '1px solid var(--subtle-border)' }}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <svg className="w-4 h-4 text-white/50 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 text-[var(--muted)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -76,7 +76,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
               d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"
             />
           </svg>
-          <span className="text-sm font-mono text-white/80 truncate">{patch.file_path}</span>
+          <span className="text-sm font-mono text-[var(--text-secondary)] truncate">{patch.file_path}</span>
           <span
             className="px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0"
             style={{
@@ -95,7 +95,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
               e.stopPropagation();
               handleCopy();
             }}
-            className="p-1 rounded hover:bg-white/[0.06] transition-colors text-white/50 hover:text-white/80"
+            className="p-1 rounded hover:bg-[var(--hover-bg)] transition-colors text-[var(--muted)] hover:text-[var(--text-secondary)]"
             title="Copy new content"
           >
             {copied ? (
@@ -114,7 +114,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
             )}
           </button>
           <svg
-            className={`w-4 h-4 text-white/50 transition-transform ${collapsed ? '' : 'rotate-180'}`}
+            className={`w-4 h-4 text-[var(--muted)] transition-transform ${collapsed ? '' : 'rotate-180'}`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -129,8 +129,8 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
         <div className="p-3 space-y-3">
           {/* Rationale */}
           {showRationale && patch.rationale && (
-            <div className="text-xs text-white/60 bg-white/[0.02] p-2 rounded border border-white/[0.04]">
-              <span className="text-white/40 font-medium">Rationale: </span>
+            <div className="text-xs text-[var(--text-tertiary)] bg-[var(--overlay-faint)] p-2 rounded border border-[var(--border-faint)]">
+              <span className="text-[var(--muted)] font-medium">Rationale: </span>
               {patch.rationale}
             </div>
           )}
@@ -141,7 +141,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
               <button
                 onClick={() => setShowNewContent(false)}
                 className={`px-2 py-1 text-xs rounded transition-colors ${
-                  !showNewContent ? 'bg-white/[0.08] text-white/90' : 'text-white/50 hover:text-white/70'
+                  !showNewContent ? 'bg-[var(--hover-bg)] text-[var(--text-secondary)]' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
                 }`}
               >
                 Diff View
@@ -149,7 +149,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
               <button
                 onClick={() => setShowNewContent(true)}
                 className={`px-2 py-1 text-xs rounded transition-colors ${
-                  showNewContent ? 'bg-white/[0.08] text-white/90' : 'text-white/50 hover:text-white/70'
+                  showNewContent ? 'bg-[var(--hover-bg)] text-[var(--text-secondary)]' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
                 }`}
               >
                 New Content
@@ -160,7 +160,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
           {/* Diff or New Content */}
           <div
             className="rounded-lg overflow-x-auto text-xs font-mono"
-            style={{ backgroundColor: 'rgba(0, 0, 0, 0.3)' }}
+            style={{ backgroundColor: 'var(--overlay-bg)' }}
           >
             {hasDiff && !showNewContent ? (
               <pre className="p-3 m-0">
@@ -171,7 +171,7 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
                       ${line.type === 'add' ? 'bg-emerald-500/10 text-emerald-300' : ''}
                       ${line.type === 'remove' ? 'bg-red-500/10 text-red-300' : ''}
                       ${line.type === 'header' ? 'text-blue-400 font-medium' : ''}
-                      ${line.type === 'context' ? 'text-white/60' : ''}
+                      ${line.type === 'context' ? 'text-[var(--text-tertiary)]' : ''}
                     `}
                   >
                     {line.content}
@@ -179,15 +179,15 @@ export function FilePatchViewer({ patch, showRationale = true, defaultCollapsed 
                 ))}
               </pre>
             ) : (
-              <pre className="p-3 m-0 text-white/80 whitespace-pre-wrap">{patch.new_content}</pre>
+              <pre className="p-3 m-0 text-[var(--text-secondary)] whitespace-pre-wrap">{patch.new_content}</pre>
             )}
           </div>
 
           {/* Rollback Steps */}
           {patch.rollback_steps && patch.rollback_steps.length > 0 && (
             <div className="text-xs">
-              <span className="text-white/40 font-medium block mb-1">Rollback Steps:</span>
-              <ol className="list-decimal list-inside text-white/60 space-y-0.5">
+              <span className="text-[var(--muted)] font-medium block mb-1">Rollback Steps:</span>
+              <ol className="list-decimal list-inside text-[var(--text-tertiary)] space-y-0.5">
                 {patch.rollback_steps.map((step, i) => (
                   <li key={i}>{step}</li>
                 ))}

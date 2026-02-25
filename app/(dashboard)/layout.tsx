@@ -24,7 +24,7 @@ export default async function DashboardLayout({
     <SessionProvider session={session}>
       <SidebarProvider>
         <DashboardProviders>
-          <div className="min-h-screen bg-[#030303]">
+          <div className="min-h-screen bg-[var(--surface-sunken)]">
             <Sidebar />
             <DashboardMain>
               <DashboardHeader />

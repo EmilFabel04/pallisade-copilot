@@ -10,8 +10,8 @@ const buttonVariants = cva(
       variant: {
         default: 'bg-[var(--accent)] text-white hover:opacity-90 focus-visible:ring-[var(--accent)]',
         elevated: 'bg-[var(--accent)] text-white shadow-[0_12px_40px_rgba(139,11,16,0.35)] hover:shadow-[0_18px_60px_rgba(139,11,16,0.45)] focus-visible:ring-[var(--accent)]',
-        secondary: 'border border-[color:rgba(139,11,16,0.55)] text-white hover:bg-[rgba(139,11,16,0.08)]',
-        ghost: 'text-white hover:bg-white/5'
+        secondary: 'border border-[color:rgba(139,11,16,0.55)] text-[var(--text)] hover:bg-[rgba(139,11,16,0.08)]',
+        ghost: 'text-[var(--text)] hover:bg-[var(--hover-bg)]'
       },
       size: {
         default: 'h-10 px-4 py-2',

@@ -256,9 +256,9 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
       
-      <div className="relative bg-[#0a0a0a] border border-[rgba(255,255,255,0.1)] rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col">
+      <div className="relative bg-[var(--surface)] border border-[var(--border-medium)] rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col">
         {/* Header */}
-        <div className="p-6 border-b border-[rgba(255,255,255,0.06)] bg-gradient-to-r from-purple-500/5 to-transparent">
+        <div className="p-6 border-b border-[var(--subtle-border)] bg-gradient-to-r from-purple-500/5 to-transparent">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-4">
               <div className={`w-12 h-12 rounded-xl ${critColors.bg} ${critColors.border} border flex items-center justify-center`}>
@@ -278,7 +278,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                 <div className={`px-3 py-1.5 rounded-lg ${prioColors.bg} ${prioColors.text} text-sm font-bold`}>
                   {priority} - {prioColors.label}
                 </div>
-                <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-lg transition-colors">
+                <button onClick={onClose} className="p-2 hover:bg-[var(--subtle-bg)] rounded-lg transition-colors">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
@@ -288,7 +288,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
           </div>
           
           {findingTitle && (
-            <div className="mt-4 p-3 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)]">
+            <div className="mt-4 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
               <div className="text-xs text-[var(--muted)] mb-1">Triggered by</div>
               <div className="text-sm font-medium">{findingTitle}</div>
             </div>
@@ -297,15 +297,15 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
 
         {/* Tabs */}
         {!loading && impactData && (
-          <div className="flex border-b border-[rgba(255,255,255,0.06)] sticky top-0 z-10 bg-[#0a0a0a]">
+          <div className="flex border-b border-[var(--subtle-border)] sticky top-0 z-10 bg-[var(--surface)]">
             {(['overview', 'lineage', 'actions'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
                 className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
                   activeTab === tab 
-                    ? 'text-white border-b-2 border-purple-500 bg-purple-500/5' 
-                    : 'text-[var(--muted)] hover:text-white hover:bg-white/5'
+                    ? 'text-[var(--text)] border-b-2 border-purple-500 bg-purple-500/5'
+                    : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--subtle-bg)]'
                 }`}
               >
                 {tab === 'overview' && 'Overview'}
@@ -376,15 +376,15 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
 
                   {/* Quick Stats */}
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+                    <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                       <div className="text-3xl font-bold">{impactData.downstreamCount || 0}</div>
                       <div className="text-sm text-[var(--muted)]">Downstream Tables</div>
                     </div>
-                    <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+                    <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                       <div className="text-3xl font-bold text-red-400">{impactData.downstreamCritical || 0}</div>
                       <div className="text-sm text-[var(--muted)]">Critical Deps</div>
                     </div>
-                    <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+                    <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                       <div className="text-3xl font-bold text-blue-400">{impactData.usedInReports?.length || 0}</div>
                       <div className="text-sm text-[var(--muted)]">Reports Affected</div>
                     </div>
@@ -453,13 +453,13 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-[var(--muted)]">View:</span>
-                      <div className="flex bg-white/5 rounded-lg p-0.5">
+                      <div className="flex bg-[var(--subtle-bg)] rounded-lg p-0.5">
                         <button
                           onClick={() => setLineageViewMode('canvas')}
                           className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                             lineageViewMode === 'canvas'
                               ? 'bg-purple-500/20 text-purple-400'
-                              : 'text-[var(--muted)] hover:text-white'
+                              : 'text-[var(--muted)] hover:text-[var(--text)]'
                           }`}
                         >
                           <svg className="w-3.5 h-3.5 inline mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -472,7 +472,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                           className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                             lineageViewMode === 'list'
                               ? 'bg-purple-500/20 text-purple-400'
-                              : 'text-[var(--muted)] hover:text-white'
+                              : 'text-[var(--muted)] hover:text-[var(--text)]'
                           }`}
                         >
                           <svg className="w-3.5 h-3.5 inline mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -487,7 +487,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                     {selectedNode && (
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-purple-500/10 border border-purple-500/20 rounded-lg">
                         <span className="text-xs text-purple-400">Selected:</span>
-                        <span className="text-xs font-mono text-white">{selectedNode.split('.').pop()}</span>
+                        <span className="text-xs font-mono text-[var(--text)]">{selectedNode.split('.').pop()}</span>
                         <button 
                           onClick={() => setSelectedNode(null)}
                           className="text-purple-400 hover:text-purple-300"
@@ -516,7 +516,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                   {lineageViewMode === 'canvas' && 
                    ((impactData.upstreamTables && impactData.upstreamTables.length > 0) || 
                     (impactData.downstreamTables && impactData.downstreamTables.length > 0)) && (
-                    <div className="rounded-xl overflow-hidden border border-white/10">
+                    <div className="rounded-xl overflow-hidden border border-[var(--border-medium)]">
                       <LineageCanvas
                         centerTable={impactData.table}
                         upstreamTables={impactData.upstreamTables || []}
@@ -636,7 +636,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
 
                   {/* Affected Reports - shown in both views */}
                   {impactData.usedInReports && impactData.usedInReports.length > 0 && (
-                    <div className="pt-4 border-t border-white/5">
+                    <div className="pt-4 border-t border-[var(--subtle-border)]">
                       <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
                         <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -645,7 +645,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                       </h3>
                       <div className="flex flex-wrap gap-2">
                         {impactData.usedInReports.map((r, i) => (
-                          <span key={i} className="px-3 py-1.5 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] text-sm">
+                          <span key={i} className="px-3 py-1.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-sm">
                             {r}
                           </span>
                         ))}
@@ -668,7 +668,7 @@ export function ImpactModal({ isOpen, onClose, tableName, findingTitle, findingS
                       </h3>
                       <div className="space-y-3">
                         {impactData.recommendedActions.map((action, i) => (
-                          <div key={i} className="p-4 rounded-lg bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)] flex items-start gap-3">
+                          <div key={i} className="p-4 rounded-lg bg-[var(--overlay-faint)] border border-[var(--subtle-border)] flex items-start gap-3">
                             <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xs font-bold">
                               {i + 1}
                             </span>

@@ -269,8 +269,8 @@ export default function PipelineSettingsPage() {
     return (
       <div className="max-w-4xl mx-auto py-8">
         <div className="text-center py-12">
-          <p className="text-white/50">No pipeline selected</p>
-          <p className="text-sm text-white/30 mt-2">Select a pipeline from the dropdown to view settings</p>
+          <p className="text-[var(--muted)]">No pipeline selected</p>
+          <p className="text-sm text-[var(--text-faint)] mt-2">Select a pipeline from the dropdown to view settings</p>
         </div>
       </div>
     );
@@ -284,12 +284,12 @@ export default function PipelineSettingsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-white">Pipeline Settings</h1>
-          <p className="text-white/50 mt-1">Configure your data pipeline</p>
+          <h1 className="text-2xl font-semibold text-[var(--text)]">Pipeline Settings</h1>
+          <p className="text-[var(--muted)] mt-1">Configure your data pipeline</p>
         </div>
         <button
           onClick={() => router.push('/dashboard/pipeline')}
-          className="px-4 py-2 text-sm text-white/60 hover:text-white transition-colors"
+          className="px-4 py-2 text-sm text-[var(--text-tertiary)] hover:text-[var(--text)] transition-colors"
         >
           Back to Pipeline
         </button>
@@ -302,49 +302,49 @@ export default function PipelineSettingsPage() {
       )}
 
       {/* General Settings */}
-      <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-6 space-y-6">
-        <h2 className="text-lg font-medium text-white">General</h2>
-        
+      <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 space-y-6">
+        <h2 className="text-lg font-medium text-[var(--text)]">General</h2>
+
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-white/70 mb-2">Pipeline Name</label>
+            <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Pipeline Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={!canEdit}
-              className="w-full px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-white placeholder-white/30 focus:outline-none focus:border-[var(--accent)]/50 disabled:opacity-50"
+              className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50 disabled:opacity-50"
               placeholder="My Data Pipeline"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-white/70 mb-2">Description</label>
+            <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Description</label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={!canEdit}
               rows={3}
-              className="w-full px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-white placeholder-white/30 focus:outline-none focus:border-[var(--accent)]/50 disabled:opacity-50 resize-none"
+              className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50 disabled:opacity-50 resize-none"
               placeholder="Describe this pipeline..."
             />
           </div>
 
           <div className="flex items-center gap-4 pt-2">
-            <div className="text-sm text-white/50">
-              Status: <span className="text-white">{pipeline.status}</span>
+            <div className="text-sm text-[var(--muted)]">
+              Status: <span className="text-[var(--text)]">{pipeline.status}</span>
             </div>
-            <div className="text-sm text-white/50">
-              Nodes: <span className="text-white">{pipeline.nodeCount}</span>
+            <div className="text-sm text-[var(--muted)]">
+              Nodes: <span className="text-[var(--text)]">{pipeline.nodeCount}</span>
             </div>
-            <div className="text-sm text-white/50">
-              Scans: <span className="text-white">{pipeline.scanCount}</span>
+            <div className="text-sm text-[var(--muted)]">
+              Scans: <span className="text-[var(--text)]">{pipeline.scanCount}</span>
             </div>
           </div>
         </div>
 
         {canEdit && (
-          <div className="pt-4 border-t border-white/[0.06]">
+          <div className="pt-4 border-t border-[var(--subtle-border)]">
             <button
               onClick={handleSave}
               disabled={saving}
@@ -358,31 +358,31 @@ export default function PipelineSettingsPage() {
 
       {/* Token Usage (Admin Only) */}
       {isOrgAdmin && (
-        <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-6 space-y-6">
-          <h2 className="text-lg font-medium text-white">Token Usage</h2>
-          
+        <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 space-y-6">
+          <h2 className="text-lg font-medium text-[var(--text)]">Token Usage</h2>
+
           <div className="grid grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium text-white/70 mb-2">Monthly Token Limit</label>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Monthly Token Limit</label>
               <input
                 type="number"
                 value={tokenLimit ?? ''}
                 onChange={(e) => setTokenLimit(e.target.value ? parseInt(e.target.value) : null)}
-                className="w-full px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-white placeholder-white/30 focus:outline-none focus:border-[var(--accent)]/50"
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
                 placeholder="Unlimited"
               />
-              <p className="text-xs text-white/40 mt-1">Leave empty for unlimited</p>
+              <p className="text-xs text-[var(--muted)] mt-1">Leave empty for unlimited</p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-white/70 mb-2">Tokens Used This Month</label>
-              <div className="px-4 py-2.5 bg-white/[0.02] border border-white/[0.04] rounded-lg text-white">
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Tokens Used This Month</label>
+              <div className="px-4 py-2.5 bg-[var(--overlay-faint)] border border-[var(--border-faint)] rounded-lg text-[var(--text)]">
                 {pipeline.tokensUsedThisMonth.toLocaleString()}
                 {tokenLimit && (
-                  <span className="text-white/50"> / {tokenLimit.toLocaleString()}</span>
+                  <span className="text-[var(--muted)]"> / {tokenLimit.toLocaleString()}</span>
                 )}
               </div>
-              <p className="text-xs text-white/40 mt-1">
+              <p className="text-xs text-[var(--muted)] mt-1">
                 Resets: {new Date(pipeline.tokenResetDate).toLocaleDateString()}
               </p>
             </div>
@@ -391,17 +391,17 @@ export default function PipelineSettingsPage() {
           {/* Usage by user */}
           {accessList.length > 0 && (
             <div className="pt-4">
-              <h3 className="text-sm font-medium text-white/70 mb-3">Usage by User</h3>
+              <h3 className="text-sm font-medium text-[var(--text-tertiary)] mb-3">Usage by User</h3>
               <div className="space-y-2">
                 {accessList.map((access) => (
-                  <div key={access.id} className="flex items-center justify-between py-2 px-3 bg-white/[0.02] rounded-lg">
+                  <div key={access.id} className="flex items-center justify-between py-2 px-3 bg-[var(--overlay-faint)] rounded-lg">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-sm">
+                      <div className="w-8 h-8 rounded-full bg-[var(--overlay-medium)] flex items-center justify-center text-sm">
                         {access.user?.name?.[0] || access.user?.email?.[0] || '?'}
                       </div>
-                      <span className="text-sm text-white">{access.user?.name || access.user?.email}</span>
+                      <span className="text-sm text-[var(--text)]">{access.user?.name || access.user?.email}</span>
                     </div>
-                    <span className="text-sm text-white/50">{access.tokensUsed.toLocaleString()} tokens</span>
+                    <span className="text-sm text-[var(--muted)]">{access.tokensUsed.toLocaleString()} tokens</span>
                   </div>
                 ))}
               </div>
@@ -412,25 +412,25 @@ export default function PipelineSettingsPage() {
 
       {/* Access Control (Admin Only) */}
       {isOrgAdmin && (
-        <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-6 space-y-6">
+        <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 space-y-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-medium text-white">Access Control</h2>
+            <h2 className="text-lg font-medium text-[var(--text)]">Access Control</h2>
             <button
               onClick={() => setShowAddUser(true)}
-              className="px-4 py-2 text-sm bg-white/[0.06] hover:bg-white/[0.1] text-white rounded-lg transition-colors"
+              className="px-4 py-2 text-sm bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] text-[var(--text)] rounded-lg transition-colors"
             >
               Add User
             </button>
           </div>
 
           {accessList.length === 0 ? (
-            <p className="text-white/50 text-sm py-4">
+            <p className="text-[var(--muted)] text-sm py-4">
               No users have specific access. Organization admins have full access by default.
             </p>
           ) : (
             <div className="space-y-3">
               {accessList.map((access) => (
-                <div key={access.id} className="flex items-center justify-between p-4 bg-white/[0.02] border border-white/[0.04] rounded-lg">
+                <div key={access.id} className="flex items-center justify-between p-4 bg-[var(--overlay-faint)] border border-[var(--border-faint)] rounded-lg">
                   <div className="flex items-center gap-4">
                     <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-sm font-medium">
                       {access.user?.image ? (
@@ -440,8 +440,8 @@ export default function PipelineSettingsPage() {
                       )}
                     </div>
                     <div>
-                      <p className="text-white font-medium">{access.user?.name || 'Unknown'}</p>
-                      <p className="text-sm text-white/50">{access.user?.email}</p>
+                      <p className="text-[var(--text)] font-medium">{access.user?.name || 'Unknown'}</p>
+                      <p className="text-sm text-[var(--muted)]">{access.user?.email}</p>
                     </div>
                   </div>
                   
@@ -449,7 +449,7 @@ export default function PipelineSettingsPage() {
                     <select
                       value={access.accessLevel}
                       onChange={(e) => handleUpdateAccess(access.userId, e.target.value as any)}
-                      className="px-3 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-sm text-white focus:outline-none"
+                      className="px-3 py-1.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-sm text-[var(--text)] focus:outline-none"
                     >
                       <option value="VIEWER">Viewer</option>
                       <option value="EDITOR">Editor</option>
@@ -458,7 +458,7 @@ export default function PipelineSettingsPage() {
                     
                     <button
                       onClick={() => handleRemoveUser(access.userId)}
-                      className="p-2 text-white/40 hover:text-red-400 transition-colors"
+                      className="p-2 text-[var(--muted)] hover:text-red-400 transition-colors"
                       title="Remove access"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -477,7 +477,7 @@ export default function PipelineSettingsPage() {
       {canDelete && (
         <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-6 space-y-4">
           <h2 className="text-lg font-medium text-red-400">Danger Zone</h2>
-          <p className="text-sm text-white/60">
+          <p className="text-sm text-[var(--text-tertiary)]">
             Once you delete a pipeline, there is no going back. All data, configurations, and history will be permanently removed.
           </p>
           
@@ -490,14 +490,14 @@ export default function PipelineSettingsPage() {
             </button>
           ) : (
             <div className="space-y-4 p-4 bg-red-500/10 rounded-lg">
-              <p className="text-sm text-white/80">
-                To confirm deletion, type the pipeline name: <strong className="text-white">{pipeline.name}</strong>
+              <p className="text-sm text-[var(--text-secondary)]">
+                To confirm deletion, type the pipeline name: <strong className="text-[var(--text)]">{pipeline.name}</strong>
               </p>
               <input
                 type="text"
                 value={deleteConfirmText}
                 onChange={(e) => setDeleteConfirmText(e.target.value)}
-                className="w-full px-4 py-2.5 bg-white/[0.04] border border-red-500/30 rounded-lg text-white placeholder-white/30 focus:outline-none"
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-red-500/30 rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none"
                 placeholder="Type pipeline name..."
               />
               <div className="flex gap-3">
@@ -513,7 +513,7 @@ export default function PipelineSettingsPage() {
                     setShowDeleteConfirm(false);
                     setDeleteConfirmText('');
                   }}
-                  className="px-4 py-2 text-white/60 hover:text-white transition-colors"
+                  className="px-4 py-2 text-[var(--text-tertiary)] hover:text-[var(--text)] transition-colors"
                 >
                   Cancel
                 </button>
@@ -527,15 +527,15 @@ export default function PipelineSettingsPage() {
       {showAddUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/60" onClick={() => setShowAddUser(false)} />
-          <div className="relative bg-[#0a0a0a] border border-white/[0.08] rounded-xl p-6 w-full max-w-md space-y-4">
-            <h3 className="text-lg font-medium text-white">Add User Access</h3>
-            
+          <div className="relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl p-6 w-full max-w-md space-y-4">
+            <h3 className="text-lg font-medium text-[var(--text)]">Add User Access</h3>
+
             <div>
-              <label className="block text-sm font-medium text-white/70 mb-2">Select User</label>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Select User</label>
               <select
                 value={selectedUserId}
                 onChange={(e) => setSelectedUserId(e.target.value)}
-                className="w-full px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-white focus:outline-none"
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:outline-none"
               >
                 <option value="">Select a user...</option>
                 {availableUsers.map((user) => (
@@ -547,11 +547,11 @@ export default function PipelineSettingsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-white/70 mb-2">Access Level</label>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Access Level</label>
               <select
                 value={selectedAccessLevel}
                 onChange={(e) => setSelectedAccessLevel(e.target.value as any)}
-                className="w-full px-4 py-2.5 bg-white/[0.04] border border-white/[0.08] rounded-lg text-white focus:outline-none"
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:outline-none"
               >
                 <option value="VIEWER">Viewer - Read-only access</option>
                 <option value="EDITOR">Editor - Can modify configuration</option>
@@ -569,7 +569,7 @@ export default function PipelineSettingsPage() {
               </button>
               <button
                 onClick={() => setShowAddUser(false)}
-                className="px-4 py-2.5 text-white/60 hover:text-white transition-colors"
+                className="px-4 py-2.5 text-[var(--text-tertiary)] hover:text-[var(--text)] transition-colors"
               >
                 Cancel
               </button>

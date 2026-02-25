@@ -124,7 +124,7 @@ function BarChart({
         {data.map((item, i) => (
           <div key={i} className="flex items-center gap-2">
             <span className="text-xs text-[var(--muted)] w-16 truncate" title={item.bucket}>{item.bucket}</span>
-            <div className="flex-1 h-5 bg-[rgba(255,255,255,0.05)] rounded overflow-hidden">
+            <div className="flex-1 h-5 bg-[var(--subtle-bg)] rounded overflow-hidden">
               <div 
                 className="h-full rounded transition-all duration-500"
                 style={{ 
@@ -193,7 +193,7 @@ function LineChart({
           )}
         </div>
       </div>
-      <div className="relative bg-[rgba(0,0,0,0.3)] rounded-lg p-2 overflow-hidden">
+      <div className="relative bg-[var(--overlay-bg)] rounded-lg p-2 overflow-hidden">
         <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
           {/* Grid lines */}
           {[0.25, 0.5, 0.75].map(ratio => (
@@ -349,7 +349,7 @@ function StatCard({
   color?: string;
 }) {
   return (
-    <div className="p-3 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+    <div className="p-3 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
       <div className="flex items-center gap-2 mb-1">
         {icon && <span className="text-sm">{icon}</span>}
         <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">{label}</span>
@@ -426,9 +426,9 @@ export function FindingDetailModal({
       />
       
       {/* Modal */}
-      <div className="relative w-full max-w-4xl max-h-[90vh] bg-[#0c0c14] border border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="relative w-full max-w-4xl max-h-[90vh] bg-[var(--surface-inset)] border border-[var(--subtle-border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className={`px-6 py-4 border-b border-[rgba(255,255,255,0.06)] bg-gradient-to-r ${severity.gradient} bg-opacity-10`}>
+        <div className={`px-6 py-4 border-b border-[var(--subtle-border)] bg-gradient-to-r ${severity.gradient} bg-opacity-10`}>
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-4">
               {/* Severity indicator */}
@@ -451,12 +451,12 @@ export function FindingDetailModal({
                     </span>
                   )}
                   {finding.scan_type && (
-                    <span className="px-2 py-0.5 rounded text-xs bg-[rgba(255,255,255,0.05)] text-[var(--muted)]">
+                    <span className="px-2 py-0.5 rounded text-xs bg-[var(--subtle-bg)] text-[var(--muted)]">
                       {finding.scan_type}
                     </span>
                   )}
                 </div>
-                <h2 className="text-xl font-bold text-white">{finding.title}</h2>
+                <h2 className="text-xl font-bold text-[var(--text)]">{finding.title}</h2>
                 <div className="flex items-center gap-3 mt-2 text-sm text-[var(--muted)]">
                   {/* Dataset badge (for multi-dataset scans) */}
                   {finding.dataset && (
@@ -496,7 +496,7 @@ export function FindingDetailModal({
               )}
               <button
                 onClick={onClose}
-                className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+                className="p-2 rounded-lg hover:bg-[var(--subtle-bg)] transition-colors"
               >
                 <svg className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -507,7 +507,7 @@ export function FindingDetailModal({
         </div>
         
         {/* Tabs */}
-        <div className="px-6 py-2 border-b border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.3)]">
+        <div className="px-6 py-2 border-b border-[var(--subtle-border)] bg-[var(--overlay-bg)]">
           <div className="flex gap-1">
             {[
               { id: 'overview', label: 'Overview', icon: '📋' },
@@ -520,8 +520,8 @@ export function FindingDetailModal({
                 onClick={() => setActiveTab(tab.id as any)}
                 className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                   activeTab === tab.id
-                    ? 'bg-[rgba(255,255,255,0.08)] text-white'
-                    : 'text-[var(--muted)] hover:text-white hover:bg-[rgba(255,255,255,0.04)]'
+                    ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                    : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                 }`}
               >
                 <span>{tab.icon}</span>
@@ -694,7 +694,7 @@ export function FindingDetailModal({
               </div>
               
               {/* Distribution Chart */}
-              <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+              <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                 <BarChart 
                   data={distributionData}
                   label="Value Distribution"
@@ -703,7 +703,7 @@ export function FindingDetailModal({
               </div>
               
               {/* Trend Chart */}
-              <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+              <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                 <LineChart 
                   data={trendData}
                   label="Historical Trend"
@@ -719,25 +719,25 @@ export function FindingDetailModal({
                   <h3 className="text-sm font-medium text-[var(--muted)] uppercase tracking-wider mb-3">Statistical Summary</h3>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     {finding.ai_context?.min_value !== undefined && (
-                      <div className="p-3 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                      <div className="p-3 rounded-lg bg-[var(--overlay-faint)]">
                         <div className="text-xs text-[var(--muted)]">Minimum</div>
                         <div className="text-lg font-bold text-blue-400">{finding.ai_context.min_value.toFixed(2)}</div>
                       </div>
                     )}
                     {finding.ai_context?.max_value !== undefined && (
-                      <div className="p-3 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                      <div className="p-3 rounded-lg bg-[var(--overlay-faint)]">
                         <div className="text-xs text-[var(--muted)]">Maximum</div>
                         <div className="text-lg font-bold text-blue-400">{finding.ai_context.max_value.toFixed(2)}</div>
                       </div>
                     )}
                     {finding.ai_context?.avg_value !== undefined && (
-                      <div className="p-3 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                      <div className="p-3 rounded-lg bg-[var(--overlay-faint)]">
                         <div className="text-xs text-[var(--muted)]">Average</div>
                         <div className="text-lg font-bold text-purple-400">{finding.ai_context.avg_value.toFixed(2)}</div>
                       </div>
                     )}
                     {finding.ai_context?.std_dev !== undefined && (
-                      <div className="p-3 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                      <div className="p-3 rounded-lg bg-[var(--overlay-faint)]">
                         <div className="text-xs text-[var(--muted)]">Std Deviation</div>
                         <div className="text-lg font-bold text-amber-400">{finding.ai_context.std_dev.toFixed(2)}</div>
                       </div>
@@ -767,13 +767,13 @@ export function FindingDetailModal({
                       </div>
                     )}
                     {businessImpact.criticality && (
-                      <div className="flex-1 p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)] text-center">
+                      <div className="flex-1 p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)] text-center">
                         <div className="text-3xl font-bold text-purple-400">{businessImpact.criticality}</div>
                         <div className="text-xs text-[var(--muted)]">Criticality</div>
                       </div>
                     )}
                     {businessImpact.lineage?.downstreamCount && (
-                      <div className="flex-1 p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)] text-center">
+                      <div className="flex-1 p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)] text-center">
                         <div className="text-3xl font-bold text-blue-400">{businessImpact.lineage.downstreamCount}</div>
                         <div className="text-xs text-[var(--muted)]">Downstream Tables</div>
                       </div>
@@ -822,7 +822,7 @@ export function FindingDetailModal({
                       <h3 className="text-sm font-medium text-[var(--muted)] uppercase tracking-wider mb-3">Downstream Tables Affected</h3>
                       <div className="grid grid-cols-2 gap-2">
                         {businessImpact.lineage.downstreamTables.map((table, i) => (
-                          <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                          <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-[var(--overlay-faint)]">
                             <span className="text-purple-400">→</span>
                             <code className="text-sm text-[var(--text)]">{table}</code>
                           </div>
@@ -833,7 +833,7 @@ export function FindingDetailModal({
                   
                   {/* Owner */}
                   {businessImpact.owner && (
-                    <div className="flex items-center gap-3 p-3 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                    <div className="flex items-center gap-3 p-3 rounded-lg bg-[var(--overlay-faint)]">
                       <span className="text-[var(--muted)]">Owner:</span>
                       <span className="font-medium">{businessImpact.owner}</span>
                     </div>
@@ -841,7 +841,7 @@ export function FindingDetailModal({
                 </>
               ) : (
                 <div className="text-center py-12">
-                  <div className="w-16 h-16 rounded-full bg-[rgba(255,255,255,0.05)] flex items-center justify-center mx-auto mb-4">
+                  <div className="w-16 h-16 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center mx-auto mb-4">
                     <svg className="w-8 h-8 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
                     </svg>
@@ -862,7 +862,7 @@ export function FindingDetailModal({
           {activeTab === 'history' && (
             <div className="space-y-6">
               {/* Trend Chart */}
-              <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+              <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                 <LineChart 
                   data={trendData}
                   label="Health Score Over Time"
@@ -881,7 +881,7 @@ export function FindingDetailModal({
                     { date: '5 days ago', count: 1, status: 'resolved' },
                     { date: '1 week ago', count: 3, status: 'resolved' },
                   ].map((occurrence, i) => (
-                    <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-[rgba(255,255,255,0.02)]">
+                    <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-[var(--overlay-faint)]">
                       <div className="flex items-center gap-3">
                         <div className={`w-2 h-2 rounded-full ${
                           occurrence.status === 'open' ? 'bg-red-400' : 'bg-emerald-400'
@@ -904,7 +904,7 @@ export function FindingDetailModal({
               </div>
               
               {/* Detection info */}
-              <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+              <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                 <h3 className="text-sm font-medium mb-3">Detection Information</h3>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
@@ -930,7 +930,7 @@ export function FindingDetailModal({
         </div>
         
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.3)] flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-[var(--subtle-border)] bg-[var(--overlay-bg)] flex items-center justify-between">
           <div className="text-xs text-[var(--muted)]">
             Finding ID: {finding.id?.substring(0, 8)}...
           </div>
@@ -948,7 +948,7 @@ export function FindingDetailModal({
             )}
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] transition-colors"
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)] transition-colors text-[var(--text)]"
             >
               Close
             </button>

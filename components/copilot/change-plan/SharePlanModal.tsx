@@ -167,14 +167,14 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
       <div
         className="w-full max-w-md rounded-xl overflow-hidden"
         style={{
-          backgroundColor: '#1a1a24',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
+          backgroundColor: 'var(--surface)',
+          border: '1px solid var(--border-medium)',
         }}
       >
         {/* Header */}
         <div
           className="flex items-center justify-between px-4 py-3"
-          style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.06)' }}
+          style={{ borderBottom: '1px solid var(--subtle-border)' }}
         >
           <div className="flex items-center gap-3">
             <div
@@ -184,13 +184,13 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
               {targetConfig.icon}
             </div>
             <div>
-              <h2 className="text-sm font-medium text-white/90">Share to {targetConfig.label}</h2>
-              <p className="text-xs text-white/50">{plan.title}</p>
+              <h2 className="text-sm font-medium text-[var(--text-secondary)]">Share to {targetConfig.label}</h2>
+              <p className="text-xs text-[var(--muted)]">{plan.title}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors text-white/50 hover:text-white/80"
+            className="p-1.5 rounded-lg hover:bg-[var(--hover-bg)] transition-colors text-[var(--muted)] hover:text-[var(--text-secondary)]"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -217,18 +217,18 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
           {/* Loading state */}
           {fetchingIntegrations ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full" />
+              <div className="animate-spin w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full" />
             </div>
           ) : integrations.length === 0 ? (
             /* No integrations */
             <div className="text-center py-8">
               <div
                 className="w-12 h-12 mx-auto mb-3 rounded-full flex items-center justify-center"
-                style={{ backgroundColor: 'rgba(255, 255, 255, 0.05)' }}
+                style={{ backgroundColor: 'var(--subtle-bg)' }}
               >
                 {targetConfig.icon}
               </div>
-              <p className="text-sm text-white/70 mb-2">No {targetConfig.label} integrations connected</p>
+              <p className="text-sm text-[var(--text-tertiary)] mb-2">No {targetConfig.label} integrations connected</p>
               <a
                 href="/dashboard/pipeline"
                 className="text-xs text-blue-400 hover:underline"
@@ -240,16 +240,16 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
             <>
               {/* Integration selector */}
               <div>
-                <label className="block text-xs text-white/50 mb-1.5">
+                <label className="block text-xs text-[var(--muted)] mb-1.5">
                   Select {targetConfig.label} Integration
                 </label>
                 <select
                   value={selectedIntegration}
                   onChange={(e) => setSelectedIntegration(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg text-sm text-white/90 outline-none transition-colors"
+                  className="w-full px-3 py-2 rounded-lg text-sm text-[var(--text-secondary)] outline-none transition-colors"
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    backgroundColor: 'var(--subtle-bg)',
+                    border: '1px solid var(--border-medium)',
                   }}
                 >
                   <option value="">Select an integration...</option>
@@ -263,7 +263,7 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
 
               {/* Config input (channel/project/repo) */}
               <div>
-                <label className="block text-xs text-white/50 mb-1.5">
+                <label className="block text-xs text-[var(--muted)] mb-1.5">
                   {targetConfig.configLabel} {targetType !== 'slack' && <span className="text-red-400">*</span>}
                 </label>
                 <input
@@ -271,34 +271,34 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
                   value={configValue}
                   onChange={(e) => setConfigValue(e.target.value)}
                   placeholder={targetConfig.configPlaceholder}
-                  className="w-full px-3 py-2 rounded-lg text-sm text-white/90 placeholder:text-white/30 outline-none transition-colors"
+                  className="w-full px-3 py-2 rounded-lg text-sm text-[var(--text-secondary)] placeholder:text-[var(--text-faint)] outline-none transition-colors"
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    backgroundColor: 'var(--subtle-bg)',
+                    border: '1px solid var(--border-medium)',
                   }}
                 />
                 {targetType === 'slack' && (
-                  <p className="text-xs text-white/40 mt-1">Leave empty for default channel</p>
+                  <p className="text-xs text-[var(--muted)] mt-1">Leave empty for default channel</p>
                 )}
               </div>
 
               {/* Preview */}
               <div>
-                <label className="block text-xs text-white/50 mb-1.5">Preview</label>
+                <label className="block text-xs text-[var(--muted)] mb-1.5">Preview</label>
                 <div
                   className="p-3 rounded-lg text-xs space-y-1"
                   style={{
-                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                    border: '1px solid rgba(255, 255, 255, 0.06)',
+                    backgroundColor: 'var(--overlay-faint)',
+                    border: '1px solid var(--subtle-border)',
                   }}
                 >
-                  <div className="font-medium text-white/80">
+                  <div className="font-medium text-[var(--text-secondary)]">
                     {targetType === 'jira' ? `[Scout] ${plan.title}` : `Change Plan: ${plan.title}`}
                   </div>
-                  <div className="text-white/50 line-clamp-2">
+                  <div className="text-[var(--muted)] line-clamp-2">
                     {plan.description || plan.root_cause || 'A change plan has been created.'}
                   </div>
-                  <div className="flex gap-2 pt-1 text-white/40">
+                  <div className="flex gap-2 pt-1 text-[var(--muted)]">
                     <span>{plan.patches.length} files</span>
                     <span>|</span>
                     <span>{plan.impact_analysis?.risk_level || 'LOW'} risk</span>
@@ -313,12 +313,12 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
         {integrations.length > 0 && !fetchingIntegrations && (
           <div
             className="flex items-center justify-end gap-2 px-4 py-3"
-            style={{ borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}
+            style={{ borderTop: '1px solid var(--subtle-border)' }}
           >
             <button
               onClick={onClose}
               disabled={loading}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-white/70 hover:text-white/90 hover:bg-white/[0.06] transition-colors disabled:opacity-50"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors disabled:opacity-50"
             >
               Cancel
             </button>

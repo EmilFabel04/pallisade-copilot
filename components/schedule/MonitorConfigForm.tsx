@@ -81,12 +81,12 @@ export function MonitorConfigForm({
     <div className="space-y-4">
       {/* Monitor type */}
       <div>
-        <label className="block text-[12px] font-medium text-white/50 mb-2">
+        <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
           Monitor Type
         </label>
 
         {/* Data Quality monitors */}
-        <p className="text-[11px] text-white/30 uppercase tracking-wider mb-2">Data Quality</p>
+        <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Data Quality</p>
         <div className="grid grid-cols-2 gap-2 mb-4">
           {MONITOR_TYPES.filter((mt) => !INFRA_TYPES.includes(mt.value)).map((mt) => (
             <button
@@ -106,18 +106,18 @@ export function MonitorConfigForm({
               className={cn(
                 'flex flex-col items-start p-3 rounded-lg text-left transition-colors',
                 monitorType === mt.value
-                  ? 'bg-white/[0.1] border border-white/[0.15]'
-                  : 'bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06]'
+                  ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
+                  : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
               )}
             >
-              <span className="text-[13px] font-medium text-white">{mt.label}</span>
-              <span className="text-[11px] text-white/40 mt-0.5">{mt.description}</span>
+              <span className="text-[13px] font-medium text-[var(--text)]">{mt.label}</span>
+              <span className="text-[11px] text-[var(--muted)] mt-0.5">{mt.description}</span>
             </button>
           ))}
         </div>
 
         {/* Infrastructure monitors */}
-        <p className="text-[11px] text-white/30 uppercase tracking-wider mb-2">Infrastructure</p>
+        <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Infrastructure</p>
         <div className="grid grid-cols-2 gap-2">
           {MONITOR_TYPES.filter((mt) => INFRA_TYPES.includes(mt.value)).map((mt) => (
             <button
@@ -131,12 +131,12 @@ export function MonitorConfigForm({
               className={cn(
                 'flex flex-col items-start p-3 rounded-lg text-left transition-colors',
                 monitorType === mt.value
-                  ? 'bg-white/[0.1] border border-white/[0.15]'
-                  : 'bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06]'
+                  ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
+                  : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
               )}
             >
-              <span className="text-[13px] font-medium text-white">{mt.label}</span>
-              <span className="text-[11px] text-white/40 mt-0.5">{mt.description}</span>
+              <span className="text-[13px] font-medium text-[var(--text)]">{mt.label}</span>
+              <span className="text-[11px] text-[var(--muted)] mt-0.5">{mt.description}</span>
             </button>
           ))}
         </div>
@@ -145,7 +145,7 @@ export function MonitorConfigForm({
       {/* Target table (not for infrastructure monitors) */}
       {!INFRA_TYPES.includes(monitorType) && (
         <div>
-          <label className="block text-[12px] font-medium text-white/50 mb-2">
+          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
             Target Table
           </label>
           <input
@@ -153,9 +153,9 @@ export function MonitorConfigForm({
             value={targetFqn}
             onChange={(e) => onTargetFqnChange(e.target.value)}
             placeholder="dataset.table or project.dataset.table"
-            className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+            className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
           />
-          <p className="text-[11px] text-white/30 mt-1">
+          <p className="text-[11px] text-[var(--text-faint)] mt-1">
             e.g. raw.customers or acme-484520.raw.customers
           </p>
         </div>
@@ -196,11 +196,11 @@ export function MonitorConfigForm({
             type="checkbox"
             checked={config.llm_validate !== false}
             onChange={(e) => onConfigChange({ ...config, llm_validate: e.target.checked })}
-            className="w-4 h-4 rounded border-white/20 bg-white/[0.04] text-violet-500 focus:ring-violet-500/30 focus:ring-offset-0"
+            className="w-4 h-4 rounded border-[var(--overlay-strong)] bg-[var(--overlay-bg)] text-violet-500 focus:ring-violet-500/30 focus:ring-offset-0"
           />
           <div>
-            <span className="text-[12px] text-white/70 group-hover:text-white/90">AI Validation</span>
-            <span className="text-[11px] text-white/30 ml-1.5">
+            <span className="text-[12px] text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]">AI Validation</span>
+            <span className="text-[11px] text-[var(--text-faint)] ml-1.5">
               LLM reviews alerts to reduce false positives
             </span>
           </div>
@@ -212,7 +212,7 @@ export function MonitorConfigForm({
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1.5 text-[12px] text-white/40 hover:text-white/60 transition-colors"
+          className="flex items-center gap-1.5 text-[12px] text-[var(--muted)] hover:text-[var(--text-tertiary)] transition-colors"
         >
           <svg
             className={`w-3.5 h-3.5 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
@@ -222,7 +222,7 @@ export function MonitorConfigForm({
           </svg>
           Advanced Settings
           {!showAdvanced && (
-            <span className="text-[11px] text-white/25 ml-1">
+            <span className="text-[11px] text-[var(--text-faint)] ml-1">
               — auto-detected from warehouse if left blank
             </span>
           )}
@@ -231,12 +231,12 @@ export function MonitorConfigForm({
 
       {/* Advanced settings content */}
       {showAdvanced && (
-        <div className="pl-3 border-l border-white/[0.06] space-y-3">
+        <div className="pl-3 border-l border-[var(--subtle-border)] space-y-3">
           {/* FRESHNESS */}
           {(monitorType === 'FRESHNESS' || monitorType === 'freshness') && (
             <div className="space-y-3">
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Timestamp column
                 </label>
                 <input
@@ -246,11 +246,11 @@ export function MonitorConfigForm({
                     onConfigChange({ ...config, timestamp_column: e.target.value || undefined })
                   }
                   placeholder="Auto-detect (prefers _PARTITIONTIME, loaded_at, created_at)"
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Max hours since last update
                 </label>
                 <input
@@ -260,7 +260,7 @@ export function MonitorConfigForm({
                     onConfigChange({ ...config, max_hours: parseInt(e.target.value) || 0 })
                   }
                   placeholder="Auto-compute from historical update frequency"
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
             </div>
@@ -270,7 +270,7 @@ export function MonitorConfigForm({
           {(monitorType === 'VOLUME' || monitorType === 'volume') && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Min expected rows
                 </label>
                 <input
@@ -280,11 +280,11 @@ export function MonitorConfigForm({
                     onConfigChange({ ...config, min_rows: parseInt(e.target.value) || 0 })
                   }
                   placeholder="Auto-compute (mean - 3σ)"
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Max expected rows
                 </label>
                 <input
@@ -294,7 +294,7 @@ export function MonitorConfigForm({
                     onConfigChange({ ...config, max_rows: parseInt(e.target.value) || 0 })
                   }
                   placeholder="Auto-compute (mean + 3σ)"
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
             </div>
@@ -304,7 +304,7 @@ export function MonitorConfigForm({
           {(monitorType === 'ANOMALY' || monitorType === 'anomaly') && (
             <div className="space-y-3">
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Metric
                 </label>
                 <select
@@ -325,7 +325,7 @@ export function MonitorConfigForm({
                       }
                     }
                   }}
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 >
                   <optgroup label="Table-level">
                     <option value="row_count">Row Count</option>
@@ -346,14 +346,14 @@ export function MonitorConfigForm({
                   </optgroup>
                 </select>
                 {config.column === '*' && (
-                  <p className="text-[11px] text-white/30 mt-1">
+                  <p className="text-[11px] text-[var(--text-faint)] mt-1">
                     Auto-discovers all numeric columns and checks each one
                   </p>
                 )}
               </div>
               {config.metric && config.metric !== 'row_count' && config.column !== '*' && (
                 <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                     Column name <span className="text-red-400">*</span>
                   </label>
                   <input
@@ -361,13 +361,13 @@ export function MonitorConfigForm({
                     value={config.column || ''}
                     onChange={(e) => onConfigChange({ ...config, column: e.target.value })}
                     placeholder="revenue"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                   />
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                     Z-score threshold
                   </label>
                   <input
@@ -378,11 +378,11 @@ export function MonitorConfigForm({
                       onConfigChange({ ...config, anomaly_threshold: parseFloat(e.target.value) || 3.0 })
                     }
                     placeholder="3.0"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                     Lookback days
                   </label>
                   <input
@@ -392,12 +392,12 @@ export function MonitorConfigForm({
                       onConfigChange({ ...config, lookback_days: parseInt(e.target.value) || 30 })
                     }
                     placeholder="30"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                   />
                 </div>
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Timestamp column
                 </label>
                 <input
@@ -407,7 +407,7 @@ export function MonitorConfigForm({
                     onConfigChange({ ...config, timestamp_column: e.target.value || undefined })
                   }
                   placeholder="Auto-detect"
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
             </div>
@@ -416,7 +416,7 @@ export function MonitorConfigForm({
           {/* CUSTOM_SQL */}
           {monitorType === 'CUSTOM_SQL' && (
             <div>
-              <label className="block text-[12px] font-medium text-white/50 mb-2">
+              <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                 Custom SQL (must return a single numeric value)
               </label>
               <textarea
@@ -424,7 +424,7 @@ export function MonitorConfigForm({
                 onChange={(e) => onConfigChange({ ...config, sql: e.target.value })}
                 placeholder="SELECT COUNT(*) FROM orders WHERE created_at > NOW() - INTERVAL '24 hours'"
                 rows={4}
-                className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2] font-mono"
+                className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] font-mono"
               />
             </div>
           )}
@@ -433,7 +433,7 @@ export function MonitorConfigForm({
           {monitorType === 'CERTIFICATE' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Certificate paths (one per line)
                 </label>
                 <textarea
@@ -446,12 +446,12 @@ export function MonitorConfigForm({
                   }
                   placeholder={"/etc/ssl/certs/server.crt\n/etc/letsencrypt/live/example.com/fullchain.pem\n\nLeave empty to auto-discover"}
                   rows={3}
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2] font-mono"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] font-mono"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                     Warn (days before expiry)
                   </label>
                   <input
@@ -461,11 +461,11 @@ export function MonitorConfigForm({
                       onConfigChange({ ...config, warn_days: parseInt(e.target.value) || 30 })
                     }
                     placeholder="30"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                   />
                 </div>
                 <div>
-                  <label className="block text-[12px] font-medium text-white/50 mb-2">
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                     Fail (days before expiry)
                   </label>
                   <input
@@ -475,7 +475,7 @@ export function MonitorConfigForm({
                       onConfigChange({ ...config, fail_days: parseInt(e.target.value) || 7 })
                     }
                     placeholder="7"
-                    className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                   />
                 </div>
               </div>
@@ -487,7 +487,7 @@ export function MonitorConfigForm({
             <div className="space-y-3">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <label className="text-[12px] font-medium text-white/50">
+                  <label className="text-[12px] font-medium text-[var(--muted)]">
                     Log file paths <span className="text-red-400">*</span>
                   </label>
                   <button
@@ -517,7 +517,7 @@ export function MonitorConfigForm({
 
                 {/* Discovered log files — click to toggle selection */}
                 {discoveredLogs.length > 0 && (
-                  <div className="mb-2 max-h-[180px] overflow-y-auto rounded-lg border border-white/[0.08] bg-white/[0.02]">
+                  <div className="mb-2 max-h-[180px] overflow-y-auto rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
                     {discoveredLogs.map((log) => {
                       const selected = (config.log_paths || []).includes(log.path);
                       return (
@@ -526,10 +526,10 @@ export function MonitorConfigForm({
                           type="button"
                           onClick={() => toggleLogPath(log.path)}
                           className={cn(
-                            'flex items-center justify-between w-full px-3 py-1.5 text-left transition-colors border-b border-white/[0.04] last:border-b-0',
+                            'flex items-center justify-between w-full px-3 py-1.5 text-left transition-colors border-b border-[var(--border-faint)] last:border-b-0',
                             selected
                               ? 'bg-violet-500/[0.08]'
-                              : 'hover:bg-white/[0.04]'
+                              : 'hover:bg-[var(--overlay-bg)]'
                           )}
                         >
                           <div className="flex items-center gap-2 min-w-0">
@@ -537,7 +537,7 @@ export function MonitorConfigForm({
                               'w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center',
                               selected
                                 ? 'bg-violet-500 border-violet-500'
-                                : 'border-white/20'
+                                : 'border-[var(--overlay-strong)]'
                             )}>
                               {selected && (
                                 <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -545,9 +545,9 @@ export function MonitorConfigForm({
                                 </svg>
                               )}
                             </div>
-                            <span className="text-[12px] text-white/80 font-mono truncate">{log.path}</span>
+                            <span className="text-[12px] text-[var(--text-secondary)] font-mono truncate">{log.path}</span>
                           </div>
-                          <span className="text-[11px] text-white/30 flex-shrink-0 ml-2">{log.size_human}</span>
+                          <span className="text-[11px] text-[var(--text-faint)] flex-shrink-0 ml-2">{log.size_human}</span>
                         </button>
                       );
                     })}
@@ -563,7 +563,7 @@ export function MonitorConfigForm({
                   <input
                     type="text"
                     placeholder="/var/log/syslog — press Enter to add"
-                    className="flex-1 bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2] font-mono"
+                    className="flex-1 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] font-mono"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
@@ -587,7 +587,7 @@ export function MonitorConfigForm({
                     {(config.log_paths || []).map((p: string) => (
                       <span
                         key={p}
-                        className="inline-flex items-center gap-1 px-2 py-1 bg-white/[0.06] border border-white/[0.08] rounded-md text-[12px] text-white/80 font-mono"
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-[var(--hover-bg)] border border-[var(--subtle-border)] rounded-md text-[12px] text-[var(--text-secondary)] font-mono"
                       >
                         {p}
                         <button
@@ -596,7 +596,7 @@ export function MonitorConfigForm({
                             const updated = (config.log_paths || []).filter((x: string) => x !== p);
                             onConfigChange({ ...config, log_paths: updated });
                           }}
-                          className="text-white/30 hover:text-white/70 ml-0.5"
+                          className="text-[var(--text-faint)] hover:text-[var(--text-tertiary)] ml-0.5"
                         >
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -608,7 +608,7 @@ export function MonitorConfigForm({
                 )}
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-white/50 mb-2">
+                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Error patterns (comma-separated)
                 </label>
                 <input
@@ -621,7 +621,7 @@ export function MonitorConfigForm({
                     })
                   }
                   placeholder="ERROR, FATAL, CRITICAL"
-                  className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
             </div>

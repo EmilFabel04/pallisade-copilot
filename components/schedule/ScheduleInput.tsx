@@ -41,8 +41,8 @@ export function ScheduleInput({ value, onChange }: ScheduleInputProps) {
             className={cn(
               'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
               value === preset.value
-                ? 'bg-white/[0.12] text-white border border-white/[0.15]'
-                : 'bg-white/[0.04] text-white/50 border border-white/[0.06] hover:bg-white/[0.08] hover:text-white/70'
+                ? 'bg-[var(--overlay-strong)] text-[var(--text)] border border-[var(--overlay-strong)]'
+                : 'bg-[var(--overlay-bg)] text-[var(--muted)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] hover:text-[var(--text-tertiary)]'
             )}
           >
             {preset.label}
@@ -56,8 +56,8 @@ export function ScheduleInput({ value, onChange }: ScheduleInputProps) {
           className={cn(
             'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
             !isPreset && value
-              ? 'bg-white/[0.12] text-white border border-white/[0.15]'
-              : 'bg-white/[0.04] text-white/50 border border-white/[0.06] hover:bg-white/[0.08] hover:text-white/70'
+              ? 'bg-[var(--overlay-strong)] text-[var(--text)] border border-[var(--overlay-strong)]'
+              : 'bg-[var(--overlay-bg)] text-[var(--muted)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] hover:text-[var(--text-tertiary)]'
           )}
         >
           Custom
@@ -71,13 +71,13 @@ export function ScheduleInput({ value, onChange }: ScheduleInputProps) {
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="* * * * * (min hour day month weekday)"
-          className="w-full bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2 text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.2]"
+          className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
         />
       )}
 
       {/* Human-readable preview */}
       {value && (
-        <p className="text-[11px] text-white/40">{cronToHuman(value)}</p>
+        <p className="text-[11px] text-[var(--muted)]">{cronToHuman(value)}</p>
       )}
     </div>
   );

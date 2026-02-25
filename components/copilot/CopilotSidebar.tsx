@@ -147,8 +147,8 @@ export function CopilotSidebar() {
       <div className="sidebar-footer">
         {/* User info */}
         {!isCollapsed && session?.user && (
-          <div className="px-3 py-2 mb-2 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)]">
-            <div className="text-sm font-medium text-white truncate">
+          <div className="px-3 py-2 mb-2 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            <div className="text-sm font-medium text-[var(--text)] truncate">
               {session.user.name || session.user.email}
             </div>
             <div className="text-xs text-[var(--muted)] truncate">

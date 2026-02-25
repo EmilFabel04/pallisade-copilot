@@ -68,9 +68,9 @@ export function MentionDropdown({ items, selectedIndex, onSelect, onClose }: Men
     return (
       <div
         ref={dropdownRef}
-        className="absolute bottom-full left-0 right-0 mb-2 bg-[#1a1a24] border border-white/[0.1] rounded-lg shadow-xl z-50 p-3"
+        className="absolute bottom-full left-0 right-0 mb-2 bg-[var(--surface)] border border-[var(--border-medium)] rounded-lg shadow-xl z-50 p-3"
       >
-        <p className="text-xs text-white/40 text-center">No matching integrations or tables</p>
+        <p className="text-xs text-[var(--muted)] text-center">No matching integrations or tables</p>
       </div>
     );
   }
@@ -94,7 +94,7 @@ export function MentionDropdown({ items, selectedIndex, onSelect, onClose }: Men
         ref={isSelected ? selectedRef : undefined}
         className={cn(
           'flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors',
-          isSelected ? 'bg-white/[0.08]' : 'hover:bg-white/[0.04]'
+          isSelected ? 'bg-[var(--hover-bg)]' : 'hover:bg-[var(--overlay-bg)]'
         )}
         onMouseDown={(e) => {
           e.preventDefault(); // Prevent textarea blur
@@ -105,10 +105,10 @@ export function MentionDropdown({ items, selectedIndex, onSelect, onClose }: Men
           <span className="text-[8px] font-bold text-white">{toolLabel}</span>
         </div>
         <div className="flex-1 min-w-0">
-          <span className="text-xs text-white/90 truncate">{item.label}</span>
+          <span className="text-xs text-[var(--text-secondary)] truncate">{item.label}</span>
         </div>
         {item.detail && (
-          <span className="text-[10px] text-white/30 flex-shrink-0">{item.detail}</span>
+          <span className="text-[10px] text-[var(--text-faint)] flex-shrink-0">{item.detail}</span>
         )}
       </div>
     );
@@ -117,17 +117,17 @@ export function MentionDropdown({ items, selectedIndex, onSelect, onClose }: Men
   return (
     <div
       ref={dropdownRef}
-      className="absolute bottom-full left-0 right-0 mb-2 bg-[#1a1a24] border border-white/[0.1] rounded-lg shadow-xl z-50 max-h-[280px] overflow-y-auto"
+      className="absolute bottom-full left-0 right-0 mb-2 bg-[var(--surface)] border border-[var(--border-medium)] rounded-lg shadow-xl z-50 max-h-[280px] overflow-y-auto"
     >
       {integrations.length > 0 && (
         <div className="p-1.5">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-white/30 px-2.5 py-1">Integrations</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-faint)] px-2.5 py-1">Integrations</p>
           {integrations.map(renderItem)}
         </div>
       )}
       {tablesAndModels.length > 0 && (
-        <div className={cn('p-1.5', integrations.length > 0 && 'border-t border-white/[0.06]')}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-white/30 px-2.5 py-1">Tables & Models</p>
+        <div className={cn('p-1.5', integrations.length > 0 && 'border-t border-[var(--subtle-border)]')}>
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-faint)] px-2.5 py-1">Tables & Models</p>
           {tablesAndModels.map(renderItem)}
         </div>
       )}

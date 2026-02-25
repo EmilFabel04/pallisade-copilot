@@ -122,7 +122,7 @@ function FindingLineageNode({ data, selected }: { data: any; selected?: boolean 
     >
       {/* Source indicator - red dot for finding source */}
       {isSource && (
-        <div className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 ring-2 ring-[#0a0a0a] flex items-center justify-center">
+        <div className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 ring-2 ring-[var(--surface)] flex items-center justify-center">
           <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 9v2m0 4h.01" />
           </svg>
@@ -134,11 +134,11 @@ function FindingLineageNode({ data, selected }: { data: any; selected?: boolean 
         <span className={isSource ? 'text-purple-400' : colors.text}>
           {icon}
         </span>
-        <span className={`text-[10px] uppercase font-semibold ${isSource ? 'text-purple-400' : 'text-white/50'}`}>
+        <span className={`text-[10px] uppercase font-semibold ${isSource ? 'text-purple-400' : 'text-[var(--muted)]'}`}>
           {type}
         </span>
         {data.owner && (
-          <span className="text-[9px] text-white/30 ml-auto truncate max-w-[60px]" title={data.owner}>
+          <span className="text-[9px] text-[var(--text-faint)] ml-auto truncate max-w-[60px]" title={data.owner}>
             {data.owner}
           </span>
         )}
@@ -152,7 +152,7 @@ function FindingLineageNode({ data, selected }: { data: any; selected?: boolean 
       {/* Column badge */}
       {data.affectedColumn && (
         <div className="mt-2 flex items-center gap-1">
-          <span className="text-[9px] text-white/40">
+          <span className="text-[9px] text-[var(--muted)]">
             {isSource ? 'Issue in:' : 'Affected:'}
           </span>
           <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${
@@ -172,7 +172,7 @@ function FindingLineageNode({ data, selected }: { data: any; selected?: boolean 
             {criticality}
           </span>
           {data.distance !== undefined && data.distance > 0 && (
-            <span className="text-[9px] text-white/30">
+            <span className="text-[9px] text-[var(--text-faint)]">
               {data.distance} hop{data.distance > 1 ? 's' : ''}
             </span>
           )}
@@ -253,7 +253,7 @@ function TransformationEdge({
               <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-50 max-w-[300px]">
                 <div className="p-3 rounded-lg bg-slate-800 border border-slate-600 shadow-xl">
                   <div className="text-[10px] text-slate-400 mb-1">SQL Transformation:</div>
-                  <pre className="text-[10px] text-white/80 font-mono whitespace-pre-wrap break-all">
+                  <pre className="text-[10px] text-[var(--text-secondary)] font-mono whitespace-pre-wrap break-all">
                     {transformation.length > 200 ? transformation.slice(0, 200) + '...' : transformation}
                   </pre>
                 </div>
@@ -405,17 +405,17 @@ export function FindingLineageCanvas({
   if (graphNodes.length === 0) {
     return (
       <div className={`flex flex-col items-center justify-center h-full ${className}`}>
-        <svg className="w-16 h-16 text-white/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-16 h-16 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
         </svg>
-        <p className="text-white/40 text-sm">No lineage data available</p>
-        <p className="text-white/30 text-xs mt-1">Build lineage from your data warehouse to see column-level impact</p>
+        <p className="text-[var(--muted)] text-sm">No lineage data available</p>
+        <p className="text-[var(--text-faint)] text-xs mt-1">Build lineage from your data warehouse to see column-level impact</p>
       </div>
     );
   }
 
   return (
-    <div className={`w-full h-full min-h-[400px] bg-[#050505] ${className}`}>
+    <div className={`w-full h-full min-h-[400px] bg-[var(--surface-inset)] ${className}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -433,39 +433,39 @@ export function FindingLineageCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Controls 
-          className="!bg-white/5 !border-white/10 !rounded-lg [&>button]:!bg-white/5 [&>button]:!border-white/10 [&>button]:!text-white/60 [&>button:hover]:!bg-white/10"
+          className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg [&>button]:!bg-[var(--subtle-bg)] [&>button]:!border-[var(--border-medium)] [&>button]:!text-[var(--text-tertiary)] [&>button:hover]:!bg-[var(--overlay-medium)]"
         />
         <MiniMap 
           nodeColor={nodeColor}
           maskColor="rgba(0, 0, 0, 0.8)"
-          className="!bg-white/5 !border-white/10 !rounded-lg"
+          className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg"
           nodeStrokeWidth={3}
         />
         <Background color="#ffffff08" gap={24} />
       </ReactFlow>
       
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-black/80 backdrop-blur-sm rounded-lg border border-white/10 text-[10px]">
+      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-black/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-3 rounded border-2 border-red-500 bg-purple-500/30" />
-          <span className="text-white/50">Issue Source</span>
+          <span className="text-[var(--muted)]">Issue Source</span>
         </div>
-        <div className="w-px h-4 bg-white/20" />
+        <div className="w-px h-4 bg-[var(--overlay-strong)]" />
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded bg-red-500" />
-          <span className="text-white/50">Critical</span>
+          <span className="text-[var(--muted)]">Critical</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded bg-orange-500" />
-          <span className="text-white/50">High</span>
+          <span className="text-[var(--muted)]">High</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded bg-amber-500" />
-          <span className="text-white/50">Medium</span>
+          <span className="text-[var(--muted)]">Medium</span>
         </div>
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded bg-slate-500" />
-          <span className="text-white/50">Low</span>
+          <span className="text-[var(--muted)]">Low</span>
         </div>
       </div>
     </div>

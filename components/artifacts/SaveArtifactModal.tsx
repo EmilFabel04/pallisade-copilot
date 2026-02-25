@@ -214,14 +214,14 @@ export function SaveArtifactModal({
       {/* Modal */}
       <div
         ref={modalRef}
-        className="relative w-full max-w-md bg-[#0f0f14] border border-white/[0.08] rounded-xl shadow-2xl"
+        className="relative w-full max-w-md bg-[var(--surface)] border border-[var(--hover-bg)] rounded-xl shadow-2xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.06]">
-          <h2 className="text-[15px] font-semibold text-white">Save to Artifacts</h2>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--subtle-border)]">
+          <h2 className="text-[15px] font-semibold text-[var(--text)]">Save to Artifacts</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-white/40 hover:text-white hover:bg-white/[0.06] transition-colors"
+            className="p-1 rounded-md text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -233,20 +233,20 @@ export function SaveArtifactModal({
         <div className="px-5 py-4 space-y-4">
           {/* Title */}
           <div>
-            <label className="block text-[12px] font-medium text-white/50 mb-1.5">Title</label>
+            <label className="block text-[12px] font-medium text-[var(--muted)] mb-1.5">Title</label>
             <input
               ref={titleInputRef}
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Enter a title..."
-              className="w-full h-10 px-3 bg-white/[0.03] border border-white/[0.08] rounded-lg text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.15] focus:ring-1 focus:ring-white/[0.06] transition-colors"
+              className="w-full h-10 px-3 bg-[var(--overlay-bg)] border border-[var(--hover-bg)] rounded-lg text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] focus:ring-1 focus:ring-[var(--subtle-border)] transition-colors"
             />
           </div>
 
           {/* Type */}
           <div>
-            <label className="block text-[12px] font-medium text-white/50 mb-1.5">Type</label>
+            <label className="block text-[12px] font-medium text-[var(--muted)] mb-1.5">Type</label>
             <div className="grid grid-cols-5 gap-2">
               {typeOptions.map((option) => (
                 <button
@@ -255,7 +255,7 @@ export function SaveArtifactModal({
                   className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
                     type === option.value
                       ? typeColors[option.value]
-                      : 'border-white/[0.06] text-white/40 hover:border-white/[0.12] hover:text-white/60'
+                      : 'border-[var(--subtle-border)] text-[var(--muted)] hover:border-[var(--overlay-strong)] hover:text-[var(--text-tertiary)]'
                   }`}
                   title={option.description}
                 >
@@ -268,23 +268,23 @@ export function SaveArtifactModal({
 
           {/* Tags */}
           <div>
-            <label className="block text-[12px] font-medium text-white/50 mb-1.5">
-              Tags <span className="text-white/30">(comma separated)</span>
+            <label className="block text-[12px] font-medium text-[var(--muted)] mb-1.5">
+              Tags <span className="text-[var(--text-faint)]">(comma separated)</span>
             </label>
             <input
               type="text"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
               placeholder="e.g., analytics, orders, debug"
-              className="w-full h-10 px-3 bg-white/[0.03] border border-white/[0.08] rounded-lg text-[13px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.15] focus:ring-1 focus:ring-white/[0.06] transition-colors"
+              className="w-full h-10 px-3 bg-[var(--overlay-bg)] border border-[var(--hover-bg)] rounded-lg text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] focus:ring-1 focus:ring-[var(--subtle-border)] transition-colors"
             />
           </div>
 
           {/* Preview */}
           <div>
-            <label className="block text-[12px] font-medium text-white/50 mb-1.5">Preview</label>
-            <div className="max-h-32 overflow-y-auto p-3 bg-white/[0.02] border border-white/[0.06] rounded-lg">
-              <pre className="text-[11px] text-white/50 font-mono whitespace-pre-wrap break-words line-clamp-6">
+            <label className="block text-[12px] font-medium text-[var(--muted)] mb-1.5">Preview</label>
+            <div className="max-h-32 overflow-y-auto p-3 bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-lg">
+              <pre className="text-[11px] text-[var(--muted)] font-mono whitespace-pre-wrap break-words line-clamp-6">
                 {content.length > 500 ? content.substring(0, 500) + '...' : content}
               </pre>
             </div>
@@ -292,10 +292,10 @@ export function SaveArtifactModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-white/[0.06]">
+        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--subtle-border)]">
           <button
             onClick={onClose}
-            className="px-4 h-9 text-[13px] font-medium text-white/60 hover:text-white hover:bg-white/[0.04] rounded-lg transition-colors"
+            className="px-4 h-9 text-[13px] font-medium text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] rounded-lg transition-colors"
           >
             Cancel
           </button>

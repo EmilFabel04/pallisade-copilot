@@ -108,18 +108,18 @@ function LineageNode({ data }: { data: any }) {
       title={fullName}
     >
       {/* Health indicator */}
-      <div className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${healthColors[health]} ring-2 ring-[#0a0a0a]`} />
+      <div className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${healthColors[health]} ring-2 ring-[var(--surface)]`} />
       
       {/* Header */}
       <div className="flex items-center gap-2 mb-1">
         <span className={isCenter ? 'text-purple-400' : colors.text}>
           {icon}
         </span>
-        <span className={`text-[10px] uppercase font-medium ${isCenter ? 'text-purple-400' : 'text-white/50'}`}>
+        <span className={`text-[10px] uppercase font-medium ${isCenter ? 'text-purple-400' : 'text-[var(--muted)]'}`}>
           {type}
         </span>
         {data.platform && (
-          <span className="text-[9px] text-white/30 ml-auto">{data.platform}</span>
+          <span className="text-[9px] text-[var(--text-faint)] ml-auto">{data.platform}</span>
         )}
       </div>
       
@@ -135,7 +135,7 @@ function LineageNode({ data }: { data: any }) {
             {criticality}
           </span>
           {data.distance && (
-            <span className="text-[9px] text-white/30">{data.distance} hop{data.distance > 1 ? 's' : ''}</span>
+            <span className="text-[9px] text-[var(--text-faint)]">{data.distance} hop{data.distance > 1 ? 's' : ''}</span>
           )}
         </div>
       )}
@@ -319,17 +319,17 @@ export function LineageCanvas({
   if (upstreamTables.length === 0 && downstreamTables.length === 0) {
     return (
       <div className={`flex flex-col items-center justify-center py-12 ${className}`}>
-        <svg className="w-16 h-16 text-white/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-16 h-16 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
         </svg>
-        <p className="text-white/40 text-sm">No lineage data available</p>
-        <p className="text-white/30 text-xs mt-1">Run a lineage scan to populate dependencies</p>
+        <p className="text-[var(--muted)] text-sm">No lineage data available</p>
+        <p className="text-[var(--text-faint)] text-xs mt-1">Run a lineage scan to populate dependencies</p>
       </div>
     );
   }
 
   return (
-    <div className={`w-full h-[400px] bg-[#050505] rounded-lg border border-white/10 ${className}`}>
+    <div className={`w-full h-[400px] bg-[var(--surface-inset)] rounded-lg border border-[var(--border-medium)] ${className}`}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -346,34 +346,34 @@ export function LineageCanvas({
         proOptions={{ hideAttribution: true }}
       >
         <Controls 
-          className="!bg-white/5 !border-white/10 !rounded-lg [&>button]:!bg-white/5 [&>button]:!border-white/10 [&>button]:!text-white/60 [&>button:hover]:!bg-white/10"
+          className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg [&>button]:!bg-[var(--subtle-bg)] [&>button]:!border-[var(--border-medium)] [&>button]:!text-[var(--text-tertiary)] [&>button:hover]:!bg-[var(--overlay-medium)]"
         />
         <MiniMap 
           nodeColor={nodeColor}
           maskColor="rgba(0, 0, 0, 0.8)"
-          className="!bg-white/5 !border-white/10 !rounded-lg"
+          className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg"
         />
         <Background color="#ffffff10" gap={20} />
       </ReactFlow>
       
       {/* Legend */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-white/10 text-[10px]">
+      <div className="absolute bottom-4 left-4 flex items-center gap-4 px-3 py-2 bg-black/60 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
         <div className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-emerald-500" />
-          <span className="text-white/50">Healthy</span>
+          <span className="text-[var(--muted)]">Healthy</span>
         </div>
         <div className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-amber-500" />
-          <span className="text-white/50">Degraded</span>
+          <span className="text-[var(--muted)]">Degraded</span>
         </div>
         <div className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-red-500" />
-          <span className="text-white/50">Failing</span>
+          <span className="text-[var(--muted)]">Failing</span>
         </div>
-        <div className="w-px h-3 bg-white/20" />
+        <div className="w-px h-3 bg-[var(--overlay-strong)]" />
         <div className="flex items-center gap-1">
           <div className="w-3 h-0.5 bg-purple-500" />
-          <span className="text-white/50">Data Flow</span>
+          <span className="text-[var(--muted)]">Data Flow</span>
         </div>
       </div>
     </div>

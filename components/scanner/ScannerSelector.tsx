@@ -173,15 +173,15 @@ export function ScannerSelector({
     <div className="space-y-4">
       {/* Filter tabs */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1 bg-black/20 rounded-lg p-0.5">
+        <div className="flex items-center gap-1 bg-[var(--overlay-faint)] rounded-lg p-0.5">
           {(['all', 'data', 'security', 'pipeline', 'code'] as const).map((cat) => (
             <button
               key={cat}
               onClick={() => setFilter(cat)}
               className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
                 filter === cat
-                  ? 'bg-[var(--card-bg)] text-white'
-                  : 'text-[var(--muted)] hover:text-white'
+                  ? 'bg-[var(--card-bg)] text-[var(--text)]'
+                  : 'text-[var(--muted)] hover:text-[var(--text)]'
               }`}
             >
               {cat === 'all' ? 'All' : categoryLabels[cat].label}
@@ -193,7 +193,7 @@ export function ScannerSelector({
           <button
             onClick={selectAll}
             disabled={disabled}
-            className="text-[var(--accent)] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Select all
           </button>
@@ -201,7 +201,7 @@ export function ScannerSelector({
           <button
             onClick={selectNone}
             disabled={disabled}
-            className="text-[var(--muted)] hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-[var(--muted)] hover:text-[var(--text)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Clear
           </button>
@@ -244,10 +244,10 @@ export function ScannerSelector({
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <div className={available ? 'text-white' : 'text-[var(--muted)]'}>
+                    <div className={available ? 'text-[var(--text)]' : 'text-[var(--muted)]'}>
                       {scanner.icon}
                     </div>
-                    <span className={`text-sm font-medium ${available ? 'text-white' : 'text-[var(--muted)]'}`}>
+                    <span className={`text-sm font-medium ${available ? 'text-[var(--text)]' : 'text-[var(--muted)]'}`}>
                       {scanner.name}
                     </span>
                     {scanner.mlPowered && (
@@ -274,7 +274,7 @@ export function ScannerSelector({
       {/* Selection summary */}
       <div className="flex items-center justify-between pt-2 border-t border-[var(--border-dim)]">
         <p className="text-sm text-[var(--muted)]">
-          <span className="text-white font-medium">{selectedScanners.length}</span> scanner{selectedScanners.length !== 1 ? 's' : ''} selected
+          <span className="text-[var(--text)] font-medium">{selectedScanners.length}</span> scanner{selectedScanners.length !== 1 ? 's' : ''} selected
         </p>
         {selectedScanners.some(s => SCANNERS.find(sc => sc.id === s)?.mlPowered) && (
           <p className="text-xs text-purple-400 flex items-center gap-1">

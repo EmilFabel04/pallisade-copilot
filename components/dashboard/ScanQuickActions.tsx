@@ -81,7 +81,7 @@ export function ScanQuickActions({
       ),
       onClick: () => onViewAlerts?.(),
       badge: alertCount > 0 ? String(alertCount) : undefined,
-      color: alertCount > 0 ? 'text-red-400' : 'text-white/60',
+      color: alertCount > 0 ? 'text-red-400' : 'text-[var(--text-tertiary)]',
     },
     {
       id: 'issue',
@@ -127,11 +127,11 @@ export function ScanQuickActions({
       {/* Toggle Button */}
       <button
         onClick={() => setIsCollapsed(!isCollapsed)}
-        className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-full w-6 h-12 bg-white/[0.03] border border-white/10 border-r-0 rounded-l-lg flex items-center justify-center hover:bg-white/[0.05] transition-colors"
+        className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-full w-6 h-12 bg-[var(--overlay-bg)] border border-[var(--border-medium)] border-r-0 rounded-l-lg flex items-center justify-center hover:bg-[var(--subtle-bg)] transition-colors"
         title={isCollapsed ? 'Show quick actions' : 'Hide quick actions'}
       >
         <svg 
-          className={`w-3 h-3 text-white/40 transition-transform ${isCollapsed ? 'rotate-180' : ''}`} 
+          className={`w-3 h-3 text-[var(--muted)] transition-transform ${isCollapsed ? 'rotate-180' : ''}`} 
           fill="none" 
           stroke="currentColor" 
           viewBox="0 0 24 24"
@@ -141,10 +141,10 @@ export function ScanQuickActions({
       </button>
 
       {/* Actions Panel */}
-      <div className="bg-[#0a0a0a]/95 backdrop-blur-sm border border-white/10 border-r-0 rounded-l-xl shadow-2xl overflow-hidden">
+      <div className="bg-[var(--surface)] backdrop-blur-sm border border-[var(--border-medium)] border-r-0 rounded-l-xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="px-4 py-3 border-b border-white/5">
-          <h3 className="text-xs font-medium text-white/60 uppercase tracking-wider">Quick Actions</h3>
+        <div className="px-4 py-3 border-b border-[var(--subtle-border)]">
+          <h3 className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">Quick Actions</h3>
         </div>
 
         {/* Actions */}
@@ -153,12 +153,12 @@ export function ScanQuickActions({
             <button
               key={action.id}
               onClick={action.onClick}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-white/[0.05] transition-colors group ${action.color || 'text-white/60'}`}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-[var(--subtle-bg)] transition-colors group ${action.color || 'text-[var(--text-tertiary)]'}`}
             >
               <span className="flex-shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
                 {action.icon}
               </span>
-              <span className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">
+              <span className="text-sm font-medium text-[var(--text-secondary)] group-hover:text-[var(--text)] transition-colors">
                 {action.name}
               </span>
               {action.badge && (
@@ -171,7 +171,7 @@ export function ScanQuickActions({
         </div>
 
         {/* Divider */}
-        <div className="mx-3 border-t border-white/5" />
+        <div className="mx-3 border-t border-[var(--subtle-border)]" />
 
         {/* External Links */}
         <div className="p-2 space-y-1">
@@ -179,12 +179,12 @@ export function ScanQuickActions({
             href="https://docs.pallisade.io"
             target="_blank"
             rel="noopener noreferrer"
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/[0.05] transition-colors group text-white/40"
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-[var(--subtle-bg)] transition-colors group text-[var(--muted)]"
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
             </svg>
-            <span className="text-xs text-white/50 group-hover:text-white/70 transition-colors">Docs</span>
+            <span className="text-xs text-[var(--muted)] group-hover:text-[var(--text-tertiary)] transition-colors">Docs</span>
             <svg className="w-3 h-3 ml-auto opacity-0 group-hover:opacity-50 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
@@ -194,12 +194,12 @@ export function ScanQuickActions({
             href="https://github.com/pallisade"
             target="_blank"
             rel="noopener noreferrer"
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/[0.05] transition-colors group text-white/40"
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-[var(--subtle-bg)] transition-colors group text-[var(--muted)]"
           >
             <svg className="w-4 h-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
               <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
             </svg>
-            <span className="text-xs text-white/50 group-hover:text-white/70 transition-colors">GitHub</span>
+            <span className="text-xs text-[var(--muted)] group-hover:text-[var(--text-tertiary)] transition-colors">GitHub</span>
             <svg className="w-3 h-3 ml-auto opacity-0 group-hover:opacity-50 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
             </svg>
@@ -207,9 +207,9 @@ export function ScanQuickActions({
         </div>
 
         {/* Keyboard Shortcuts Hint */}
-        <div className="px-4 py-2 bg-white/[0.02] border-t border-white/5">
-          <p className="text-[10px] text-white/30">
-            Press <kbd className="px-1 py-0.5 rounded bg-white/10 text-white/50 font-mono">?</kbd> for shortcuts
+        <div className="px-4 py-2 bg-[var(--overlay-faint)] border-t border-[var(--subtle-border)]">
+          <p className="text-[10px] text-[var(--text-faint)]">
+            Press <kbd className="px-1 py-0.5 rounded bg-[var(--overlay-medium)] text-[var(--muted)] font-mono">?</kbd> for shortcuts
           </p>
         </div>
       </div>

@@ -171,9 +171,9 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
       
-      <div className="relative bg-[#0a0a0a] border border-[rgba(255,255,255,0.1)] rounded-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col">
+      <div className="relative bg-[var(--surface)] border border-[var(--border-medium)] rounded-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden shadow-2xl flex flex-col">
         {/* Header - Finding Context */}
-        <div className="p-6 border-b border-[rgba(255,255,255,0.06)] bg-gradient-to-r from-red-500/5 to-transparent">
+        <div className="p-6 border-b border-[var(--subtle-border)] bg-gradient-to-r from-red-500/5 to-transparent">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-4">
               <div className={`w-12 h-12 rounded-xl ${sevColors.bg} ${sevColors.border} border flex items-center justify-center`}>
@@ -201,7 +201,7 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
               <span className={`px-3 py-1.5 rounded-lg ${sevColors.bg} ${sevColors.text} ${sevColors.border} border text-sm font-bold uppercase`}>
                 {finding.severity || 'medium'}
               </span>
-              <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-lg transition-colors">
+              <button onClick={onClose} className="p-2 hover:bg-[var(--subtle-bg)] rounded-lg transition-colors">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -210,13 +210,13 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
           </div>
           
           {/* Finding Details */}
-          <div className="mt-4 p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+          <div className="mt-4 p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <div className="text-sm font-medium">{finding.title || 'Data quality issue detected'}</div>
                 {lineageData?.finding?.value && (
                   <div className="mt-1 text-xs text-[var(--muted)]">
-                    Value: <span className="text-white font-mono">{lineageData.finding.value}</span>
+                    Value: <span className="text-[var(--text)] font-mono">{lineageData.finding.value}</span>
                   </div>
                 )}
               </div>
@@ -288,16 +288,16 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
             // Full Lineage View
             <>
               {/* Left Sidebar - Affected Assets */}
-              <div className="w-72 border-r border-[rgba(255,255,255,0.06)] overflow-y-auto bg-[rgba(255,255,255,0.01)]">
+              <div className="w-72 border-r border-[var(--subtle-border)] overflow-y-auto bg-[var(--overlay-faint)]">
                 {/* Impact Summary */}
-                <div className="p-4 border-b border-[rgba(255,255,255,0.06)]">
+                <div className="p-4 border-b border-[var(--subtle-border)]">
                   <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-3">Impact Summary</h3>
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="p-2 rounded-lg bg-[rgba(255,255,255,0.03)]">
+                    <div className="p-2 rounded-lg bg-[var(--overlay-bg)]">
                       <div className="text-lg font-bold">{lineageData?.impact.totalAffectedTables || 0}</div>
                       <div className="text-[10px] text-[var(--muted)]">Tables</div>
                     </div>
-                    <div className="p-2 rounded-lg bg-[rgba(255,255,255,0.03)]">
+                    <div className="p-2 rounded-lg bg-[var(--overlay-bg)]">
                       <div className="text-lg font-bold text-blue-400">{lineageData?.impact.totalAffectedDashboards || 0}</div>
                       <div className="text-[10px] text-[var(--muted)]">Dashboards</div>
                     </div>
@@ -373,7 +373,7 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
                                 </div>
                                 {asset.column && (
                                   <div className="text-[10px] text-[var(--muted)] mb-1">
-                                    Column: <span className="text-white">{asset.column}</span>
+                                    Column: <span className="text-[var(--text)]">{asset.column}</span>
                                   </div>
                                 )}
                                 <div className="text-[10px] text-[var(--muted)] line-clamp-2">
@@ -393,7 +393,7 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
               <div className="flex-1 flex flex-col overflow-hidden">
                 {/* Propagation Explanation */}
                 {lineageData?.impact.propagationExplanation && (
-                  <div className="p-4 border-b border-[rgba(255,255,255,0.06)] bg-amber-500/5">
+                  <div className="p-4 border-b border-[var(--subtle-border)] bg-amber-500/5">
                     <div className="flex items-start gap-3">
                       <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -420,13 +420,13 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
               
               {/* Right Panel - Selected Asset Details (shown when asset selected) */}
               {selectedAsset && (
-                <div className="w-72 border-l border-[rgba(255,255,255,0.06)] overflow-y-auto bg-[rgba(255,255,255,0.01)]">
+                <div className="w-72 border-l border-[var(--subtle-border)] overflow-y-auto bg-[var(--overlay-faint)]">
                   <div className="p-4">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-sm font-semibold">Asset Details</h3>
                       <button 
                         onClick={() => setSelectedAsset(null)}
-                        className="p-1 hover:bg-white/5 rounded"
+                        className="p-1 hover:bg-[var(--subtle-bg)] rounded"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

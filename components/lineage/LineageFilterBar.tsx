@@ -78,8 +78,8 @@ export function LineageFilterBar({
                   transition-all border
                   ${
                     isActive
-                      ? 'border-white/20 text-white'
-                      : 'border-transparent text-white/40 hover:text-white/60 hover:border-white/10'
+                      ? 'border-[var(--overlay-strong)] text-[var(--text)]'
+                      : 'border-transparent text-[var(--muted)] hover:text-[var(--text-tertiary)] hover:border-[var(--border-medium)]'
                   }
                 `}
                 style={{
@@ -88,7 +88,7 @@ export function LineageFilterBar({
               >
                 <span
                   className="w-2 h-2 rounded-full"
-                  style={{ backgroundColor: isActive ? color : 'rgba(255,255,255,0.2)' }}
+                  style={{ backgroundColor: isActive ? color : 'var(--overlay-strong)' }}
                 />
                 {LAYER_LABELS[layer]}
               </button>
@@ -98,7 +98,7 @@ export function LineageFilterBar({
       )}
 
       {/* Separator */}
-      {!isControlPlane && <div className="w-px h-6 bg-white/10" />}
+      {!isControlPlane && <div className="w-px h-6 bg-[var(--overlay-medium)]" />}
 
       {/* Node type toggles */}
       {!isControlPlane && (
@@ -107,24 +107,24 @@ export function LineageFilterBar({
             onClick={() => onChange({ ...filters, showToolNodes: !filters.showToolNodes })}
             className={`
               flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium transition-all
-              ${filters.showToolNodes ? 'bg-indigo-500/20 text-indigo-300' : 'text-white/40 hover:text-white/60'}
+              ${filters.showToolNodes ? 'bg-indigo-500/20 text-indigo-300' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'}
             `}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-current" />
             Tools
-            {stats && <span className="text-white/30">({stats.toolNodes})</span>}
+            {stats && <span className="text-[var(--text-faint)]">({stats.toolNodes})</span>}
           </button>
           <button
             onClick={() => onChange({ ...filters, showTableNodes: !filters.showTableNodes })}
             className={`
               flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium transition-all
-              ${filters.showTableNodes ? 'bg-blue-500/20 text-blue-300' : 'text-white/40 hover:text-white/60'}
+              ${filters.showTableNodes ? 'bg-blue-500/20 text-blue-300' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'}
             `}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-current" />
             Data Assets
             {stats && (
-              <span className="text-white/30">
+              <span className="text-[var(--text-faint)]">
                 ({stats.tableNodes + stats.viewNodes + stats.modelNodes + (stats.dagNodes || 0) + (stats.taskNodes || 0)})
               </span>
             )}
@@ -133,7 +133,7 @@ export function LineageFilterBar({
       )}
 
       {/* Separator */}
-      {!isControlPlane && <div className="w-px h-6 bg-white/10" />}
+      {!isControlPlane && <div className="w-px h-6 bg-[var(--overlay-medium)]" />}
 
       {/* Lineage level toggle */}
       {!isControlPlane && (
@@ -147,7 +147,7 @@ export function LineageFilterBar({
                 ${
                   filters.lineageLevel === level
                     ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
-                    : 'text-white/40 hover:text-white/60 hover:bg-white/5'
+                    : 'text-[var(--muted)] hover:text-[var(--text-tertiary)] hover:bg-[var(--subtle-bg)]'
                 }
               `}
             >
@@ -163,7 +163,7 @@ export function LineageFilterBar({
           onClick={() => onChange({ ...filters, showInferred: !filters.showInferred })}
           className={`
             flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium transition-all
-            ${filters.showInferred ? 'bg-amber-500/20 text-amber-300' : 'text-white/40 hover:text-white/60'}
+            ${filters.showInferred ? 'bg-amber-500/20 text-amber-300' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'}
           `}
           title={filters.showInferred ? 'Hide inferred nodes/edges' : 'Show inferred nodes/edges'}
         >
@@ -176,13 +176,13 @@ export function LineageFilterBar({
       )}
 
       {/* Separator */}
-      {!isControlPlane && <div className="w-px h-6 bg-white/10" />}
+      {!isControlPlane && <div className="w-px h-6 bg-[var(--overlay-medium)]" />}
 
       {/* Confidence threshold */}
       {!isControlPlane && filters.minConfidence > 0 && (
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-white/40">Min Confidence</span>
-          <span className="text-[11px] text-white font-medium">{Math.round(filters.minConfidence * 100)}%</span>
+          <span className="text-[10px] text-[var(--muted)]">Min Confidence</span>
+          <span className="text-[11px] text-[var(--text)] font-medium">{Math.round(filters.minConfidence * 100)}%</span>
         </div>
       )}
       {!isControlPlane && (
@@ -200,13 +200,13 @@ export function LineageFilterBar({
 
       {/* Search */}
       <div className="ml-auto relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-faint)]" />
         <input
           type="text"
           placeholder="Search nodes..."
           value={filters.searchQuery}
           onChange={handleSearch}
-          className="pl-8 pr-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.06] text-[12px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.12] w-48"
+          className="pl-8 pr-3 py-1.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[12px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] w-48"
         />
       </div>
     </div>

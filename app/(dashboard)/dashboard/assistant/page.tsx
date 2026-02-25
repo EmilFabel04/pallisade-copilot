@@ -1172,7 +1172,7 @@ function AssistantPageInner() {
           style={{ width: showHistory ? sidebarWidth : 0 }}
         >
           <div
-            className="h-full flex flex-col border-r border-white/[0.06] px-3"
+            className="h-full flex flex-col border-r border-[var(--subtle-border)] px-3"
             style={{ width: sidebarWidth }}
           >
             {/* New Chat Button */}
@@ -1203,8 +1203,8 @@ function AssistantPageInner() {
                       className={cn(
                         'w-full text-left px-2.5 py-2 rounded-lg transition-all group cursor-pointer',
                         sessionId === s.id
-                          ? 'bg-white/[0.08] text-white'
-                          : 'hover:bg-white/[0.04] text-[var(--muted)] hover:text-white'
+                          ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                          : 'hover:bg-[var(--overlay-bg)] text-[var(--muted)] hover:text-[var(--text)]'
                       )}
                     >
                       <div className="flex items-center gap-2">
@@ -1246,7 +1246,7 @@ function AssistantPageInner() {
         {/* Main Chat Area */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Compact Header */}
-          <div className="flex items-center justify-between py-2 px-4 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between py-2 px-4 border-b border-[var(--subtle-border)]">
             <div className="flex items-center gap-2">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1275,7 +1275,7 @@ function AssistantPageInner() {
               onClick={() => setShowSources(!showSources)}
               className={cn(
                 'gap-1.5 px-2.5 h-8 text-xs',
-                showSources && 'bg-white/[0.08]'
+                showSources && 'bg-[var(--hover-bg)]'
               )}
             >
               {Icons.cube}
@@ -1336,7 +1336,7 @@ function AssistantPageInner() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent, prompt)}
-                      className="text-xs text-[var(--muted)] hover:text-white h-7 px-2.5"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--text)] h-7 px-2.5"
                     >
                       {prompt}
                     </Button>
@@ -1381,7 +1381,7 @@ function AssistantPageInner() {
                           </div>
                         </div>
                       ) : (
-                        <div className="px-3 py-2 bg-white/[0.06] border border-[var(--accent)]/50 text-white rounded-xl rounded-tr-sm">
+                        <div className="px-3 py-2 bg-[var(--hover-bg)] border border-[var(--accent)]/50 text-[var(--text)] rounded-xl rounded-tr-sm">
                           {message.content.length > MAX_MESSAGE_LENGTH ? (
                             <div>
                               <div className="text-sm whitespace-pre-wrap break-words">
@@ -1521,7 +1521,7 @@ function AssistantPageInner() {
                             return (
                               <div
                                 key={tc.id}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.02] border border-white/[0.05] rounded-lg text-[11px]"
+                                className="flex items-center gap-2 px-3 py-1.5 bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-lg text-[11px]"
                               >
                                 {tc.isExecuting ? (
                                   <div className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
@@ -1534,9 +1534,9 @@ function AssistantPageInner() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                   </svg>
                                 ) : null}
-                                <span className="text-white/60 truncate">
+                                <span className="text-[var(--text-tertiary)] truncate">
                                   {tc.name}
-                                  {tc.isExecuting && <span className="text-white/30 ml-1">running...</span>}
+                                  {tc.isExecuting && <span className="text-[var(--text-faint)] ml-1">running...</span>}
                                 </span>
                               </div>
                             );
@@ -1585,7 +1585,7 @@ function AssistantPageInner() {
           <div className="px-4 pb-4 pt-2">
             <div className="max-w-2xl mx-auto">
               <form onSubmit={handleSubmit}>
-                <div className="relative bg-[#1a1a24] border border-white/[0.1] rounded-xl focus-within:border-white/[0.2] transition-colors">
+                <div className="relative bg-[var(--surface-raised)] border border-[var(--border-medium)] rounded-xl focus-within:border-[var(--overlay-strong)] transition-colors">
                   {/* @mention autocomplete dropdown */}
                   {showMentionDropdown && (
                     <MentionDropdown
@@ -1602,25 +1602,25 @@ function AssistantPageInner() {
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask about your data pipeline... (type @ to reference integrations)"
-                    className="w-full min-h-[80px] max-h-[200px] bg-transparent border-0 focus:ring-0 resize-none px-4 pt-3 pb-14 text-sm placeholder:text-white/30 rounded-xl"
+                    className="w-full min-h-[80px] max-h-[200px] bg-transparent border-0 focus:ring-0 resize-none px-4 pt-3 pb-14 text-sm placeholder:text-[var(--text-faint)] rounded-xl"
                     rows={2}
                   />
 
                   {/* Bottom bar with mode selector, model selector, and send button */}
-                  <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[#1a1a24] border-t border-white/[0.06] rounded-b-xl">
+                  <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[var(--surface-raised)] border-t border-[var(--subtle-border)] rounded-b-xl">
                     <div className="flex items-center gap-2">
                       <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
                       <select
                         value={selectedModel}
                         onChange={(e) => setSelectedModel(e.target.value)}
-                        className="px-2 py-1 text-[11px] rounded-lg bg-white/[0.04] border border-white/[0.08] text-white/70 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+                        className="px-2 py-1 text-[11px] rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--overlay-strong)] cursor-pointer"
                       >
                         <option value="gpt-5.2">GPT-5.2</option>
                         <option value="gpt-5.2-mini">GPT-5.2 Mini</option>
                         <option value="claude-sonnet">Claude Sonnet</option>
                         <option value="claude-haiku">Claude Haiku</option>
                       </select>
-                      <span className="text-[10px] text-white/30 hidden sm:inline">Enter to send</span>
+                      <span className="text-[10px] text-[var(--text-faint)] hidden sm:inline">Enter to send</span>
                     </div>
                     {isLoading ? (
                       <Button
@@ -1630,7 +1630,7 @@ function AssistantPageInner() {
                         className="h-7 w-7 p-0"
                         variant="ghost"
                       >
-                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <div className="w-4 h-4 border-2 border-[var(--text-faint)] border-t-[var(--text)] rounded-full animate-spin" />
                       </Button>
                     ) : (
                       <Button
@@ -1654,7 +1654,7 @@ function AssistantPageInner() {
           'flex-shrink-0 transition-all duration-300 overflow-hidden',
           showSources ? 'w-80' : 'w-0'
         )}>
-          <div className="h-full flex flex-col border-l border-white/[0.06] pl-4 pr-2">
+          <div className="h-full flex flex-col border-l border-[var(--subtle-border)] pl-4 pr-2">
             <div className="py-3 mb-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Sources</h3>
@@ -1709,7 +1709,7 @@ function AssistantPageInner() {
                 </div>
               ) : sourceData.nodes.length === 0 ? (
                 <div className="text-center py-8">
-                  <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-3">
+                  <div className="w-12 h-12 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] flex items-center justify-center mx-auto mb-3">
                     {Icons.cube}
                   </div>
                   <p className="text-xs text-[var(--muted)]">No connected sources</p>
@@ -1722,7 +1722,7 @@ function AssistantPageInner() {
                     <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connected Stack</h4>
                     <div className="space-y-1.5">
                       {sourceData.nodes.map((node) => (
-                        <div key={node.id} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+                        <div key={node.id} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
                           <SourceIcon toolType={node.toolType} />
                           <div className="flex-1 min-w-0">
                             <div className="text-xs font-medium truncate">{node.name}</div>
@@ -1741,7 +1741,7 @@ function AssistantPageInner() {
                       count={sourceData.models.length}
                       items={sourceData.models}
                       renderItem={(model) => (
-                        <div key={model.name} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                        <div key={model.name} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className={cn(
                               'w-1.5 h-1.5 rounded-full flex-shrink-0',
@@ -1765,7 +1765,7 @@ function AssistantPageInner() {
                       count={sourceData.tables.length}
                       items={sourceData.tables}
                       renderItem={(table) => (
-                        <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                        <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
                           <span className="text-[var(--muted)]">{Icons.table}</span>
                           <span className="text-xs truncate">{table.name}</span>
                         </div>
@@ -1780,7 +1780,7 @@ function AssistantPageInner() {
                       <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connectors</h4>
                       <div className="space-y-1">
                         {sourceData.connectors.map((c) => (
-                          <div key={c.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                          <div key={c.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
                             <span className="text-xs">{c.name}</span>
                             <span className={cn(
                               'text-[10px]',
@@ -1849,7 +1849,7 @@ function AssistantPageInner() {
           </div>
           <button
             onClick={() => setShareToast(null)}
-            className="p-1 hover:bg-white/10 rounded transition-colors"
+            className="p-1 hover:bg-[var(--overlay-medium)] rounded transition-colors"
           >
             <svg className="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -2061,12 +2061,12 @@ function TableBlock({ content }: { content: string }) {
   );
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
+    <div className="overflow-x-auto rounded-lg border border-[var(--subtle-border)]">
       <table className="w-full text-[12px]">
         <thead>
-          <tr className="bg-white/[0.04] border-b border-white/[0.08]">
+          <tr className="bg-[var(--overlay-bg)] border-b border-[var(--subtle-border)]">
             {headerCells.map((cell, i) => (
-              <th key={i} className="px-3 py-2 text-left font-semibold text-white/80">
+              <th key={i} className="px-3 py-2 text-left font-semibold text-[var(--text-secondary)]">
                 {cell}
               </th>
             ))}
@@ -2074,9 +2074,9 @@ function TableBlock({ content }: { content: string }) {
         </thead>
         <tbody>
           {dataRows.map((row, rowIdx) => (
-            <tr key={rowIdx} className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02]">
+            <tr key={rowIdx} className="border-b border-[var(--border-faint)] last:border-0 hover:bg-[var(--overlay-faint)]">
               {row.map((cell, cellIdx) => (
-                <td key={cellIdx} className="px-3 py-2 text-white/70">
+                <td key={cellIdx} className="px-3 py-2 text-[var(--text-tertiary)]">
                   <span dangerouslySetInnerHTML={{ __html: formatInline(cell) }} />
                 </td>
               ))}
@@ -2114,8 +2114,8 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   };
 
   return (
-    <div className="rounded-lg overflow-hidden bg-[#0d0d12] border border-white/[0.08]">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.02] border-b border-white/[0.06]">
+    <div className="rounded-lg overflow-hidden bg-[var(--surface)] border border-[var(--subtle-border)]">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--overlay-faint)] border-b border-[var(--subtle-border)]">
         <span className="text-[10px] font-medium text-[var(--muted)]">
           {languageLabels[language.toLowerCase()] || language.toUpperCase()}
         </span>
@@ -2198,9 +2198,9 @@ function TextBlock({ content }: { content: string }) {
 function formatInline(text: string): string {
   return text
     // Bold - make it white for emphasis
-    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold" style="color:var(--text)">$1</strong>')
     // Italic - subtle emphasis with opacity
-    .replace(/\*([^*]+)\*/g, '<em class="text-white/80 italic">$1</em>')
+    .replace(/\*([^*]+)\*/g, '<em class="italic" style="color:var(--text-secondary)">$1</em>')
     // Inline code with smart detection
     .replace(/`([^`]+)`/g, (_match, code) => {
       // File paths (contains / or common extensions)
@@ -2221,8 +2221,8 @@ function formatInline(text: string): string {
 export default function AssistantPage() {
   return (
     <Suspense fallback={
-      <div className="flex items-center justify-center h-full bg-[#050508]">
-        <div className="w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-full bg-[var(--surface-inset)]">
+        <div className="w-6 h-6 border-2 border-[var(--text-faint)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
       </div>
     }>
       <AssistantPageInner />

@@ -338,7 +338,7 @@ export function SmartFixes({
             </button>
           </div>
         </div>
-        <pre className="text-xs bg-[rgba(0,0,0,0.3)] p-3 rounded-lg overflow-x-auto max-h-32">
+        <pre className="text-xs bg-[var(--overlay-bg)] p-3 rounded-lg overflow-x-auto max-h-32">
           <code>{bestFix.code.slice(0, 300)}{bestFix.code.length > 300 ? '...' : ''}</code>
         </pre>
         
@@ -403,7 +403,7 @@ export function SmartFixes({
             className={`border rounded-xl overflow-hidden transition-all ${
               isExpanded 
                 ? 'border-[var(--accent)]/30 bg-[rgba(139,11,16,0.05)]' 
-                : 'border-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.12)]'
+                : 'border-[var(--subtle-border)] hover:border-[var(--overlay-strong)]'
             }`}
           >
             {/* Fix Header */}
@@ -413,7 +413,7 @@ export function SmartFixes({
             >
               {/* Priority badge */}
               <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-lg ${
-                index === 0 ? 'bg-[var(--accent)]/20' : 'bg-[rgba(255,255,255,0.05)]'
+                index === 0 ? 'bg-[var(--accent)]/20' : 'bg-[var(--subtle-bg)]'
               }`}>
                 {STACK_ICONS[fix.stack] || '🔧'}
               </div>
@@ -464,7 +464,7 @@ export function SmartFixes({
 
             {/* Expanded Content */}
             {isExpanded && (
-              <div className="px-4 pb-4 space-y-4 border-t border-[rgba(255,255,255,0.04)]">
+              <div className="px-4 pb-4 space-y-4 border-t border-[var(--border-faint)]">
                 {/* Why this fix + Learning data */}
                 <div className="pt-4">
                   <div className="text-xs font-medium text-[var(--muted)] uppercase tracking-wide mb-2">
@@ -474,7 +474,7 @@ export function SmartFixes({
                   
                   {/* Learning evidence */}
                   {fix.similarFixesCount && fix.similarFixesCount > 0 && (
-                    <div className="mt-3 p-3 rounded-lg bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+                    <div className="mt-3 p-3 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                       <div className="flex items-center gap-3 text-sm">
                         <div className="flex items-center gap-1.5">
                           <span className="text-purple-400">📊</span>
@@ -534,14 +534,14 @@ export function SmartFixes({
                         className={`text-xs px-3 py-1.5 rounded-lg transition-all ${
                           copiedId === fix.id
                             ? 'bg-emerald-500/20 text-emerald-400'
-                            : 'bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)]'
+                            : 'bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)]'
                         }`}
                       >
                         {copiedId === fix.id ? '✓ Copied!' : '📋 Copy Code'}
                       </button>
                     </div>
                   </div>
-                  <pre className="text-sm bg-[rgba(0,0,0,0.4)] p-4 rounded-xl overflow-x-auto">
+                  <pre className="text-sm bg-[var(--overlay-bg)] p-4 rounded-xl overflow-x-auto">
                     <code className={`language-${fix.language}`}>{fix.code}</code>
                   </pre>
                 </div>
@@ -672,7 +672,7 @@ export function SmartFixesPanel({ reportId }: { reportId: string }) {
 
       {results.length === 0 ? (
         <div className="dashboard-card p-8 text-center">
-          <div className="w-16 h-16 rounded-full bg-[rgba(255,255,255,0.05)] flex items-center justify-center mx-auto mb-4">
+          <div className="w-16 h-16 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center mx-auto mb-4">
             <svg className="w-8 h-8 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -687,7 +687,7 @@ export function SmartFixesPanel({ reportId }: { reportId: string }) {
           {results.map((result) => (
             <div key={result.finding_id} className="dashboard-card overflow-hidden">
               {/* Finding Context Header */}
-              <div className="p-4 bg-gradient-to-r from-[rgba(255,255,255,0.02)] to-transparent border-b border-[rgba(255,255,255,0.06)]">
+              <div className="p-4 bg-gradient-to-r from-[var(--overlay-faint)] to-transparent border-b border-[var(--subtle-border)]">
                 <div className="flex items-start gap-3">
                   {/* Severity indicator */}
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${

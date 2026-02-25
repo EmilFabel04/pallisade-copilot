@@ -85,12 +85,12 @@ export default function ArtifactsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#050505]">
+    <div className="min-h-screen bg-[var(--surface-inset)]">
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-2xl font-semibold text-white">Artifacts</h1>
-          <p className="mt-1 text-[14px] text-white/50">
+          <h1 className="text-2xl font-semibold text-[var(--text)]">Artifacts</h1>
+          <p className="mt-1 text-[14px] text-[var(--muted)]">
             Saved responses from AI Chat - queries, fixes, insights, and more
           </p>
         </div>
