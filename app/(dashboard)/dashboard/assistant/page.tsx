@@ -1161,7 +1161,7 @@ function AssistantPageInner() {
 
   return (
     <TooltipProvider>
-      <div className="h-[calc(100vh-120px)] flex">
+      <div className="-m-6 h-[calc(100vh-56px)] flex">
         {/* Chat History Sidebar */}
         <div
           className={cn(
@@ -1172,11 +1172,11 @@ function AssistantPageInner() {
           style={{ width: showHistory ? sidebarWidth : 0 }}
         >
           <div
-            className="h-full flex flex-col border-r border-[var(--subtle-border)] px-3"
+            className="h-full flex flex-col border-r border-[var(--subtle-border)] px-3 pt-4"
             style={{ width: sidebarWidth }}
           >
             {/* New Chat Button */}
-            <Button onClick={startNewChat} className="mb-4 gap-2">
+            <Button variant="secondary" onClick={startNewChat} className="mb-4 gap-2">
               {Icons.plus}
               <span>New Chat</span>
             </Button>
@@ -1244,7 +1244,7 @@ function AssistantPageInner() {
         </div>
 
         {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 relative">
           {/* Compact Header */}
           <div className="flex items-center justify-between py-2 px-4 border-b border-[var(--subtle-border)]">
             <div className="flex items-center gap-2">
@@ -1288,31 +1288,32 @@ function AssistantPageInner() {
             </Button>
           </div>
 
-          {/* Onboarding Banner */}
-          {selectedPipelineId && onboardingStatus !== 'COMPLETED' && (
-            <div className="px-4 pt-3">
-              <OnboardingBanner
-                status={onboardingStatus as 'NOT_STARTED' | 'IN_PROGRESS' | 'NEEDS_UPDATE'}
-                onStart={handleStartOnboarding}
-                isLoading={onboardingLoading}
-                collapsed={onboardingCollapsed}
-                onToggleCollapse={() => {
-                  const next = !onboardingCollapsed;
-                  setOnboardingCollapsed(next);
-                  if (selectedPipelineId) {
-                    if (next) {
-                      localStorage.setItem(`onboarding-collapsed-${selectedPipelineId}`, 'true');
-                    } else {
-                      localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+          {/* Messages + floating onboarding — fills entire remaining space */}
+          <div className="flex-1 relative min-h-0 overflow-hidden">
+            {/* Floating Onboarding Banner */}
+            {selectedPipelineId && onboardingStatus !== 'COMPLETED' && (
+              <div className="absolute top-3 left-4 right-4 z-20">
+                <OnboardingBanner
+                  status={onboardingStatus as 'NOT_STARTED' | 'IN_PROGRESS' | 'NEEDS_UPDATE'}
+                  onStart={handleStartOnboarding}
+                  isLoading={onboardingLoading}
+                  collapsed={onboardingCollapsed}
+                  onToggleCollapse={() => {
+                    const next = !onboardingCollapsed;
+                    setOnboardingCollapsed(next);
+                    if (selectedPipelineId) {
+                      if (next) {
+                        localStorage.setItem(`onboarding-collapsed-${selectedPipelineId}`, 'true');
+                      } else {
+                        localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+                      }
                     }
-                  }
-                }}
-              />
-            </div>
-          )}
+                  }}
+                />
+              </div>
+            )}
 
-          {/* Messages */}
-          <ScrollArea className="flex-1 px-4 py-3">
+            <ScrollArea className="h-full px-4 py-3">
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-4">
                 <Avatar className="w-14 h-14 mb-3">
@@ -1344,7 +1345,7 @@ function AssistantPageInner() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3 pb-2">
+              <div className="space-y-3 pb-24">
                 {messages.map((message) => (
                   <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
                     {message.role === 'assistant' && (
@@ -1581,8 +1582,9 @@ function AssistantPageInner() {
             )}
           </ScrollArea>
 
-          {/* Input - Cursor style */}
-          <div className="px-4 pb-4 pt-2">
+            {/* Input - floating at bottom of chat area */}
+            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-4 pt-8 bg-gradient-to-t from-[var(--bg)] from-60% to-transparent pointer-events-none">
+              <div className="pointer-events-auto">
             <div className="max-w-2xl mx-auto">
               <form onSubmit={handleSubmit}>
                 <div className="relative bg-[var(--surface-raised)] border border-[var(--border-medium)] rounded-xl focus-within:border-[var(--overlay-strong)] transition-colors">
@@ -1645,7 +1647,9 @@ function AssistantPageInner() {
                   </div>
                 </div>
               </form>
+              </div>
             </div>
+          </div>
           </div>
         </div>
 
@@ -1764,8 +1768,8 @@ function AssistantPageInner() {
                       title="Tables"
                       count={sourceData.tables.length}
                       items={sourceData.tables}
-                      renderItem={(table) => (
-                        <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
+                      renderItem={(table, index) => (
+                        <div key={`${table.schema}.${table.name}.${index}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
                           <span className="text-[var(--muted)]">{Icons.table}</span>
                           <span className="text-xs truncate">{table.name}</span>
                         </div>
@@ -1898,7 +1902,7 @@ function SourceSection<T>({
   title: string;
   count: number;
   items: T[];
-  renderItem: (item: T) => React.ReactNode;
+  renderItem: (item: T, index: number) => React.ReactNode;
   groupBy: (item: T) => string;
 }) {
   const [expanded, setExpanded] = useState(true);

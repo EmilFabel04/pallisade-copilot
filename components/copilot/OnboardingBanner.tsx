@@ -74,8 +74,8 @@ export function OnboardingBanner({
       <button
         onClick={onToggleCollapse}
         className={cn(
-          'flex items-center gap-2 px-3 py-2 rounded-lg transition-colors',
-          'bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/15 hover:border-indigo-500/30',
+          'flex items-center gap-2 px-3 py-2 rounded-lg transition-colors shadow-lg',
+          'bg-[var(--bg)] border border-indigo-500/30 hover:border-indigo-500/50',
         )}
       >
         <GraduationCapIcon className="w-4 h-4 text-indigo-400" />
@@ -91,7 +91,7 @@ export function OnboardingBanner({
 
   // Expanded: full banner
   return (
-    <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-xl p-4">
+    <div className="bg-[var(--bg)] border border-indigo-500/30 rounded-xl p-4 shadow-lg">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="w-10 h-10 rounded-lg bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
