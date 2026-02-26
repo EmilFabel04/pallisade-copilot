@@ -1,0 +1,78 @@
+---
+title: Tableau
+description: Connect Tableau Server or Tableau Cloud to Pallisade for workbook monitoring, extract refresh tracking, datasource health, and usage analytics.
+section: integrations
+order: 15
+---
+
+# Tableau
+
+## Overview
+
+The Tableau integration connects Pallisade to your Tableau Server or Tableau Cloud via the REST API. Pallisade monitors workbook health, tracks extract refresh schedules and failures, detects broken datasources, and identifies stale content based on usage patterns.
+
+Key capabilities:
+
+- **Workbook monitoring** -- track workbook status, owner, project, and view counts
+- **Extract refresh tracking** -- detect refresh failures and stale extracts
+- **Datasource health** -- connection type, server/database references, refresh status
+- **View performance** -- load times and error detection per view
+- **Usage analytics** -- view counts, favorites, and last-accessed timestamps
+- **Content staleness** -- workbooks not viewed in configurable time periods
+
+## Prerequisites
+
+- Tableau Server (2019.3+) or Tableau Cloud
+- A **Personal Access Token** (PAT) for authentication
+- The token user needs Site Administrator or equivalent read permissions
+
+<Callout type="tip">
+Generate a Personal Access Token in Tableau under **My Account Settings > Personal Access Tokens**. Give the token a descriptive name (e.g., "Pallisade Integration") and save the secret securely -- it is shown only once.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Tableau** from the Reporting layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `server` | Yes | Tableau Server URL (e.g., `https://your-tableau-server.com`) |
+| `site_id` | No | Site ID (leave empty for the default site) |
+| `token_name` | Yes | Personal Access Token name |
+| `token_secret` | Yes | Personal Access Token secret |
+
+3. Click **Test Connection**. Pallisade authenticates via the Tableau REST API sign-in endpoint.
+
+<Callout type="warning">
+For Tableau Cloud, the server URL follows the format `https://prod-useast-b.online.tableau.com`. The `site_id` is required for multi-site deployments -- find it in the URL after `/site/`.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Workbooks** | ID, name, project, owner, created/updated timestamps, view count |
+| **Views** | View name, workbook association, usage counts |
+| **Datasources** | ID, name, project, connection type, server, database, extract status |
+| **Extract refreshes** | Schedule, last refresh timestamp, status (success/failed), consecutive failures |
+| **Refresh tasks** | Task ID, schedule frequency, priority, last run status |
+| **Projects** | Project hierarchy and content organization |
+| **Usage metrics** | Views per workbook, favorites, last accessed timestamps |
+
+## Troubleshooting
+
+**"401 Unauthorized"**
+The Personal Access Token may be expired or revoked. Regenerate it in Tableau and update the connection.
+
+**Site not found**
+If you have multiple sites, the `site_id` must match exactly. The default site uses an empty string. Check the URL in your Tableau browser session for the correct site identifier.
+
+**Extract refresh failures not showing**
+The API user needs permission to view refresh task history. Ensure the token belongs to a user with Site Administrator Explorer or higher role.
+
+**No workbooks found**
+The token user may lack permissions to view content in the target project. Verify project-level permissions in Tableau Server.
+
+**Stale content detected for embedded workbooks**
+Embedded views accessed via the Embedding API may not register view counts in Tableau. Consider excluding known embedded workbooks from staleness checks.

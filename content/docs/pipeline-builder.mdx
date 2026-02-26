@@ -1,0 +1,160 @@
+---
+title: Pipeline Builder
+description: Create pipelines, connect integrations, and organize your data stack into layers with the visual pipeline builder.
+section: guides
+order: 4
+---
+
+# Pipeline Builder
+
+The Pipeline Builder is where you define your data stack. A pipeline groups your integrations, monitors, lineage, and Scout context into a single workspace. You can create multiple pipelines to separate environments, domains, or teams.
+
+## Creating a Pipeline
+
+1. From the **Dashboard**, click **New Pipeline**.
+2. Enter a pipeline name (e.g., `production-analytics`, `marketing-data`).
+3. Optionally select a stack template that pre-configures common integration combinations.
+4. Click **Create**.
+
+After creation, you land on the pipeline overview page where you can start adding integrations.
+
+<Callout type="tip">
+Name your pipelines after the domain or environment they represent. This makes it easier for team members to find the right workspace and keeps Scout's context scoped to the relevant data.
+</Callout>
+
+## Adding Integrations
+
+Integrations are the individual connections to your data tools. Each pipeline can have multiple integrations across different categories.
+
+### How to Add an Integration
+
+1. Open your pipeline and go to **Settings**.
+2. Click **Add Integration**.
+3. Select the integration type from the catalog.
+4. Enter the required credentials and configuration.
+5. Click **Test Connection** to verify access.
+6. Click **Save**.
+
+### Available Integration Types
+
+| Category | Integrations | What Pallisade Gets |
+|----------|-------------|-------------------|
+| **Warehouses** | BigQuery, Snowflake, PostgreSQL, Redshift, SQL Server, Azure SQL, Databricks | Schema discovery, query execution, table metadata |
+| **Transformation** | dbt Cloud, dbt Core | Model metadata, manifest parsing, lineage, test results |
+| **Orchestration** | Apache Airflow, Dagster, Prefect | DAG parsing, task dependencies, run status |
+| **Data Integration** | Fivetran, Airbyte, Stitch | Connector status, sync monitoring |
+| **BI & Reporting** | Looker, Tableau, Power BI, Metabase | Dashboard/report metadata |
+| **Alerts** | Slack, Microsoft Teams, PagerDuty, OpsGenie | Notification delivery |
+| **Ticketing** | Jira, Linear, Asana, GitHub Issues | Issue creation and tracking |
+| **Cloud Storage** | Amazon S3, Google Cloud Storage, Azure Data Lake Storage | File and object metadata |
+| **Infrastructure** | Linux servers (SSH) | Certificate, health, and log monitoring |
+
+<Callout type="warning">
+Each integration stores credentials securely. Use service accounts with the minimum required permissions. Warehouse connections should be read-only unless you plan to use Fix mode to apply changes.
+</Callout>
+
+## Pipeline Layers
+
+The pipeline builder organizes integrations into conceptual layers that match the typical data pipeline architecture. Layers determine how nodes appear in the [lineage viewer](/docs/lineage) and health overview.
+
+### Ingestion Layer
+
+The entry point of your pipeline. Includes data integration tools that pull data from source systems into your warehouse.
+
+- **Integrations:** Fivetran, Airbyte, Stitch, cloud storage connectors
+- **What to monitor:** Sync freshness, row counts, connector health
+
+### Transformation Layer
+
+Where raw data is cleaned, joined, and modeled into analytics-ready tables.
+
+- **Integrations:** dbt Cloud, dbt Core
+- **What to monitor:** Model build times, test pass rates, schema changes
+
+### Warehouse Layer
+
+Your data warehouses where transformed data lives and gets queried.
+
+- **Integrations:** BigQuery, Snowflake, PostgreSQL, Redshift, SQL Server, Azure SQL, Databricks
+- **What to monitor:** Table freshness, volume anomalies, null rates, query performance
+
+### Orchestration Layer
+
+The schedulers and workflow engines that coordinate when things run.
+
+- **Integrations:** Apache Airflow, Dagster, Prefect
+- **What to monitor:** DAG success rates, task durations, SLA breaches
+
+### Reporting Layer
+
+The dashboards and reports that end users consume.
+
+- **Integrations:** Looker, Tableau, Power BI, Metabase
+- **What to monitor:** Data freshness in dashboards, broken references
+
+## Pipeline Health Overview
+
+The pipeline overview page shows a summary of health across all your integrations:
+
+| Metric | Description |
+|--------|-------------|
+| **Integration status** | Connected / disconnected / error state for each integration |
+| **Monitor summary** | Count of passing, warning, and failing monitors |
+| **Recent activity** | Latest monitor runs, Scout conversations, and sync events |
+| **Coverage** | Percentage of tables with active monitors |
+
+Each integration card shows its current connection status with a colored indicator:
+
+- **Green** -- Connected and healthy
+- **Yellow** -- Connected with warnings (e.g., stale sync)
+- **Red** -- Connection error or authentication failure
+- **Gray** -- Not yet configured
+
+## Managing Integrations
+
+### Editing an Integration
+
+1. Go to **Settings** within your pipeline.
+2. Click on the integration you want to edit.
+3. Update credentials or configuration fields.
+4. Click **Test Connection** to verify the changes.
+5. Click **Save**.
+
+### Removing an Integration
+
+1. Go to **Settings** within your pipeline.
+2. Click on the integration.
+3. Click **Remove Integration**.
+4. Confirm the removal.
+
+<Callout type="warning">
+Removing an integration will delete all associated monitors and lineage edges. This action cannot be undone. Export any important monitor history or artifacts before removing.
+</Callout>
+
+### Testing a Connection
+
+You can re-test any integration at any time. The test verifies:
+
+- Network connectivity
+- Authentication credentials
+- Required permissions (e.g., read access to target schemas)
+- API version compatibility
+
+Test results are displayed immediately. If the test fails, the error message includes specific guidance on what to fix.
+
+## Multiple Warehouses
+
+A single pipeline can connect to multiple warehouses. This is useful when your data flows across platforms (e.g., Fivetran syncs to BigQuery, dbt transforms run on Snowflake).
+
+When multiple warehouses are connected:
+
+- Scout automatically identifies which warehouse to query based on the table name or SQL dialect.
+- Lineage edges can span across warehouses.
+- Monitors can target tables in any connected warehouse.
+- Schema keys use a compound format (e.g., `BIGQUERY:raw`, `SNOWFLAKE:PUBLIC`) to avoid naming collisions.
+
+## Next Steps
+
+- [Scheduled Monitoring](/docs/scheduled-monitoring) -- Create automated checks on your pipeline
+- [Data Lineage](/docs/lineage) -- Visualize dependencies across your integrations
+- [AI Copilot (Scout)](/docs/copilot) -- Start querying your connected data

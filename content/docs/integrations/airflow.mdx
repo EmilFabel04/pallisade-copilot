@@ -1,0 +1,93 @@
+---
+title: Apache Airflow
+description: Connect Apache Airflow to Pallisade for DAG monitoring, task health analysis, SLA tracking, and pipeline freshness checks.
+section: integrations
+order: 9
+---
+
+# Apache Airflow
+
+## Overview
+
+The Airflow integration connects Pallisade to your Apache Airflow instance via the REST API (2.0+) or by parsing DAG files from a GitHub repository. Pallisade monitors DAG runs, tracks task execution health, detects SLA misses, and calculates pipeline freshness metrics.
+
+Key capabilities:
+
+- **DAG monitoring** -- list active DAGs with schedule intervals, tags, and owners
+- **Run health analysis** -- success rates, average duration, and failure trends over configurable periods
+- **Task execution tracking** -- per-task status, duration, retries, and operator types
+- **SLA miss detection** -- identify tasks that exceeded their SLA deadlines
+- **Pipeline freshness** -- hours since last successful DAG completion
+- **Failure debugging** -- failed task logs, XCom values, and DAG source code retrieval
+- **GitHub DAG parsing** -- extract DAG structure from Python files in a connected repo
+
+## Prerequisites
+
+For **API mode**:
+- Airflow 2.0+ with the REST API enabled
+- A user with API access (basic auth or API key)
+
+For **GitHub mode**:
+- A GitHub repository containing your Airflow DAG files
+- A personal access token with repo read access
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Airflow** from the Transformation layer.
+2. Choose your connection mode and fill in the fields:
+
+**API Mode:**
+
+| Field | Required | Description |
+|---|---|---|
+| `source_mode` | Yes | Select `Airflow API` |
+| `host` | Yes | Airflow webserver URL (e.g., `https://your-airflow.com`) |
+| `username` | Yes | Airflow username |
+| `password` | Yes | Airflow password |
+
+**GitHub Mode:**
+
+| Field | Required | Description |
+|---|---|---|
+| `source_mode` | Yes | Select `GitHub DAG Files` |
+| `github_repo` | Yes | Repository in `owner/repo` format |
+| `github_branch` | No | Branch name (default: `main`) |
+| `github_token` | No | Personal access token (`ghp_...`) for private repos |
+| `dag_directory` | No | Path to DAGs folder in the repo (default: `dags`) |
+
+3. Click **Test Connection**. For API mode, Pallisade hits the `/health` endpoint.
+
+<Callout type="tip">
+For managed Airflow services (MWAA, Cloud Composer, Astronomer), use API mode. The REST API URL varies by provider -- check your provider's documentation for the correct endpoint format.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **DAGs** | dag_id, description, schedule_interval, is_paused, is_active, tags, owners |
+| **DAG runs** | run_id, state (queued/running/success/failed), execution_date, duration |
+| **Task instances** | task_id, state, operator, duration, try_number, pool, queue |
+| **SLA misses** | dag_id, task_id, execution_date, expected vs actual time |
+| **Health metrics** | Success rate, avg duration, max duration, failure count per DAG |
+| **Freshness** | Hours since last successful completion per DAG |
+| **Task structure** | Task dependencies (downstream_task_ids), operator types, retry config |
+| **Task logs** | Execution logs for debugging failed tasks (API mode only) |
+| **XCom values** | Inter-task communication data (API mode only) |
+
+## Troubleshooting
+
+**"Connection refused" on API mode**
+Ensure the Airflow webserver is reachable from Pallisade's network. For Cloud Composer, the API endpoint is different from the Airflow UI URL.
+
+**Authentication fails**
+Airflow 2.x defaults to denying API access. Ensure the `auth_backend` is configured in `airflow.cfg`. For basic auth, set `auth_backend = airflow.api.auth.backend.basic_auth`.
+
+**GitHub mode finds no DAGs**
+Check the `dag_directory` field. It should point to the folder containing your DAG Python files. The default is `dags` -- adjust if your repo uses a different structure (e.g., `airflow/dags`).
+
+**SLA misses endpoint returns 404**
+The SLA misses API endpoint varies by Airflow version. It is available in Airflow 2.x but may require specific configuration. Check that SLAs are defined in your DAGs.
+
+**Health analysis shows "no_runs"**
+The DAG has no runs in the analysis period. Trigger a manual run or wait for the next scheduled execution.

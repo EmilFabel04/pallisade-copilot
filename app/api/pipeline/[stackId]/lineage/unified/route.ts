@@ -17,14 +17,14 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
  * Fetch the engine graph (nodes + edges with confidence/evidence).
  * Returns null if engine is not available or has no data.
  */
-async function fetchEngineGraph(plane?: string): Promise<{
+async function fetchEngineGraph(stackId: string, plane?: string): Promise<{
   nodes: any[];
   edges: any[];
 } | null> {
   try {
-    const url = plane
-      ? `${SCANNER_API_URL}/api/v1/lineage/engine/graph?plane=${plane}`
-      : `${SCANNER_API_URL}/api/v1/lineage/engine/graph`;
+    const params = new URLSearchParams({ stack_id: stackId });
+    if (plane) params.set('plane', plane);
+    const url = `${SCANNER_API_URL}/api/v1/lineage/engine/graph?${params}`;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(5000),
     });
@@ -44,6 +44,7 @@ async function fetchEngineGraph(plane?: string): Promise<{
  */
 async function tryRestoreEngineFromSnapshot(
   organizationId: string,
+  stackId: string,
 ): Promise<{ nodes: any[]; edges: any[] } | null> {
   try {
     // Find the latest snapshot with graphData (org-scoped, no integrationId filter
@@ -62,7 +63,7 @@ async function tryRestoreEngineFromSnapshot(
     console.log(`[UNIFIED LINEAGE] Restoring engine graph from snapshot ${snapshot.id}`);
 
     // Send the graph data to FastAPI to restore the in-memory store
-    const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore`, {
+    const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ graph_data: snapshot.graphData }),
@@ -76,7 +77,7 @@ async function tryRestoreEngineFromSnapshot(
     console.log(`[UNIFIED LINEAGE] Engine graph restored: ${restoreData.nodes} nodes, ${restoreData.edges} edges`);
 
     // Now fetch the engine graph normally (it's in memory again)
-    return fetchEngineGraph();
+    return fetchEngineGraph(stackId);
   } catch (e) {
     console.warn('[UNIFIED LINEAGE] Failed to restore engine from snapshot:', e);
     return null;
@@ -86,9 +87,9 @@ async function tryRestoreEngineFromSnapshot(
 /**
  * Fetch engine coverage stats.
  */
-async function fetchEngineStats() {
+async function fetchEngineStats(stackId: string) {
   try {
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/stats`, {
+    const res = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/stats?stack_id=${stackId}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return undefined;
@@ -345,18 +346,18 @@ export async function GET(
 
     // Fetch engine graph and stats in parallel
     let [engineGraph, engineStats] = await Promise.all([
-      fetchEngineGraph(enginePlaneFilter),
-      fetchEngineStats(),
+      fetchEngineGraph(stackId, enginePlaneFilter),
+      fetchEngineStats(stackId),
     ]);
 
     // If engine graph is empty (e.g., after server restart), try restoring from DB snapshot
     if (!engineGraph) {
-      const restored = await tryRestoreEngineFromSnapshot(organizationId);
+      const restored = await tryRestoreEngineFromSnapshot(organizationId, stackId);
       if (restored) {
         // Re-fetch with plane filter now that the graph is restored
         [engineGraph, engineStats] = await Promise.all([
-          fetchEngineGraph(enginePlaneFilter),
-          fetchEngineStats(),
+          fetchEngineGraph(stackId, enginePlaneFilter),
+          fetchEngineStats(stackId),
         ]);
       }
     }
@@ -482,6 +483,28 @@ export async function GET(
         }
       }
 
+      // Step 1b: Deduplicate inferred (bridge) nodes with real extracted nodes.
+      // If the reconciler inferred a node that was already discovered by an
+      // extractor, drop the inferred duplicate and remap its edges to the real one.
+      const realFqnMap = new Map<string, string>(); // FQN → real engine node ID
+      const inferredRemap = new Map<string, string>(); // inferred ID → real ID
+
+      for (const eNode of engineGraph.nodes) {
+        if (eNode.fqn && !eNode.inferred) {
+          if (!realFqnMap.has(eNode.fqn)) {
+            realFqnMap.set(eNode.fqn, eNode.id);
+          }
+        }
+      }
+      for (const eNode of engineGraph.nodes) {
+        if (eNode.fqn && eNode.inferred) {
+          const realId = realFqnMap.get(eNode.fqn);
+          if (realId && realId !== eNode.id) {
+            inferredRemap.set(eNode.id, realId);
+          }
+        }
+      }
+
       // Step 2: Convert engine nodes to unified nodes, skipping remapped Airflow table refs
       const engineIdToUnifiedId = new Map<string, string>();
       dataAssetNodes = [];
@@ -495,9 +518,9 @@ export async function GET(
       }
 
       for (const eNode of engineGraph.nodes) {
-        if (airflowToWarehouseRemap.has(eNode.id)) {
-          // This Airflow table ref has a matching warehouse node — skip it,
-          // its edges will be remapped to the warehouse node below
+        if (airflowToWarehouseRemap.has(eNode.id) || inferredRemap.has(eNode.id)) {
+          // Duplicate node (Airflow table ref or inferred bridge) — skip it,
+          // its edges will be remapped to the real node below
           continue;
         }
 
@@ -528,17 +551,23 @@ export async function GET(
         dataAssetNodes.push(unified);
       }
 
-      // Step 3: Populate remap entries so Airflow edges → warehouse unified IDs
+      // Step 3: Populate remap entries so duplicate edges → real unified IDs
       for (const [airflowId, warehouseEngineId] of airflowToWarehouseRemap) {
         const warehouseUnifiedId = engineIdToUnifiedId.get(warehouseEngineId);
         if (warehouseUnifiedId) {
           engineIdToUnifiedId.set(airflowId, warehouseUnifiedId);
         }
       }
+      for (const [inferredId, realEngineId] of inferredRemap) {
+        const realUnifiedId = engineIdToUnifiedId.get(realEngineId);
+        if (realUnifiedId) {
+          engineIdToUnifiedId.set(inferredId, realUnifiedId);
+        }
+      }
 
-      if (airflowToWarehouseRemap.size > 0) {
+      if (airflowToWarehouseRemap.size > 0 || inferredRemap.size > 0) {
         console.log(
-          `[UNIFIED LINEAGE] Bridged ${airflowToWarehouseRemap.size} Airflow table refs to warehouse nodes`
+          `[UNIFIED LINEAGE] Deduped: ${airflowToWarehouseRemap.size} Airflow refs, ${inferredRemap.size} inferred duplicates`
         );
       }
 

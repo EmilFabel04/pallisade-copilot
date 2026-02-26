@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, CircleAlert, CircleDashed, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, Zap } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleDashed, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, Zap } from 'lucide-react';
+import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
 import PipelineCanvas from '@/components/pipeline/PipelineCanvas';
 import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
@@ -156,6 +157,8 @@ function buildAutoEdges(nodes: PipelineNode[], existingEdges: PipelineEdge[]): P
 
 export default function PipelinePage() {
   const searchParams = useSearchParams();
+  const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
+  const lastPipelineIdRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [stack, setStack] = useState<PipelineStack>({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
@@ -164,7 +167,7 @@ export default function PipelinePage() {
   const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [environment, setEnvironment] = useState<(typeof ENVIRONMENTS)[number]>('Prod');
-  const [editMode, setEditMode] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set());
   const [planeFilter, setPlaneFilter] = useState<PlaneFilter>('all');
   const [onlyImpacted, setOnlyImpacted] = useState(false);
   const [onlyCriticalPaths, setOnlyCriticalPaths] = useState(false);
@@ -253,8 +256,9 @@ export default function PipelinePage() {
   }, []);
 
   const fetchIntegrations = useCallback(async () => {
+    if (!selectedPipelineId) return;
     try {
-      const res = await fetch('/api/integrations');
+      const res = await fetch(`/api/integrations?stackId=${selectedPipelineId}`);
       if (!res.ok) return;
       const data = await res.json();
       setIntegrationRecords((data.integrations || []).map((row: any) => ({
@@ -263,19 +267,25 @@ export default function PipelinePage() {
         status: row.status || 'INACTIVE', source: row.source || 'legacy', lastError: row.lastError,
       })));
     } catch (e) { console.error('Failed to fetch integrations', e); }
-  }, []);
+  }, [selectedPipelineId]);
 
   const handleDisconnect = useCallback(async (connector: ConnectorCard) => {
     if (connector.mode === 'integration') {
       const record = integrationRecords.find((r) => r.connectorId === connector.id);
       if (!record) return;
       setDisconnecting(connector.id);
+      // Optimistic: immediately remove from UI
+      setIntegrationRecords(prev => prev.filter(r => r.connectorId !== connector.id));
       try {
         const res = await fetch(`/api/integrations/${record.id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('delete failed');
         await fetchIntegrations();
         toast.success(`${connector.name} disconnected`);
-      } catch { toast.error(`Failed to disconnect ${connector.name}`); }
+      } catch {
+        // Rollback on failure
+        setIntegrationRecords(prev => [...prev, record]);
+        toast.error(`Failed to disconnect ${connector.name}`);
+      }
       finally { setDisconnecting(null); }
     } else {
       const node = stack.nodes.find((n) => n.toolType === connector.id);
@@ -293,17 +303,36 @@ export default function PipelinePage() {
   }, [fetchIntegrations, integrationRecords, savePipeline, stack]);
 
   // ─── Effects ──────────────────────────────────────────────
+  // Re-load when pipeline profile changes
   useEffect(() => {
+    if (pipelineLoading) return;
+    if (!selectedPipelineId) {
+      setStack({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
+      setIntegrationRecords([]);
+      setLoading(false);
+      return;
+    }
+    // Skip if pipeline hasn't changed
+    if (lastPipelineIdRef.current === selectedPipelineId) return;
+    lastPipelineIdRef.current = selectedPipelineId;
+
     const load = async () => {
       setLoading(true);
+      // Reset state for new pipeline
+      setStack({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
+      setIntegrationRecords([]);
+      setExpandedConnector(null);
       try {
-        const [pipelineRes] = await Promise.all([fetch('/api/pipeline'), fetchIntegrations()]);
+        const [pipelineRes] = await Promise.all([
+          fetch(`/api/pipeline?stackId=${selectedPipelineId}`),
+          fetchIntegrations(),
+        ]);
         if (pipelineRes.ok) { const data = await pipelineRes.json(); if (data.stack) setStack(data.stack); }
       } catch (e) { console.error('Failed to load pipeline map', e); }
       finally { setLoading(false); }
     };
     load();
-  }, [fetchIntegrations]);
+  }, [selectedPipelineId, pipelineLoading, fetchIntegrations]);
 
   useEffect(() => {
     const success = searchParams.get('success');
@@ -392,18 +421,8 @@ export default function PipelinePage() {
             >
               {ENVIRONMENTS.map((env) => <option key={env} value={env}>{env}</option>)}
             </select>
-            <button
-              onClick={() => setEditMode((p) => !p)}
-              className={`px-3 py-2 rounded-lg text-sm border transition-all ${
-                editMode
-                  ? 'border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--accent-2)] shadow-accent'
-                  : 'border-[var(--border-medium)] bg-[var(--overlay-bg)] text-[var(--text)] hover:border-[var(--overlay-strong)]'
-              }`}
-            >
-              {editMode ? 'Edit mode' : 'Inspect mode'}
-            </button>
             <button onClick={() => savePipeline(stack)} className="btn btn-primary !py-2 !px-4 !text-sm" disabled={saving}>
-              {saving ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" />Saving...</> : 'Save map'}
+              {saving ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" />Saving...</> : 'Save'}
             </button>
           </div>
         </div>
@@ -520,12 +539,20 @@ export default function PipelinePage() {
           const gColor = GROUP_COLORS[group];
           return (
             <div key={group} className="space-y-2">
-              <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCollapsedGroups(prev => {
+                  const next = new Set(prev);
+                  next.has(group) ? next.delete(group) : next.add(group);
+                  return next;
+                })}
+                className="flex items-center gap-2 w-full text-left group/hdr"
+              >
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: gColor }} />
                 <h3 className="text-sm font-medium">{groupLabel(group)}</h3>
                 <span className="text-[10px] text-[var(--muted)]">({connectors.length})</span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                <ChevronDown className={`w-3.5 h-3.5 text-[var(--muted)] ml-auto transition-transform ${collapsedGroups.has(group) ? '-rotate-90' : ''}`} />
+              </button>
+              {!collapsedGroups.has(group) && <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {connectors.map((connector) => {
                   const status = connectorStatusById.get(connector.id) || 'NOT_CONNECTED';
                   const recommended = selectedTemplate?.recommendedConnectorIds.includes(connector.id);
@@ -617,7 +644,7 @@ export default function PipelinePage() {
                         ) : (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}
-                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs btn-primary !py-2 !text-xs !shadow-none transition-all"
+                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] text-[var(--text)] hover:bg-[var(--hover-bg)] hover:border-[var(--overlay-strong)] transition-all"
                           >
                             <Zap className="w-3 h-3" />
                             Connect
@@ -637,7 +664,7 @@ export default function PipelinePage() {
                     </div>
                   );
                 })}
-              </div>
+              </div>}
             </div>
           );
         })}
@@ -649,13 +676,6 @@ export default function PipelinePage() {
           <div>
             <h2 className="text-xl font-semibold">Pipeline Map</h2>
             <p className="text-sm text-[var(--muted)] mt-1">Auto-generated from connected integrations</p>
-          </div>
-          <div className={`text-xs px-2.5 py-1 rounded-full border ${
-            editMode
-              ? 'border-[var(--accent)]/30 bg-[var(--accent)]/10 text-[var(--accent-2)]'
-              : 'border-[var(--border-medium)] bg-[var(--overlay-bg)] text-[var(--muted)]'
-          }`}>
-            {editMode ? 'Edit mode' : 'Inspect mode'}
           </div>
         </div>
 
@@ -728,11 +748,9 @@ export default function PipelinePage() {
               </div>
             </div>
 
-            {editMode && (
-              <div className="pt-2 border-t border-[var(--border-medium)] text-[11px] text-[var(--muted)]">
-                Drag nodes to reposition. Connect handles to create edges.
-              </div>
-            )}
+            <div className="pt-2 border-t border-[var(--border-medium)] text-[11px] text-[var(--muted)]">
+              Drag nodes to reposition. Connect handles to create edges.
+            </div>
           </div>
 
           {/* Canvas */}
@@ -744,7 +762,7 @@ export default function PipelinePage() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onSave={() => savePipeline(stack, true)}
-              readOnly={!editMode}
+              readOnly={false}
             />
           </div>
         </div>

@@ -531,52 +531,74 @@ export function DataAssetDetailPanel({
         )}
 
         {/* ─── Blast Radius ──────────────────────────────────── */}
-        <Section title="Blast Radius">
+        <Section title="Impact Analysis">
           {!blastRadius && !blastLoading && (
             <button
               onClick={fetchBlastRadius}
               className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] hover:border-[var(--border-medium)] transition-all text-[12px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
             >
               <Zap className="w-3.5 h-3.5" />
-              Calculate Blast Radius
+              Analyze Impact
             </button>
           )}
           {blastLoading && (
             <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
               <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
-              Calculating...
+              Analyzing...
             </div>
           )}
           {blastRadius && (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
+              {/* Summary */}
               <div className="p-2.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--border-faint)]">
-                <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Total Downstream</span>
-                <p className="text-[18px] text-[var(--text)] font-medium mt-0.5">
-                  {blastRadius.total_downstream}
-                </p>
-              </div>
-              {Object.keys(blastRadius.by_kind || {}).length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.entries(blastRadius.by_kind).map(([kind, count]) => (
-                    <span
-                      key={kind}
-                      className="px-2 py-0.5 text-[10px] bg-[var(--subtle-bg)] text-[var(--text-tertiary)] rounded capitalize"
-                    >
-                      {count} {kind}{count !== 1 ? 's' : ''}
-                    </span>
-                  ))}
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Affected Assets</span>
+                  <span className="text-[16px] text-[var(--text)] font-semibold">{blastRadius.total_downstream}</span>
                 </div>
-              )}
-              {Object.keys(blastRadius.by_domain || {}).length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.entries(blastRadius.by_domain).map(([domain, count]) => (
-                    <span
-                      key={domain}
-                      className="px-2 py-0.5 text-[10px] bg-violet-500/10 text-violet-300/70 rounded capitalize"
-                    >
-                      {count} {domain}
-                    </span>
-                  ))}
+                {Object.keys(blastRadius.by_kind || {}).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {Object.entries(blastRadius.by_kind).map(([kind, count]) => (
+                      <span key={kind} className="px-2 py-0.5 text-[10px] bg-[var(--subtle-bg)] text-[var(--text-tertiary)] rounded capitalize">
+                        {count} {kind}{count !== 1 ? 's' : ''}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Affected nodes with impact descriptions */}
+              {blastRadius.affected && blastRadius.affected.length > 0 && (
+                <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                  {blastRadius.affected.slice(0, 15).map((a) => {
+                    const isCritical = a.criticality === 'critical' || a.criticality === 'high';
+                    return (
+                      <button
+                        key={a.id}
+                        onClick={() => onNodeNavigate(a.id)}
+                        className="w-full text-left p-2 rounded-lg bg-[var(--overlay-faint)] hover:bg-[var(--hover-bg)] border border-[var(--border-faint)] transition-all"
+                      >
+                        <div className="flex items-center gap-2">
+                          {isCritical && (
+                            <AlertCircle className="w-3 h-3 text-red-400 shrink-0" />
+                          )}
+                          <span className="text-[11px] text-[var(--text)] font-mono truncate flex-1">
+                            {a.name}
+                          </span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)] capitalize shrink-0">
+                            {a.kind}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-[var(--muted)] mt-1">
+                          {a.impact}
+                        </div>
+                      </button>
+                    );
+                  })}
+                  {blastRadius.affected.length > 15 && (
+                    <div className="text-[10px] text-[var(--text-faint)] text-center py-1">
+                      + {blastRadius.affected.length - 15} more
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArtifactType } from '@prisma/client';
 import { ArtifactFilters, ArtifactList } from '@/components/artifacts';
+import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
 
 interface Artifact {
@@ -22,6 +23,7 @@ interface Artifact {
 
 export default function ArtifactsPage() {
   const router = useRouter();
+  const { selectedPipelineId } = usePipeline();
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -29,8 +31,14 @@ export default function ArtifactsPage() {
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
 
   const fetchArtifacts = useCallback(async () => {
+    if (!selectedPipelineId) {
+      setArtifacts([]);
+      setIsLoading(false);
+      return;
+    }
     try {
       const params = new URLSearchParams();
+      params.set('stackId', selectedPipelineId);
       if (search) params.set('search', search);
       if (selectedType) params.set('type', selectedType);
       if (showPinnedOnly) params.set('pinned', 'true');
@@ -46,9 +54,11 @@ export default function ArtifactsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [search, selectedType, showPinnedOnly]);
+  }, [search, selectedType, showPinnedOnly, selectedPipelineId]);
 
+  // Reset and re-fetch when pipeline changes
   useEffect(() => {
+    setIsLoading(true);
     const debounceTimeout = setTimeout(() => {
       fetchArtifacts();
     }, 300);

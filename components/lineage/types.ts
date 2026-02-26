@@ -215,11 +215,22 @@ export interface UnifiedLineageEdge {
 }
 
 // Blast radius result from engine API
+export interface BlastRadiusAffectedNode {
+  id: string;
+  name: string;
+  fqn: string;
+  kind: string;
+  domain: string;
+  platform?: string;
+  criticality: string;
+  impact: string;
+}
+
 export interface BlastRadiusResult {
   total_downstream: number;
   by_domain: Record<string, number>;
   by_kind: Record<string, number>;
-  critical_paths: number;
+  affected: BlastRadiusAffectedNode[];
 }
 
 // Helper to render a column mapping (handles both string and object forms)
@@ -666,7 +677,7 @@ export function getDefaultFilterState(): LineageFilterState {
     searchQuery: '',
     lineageLevel: 'all',
     minConfidence: 0,
-    showInferred: true,
+    showInferred: false,
   };
 }
 
@@ -680,7 +691,7 @@ export function applyFilterPreset(preset: LineageFilterPreset): LineageFilterSta
     searchQuery: '',
     lineageLevel: 'all',
     minConfidence: 0,
-    showInferred: true,
+    showInferred: false,
   };
 }
 

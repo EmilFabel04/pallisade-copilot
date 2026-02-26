@@ -1,0 +1,71 @@
+---
+title: Microsoft Teams
+description: Connect Microsoft Teams to Pallisade for alert delivery via incoming webhook, with adaptive card formatting for findings and pipeline health updates.
+section: integrations
+order: 19
+---
+
+# Microsoft Teams
+
+## Overview
+
+The Microsoft Teams integration sends Pallisade alerts and notifications to a Teams channel via an incoming webhook. Messages are formatted as Adaptive Cards with finding details, severity indicators, affected resources, and suggested actions.
+
+Key capabilities:
+
+- **Webhook-based delivery** -- no app installation required, just a webhook URL
+- **Adaptive Card formatting** -- rich, structured messages with severity colors and action buttons
+- **Finding notifications** -- real-time alerts for critical and high-severity findings
+- **Pipeline health updates** -- summaries of pipeline failures and freshness violations
+- **Zero-config routing** -- all alerts go to the configured webhook channel
+
+## Prerequisites
+
+- A Microsoft Teams channel where you have permission to add connectors
+- An **Incoming Webhook** connector configured on the target channel
+
+<Callout type="tip">
+To create an incoming webhook: right-click the target channel in Teams, select **Connectors** (or **Manage channel > Connectors**), find **Incoming Webhook**, click **Configure**, give it a name (e.g., "Pallisade Alerts"), and copy the generated webhook URL.
+</Callout>
+
+## Setup
+
+1. Navigate to **Settings > Integrations** and select **Microsoft Teams** from the Notifications category.
+2. Fill in the connection field:
+
+| Field | Required | Description |
+|---|---|---|
+| `webhook_url` | Yes | Incoming Webhook URL (starts with `https://outlook.office.com/webhook/...`) |
+
+3. Click **Test Connection** to send a test adaptive card to the configured channel.
+
+## What Gets Sent
+
+| Notification Type | Card Content |
+|---|---|
+| **Critical findings** | Red severity badge, finding title, affected resource, error details, suggested fix |
+| **High findings** | Orange severity badge, finding title, resource summary |
+| **Pipeline failures** | Failure type, connector/DAG/flow name, error message, timestamp |
+| **Freshness violations** | Resource name, hours overdue, expected SLA threshold |
+| **Health summaries** | Finding count by severity, overall health score, top issues |
+
+## Troubleshooting
+
+**"400 Bad Request" when sending**
+The webhook URL may be malformed or the connector was removed. Regenerate the webhook in the Teams channel connector settings.
+
+**"410 Gone" error**
+The webhook has been deleted or the channel was removed. Create a new incoming webhook and update the URL in Pallisade.
+
+**Messages not appearing in channel**
+Verify the webhook URL is complete (do not truncate it). Also confirm the Teams channel still exists and the connector is active.
+
+**Adaptive Cards rendering incorrectly**
+Some Teams clients (especially older mobile versions) may not fully render all Adaptive Card features. The message content is still delivered as text fallback.
+
+**Rate limiting**
+Microsoft Teams webhooks have rate limits (approximately 4 messages per second). Pallisade batches alerts to stay within this limit. During large scans, delivery may be slightly delayed.
+
+<Callout type="warning">
+Incoming Webhooks do not support bidirectional communication. Pallisade can send alerts to Teams but cannot receive responses. For interactive workflows, consider pairing with a ticketing integration (Jira, Linear).
+</Callout>

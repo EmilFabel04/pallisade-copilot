@@ -44,10 +44,14 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     });
 
+    // Optional: filter by stackId if provided
+    const stackId = request.nextUrl.searchParams.get('stackId');
+
     // Fetch Pipeline nodes (new approach)
     const pipelineNodes = await prisma.pipelineNode.findMany({
       where: {
         stack: { organizationId: user.organizationId },
+        ...(stackId ? { stackId } : {}),
       },
       select: {
         id: true,

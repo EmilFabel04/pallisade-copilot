@@ -164,7 +164,7 @@ export async function POST(
     console.log(`[LINEAGE] Starting investigation with ${toolConfigs.length} tools: ${toolConfigs.map(t => t.tool_type).join(', ')}`);
 
     // --- Call the Investigator endpoint (single request for all tools) ---
-    const investigateResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/investigate`, {
+    const investigateResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/investigate?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -291,7 +291,7 @@ export async function POST(
 
     // Persist engine graph to snapshot for restart recovery
     try {
-      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot`, {
+      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot?stack_id=${stackId}`, {
         signal: AbortSignal.timeout(10000),
       });
       if (snapshotRes.ok) {
@@ -510,7 +510,8 @@ export async function DELETE(
     // Clear in-memory engine graph and run registry so stale views aren't served
     const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
     try {
-      await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/clear-cache`, {
+      const { stackId: delStackId } = await params;
+      await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/clear-cache?stack_id=${delStackId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(5000),

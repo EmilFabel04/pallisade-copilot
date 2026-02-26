@@ -1,0 +1,84 @@
+---
+title: Snowflake
+description: Connect Snowflake to Pallisade for schema discovery, deep column statistics, query history lineage, and role-based access monitoring.
+section: integrations
+order: 2
+---
+
+# Snowflake
+
+## Overview
+
+The Snowflake integration connects Pallisade to your Snowflake Data Cloud. It reads table and column metadata from `INFORMATION_SCHEMA`, computes column statistics with `PERCENTILE_CONT` and `APPROX_COUNT_DISTINCT`, and retrieves up to one year of query history from `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY` for lineage analysis.
+
+Key capabilities:
+
+- **Schema discovery** -- tables, views, columns, data types, comments, and clustering keys
+- **Column statistics** -- null rates, distinct counts, percentiles, min/max, top values
+- **Query history lineage** -- up to 365 days of SQL logs for automatic lineage
+- **Primary keys** -- detected via `SHOW PRIMARY KEYS`
+- **Data freshness** -- `LAST_ALTERED` metadata or timestamp column scanning
+- **Micro-partition awareness** -- clustering key detection for optimization insights
+
+## Prerequisites
+
+- A Snowflake account with an active warehouse
+- A user with at least the following privileges:
+  - `USAGE` on the target warehouse, database, and schemas
+  - `SELECT` on tables you want to profile
+  - `IMPORTED PRIVILEGES` on `SNOWFLAKE.ACCOUNT_USAGE` (for query history lineage)
+
+<Callout type="tip">
+Create a dedicated `PALLISADE_READER` role with read-only access. Grant it `IMPORTED PRIVILEGES` on the `SNOWFLAKE` database to enable query history without exposing write access.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Snowflake** from the Warehouse layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `account` | Yes | Account identifier (e.g., `xy12345.us-east-1`) |
+| `username` | Yes | Snowflake username |
+| `password` | Yes | Snowflake password |
+| `warehouse` | Yes | Compute warehouse to use (e.g., `COMPUTE_WH`) |
+| `database` | Yes | Database to scan |
+| `schemas` | No | Select specific schemas, or leave empty to scan all |
+
+3. Click **Test Connection**. Pallisade runs `SELECT CURRENT_VERSION()` to verify.
+4. Scanning begins across all selected schemas in the target database.
+
+<Callout type="warning">
+The `account` identifier format varies by cloud provider and region. For AWS it is typically `orgname-accountname` or `xy12345.us-east-1`. For Azure, use `xy12345.east-us-2.azure`. Check your Snowflake URL for the correct format.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Tables and views** | From `INFORMATION_SCHEMA.TABLES` with type, row count, bytes, owner |
+| **Columns** | Name, data type, nullability, default, precision, scale, comment |
+| **Primary keys** | Via `SHOW PRIMARY KEYS` |
+| **Clustering keys** | Parsed from `CLUSTERING_KEY` column |
+| **Column statistics** | Null rate, distinct count, min/max, avg, stddev, percentiles (25/50/75/90/99), top values |
+| **Freshness** | `LAST_ALTERED` from table metadata or MAX of timestamp column |
+| **Query history** | Up to 365 days from `ACCOUNT_USAGE.QUERY_HISTORY` -- SQL text, user, role, warehouse, bytes scanned, duration |
+| **Lineage edges** | SQL parsing of query history for table-to-table relationships |
+
+## Troubleshooting
+
+**"Insufficient privileges" on ACCOUNT_USAGE**
+Run `GRANT IMPORTED PRIVILEGES ON DATABASE SNOWFLAKE TO ROLE your_role;` as `ACCOUNTADMIN`.
+
+**Connection timeout**
+Ensure the warehouse is not suspended. Pallisade sets `login_timeout=30` and `network_timeout=60`. If your warehouse takes longer to resume, increase the auto-resume timeout in Snowflake.
+
+**No schemas found**
+The user may lack `USAGE` on the database. Verify with `SHOW SCHEMAS IN DATABASE your_db;` using the same credentials.
+
+**Missing credentials error**
+All four required fields (account, username, password, database) must be filled. The adapter validates these before attempting connection.
+
+**Query history is empty**
+`ACCOUNT_USAGE` views have a latency of up to 45 minutes. Recent queries may not appear immediately. Also confirm the role has `IMPORTED PRIVILEGES` on the `SNOWFLAKE` database.

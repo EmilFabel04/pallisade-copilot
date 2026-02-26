@@ -1,0 +1,80 @@
+---
+title: Power BI
+description: Connect Microsoft Power BI to Pallisade for dataset refresh monitoring, gateway health, report tracking, and workspace health analysis.
+section: integrations
+order: 16
+---
+
+# Power BI
+
+## Overview
+
+The Power BI integration connects Pallisade to your Power BI tenant via the REST API using Azure AD Service Principal authentication. Pallisade monitors dataset refresh status, tracks gateway health, detects report errors, and provides workspace-level health analysis.
+
+Key capabilities:
+
+- **Dataset refresh monitoring** -- refresh status, schedule, duration, and failure tracking
+- **Gateway health** -- live/warning/error/offline status for on-premises gateways
+- **Report tracking** -- report metadata, associated datasets, and workspace organization
+- **Workspace health** -- aggregate health metrics per workspace
+- **Datasource connections** -- track underlying data source connectivity
+- **Storage mode awareness** -- Import, DirectQuery, and Dual mode detection
+
+## Prerequisites
+
+- An Azure AD tenant with Power BI
+- An **App Registration** (Service Principal) in Azure AD with:
+  - `Dataset.Read.All` and `Workspace.Read.All` permissions in the Power BI API
+  - Admin consent granted for the tenant
+- The Service Principal must be added to Power BI workspaces as a Member or higher
+
+<Callout type="tip">
+Create the App Registration in Azure Portal under **Azure Active Directory > App registrations > New registration**. After creating it, go to **API permissions > Add a permission > Power BI Service** and add the required permissions.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Power BI** from the Reporting layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `tenant_id` | Yes | Azure AD Tenant ID |
+| `client_id` | Yes | Application (Client) ID from your App Registration |
+| `client_secret` | Yes | Client Secret from your App Registration |
+| `workspace_id` | No | Filter to a specific workspace ID |
+
+3. Click **Test Connection**. Pallisade authenticates via OAuth2 client credentials flow and lists accessible workspaces.
+
+<Callout type="warning">
+Power BI Service Principal access must be enabled by a Power BI Admin. Go to **Power BI Admin Portal > Tenant settings > Developer settings > Allow service principals to use Power BI APIs** and enable it for your security group.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Datasets** | ID, name, workspace, is_refreshable, storage mode (Import/DirectQuery/Dual), configured_by |
+| **Refresh schedules** | Enabled status, days, times |
+| **Refresh history** | Status (Completed/Failed/InProgress), timestamp, duration, error messages |
+| **Reports** | ID, name, workspace, associated dataset |
+| **Gateways** | ID, name, status (Live/Warning/Error/Offline), gateway type |
+| **Datasources** | Connection details, gateway association, credential status |
+| **Workspaces** | ID, name, type, capacity assignment |
+
+## Troubleshooting
+
+**"AADSTS7000215: Invalid client secret"**
+The client secret has expired. Generate a new one in Azure Portal under the App Registration's **Certificates & secrets** section.
+
+**"Unauthorized" despite correct credentials**
+The Service Principal needs to be added to each Power BI workspace. In the workspace settings, add the App Registration as a Member.
+
+**No datasets found**
+If `workspace_id` is set, verify it is correct. Without it, Pallisade scans all workspaces accessible to the Service Principal.
+
+**Gateway shows "Offline"**
+The on-premises data gateway service is not running or cannot reach Power BI Service. Check the gateway machine and restart the gateway service.
+
+**Refresh history shows "Failed" with no error**
+Some refresh failures have error details only visible in the Power BI Service UI. Check the dataset's refresh history in the Power BI workspace for the full error message.

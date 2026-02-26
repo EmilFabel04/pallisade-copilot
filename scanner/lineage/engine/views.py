@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 # Layout constants
 LAYER_SPACING_X = 300  # px between layers (left-to-right)
-NODE_SPACING_Y = 100   # px between nodes within a layer
+NODE_SPACING_Y = 130   # px between nodes within a layer
 CLUSTER_PADDING = 40    # px padding around cluster contents
 PIPELINE_NODE_SPACING_X = 350  # px between pipeline overview nodes
 
@@ -737,13 +737,33 @@ class ViewBuilder:
             elif fqn not in warehouse_fqn_map:
                 warehouse_fqn_map[fqn] = node.id
 
+        # Step 2b: Deduplicate inferred (bridge) nodes by FQN
+        # If the reconciler created an inferred node for an asset that was
+        # already discovered by an extractor, drop the inferred duplicate
+        # and remap its edges to the real node.
+        real_fqn_map: Dict[str, str] = {}  # FQN → real node ID
+        inferred_remap: Dict[str, str] = {}  # inferred node ID → real node ID
+
+        for node in self.graph.nodes.values():
+            if not node.fqn or node.inferred:
+                continue
+            if node.fqn not in real_fqn_map:
+                real_fqn_map[node.fqn] = node.id
+
+        for node in self.graph.nodes.values():
+            if not node.fqn or not node.inferred:
+                continue
+            real_id = real_fqn_map.get(node.fqn)
+            if real_id and real_id != node.id:
+                inferred_remap[node.id] = real_id
+
         # Step 3: Build node list
         view_nodes: List[ViewNode] = []
         node_id_set: Set[str] = set()
         unmapped: List[Dict[str, Any]] = []
 
         for node in sorted(self.graph.nodes.values(), key=lambda n: n.fqn):
-            if node.id in airflow_remap:
+            if node.id in airflow_remap or node.id in inferred_remap:
                 continue
 
             ct = node.canonical_type or map_node_type(node).value
@@ -806,13 +826,15 @@ class ViewBuilder:
                     "sources": node.sources,
                 })
 
-        # Step 4: Build edges (remap airflow refs)
+        # Step 4: Build edges (remap airflow refs and inferred duplicates)
         view_edges: List[ViewEdge] = []
         seen_edge_pairs: Set[str] = set()
 
         for edge in self.graph.edges.values():
             src_id = airflow_remap.get(edge.source_id, edge.source_id)
             tgt_id = airflow_remap.get(edge.target_id, edge.target_id)
+            src_id = inferred_remap.get(src_id, src_id)
+            tgt_id = inferred_remap.get(tgt_id, tgt_id)
 
             if src_id not in node_id_set or tgt_id not in node_id_set:
                 continue
@@ -868,6 +890,7 @@ class ViewBuilder:
                 "needsMappingCount": len(unmapped),
                 "clusterCount": len(clusters),
                 "airflowDeduped": len(airflow_remap),
+                "inferredDeduped": len(inferred_remap),
             },
         )
 

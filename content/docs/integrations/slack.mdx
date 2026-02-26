@@ -1,0 +1,76 @@
+---
+title: Slack
+description: Connect Slack to Pallisade for real-time alert routing, finding notifications, and pipeline health updates delivered to your channels.
+section: integrations
+order: 18
+---
+
+# Slack
+
+## Overview
+
+The Slack integration sends Pallisade alerts and notifications directly to your Slack channels. When Pallisade detects data quality issues, pipeline failures, freshness violations, or other findings, it delivers formatted messages to the channels you configure. This keeps your data team informed without leaving their existing communication tool.
+
+Key capabilities:
+
+- **Alert routing** -- send findings to specific channels based on severity or type
+- **Finding notifications** -- real-time messages when new critical/high findings are detected
+- **Pipeline health updates** -- periodic summaries of pipeline and integration health
+- **Customizable defaults** -- set a default channel for all alerts, with per-rule overrides
+- **Rich formatting** -- messages include finding details, affected resources, and suggested actions
+
+## Prerequisites
+
+- A Slack workspace where you have permission to install apps
+- A **Slack App** with the following bot token scopes:
+  - `chat:write` -- post messages to channels
+  - `channels:read` -- list public channels for channel selection
+  - `groups:read` -- list private channels the bot is a member of
+
+<Callout type="tip">
+Create a Slack App at **https://api.slack.com/apps > Create New App > From Scratch**. After creating the app, navigate to **OAuth & Permissions**, add the required scopes, and install the app to your workspace. Copy the **Bot User OAuth Token** (starts with `xoxb-`).
+</Callout>
+
+## Setup
+
+1. Navigate to **Settings > Integrations** and select **Slack** from the Notifications category.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `bot_token` | Yes | Bot User OAuth Token (starts with `xoxb-...`) |
+| `channel` | No | Default channel for alerts (e.g., `#data-alerts`) |
+
+3. Click **Test Connection** to verify the token and send a test message.
+4. Invite the Pallisade bot to your target channels by typing `/invite @Pallisade` in each channel.
+
+<Callout type="warning">
+The Slack bot must be invited to each channel where it should post messages. Without an invitation, messages to that channel will fail silently. For private channels, use `/invite @Pallisade` after adding the bot.
+</Callout>
+
+## What Gets Sent
+
+| Notification Type | Content |
+|---|---|
+| **Critical findings** | Finding title, severity, affected resource, suggested fix, link to Pallisade |
+| **High findings** | Finding title, severity, resource details |
+| **Pipeline failures** | Failed connector/DAG/flow name, error summary, time of failure |
+| **Freshness violations** | Table or connector name, hours since last update, expected SLA |
+| **Health summaries** | Periodic rollup of findings by severity across all integrations |
+
+## Troubleshooting
+
+**"not_in_channel" error**
+The bot has not been invited to the target channel. Run `/invite @Pallisade` in the channel.
+
+**"invalid_auth" error**
+The bot token is invalid or the app was uninstalled. Regenerate the token in your Slack App settings and update it in Pallisade.
+
+**Messages not appearing**
+Check that the channel name is correct (include the `#` prefix or use the channel ID). Also verify the bot has `chat:write` scope.
+
+**Rate limiting**
+Slack limits API calls to approximately 1 message per second per channel. Pallisade batches alerts to avoid hitting this limit. During large scan runs, some messages may be slightly delayed.
+
+**Private channel not listed**
+The bot must be a member of private channels to list or post to them. Invite the bot first, then configure the channel in Pallisade.

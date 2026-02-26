@@ -39,13 +39,14 @@ export async function GET(
     const action = searchParams.get('action') || 'stats';
     const assetId = searchParams.get('id') || '';
 
-    // Build query params to forward
+    // Build query params to forward (always include stack_id for pipeline isolation)
     const forwardParams = new URLSearchParams();
+    forwardParams.set('stack_id', stackId);
     for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane']) {
       const val = searchParams.get(key);
       if (val) forwardParams.set(key, val);
     }
-    const qs = forwardParams.toString() ? `?${forwardParams.toString()}` : '';
+    const qs = `?${forwardParams.toString()}`;
 
     let endpoint: string;
     switch (action) {
@@ -140,7 +141,7 @@ export async function GET(
 
         if (snapshot?.graphData) {
           console.log(`[ENGINE PROXY] Restoring graph from snapshot ${snapshot.id}`);
-          const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore`, {
+          const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore?stack_id=${stackId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ graph_data: snapshot.graphData }),
@@ -202,7 +203,7 @@ export async function POST(
       }
 
       // Fetch the serialized graph from FastAPI
-      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot`, {
+      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot?stack_id=${stackId}`, {
         signal: AbortSignal.timeout(10000),
       });
       if (!snapshotRes.ok) {
@@ -261,16 +262,17 @@ export async function POST(
     let endpoint: string;
     let timeout = 120000;
 
+    const stackQs = `?stack_id=${stackId}`;
     switch (action) {
       case 'build':
-        endpoint = '/api/v1/lineage/engine/build';
+        endpoint = `/api/v1/lineage/engine/build${stackQs}`;
         break;
       case 'reconcile':
-        endpoint = '/api/v1/lineage/engine/reconcile';
+        endpoint = `/api/v1/lineage/engine/reconcile${stackQs}`;
         timeout = 180000; // LLM call may take longer
         break;
       case 'reconcile-apply':
-        endpoint = '/api/v1/lineage/engine/reconcile/apply';
+        endpoint = `/api/v1/lineage/engine/reconcile/apply${stackQs}`;
         break;
       default:
         return NextResponse.json({ error: `Unknown POST action: ${action}` }, { status: 400 });

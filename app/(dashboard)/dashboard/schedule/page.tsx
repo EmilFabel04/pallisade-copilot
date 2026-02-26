@@ -34,11 +34,19 @@ export default function SchedulePage() {
   // Integrations for create modal
   const [integrations, setIntegrations] = useState<Array<{ id: string; name: string; type: string }>>([]);
 
-  // Fetch tasks
+  // Fetch tasks scoped to current pipeline
   const fetchTasks = useCallback(async () => {
+    if (!selectedPipeline?.id) {
+      setTasks([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     try {
-      const params = filter !== 'all' ? `?status=${filter}` : '';
-      const res = await fetch(`/api/schedule/tasks${params}`);
+      const params = new URLSearchParams();
+      if (filter !== 'all') params.set('status', filter);
+      params.set('stackId', selectedPipeline.id);
+      const res = await fetch(`/api/schedule/tasks?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setTasks(data.tasks || []);
@@ -48,9 +56,12 @@ export default function SchedulePage() {
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [filter, selectedPipeline?.id]);
 
+  // Re-fetch and reset selection when pipeline changes
   useEffect(() => {
+    setSelectedTask(null);
+    setTaskRuns([]);
     fetchTasks();
   }, [fetchTasks]);
 

@@ -143,7 +143,7 @@ export async function POST(
     );
 
     // Call the FastAPI LLM extraction SSE endpoint
-    const scannerResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract-llm`, {
+    const scannerResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract-llm?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { PipelineNode, getToolById } from '@/components/pipeline/types';
+import { usePipeline } from '@/contexts/PipelineContext';
 
 // Cache TTL: 5 minutes
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_KEY = 'pallisade_sources_cache';
+const CACHE_KEY_PREFIX = 'pallisade_sources_cache_';
 
 interface TableInfo {
   name: string;
@@ -53,28 +54,26 @@ interface CacheEntry {
   timestamp: number;
 }
 
-// Load cache from localStorage
-function loadCache(): CacheEntry | null {
-  if (typeof window === 'undefined') return null;
+// Load cache from localStorage (scoped per pipeline)
+function loadCache(pipelineId: string): CacheEntry | null {
+  if (typeof window === 'undefined' || !pipelineId) return null;
   try {
-    const cached = localStorage.getItem(CACHE_KEY);
+    const cached = localStorage.getItem(CACHE_KEY_PREFIX + pipelineId);
     if (!cached) return null;
     const entry: CacheEntry = JSON.parse(cached);
-    // Check if cache is still valid
     if (Date.now() - entry.timestamp < CACHE_TTL_MS) {
       return entry;
     }
-    // Cache expired
-    localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem(CACHE_KEY_PREFIX + pipelineId);
     return null;
   } catch {
     return null;
   }
 }
 
-// Save cache to localStorage
+// Save cache to localStorage (scoped per pipeline)
 function saveCache(data: Record<string, SourceData>, nodes: PipelineNode[], stackId: string): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || !stackId) return;
   try {
     const entry: CacheEntry = {
       data,
@@ -82,13 +81,14 @@ function saveCache(data: Record<string, SourceData>, nodes: PipelineNode[], stac
       stackId,
       timestamp: Date.now(),
     };
-    localStorage.setItem(CACHE_KEY, JSON.stringify(entry));
+    localStorage.setItem(CACHE_KEY_PREFIX + stackId, JSON.stringify(entry));
   } catch {
     // localStorage might be full or disabled
   }
 }
 
 export default function SourcesPage() {
+  const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
   const [nodes, setNodes] = useState<PipelineNode[]>([]);
   const [currentStackId, setCurrentStackId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,7 +97,7 @@ export default function SourcesPage() {
   const [loadingData, setLoadingData] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'tables' | 'models' | 'connectors'>('tables');
   const [searchQuery, setSearchQuery] = useState('');
-  const initializedRef = useRef(false);
+  const lastPipelineIdRef = useRef<string | null>(null);
 
   // Load node data function
   const loadNodeData = useCallback(async (nodeId: string, stackId: string, forceRefresh = false) => {
@@ -163,21 +163,38 @@ export default function SourcesPage() {
     return 'tables';
   };
 
-  // Initialize from cache or fetch fresh data
+  // Initialize or re-initialize when pipeline changes
   useEffect(() => {
-    if (initializedRef.current) return;
-    initializedRef.current = true;
+    if (pipelineLoading) return;
+    if (!selectedPipelineId) {
+      setLoading(false);
+      setNodes([]);
+      setNodeData({});
+      setSelectedNode(null);
+      setCurrentStackId(null);
+      return;
+    }
+
+    // Skip if pipeline hasn't changed
+    if (lastPipelineIdRef.current === selectedPipelineId) return;
+    lastPipelineIdRef.current = selectedPipelineId;
 
     const initialize = async () => {
-      // Try to load from cache first
-      const cached = loadCache();
+      setLoading(true);
+      // Reset state for new pipeline
+      setNodes([]);
+      setNodeData({});
+      setSelectedNode(null);
+      setSearchQuery('');
+
+      // Try pipeline-scoped cache first
+      const cached = loadCache(selectedPipelineId);
 
       if (cached) {
         setNodes(cached.nodes);
         setCurrentStackId(cached.stackId);
         setNodeData(cached.data);
 
-        // Auto-select first node
         const firstConnected = cached.nodes.find((n: PipelineNode) =>
           n.status === 'ACTIVE' || n.status === 'CONNECTED'
         ) || cached.nodes[0];
@@ -190,9 +207,9 @@ export default function SourcesPage() {
         return;
       }
 
-      // No cache, fetch fresh
+      // No cache, fetch fresh using selected pipeline ID
       try {
-        const res = await fetch('/api/pipeline');
+        const res = await fetch(`/api/pipeline?stackId=${selectedPipelineId}`);
         if (res.ok) {
           const data = await res.json();
           if (data.stack) {
@@ -219,7 +236,7 @@ export default function SourcesPage() {
     };
 
     initialize();
-  }, []);
+  }, [selectedPipelineId, pipelineLoading]);
 
   // Load data when node is selected (only if not cached)
   useEffect(() => {

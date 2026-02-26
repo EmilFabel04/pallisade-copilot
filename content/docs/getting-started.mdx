@@ -1,0 +1,138 @@
+---
+title: Getting Started
+description: Set up your first pipeline, connect a warehouse, and start using Scout in minutes.
+section: guides
+order: 1
+---
+
+# Getting Started
+
+This guide walks you through setting up Pallisade from scratch. By the end, you will have a connected pipeline, an active monitor, and your first Scout conversation.
+
+## Prerequisites
+
+- A Pallisade account (sign up at pallisade.com)
+- Credentials for at least one data warehouse (BigQuery, Snowflake, PostgreSQL, Redshift, SQL Server, Azure SQL, or Databricks)
+- Optionally, credentials for your transformation layer (dbt Cloud or dbt Core) and orchestration tool (Airflow, Dagster, or Prefect)
+
+## Step 1: Create a Pipeline
+
+A pipeline is the top-level container that groups your integrations, monitors, and lineage into a single workspace.
+
+1. Open the **Dashboard** and click **New Pipeline**.
+2. Give your pipeline a name (e.g., `production-analytics`).
+3. Optionally select a stack template to pre-configure common integration combinations, or start from scratch.
+4. Click **Create**.
+
+<Callout type="tip">
+Use descriptive pipeline names that match your team's terminology. You can create multiple pipelines to separate environments (production vs. staging) or domains (marketing vs. finance).
+</Callout>
+
+## Step 2: Connect Your Warehouse
+
+Your warehouse connection is what allows Scout to query live data, discover schemas, and run monitors.
+
+1. Inside your pipeline, go to **Settings** and click **Add Integration**.
+2. Select your warehouse type (e.g., BigQuery, Snowflake).
+3. Enter your connection credentials.
+4. Click **Test Connection** to verify access.
+5. Click **Save**.
+
+**Credential requirements by warehouse:**
+
+| Warehouse | Required Fields |
+|-----------|----------------|
+| BigQuery | Service account JSON key, project ID, default dataset |
+| Snowflake | Account, warehouse, database, schema, user, password/key |
+| PostgreSQL | Host, port, database, user, password, SSL mode |
+| Redshift | Host, port, database, user, password |
+| SQL Server | Host, port, database, user, password |
+| Databricks | Host, HTTP path, access token, catalog |
+
+<Callout type="warning">
+Use a read-only service account for your warehouse connection. Scout only needs `SELECT` access for querying and schema discovery. Write access is never required.
+</Callout>
+
+## Step 3: Add Your Transformation Layer
+
+Connecting your transformation tool gives Scout access to model metadata, lineage, and test results.
+
+**dbt Cloud:**
+1. Add a dbt Cloud integration with your API token and account ID.
+2. Pallisade will pull model metadata, manifest, and test results automatically.
+
+**dbt Core:**
+1. Add a dbt Core integration and point it to your `manifest.json` file location (local path or cloud storage).
+2. Pallisade parses the manifest for model definitions, lineage, and documentation.
+
+## Step 4: Run Onboarding
+
+Onboarding teaches Scout about your specific setup so it can answer questions accurately without repeated clarification.
+
+1. Open the **Assistant** page and select **Onboard** mode.
+2. Scout will ask you questions about your connected integrations -- one at a time.
+3. Answer each question. Scout acknowledges your answer and follows up if it needs more detail.
+4. Topics covered include:
+   - Warehouse structure (projects, datasets, schemas, roles)
+   - Deployment methods (how dbt models are deployed, how DAGs run)
+   - Team workflows (PR review process, who owns what)
+   - Naming conventions (prefixes, folder structure)
+5. When onboarding is complete, Scout summarizes what it learned and what capabilities it has unlocked.
+
+<Callout type="info">
+You can re-run onboarding at any time if your setup changes. Scout will only ask about topics that have new or missing context.
+</Callout>
+
+## Step 5: Start Asking Questions
+
+With your warehouse connected and onboarding complete, open the **Assistant** page and start a conversation.
+
+Try these example prompts to get started:
+
+```
+What are the largest tables in my warehouse by row count?
+```
+
+```
+Show me the schema for the orders table.
+```
+
+```
+Which tables were updated in the last 24 hours?
+```
+
+Scout will query your warehouse directly and return real results. See the [Copilot guide](/docs/copilot) for details on all eight interaction modes.
+
+## Step 6: Schedule Monitors
+
+Monitors run automated quality checks on a cron schedule and alert your team when something breaks.
+
+1. Go to the **Schedule** page and click **New Monitor**.
+2. Select a monitor type (e.g., Freshness, Volume, Schema Change).
+3. Choose the target table and configure thresholds.
+4. Set a cron schedule (e.g., every hour, every day at 6 AM).
+5. Click **Create**.
+
+Pallisade auto-configures sensible defaults: it discovers timestamp columns, computes baseline statistics from historical data, and sets initial thresholds automatically. You can adjust these at any time.
+
+See the [Scheduled Monitoring guide](/docs/scheduled-monitoring) for the full list of monitor types and configuration options.
+
+## Step 7: Set Up Alerts
+
+Connect an alert channel so your team gets notified when monitors fail.
+
+1. Go to **Settings** and add an alert integration (Slack, Microsoft Teams, PagerDuty, or OpsGenie).
+2. Configure which statuses trigger alerts (FAIL only, FAIL + WARN, etc.).
+3. Assign the alert channel to specific monitors or apply it pipeline-wide.
+
+<Callout type="tip">
+Start with a Slack channel for FAIL-only alerts on your most critical tables. You can expand to WARN alerts and additional channels once you have tuned your thresholds.
+</Callout>
+
+## Next Steps
+
+- [AI Copilot (Scout)](/docs/copilot) -- Learn all eight interaction modes
+- [Data Lineage](/docs/lineage) -- Explore your dependency graph
+- [Pipeline Builder](/docs/pipeline-builder) -- Organize your integrations
+- [Scheduled Monitoring](/docs/scheduled-monitoring) -- Set up automated checks
+- [Team & Access Control](/docs/team-access) -- Invite your team

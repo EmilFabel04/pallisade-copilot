@@ -217,24 +217,59 @@ class GraphStore:
     def blast_radius(
         self, asset_id: str, filters: Optional[Filters] = None,
     ) -> Dict[str, Any]:
-        """Compute the downstream blast radius of an asset."""
+        """Compute the downstream blast radius of an asset with impact details."""
         if not self.graph:
-            return {"total": 0, "by_kind": {}, "by_domain": {}}
+            return {"total_downstream": 0, "by_kind": {}, "by_domain": {}, "affected": []}
 
         downstream = self.get_downstream(asset_id, filters=filters)
 
         by_kind: Dict[str, int] = defaultdict(int)
         by_domain: Dict[str, int] = defaultdict(int)
+        affected: list = []
+
         for node in downstream:
             by_kind[node.asset_kind.value] += 1
             by_domain[node.platform_domain.value] += 1
 
+            # Build impact description based on node type and domain
+            impact = "affected"
+            domain = node.platform_domain.value
+            kind = node.asset_kind.value
+            if domain == "bi" or kind in ("dashboard", "report", "workbook"):
+                impact = "stale reports / broken dashboards"
+            elif kind in ("model", "view"):
+                impact = "query failures on rebuild"
+            elif kind == "table":
+                impact = "schema mismatch / stale data"
+            elif domain == "transform":
+                impact = "transformation failures"
+
+            affected.append({
+                "id": node.id,
+                "name": node.name,
+                "fqn": node.fqn,
+                "kind": kind,
+                "domain": domain,
+                "platform": node.platform,
+                "criticality": node.criticality,
+                "impact": impact,
+            })
+
+        # Sort: critical nodes first, then by domain priority
+        domain_priority = {"bi": 0, "warehouse": 1, "transform": 2, "other": 3}
+        crit_priority = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        affected.sort(key=lambda a: (
+            crit_priority.get(a["criticality"], 3),
+            domain_priority.get(a["domain"], 3),
+            a["name"],
+        ))
+
         return {
             "asset_id": asset_id,
-            "total": len(downstream),
+            "total_downstream": len(downstream),
             "by_kind": dict(by_kind),
             "by_domain": dict(by_domain),
-            "affected_nodes": [n.id for n in downstream],
+            "affected": affected,
         }
 
     def subgraph(

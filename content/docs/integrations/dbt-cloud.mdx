@@ -1,0 +1,83 @@
+---
+title: dbt Cloud
+description: Connect dbt Cloud to Pallisade for model lineage, test coverage analysis, documentation completeness, and run health monitoring.
+section: integrations
+order: 7
+---
+
+# dbt Cloud
+
+## Overview
+
+The dbt Cloud integration connects Pallisade to your hosted dbt environment via the dbt Cloud API. Pallisade parses your manifest artifacts to extract model lineage, test coverage, source freshness configuration, and documentation completeness. It supports both the Admin API (full run history) and the Discovery API (metadata only).
+
+Key capabilities:
+
+- **Model lineage** -- full dependency graph from sources through staging, intermediate, and mart models
+- **Test coverage** -- which models and columns have tests, and which are untested
+- **Documentation completeness** -- percentage of models and columns with descriptions
+- **Source freshness** -- freshness SLA configuration from your dbt sources
+- **Run health** -- job run history, success rates, and duration trends (Admin API)
+- **Materialization tracking** -- table, view, incremental, and ephemeral classification
+
+## Prerequisites
+
+- A dbt Cloud account with at least one project
+- A **service token** with appropriate permissions:
+  - **Admin API mode**: Token needs "Job Viewer" or broader permissions
+  - **Discovery API mode**: Token needs "Metadata Only" permissions
+
+<Callout type="tip">
+The Discovery API mode is read-only and works with minimal permissions. Use it if you only need metadata and lineage without run history. The Admin API provides full job run history and artifact access.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **dbt Cloud** from the Transformation layer.
+2. Choose your API mode and fill in the fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `api_mode` | Yes | `admin` (Full Access) or `discovery` (Metadata Only) |
+| `api_token` | Yes | Service token (starts with `dbtc_...`) |
+| `account_id` | Yes | dbt Cloud account ID (required for Admin API) |
+| `environment_id` | No | Environment ID (required for Discovery API mode) |
+| `project_id` | No | Filter to a specific project |
+
+3. Click **Test Connection** to verify your token and account access.
+4. Pallisade fetches the latest manifest and parses all models, sources, tests, and exposures.
+
+<Callout type="warning">
+The `account_id` is found in your dbt Cloud URL: `https://cloud.getdbt.com/deploy/{account_id}/...`. The `environment_id` is visible in the environment settings page.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Models** | Name, unique_id, materialization, schema, database, description, tags, owners |
+| **Sources** | Name, database, schema, tables, freshness configuration (warn/error thresholds) |
+| **Tests** | Test type (unique, not_null, accepted_values, relationships, custom), columns tested |
+| **Lineage** | Full dependency graph -- model depends on sources and other models |
+| **Exposures** | Downstream consumers (dashboards, applications) referencing models |
+| **Columns** | Column-level descriptions and tests per model |
+| **Documentation score** | Percentage of models and columns with non-empty descriptions |
+| **Test coverage score** | Percentage of models and columns with at least one test |
+| **Run history** | Job run status, duration, and success rate (Admin API only) |
+
+## Troubleshooting
+
+**"401 Unauthorized"**
+Your service token is invalid or expired. Generate a new one in dbt Cloud under **Account Settings > API Tokens > Service Tokens**.
+
+**No models found**
+Ensure the project has at least one successful run that produced a `manifest.json`. The Discovery API requires an environment to have a production deployment.
+
+**Missing test or documentation data**
+Tests and docs are only available if they exist in your dbt project. Pallisade reports what is in the manifest -- if models lack tests or descriptions, that reflects the project state.
+
+**Discovery API returns empty results**
+The `environment_id` must point to an environment with a successful dbt run. Check that the environment has recent artifacts available.
+
+**Admin API missing run history**
+The service token needs "Job Viewer" permission at minimum. Check the token's permission scope in dbt Cloud settings.

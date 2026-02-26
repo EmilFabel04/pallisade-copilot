@@ -153,9 +153,42 @@ class LiveWarehouseAdapter(BaseLineageAdapter):
         return parser.parse()
 
     def _run_snowflake(self, conn_config: Dict, options: Dict):
-        # Snowflake parser not yet implemented in parsers/
-        logger.warning("[LiveWarehouse] Snowflake parser not yet available")
-        return None
+        import snowflake.connector
+
+        from ...parsers.snowflake import SnowflakeQueryParser
+
+        account = conn_config.get("account", "")
+        user = conn_config.get("user") or conn_config.get("username", "")
+        password = conn_config.get("password", "")
+        warehouse = conn_config.get("warehouse", "")
+        database = conn_config.get("database", "")
+        schema = conn_config.get("schema", "")
+        role = conn_config.get("role", "")
+
+        connect_kwargs: Dict[str, Any] = {
+            "account": account,
+            "user": user,
+            "password": password,
+        }
+        if warehouse:
+            connect_kwargs["warehouse"] = warehouse
+        if database:
+            connect_kwargs["database"] = database
+        if schema:
+            connect_kwargs["schema"] = schema
+        if role:
+            connect_kwargs["role"] = role
+
+        conn = snowflake.connector.connect(**connect_kwargs)
+        try:
+            parser = SnowflakeQueryParser(
+                connection=conn,
+                days_back=options.get("days_back", 30),
+                use_access_history=options.get("use_access_history", True),
+            )
+            return parser.parse()
+        finally:
+            conn.close()
 
     def _run_postgres(self, conn_config: Dict, options: Dict):
         # Postgres parser not yet implemented in parsers/

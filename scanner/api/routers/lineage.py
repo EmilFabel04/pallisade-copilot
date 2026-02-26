@@ -1017,44 +1017,69 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
     )
 
 
-# Singleton store for the engine graph (in-memory for now)
-_engine_store = None
-_run_registry = None
+# Per-pipeline stores for the engine graph (keyed by stack_id)
+_engine_stores: dict = {}
+_run_registries: dict = {}
 
-# Cached engine adapter results — nodes/edges from each extraction, fed to resolver
-_engine_collected_results: dict = {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
+# Per-pipeline cached engine adapter results — nodes/edges from each extraction
+_engine_collected_results_map: dict = {}
+
+_EMPTY_COLLECTED = lambda: {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
+
+# Track the "current" stack_id for extraction endpoints that accumulate results
+_current_stack_id: str = "default"
 
 
-def _clear_engine_cache():
+def _get_collected_results(stack_id: str | None = None) -> dict:
+    key = stack_id or _current_stack_id
+    if key not in _engine_collected_results_map:
+        _engine_collected_results_map[key] = _EMPTY_COLLECTED()
+    return _engine_collected_results_map[key]
+
+
+# Backwards-compatible global alias so existing extraction code can reference it
+class _CollectedResultsProxy:
+    """Proxy that delegates to per-stack collected results."""
+    def __getitem__(self, key):
+        return _get_collected_results()[key]
+    def __setitem__(self, key, value):
+        _get_collected_results()[key] = value
+    def get(self, key, default=None):
+        return _get_collected_results().get(key, default)
+
+_engine_collected_results = _CollectedResultsProxy()
+
+
+def _clear_engine_cache(stack_id: str | None = None):
     """Reset cached results for a fresh extraction run.
 
     Called before a batch of extractions to prevent stale data from
     previous runs accumulating and causing non-deterministic graphs.
     """
-    global _engine_collected_results
-    _engine_collected_results = {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
+    key = stack_id or _current_stack_id
+    _engine_collected_results_map[key] = _EMPTY_COLLECTED()
 
 
-def _get_engine_store():
-    global _engine_store
-    if _engine_store is None:
+def _get_engine_store(stack_id: str | None = None):
+    key = stack_id or "default"
+    if key not in _engine_stores:
         try:
             from lineage.engine.store import GraphStore
         except ImportError:
             from scanner.lineage.engine.store import GraphStore
-        _engine_store = GraphStore()
-    return _engine_store
+        _engine_stores[key] = GraphStore()
+    return _engine_stores[key]
 
 
-def _get_run_registry():
-    global _run_registry
-    if _run_registry is None:
+def _get_run_registry(stack_id: str | None = None):
+    key = stack_id or "default"
+    if key not in _run_registries:
         try:
             from lineage.engine.run_registry import RunRegistry
         except ImportError:
             from scanner.lineage.engine.run_registry import RunRegistry
-        _run_registry = RunRegistry()
-    return _run_registry
+        _run_registries[key] = RunRegistry()
+    return _run_registries[key]
 
 
 def _rebuild_engine_from_cache() -> None:
@@ -1074,11 +1099,11 @@ def _rebuild_engine_from_cache() -> None:
         except ImportError:
             from scanner.lineage.engine.resolver import ResolverPipeline, ResolverConfig
 
-        store = _get_engine_store()
+        store = _get_engine_store(_current_stack_id)
         pipeline = ResolverPipeline(ResolverConfig())
         store.graph = pipeline.resolve(
-            list(_engine_collected_results["nodes"]),
-            list(_engine_collected_results["edges"]),
+            list(_get_collected_results()["nodes"]),
+            list(_get_collected_results()["edges"]),
         )
         store.resolution_stats = pipeline.stats
         store.graph.built_at = datetime.utcnow()
@@ -1098,7 +1123,7 @@ def _rebuild_engine_from_cache() -> None:
             )
 
         # --- Cross-tool edge synthesis ---
-        dbt_manifest = _engine_collected_results.get("dbt_manifest")
+        dbt_manifest = _get_collected_results().get("dbt_manifest")
         if dbt_manifest and store.graph:
             try:
                 try:
@@ -1108,7 +1133,7 @@ def _rebuild_engine_from_cache() -> None:
                     from scanner.lineage.canonical import CanonicalResolver
                     from scanner.lineage.cross_tool import CrossToolEdgeSynthesizer
 
-                dbt_cfg = _engine_collected_results.get("dbt_config") or {}
+                dbt_cfg = _get_collected_results().get("dbt_config") or {}
                 resolver = CanonicalResolver(
                     default_warehouse=dbt_cfg.get("warehouse_type", "bigquery"),
                     project_id=dbt_cfg.get("namespace", ""),
@@ -1117,7 +1142,7 @@ def _rebuild_engine_from_cache() -> None:
                 resolver.register_dbt_model_targets(dbt_manifest.get("nodes", {}))
 
                 # Patch dbt node schemas if GitHub-derived schema mapping is available
-                schema_mapping = _engine_collected_results.get("schema_mapping")
+                schema_mapping = _get_collected_results().get("schema_mapping")
                 if schema_mapping:
                     for node in store.graph.nodes.values():
                         if node.platform == "dbt" and node.name in schema_mapping:
@@ -1198,7 +1223,7 @@ def _parse_filters(
 
 
 @router.post("/lineage/engine/clear-cache")
-async def engine_clear_cache():
+async def engine_clear_cache(stack_id: Optional[str] = Query(None)):
     """Reset engine cache before a fresh extraction batch.
 
     The frontend calls this before looping over pipeline nodes so that
@@ -1207,28 +1232,31 @@ async def engine_clear_cache():
     are never served after lineage is deleted.
     """
     import logging
-    _clear_engine_cache()
+    global _current_stack_id
+    if stack_id:
+        _current_stack_id = stack_id
+    _clear_engine_cache(stack_id)
 
     # Clear in-memory graph
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     store.graph = None
     store.tool_nodes = []
 
     # Clear run registry so stale pre-computed views are not served
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     registry._runs.clear()
     registry._current_run_id = None
 
-    logging.getLogger(__name__).info("[Engine] clear-cache: Reset engine store, run registry, and collected results")
+    logging.getLogger(__name__).info(f"[Engine] clear-cache: Reset engine store for stack_id={stack_id or 'default'}")
     return {"success": True, "message": "Engine cache cleared"}
 
 
 @router.post("/lineage/engine/build", response_model=EngineGraphResponse)
-async def engine_build(request: EngineBuildRequest):
+async def engine_build(request: EngineBuildRequest, stack_id: Optional[str] = Query(None)):
     """Build a lineage graph from engine config."""
     import asyncio
 
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     try:
         graph = await asyncio.to_thread(store.build_graph, request.config)
         coverage = store.get_stats()
@@ -1254,9 +1282,10 @@ async def engine_upstream(
     domain: Optional[str] = Query(None),
     kind: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    stack_id: Optional[str] = Query(None),
 ):
     """Get upstream lineage for an asset with filtering."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -1274,9 +1303,10 @@ async def engine_downstream(
     domain: Optional[str] = Query(None),
     kind: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    stack_id: Optional[str] = Query(None),
 ):
     """Get downstream lineage for an asset with filtering."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -1293,9 +1323,10 @@ async def engine_blast_radius(
     domain: Optional[str] = Query(None),
     kind: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    stack_id: Optional[str] = Query(None),
 ):
     """Compute the downstream blast radius of an asset."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -1304,9 +1335,9 @@ async def engine_blast_radius(
 
 
 @router.get("/lineage/engine/explain-edge/{edge_id}")
-async def engine_explain_edge(edge_id: str):
+async def engine_explain_edge(edge_id: str, stack_id: Optional[str] = Query(None)):
     """Show evidence and reasoning for a specific edge."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -1319,9 +1350,10 @@ async def engine_explain_edge(edge_id: str):
 @router.get("/lineage/engine/graph")
 async def engine_full_graph(
     plane: Optional[str] = Query(None, description="Filter edges by plane: data,control,cross"),
+    stack_id: Optional[str] = Query(None),
 ):
     """Return the full engine graph (nodes + edges with confidence/evidence)."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         return {"nodes": [], "edges": []}
 
@@ -1341,14 +1373,14 @@ async def engine_full_graph(
 
 
 @router.get("/lineage/engine/snapshot")
-async def engine_snapshot():
+async def engine_snapshot(stack_id: Optional[str] = Query(None)):
     """Return the engine graph serialized for persistence (to store in DB).
 
     The response includes the full graph dict (nodes + edges with all metadata
     including raw_metadata / dbt_resource_type) so the frontend can save it
     to LineageSnapshot.graphData and restore on server restart.
     """
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         return {"has_graph": False, "graph_data": None}
     graph_data = store.graph.to_dict()
@@ -1362,7 +1394,7 @@ class EngineRestoreRequest(BaseModel):
 
 
 @router.post("/lineage/engine/restore")
-async def engine_restore(request: EngineRestoreRequest):
+async def engine_restore(request: EngineRestoreRequest, stack_id: Optional[str] = Query(None)):
     """Restore the engine graph from a previously persisted snapshot.
 
     Called by the frontend when the in-memory engine graph is empty (after
@@ -1378,7 +1410,7 @@ async def engine_restore(request: EngineRestoreRequest):
             from scanner.lineage.graph import LineageGraph
 
         graph = LineageGraph.from_dict(request.graph_data)
-        store = _get_engine_store()
+        store = _get_engine_store(stack_id)
         store.graph = graph
         store.tool_nodes = request.graph_data.get("tool_nodes", [])
         _logger.info(
@@ -1398,13 +1430,13 @@ async def engine_restore(request: EngineRestoreRequest):
 
 
 @router.get("/lineage/engine/control-plane/{dag_id}")
-async def engine_control_plane(dag_id: str):
+async def engine_control_plane(dag_id: str, stack_id: Optional[str] = Query(None)):
     """Return the control-plane subgraph for a specific DAG.
 
     Returns the DAG node, its tasks, internal dependency edges, and
     cross-link edges to data-plane assets.
     """
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -1426,9 +1458,9 @@ async def engine_control_plane(dag_id: str):
 
 
 @router.get("/lineage/engine/control-plane")
-async def engine_control_plane_all():
+async def engine_control_plane_all(stack_id: Optional[str] = Query(None)):
     """Return the full control-plane subgraph (all DAGs and tasks)."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         return {"nodes": [], "edges": [], "stats": {}}
 
@@ -1444,9 +1476,9 @@ async def engine_control_plane_all():
 
 
 @router.get("/lineage/engine/cross-links/{asset_id}")
-async def engine_cross_links(asset_id: str):
+async def engine_cross_links(asset_id: str, stack_id: Optional[str] = Query(None)):
     """Return cross-plane edges for a data asset (links to orchestration)."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -1469,13 +1501,14 @@ async def engine_cross_links(asset_id: str):
 async def engine_run_history(
     dag_id: str,
     limit: int = Query(10, ge=1, le=100),
+    stack_id: Optional[str] = Query(None),
 ):
     """Get recent run history for an Airflow DAG.
 
     Delegates to AirflowIntegration if an adapter is available. Otherwise
     returns whatever run_summary data is stored on the DAG node.
     """
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
 
     # Try to find run_summary from the DAG node's raw_metadata
     dag_node = None
@@ -1495,9 +1528,9 @@ async def engine_run_history(
 
 
 @router.get("/lineage/engine/stats", response_model=CoverageStatsResponse)
-async def engine_stats():
+async def engine_stats(stack_id: Optional[str] = Query(None)):
     """Get coverage statistics for the built lineage graph."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         return CoverageStatsResponse()
 
@@ -1511,9 +1544,10 @@ async def engine_export(
     level: Optional[str] = Query(None),
     system: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    stack_id: Optional[str] = Query(None),
 ):
     """Export the lineage graph in various formats."""
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -1541,7 +1575,7 @@ async def engine_export(
 
 
 @router.get("/lineage/engine/control-plane-overview")
-async def engine_control_plane_overview():
+async def engine_control_plane_overview(stack_id: Optional[str] = Query(None)):
     """
     Return the derived control plane graph showing tool/integration sequence.
 
@@ -1550,7 +1584,7 @@ async def engine_control_plane_overview():
 
     Example: Fivetran → Snowflake → dbt → Snowflake → Looker
     """
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         return {"nodes": [], "edges": [], "stats": {"tool_count": 0, "flow_count": 0}}
 
@@ -1626,7 +1660,7 @@ class RenderedViewResponse(BaseModel):
 
 
 @router.get("/lineage/engine/views/pipeline-overview")
-async def view_pipeline_overview():
+async def view_pipeline_overview(stack_id: Optional[str] = Query(None)):
     """
     Return the pre-rendered Pipeline Overview view.
 
@@ -1637,14 +1671,14 @@ async def view_pipeline_overview():
     falls back to on-demand computation.
     """
     # Try pre-computed view from run registry
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     if registry.current_run_id:
         record = registry.get_run(registry.current_run_id)
         if record and "pipeline_overview" in record.artifacts.views:
             return record.artifacts.views["pipeline_overview"]
 
     # Fallback: compute on-demand
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         return RenderedViewResponse(
             viewType="pipeline_overview",
@@ -1670,7 +1704,7 @@ async def view_pipeline_overview():
 
 
 @router.get("/lineage/engine/views/lane-pipeline-overview")
-async def view_lane_pipeline_overview():
+async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
     """
     Return the lane-based Pipeline Overview view.
 
@@ -1681,14 +1715,14 @@ async def view_lane_pipeline_overview():
     falls back to on-demand computation.
     """
     # Try pre-computed view from run registry
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     if registry.current_run_id:
         record = registry.get_run(registry.current_run_id)
         if record and "lane_pipeline_overview" in record.artifacts.views:
             return record.artifacts.views["lane_pipeline_overview"]
 
     # Fallback: compute on-demand
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         return RenderedViewResponse(
             viewType="lane_pipeline_overview",
@@ -1716,7 +1750,7 @@ async def view_lane_pipeline_overview():
 
 
 @router.get("/lineage/engine/views/data-plane")
-async def view_data_plane():
+async def view_data_plane(stack_id: Optional[str] = Query(None)):
     """
     Return the pre-rendered Data Plane view.
 
@@ -1727,14 +1761,14 @@ async def view_data_plane():
     falls back to on-demand computation.
     """
     # Try pre-computed view from run registry
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     if registry.current_run_id:
         record = registry.get_run(registry.current_run_id)
         if record and "data_plane" in record.artifacts.views:
             return record.artifacts.views["data_plane"]
 
     # Fallback: compute on-demand
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         return RenderedViewResponse(
             viewType="data_plane",
@@ -1765,9 +1799,9 @@ async def view_data_plane():
 
 
 @router.get("/lineage/runs/current")
-async def get_current_run():
+async def get_current_run(stack_id: Optional[str] = Query(None)):
     """Return the current (published) run_id and its status."""
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     if not registry.current_run_id:
         return {"current_run_id": None, "status": None}
     record = registry.get_run(registry.current_run_id)
@@ -1777,9 +1811,9 @@ async def get_current_run():
 
 
 @router.get("/lineage/runs/{run_id}/status")
-async def get_run_status(run_id: str):
+async def get_run_status(run_id: str, stack_id: Optional[str] = Query(None)):
     """Lightweight status for polling a specific run."""
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     status = registry.get_run_status(run_id)
     if not status:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1787,9 +1821,9 @@ async def get_run_status(run_id: str):
 
 
 @router.get("/lineage/runs/{run_id}/views/{view_type}")
-async def get_run_view(run_id: str, view_type: str):
+async def get_run_view(run_id: str, view_type: str, stack_id: Optional[str] = Query(None)):
     """Return a pre-computed view from a specific run."""
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     record = registry.get_run(run_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1804,9 +1838,9 @@ async def get_run_view(run_id: str, view_type: str):
 
 
 @router.get("/lineage/runs")
-async def list_runs(limit: int = Query(5, ge=1, le=20)):
+async def list_runs(limit: int = Query(5, ge=1, le=20), stack_id: Optional[str] = Query(None)):
     """Return recent extraction runs."""
-    registry = _get_run_registry()
+    registry = _get_run_registry(stack_id)
     return {
         "runs": registry.list_runs(limit),
         "current_run_id": registry.current_run_id,
@@ -1848,13 +1882,13 @@ class ReconcileResponse(BaseModel):
 
 
 @router.get("/lineage/engine/reconcile/diagnostics")
-async def engine_reconcile_diagnostics():
+async def engine_reconcile_diagnostics(stack_id: Optional[str] = Query(None)):
     """Return graph diagnostics without calling the LLM.
 
     Useful for showing the user what issues exist before they
     decide to run the (potentially expensive) LLM reconciliation.
     """
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         return {"diagnostics": {"dataset_roots": [], "disconnected_components": [],
                                 "suspected_duplicates": [], "missing_links_hints": []}}
@@ -1873,7 +1907,7 @@ async def engine_reconcile_diagnostics():
 
 
 @router.post("/lineage/engine/reconcile", response_model=ReconcileResponse)
-async def engine_reconcile(request: ReconcileRequest):
+async def engine_reconcile(request: ReconcileRequest, stack_id: Optional[str] = Query(None)):
     """Run LLM reconciliation on the current engine graph.
 
     If dry_run=True (default), returns the patch for UI review without applying.
@@ -1885,7 +1919,7 @@ async def engine_reconcile(request: ReconcileRequest):
     import logging
     _logger = logging.getLogger(__name__)
 
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         raise HTTPException(404, "No graph built. Extract lineage first.")
 
@@ -1941,7 +1975,7 @@ class ReconcileApplyRequest(BaseModel):
 
 
 @router.post("/lineage/engine/reconcile/apply")
-async def engine_reconcile_apply(request: ReconcileApplyRequest):
+async def engine_reconcile_apply(request: ReconcileApplyRequest, stack_id: Optional[str] = Query(None)):
     """Apply a reconciliation patch that was previously generated with dry_run=True.
 
     This enables the 'review & confirm' flow:
@@ -1953,7 +1987,7 @@ async def engine_reconcile_apply(request: ReconcileApplyRequest):
     import logging
     _logger = logging.getLogger(__name__)
 
-    store = _get_engine_store()
+    store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
         raise HTTPException(404, "No graph built.")
 
@@ -2229,7 +2263,7 @@ class InvestigateResponse(BaseModel):
 
 
 @router.post("/lineage/investigate", response_model=InvestigateResponse)
-async def investigate_lineage(request: InvestigateRequest):
+async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[str] = Query(None)):
     """
     Run a sequential lineage investigation across all tools.
 
@@ -2239,6 +2273,9 @@ async def investigate_lineage(request: InvestigateRequest):
     """
     import logging
     _logger = logging.getLogger(__name__)
+    global _current_stack_id
+    if stack_id:
+        _current_stack_id = stack_id
 
     try:
         try:
@@ -2324,8 +2361,8 @@ async def investigate_lineage(request: InvestigateRequest):
         except ImportError:
             from scanner.lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
 
-        registry = _get_run_registry()
-        store = _get_engine_store()
+        registry = _get_run_registry(_current_stack_id)
+        store = _get_engine_store(_current_stack_id)
         pipeline_config = ExtractionPipelineConfig()
 
         run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
@@ -2382,7 +2419,7 @@ class InvestigateLLMRequest(BaseModel):
 
 
 @router.post("/lineage/investigate-llm", response_model=InvestigateResponse)
-async def investigate_lineage_llm(request: InvestigateLLMRequest):
+async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Optional[str] = Query(None)):
     """
     Run LLM-enhanced lineage investigation.
 
@@ -2396,6 +2433,9 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest):
     """
     import logging
     _logger = logging.getLogger(__name__)
+    global _current_stack_id
+    if stack_id:
+        _current_stack_id = stack_id
 
     try:
         try:
@@ -2468,8 +2508,8 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest):
         except ImportError:
             from scanner.lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
 
-        registry = _get_run_registry()
-        store = _get_engine_store()
+        registry = _get_run_registry(_current_stack_id)
+        store = _get_engine_store(_current_stack_id)
         pipeline_config = ExtractionPipelineConfig(
             use_llm_planner=request.use_llm_planner,
             use_llm_reconciler=request.use_llm_reconciler,
@@ -2534,7 +2574,7 @@ class LLMExtractRequest(BaseModel):
 
 
 @router.post("/lineage/extract-llm")
-async def extract_lineage_with_llm(request: LLMExtractRequest):
+async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optional[str] = Query(None)):
     """
     LLM-powered lineage extraction with SSE streaming progress.
 
@@ -2544,6 +2584,9 @@ async def extract_lineage_with_llm(request: LLMExtractRequest):
     """
     import logging
     _logger = logging.getLogger(__name__)
+    global _current_stack_id
+    if stack_id:
+        _current_stack_id = stack_id
 
     async def event_stream():
         try:
@@ -2639,8 +2682,8 @@ async def extract_lineage_with_llm(request: LLMExtractRequest):
                 except ImportError:
                     from lineage.engine.run_registry import RunArtifacts
 
-                registry = _get_run_registry()
-                store = _get_engine_store()
+                registry = _get_run_registry(_current_stack_id)
+                store = _get_engine_store(_current_stack_id)
 
                 run_id = registry.start_run(
                     [tc.tool_type for tc in request.tool_configs]

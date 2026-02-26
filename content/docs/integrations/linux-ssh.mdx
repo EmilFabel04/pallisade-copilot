@@ -1,0 +1,83 @@
+---
+title: Linux / SSH
+description: Connect Linux servers to Pallisade via SSH for SSL certificate monitoring, server health checks, and log analysis.
+section: integrations
+order: 22
+---
+
+# Linux / SSH
+
+## Overview
+
+The Linux/SSH integration connects Pallisade to your Linux servers via SSH for infrastructure monitoring. Pallisade monitors SSL/TLS certificate expiration, server health metrics (disk, memory, CPU), and can analyze log files for error patterns. This is useful for monitoring data infrastructure servers, database hosts, and ETL runners that are not covered by dedicated integrations.
+
+Key capabilities:
+
+- **Certificate monitoring** -- detect expiring or expired SSL/TLS certificates on the server
+- **Server health** -- disk usage, memory utilization, CPU load, and uptime
+- **Log analysis** -- scan log files for error patterns and anomalies
+- **Service status** -- check if critical services (databases, schedulers) are running
+- **Custom checks** -- run arbitrary commands for environment-specific monitoring
+
+## Prerequisites
+
+- A Linux server accessible via SSH from Pallisade's network
+- An SSH user with appropriate read permissions
+- Authentication via SSH private key (recommended) or password
+
+<Callout type="tip">
+Create a dedicated `pallisade` user on the target server with read-only access to the resources you want to monitor. Avoid using root for security reasons. Grant the user access to read certificate files, log files, and run basic system commands.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Linux Server** from the Infrastructure layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Server hostname or IP (e.g., `10.0.1.50` or `server.example.com`) |
+| `port` | No | SSH port (default: `22`) |
+| `username` | Yes | SSH username (e.g., `deploy`) |
+| `auth_method` | Yes | Authentication method: `key` (SSH Private Key) or `password` |
+| `private_key` | No | SSH private key content (for key-based auth) |
+| `passphrase` | No | Passphrase for encrypted private keys |
+| `password` | No | SSH password (for password-based auth) |
+
+3. Click **Test Connection** to verify SSH connectivity.
+
+<Callout type="warning">
+Paste the full private key including the `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----` lines. If your key is encrypted with a passphrase, provide it in the passphrase field. Ed25519 and ECDSA keys are also supported.
+</Callout>
+
+## What Gets Monitored
+
+| Category | Details |
+|---|---|
+| **SSL certificates** | Expiration date, issuer, subject, days until expiry, certificate chain validity |
+| **Disk usage** | Per-mount-point usage percentage, available space, filesystem type |
+| **Memory** | Total, used, available, swap usage |
+| **CPU** | Load averages (1/5/15 min), number of cores |
+| **Uptime** | System uptime and last reboot time |
+| **Services** | Running/stopped status for configured service names |
+| **Log files** | Error pattern matching in specified log file paths |
+
+## Troubleshooting
+
+**"Connection refused" or "Connection timed out"**
+Verify the server is reachable from Pallisade's network. Check that SSH is running on the configured port and that firewall rules allow inbound SSH connections.
+
+**"Authentication failed"**
+For key-based auth, ensure the private key matches a public key in the server's `~/.ssh/authorized_keys` file. For password auth, verify the password is correct and password authentication is enabled in `sshd_config`.
+
+**"Permission denied" for certificate files**
+Certificate files (typically in `/etc/ssl/` or `/etc/letsencrypt/`) may require root or specific group access. Add the Pallisade SSH user to the appropriate group (e.g., `ssl-cert`) or use `sudo` with NOPASSWD for specific commands.
+
+**Key passphrase errors**
+If the private key is encrypted, the passphrase field must be filled. If the key is not encrypted, leave the passphrase field empty.
+
+**Log file monitoring not returning results**
+Verify the log file path is correct and the SSH user has read permissions. Common log paths include `/var/log/syslog`, `/var/log/application.log`, or paths specific to your application.
+
+**Server health metrics incomplete**
+Some commands (like `free`, `df`, `uptime`) must be available in the user's PATH. Minimal Docker containers or restricted shells may not have these utilities installed.

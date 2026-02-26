@@ -1,0 +1,84 @@
+---
+title: Google BigQuery
+description: Connect Google BigQuery to Pallisade for full schema discovery, column statistics, query history lineage, and data freshness monitoring.
+section: integrations
+order: 1
+---
+
+# Google BigQuery
+
+## Overview
+
+The BigQuery integration gives Pallisade deep access to your Google Cloud data warehouse. Once connected, Pallisade extracts table and column metadata from `INFORMATION_SCHEMA`, gathers column-level statistics using `APPROX_QUANTILES`, and mines query history from `JOBS_BY_PROJECT` to build automatic column-level lineage.
+
+Key capabilities:
+
+- **Schema discovery** -- tables, views, columns, data types, and descriptions across all datasets
+- **Column statistics** -- null rates, distinct counts, min/max, percentiles, top values
+- **Query history lineage** -- up to 180 days of query logs parsed for table-to-table data flow
+- **Partitioning and clustering** -- detection of partition columns and clustering keys
+- **Data freshness** -- uses `__TABLES__` metadata and timestamp columns to track staleness
+- **Cost tracking** -- bytes billed per query from job metadata
+
+## Prerequisites
+
+- A GCP project with BigQuery enabled
+- A **service account** with at least the following roles:
+  - `roles/bigquery.dataViewer` (read table data and metadata)
+  - `roles/bigquery.jobUser` (run queries for statistics)
+  - `roles/bigquery.resourceViewer` (read `JOBS_BY_PROJECT` for lineage)
+- The service account JSON key file downloaded to your machine
+
+<Callout type="tip">
+If you only need schema and metadata without lineage, `bigquery.dataViewer` and `bigquery.jobUser` are sufficient. Add `bigquery.resourceViewer` to enable query-history-based lineage.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **BigQuery** from the Warehouse layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `project_id` | Yes | Your GCP project ID (e.g., `my-analytics-prod`) |
+| `credentials` | Yes | Upload your service account JSON key file |
+| `datasets` | No | Select specific datasets to scan, or leave empty to scan all |
+| `location` | No | Data location (`US`, `EU`, or a specific region like `us-east1`) |
+
+3. Click **Test Connection**. Pallisade runs `SELECT 1` against your project to verify credentials.
+4. Once connected, Pallisade begins scanning `INFORMATION_SCHEMA` for every selected dataset.
+
+<Callout type="warning">
+If your datasets span multiple regions, set the `location` field to match the region of your datasets. BigQuery requires `INFORMATION_SCHEMA` queries to target the correct region.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Tables and views** | Full list from `INFORMATION_SCHEMA.TABLES` per dataset |
+| **Columns** | Name, data type, nullability, ordinal position, description |
+| **Row counts and sizes** | From `__TABLES__` metadata (row_count, size_bytes) |
+| **Column statistics** | Null rate, distinct count, min/max, percentiles (APPROX_QUANTILES), top 10 values |
+| **Partitioning** | Partition column names from DDL metadata |
+| **Clustering** | Clustering column names |
+| **Freshness** | `last_modified_time` from `__TABLES__` or MAX of detected timestamp column |
+| **Query history** | Up to 180 days from `JOBS_BY_PROJECT` -- query text, user, bytes billed, duration |
+| **Lineage edges** | Parsed from query history SQL to map source tables to destination tables |
+
+## Troubleshooting
+
+**"Permission denied" on INFORMATION_SCHEMA**
+Your service account is missing `bigquery.dataViewer`. Grant it at the project or dataset level.
+
+**"Not found: Dataset" errors**
+The `location` field does not match the region where your datasets live. Set it to the correct multi-region (`US`/`EU`) or single region.
+
+**No query history appearing**
+The service account needs `bigquery.resourceViewer` to access `JOBS_BY_PROJECT`. This view is region-scoped, so ensure the `location` field is correct.
+
+**Connection test passes but no tables found**
+If you selected specific datasets that have no tables, or if the service account only has access to a subset of datasets, Pallisade will only show what it can read. Leave the `datasets` field empty to auto-discover all accessible datasets.
+
+**Column statistics are slow on large tables**
+Pallisade uses `TABLESAMPLE SYSTEM` when available and `APPROX_QUANTILES` for percentiles. For very wide tables (100+ columns), stats collection may take several minutes. Consider selecting specific datasets to limit the scan scope.

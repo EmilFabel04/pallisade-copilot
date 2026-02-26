@@ -1,0 +1,87 @@
+---
+title: dbt Core
+description: Connect a dbt Core project to Pallisade via manifest upload, project folder upload, or GitHub repo for model lineage and test coverage analysis.
+section: integrations
+order: 8
+---
+
+# dbt Core
+
+## Overview
+
+The dbt Core integration lets you bring your self-managed dbt project into Pallisade. You can provide your dbt artifacts in three ways: upload a `manifest.json` directly, upload a zipped project folder, or connect a GitHub repository containing your dbt project. Pallisade parses the manifest to extract model lineage, test coverage, and documentation completeness.
+
+Key capabilities:
+
+- **Model lineage** -- full dependency graph from sources to mart models
+- **Test coverage analysis** -- which models and columns have tests defined
+- **Documentation completeness** -- description coverage across models and columns
+- **Materialization tracking** -- table, view, incremental, ephemeral classification
+- **Source configuration** -- freshness thresholds and loader metadata
+- **Cross-project awareness** -- link dbt models to connected warehouse tables
+
+## Prerequisites
+
+Depending on your chosen source mode:
+
+- **Upload manifest**: A `manifest.json` file from your `target/` directory (produced by `dbt compile` or `dbt run`)
+- **Upload project folder**: Your dbt project directory with `dbt_project.yml`, `models/`, etc.
+- **GitHub repo**: A GitHub repository containing your dbt project, plus a personal access token with `repo` read access
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **dbt Core** from the Transformation layer.
+2. Choose your source mode and fill in the fields:
+
+| Field | Required | Condition | Description |
+|---|---|---|---|
+| `source_mode` | Yes | Always | `upload` (manifest), `project` (zip), or `github` (repo) |
+| `manifest` | Yes | Upload mode | Your `manifest.json` file from `target/` |
+| `project_files` | Yes | Project mode | Your dbt project folder (zipped) |
+| `github_repo` | Yes | GitHub mode | Repository in `owner/repo` format |
+| `github_branch` | No | GitHub mode | Branch name (default: `main`) |
+| `dbt_project_path` | No | GitHub mode | Path to dbt project within the repo (default: root) |
+| `warehouse_type` | No | Always | Target warehouse: `bigquery`, `snowflake`, `postgres`, or `redshift` |
+| `project_name` | No | Always | A name to identify this dbt project |
+
+3. Click **Test Connection** (or upload your file) to begin parsing.
+
+<Callout type="tip">
+The `manifest.json` is the richest source of dbt metadata. Run `dbt compile` or `dbt docs generate` in your project to produce it. It contains all models, sources, tests, columns, and dependencies.
+</Callout>
+
+<Callout type="warning">
+When using GitHub mode, the token needs read access to the repository. For private repos, create a fine-grained personal access token with "Contents: Read" permission on the target repository.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Models** | Name, unique_id, materialization, schema, database, SQL, description |
+| **Sources** | Name, tables, database, schema, freshness configuration |
+| **Tests** | Test type, tested columns, severity level |
+| **Lineage** | Model-to-model and source-to-model dependencies |
+| **Columns** | Column-level names, descriptions, data types, and tests |
+| **Seeds** | CSV-based reference data loaded by dbt |
+| **Snapshots** | Slowly changing dimension configurations |
+| **Macros** | Custom macro definitions used across the project |
+| **Documentation score** | Percentage of models and columns with descriptions |
+| **Test coverage** | Percentage of models with at least one test |
+
+## Troubleshooting
+
+**"manifest.json not found"**
+Ensure the uploaded file is a valid dbt manifest. Run `dbt compile` in your project and upload the resulting `target/manifest.json`.
+
+**GitHub mode fails with 404**
+Check that the `github_repo` is in `owner/repo` format and the token has access. For organization repos, the token must be authorized for the organization.
+
+**Missing columns in models**
+Column metadata in the manifest depends on your dbt project having column definitions in YAML schema files. If models lack column blocks in their `.yml` files, Pallisade cannot extract column details.
+
+**"Could not determine warehouse type"**
+Set the `warehouse_type` field explicitly. This helps Pallisade generate correct SQL syntax when cross-referencing dbt models with warehouse tables.
+
+**Project folder upload fails**
+Ensure the folder contains `dbt_project.yml` at the root. If your dbt project is in a subdirectory, zip only that subdirectory.

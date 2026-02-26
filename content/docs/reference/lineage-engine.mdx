@@ -1,0 +1,250 @@
+---
+title: "Lineage Engine"
+description: "Deep-dive into the lineage engine: graph model, extraction pipeline, adapters, resolver, canonical taxonomy, views, and run versioning."
+section: "reference"
+order: 3
+---
+
+## Overview
+
+The lineage engine builds a unified, cross-tool data lineage graph with evidence tracking, confidence scoring, and deterministic visualization. It lives in `scanner/lineage/engine/` and is orchestrated through a 9-step extraction pipeline.
+
+**Data flow in one sentence:** Adapters extract raw nodes and edges from each tool, the Resolver deduplicates, Canonicalization maps types, Bridge rules fill structural gaps, an optional LLM patches the graph, the ViewBuilder renders deterministic layouts, and the RunRegistry publishes atomically.
+
+---
+
+## Core Graph Model
+
+**File:** `scanner/lineage/graph.py`
+
+The graph is a directed multigraph. Nodes represent data assets and tools; edges represent relationships between them.
+
+### LineageNode
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique identifier (deterministic hash) |
+| `name` | string | Display name |
+| `fqn` | string | Fully qualified name (`database.schema.table`) |
+| `node_type` | NodeType | Granular type (24 values: TABLE, MODEL, DAG, DASHBOARD, etc.) |
+| `platform` | string | Tool name (bigquery, dbt, looker, airflow, n8n, etc.) |
+| `platform_domain` | PlatformDomain | Category: WAREHOUSE, TRANSFORM, BI, ORCHESTRATION, INGESTION, CATALOG, APP, OTHER |
+| `canonical_type` | string | Mapped type: `system`, `service`, `job`, `dataset`, `semantic` |
+| `urn` | string | Stable URN: `urn:pallisade:{type}:{platform}:{namespace}:{name}` |
+| `confidence` | float | 0.0--1.0 reliability score |
+| `evidence` | Evidence[] | Provenance records from adapters |
+| `inferred` | bool | True if created by bridge rules |
+| `health_status` | HealthStatus | HEALTHY, DEGRADED, FAILING, UNKNOWN, STALE |
+| `columns` | dict[] | Column definitions (name, type, description) |
+
+**`stable_id`** is a deterministic hash from `(domain, namespace, container, name)`. It excludes `platform` so the same table discovered by BigQuery and dbt gets the same `stable_id`, enabling cross-adapter deduplication.
+
+### LineageEdge
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Deterministic ID from `(source, target, type, level, evidence_ref)` |
+| `source_id` / `target_id` | string | Upstream and downstream node IDs |
+| `edge_type` | EdgeType | 13 values: DEPENDS_ON, WRITES_TO, READS_FROM, TRIGGERS, etc. |
+| `lineage_level` | LineageLevel | TOOL, TABLE, or COLUMN |
+| `plane` | LinePlane | DATA, CONTROL, or CROSS |
+| `confidence` | float | 0.0--1.0 reliability score |
+| `canonical_edge_type` | string | Mapped: `hosts`, `runs`, `reads`, `writes`, `derives`, `serves` |
+| `evidence` | Evidence[] | Provenance records |
+| `column_mappings` | ColumnMapping[] | Column-level lineage |
+
+### Evidence
+
+Every edge carries provenance explaining why it exists:
+
+```python
+Evidence(
+    adapter_id="live_warehouse:bigquery",
+    source_ref="bigquery:job:project.analytics.stg_customers",
+    observed_at=datetime(2024, 1, 15),
+    snippet="SELECT * FROM raw.customers WHERE ...",
+)
+```
+
+Evidence weights determine confidence: declarative (1.0), API metadata (0.9), compiled SQL (0.8), query history (0.6), regex (0.3).
+
+### LinePlane
+
+| Plane | Description |
+|-------|-------------|
+| DATA | Asset-to-asset relationships (table -> table) |
+| CONTROL | Orchestration relationships (DAG -> task) |
+| CROSS | Links between planes (task -> table it writes to) |
+
+---
+
+## Extraction Pipeline
+
+**File:** `scanner/lineage/engine/pipeline.py`
+
+The `run_extraction_pipeline()` function orchestrates extraction in 9 ordered steps:
+
+```
+Step 0: Start run_id via RunRegistry
+Step 1: (optional) LLM planner -> adapter execution order
+Step 2: Investigator executes adapters -> resolver -> graph
+Step 3: Canonicalize types (first pass)
+Step 4: Deterministic bridge rules
+Step 5: Re-canonicalize (bridge-added nodes need types too)
+Step 6: (optional) LLM reconciliation -> patch -> validate -> apply
+Step 7: Build rendered views
+Step 8: Persist artifacts under run_id, atomically publish
+Step 9: Update store.graph for backward-compatible query endpoints
+```
+
+<Callout>
+Bridge rules MUST run after canonicalization (so nodes have `canonical_type` for orphan detection) but before views are built (so bridge-added nodes appear in the visualization).
+</Callout>
+
+On success, `current_run_id` is atomically updated. On failure, the pointer stays on the previous successful run -- the frontend never sees broken state.
+
+### Investigator
+
+**File:** `scanner/lineage/engine/investigator.py`
+
+The `LineageInvestigator` executes adapters in data-flow order:
+
+```
+WAREHOUSE (0) -> INGESTION (1) -> TRANSFORMATION (2) ->
+ORCHESTRATION (3) -> REPORTING (4) -> INFRASTRUCTURE (5) ->
+VERSION_CONTROL (6) -> QUALITY (7)
+```
+
+Each adapter enriches a shared `InvestigationContext` that tracks table inventory, tool connections, unresolved references, and per-tool extraction metadata.
+
+After each adapter, the `CorrelationEngine` runs cross-tool pattern matching: table reference matching, connection string matching, schedule alignment, retry of unresolved references, and infrastructure hosting detection.
+
+---
+
+## Adapters
+
+**File:** `scanner/lineage/engine/adapter.py` (base), `scanner/lineage/engine/adapters/` (implementations)
+
+All adapters inherit from `BaseLineageAdapter` and declare capabilities: DISCOVER_ASSETS, EXTRACT_TOOL_LINEAGE, EXTRACT_TABLE_LINEAGE, EXTRACT_COLUMN_LINEAGE, GET_RUNS_LOGS, GET_QUERY_HISTORY, GET_OWNERSHIP, GET_CONTRACTS, GET_BI_EXPOSURES.
+
+### 18 Live Adapters
+
+**Warehouse:** `live_warehouse` (BigQuery, Snowflake, Postgres, Redshift -- SQL parsing via sqlglot), `live_dbt` (dbt Core/Cloud manifest, confidence 1.0).
+
+**BI/Reporting:** `live_looker`, `live_metabase`, `live_tableau`, `live_powerbi`.
+
+**Orchestration:** `live_airflow` (static DAG parsing or REST API), `live_dagster`, `live_prefect`, `live_n8n` (DB node parameter extraction + SQL regex).
+
+**Ingestion:** `live_fivetran` (connector schema introspection), `live_airbyte` (syncCatalog stream mapping), `live_storage` (S3, GCS, ADLS).
+
+**Other:** `live_elementary` (data quality health enrichment), `live_openlineage` (Marquez/OL backends), `live_databricks` (Unity Catalog), `live_linux` (infrastructure discovery), `live_github` (stub).
+
+### SQL Parsing
+
+**File:** `scanner/lineage/engine/sql_lineage.py`
+
+The `SQLLineageExtractor` uses sqlglot for multi-dialect SQL parsing with regex fallback. Supported dialects: snowflake, bigquery, databricks, spark, redshift, postgres, mysql, duckdb, trino, presto, sqlite, oracle, mssql/tsql.
+
+---
+
+## Resolution and Deduplication
+
+**File:** `scanner/lineage/engine/resolver.py`
+
+The `ResolverPipeline` runs four steps:
+
+1. **Normalize identifiers** -- Apply `case_hint` from each adapter (lower, upper, preserve).
+2. **Deduplicate nodes by `stable_id`** -- Priority order: warehouse > transform > BI > orchestration > ingestion.
+3. **Remap edge references** through the dedup mapping.
+4. **Merge edges** by `(source, target, type, level)` -- merge evidence lists, compute weighted confidence.
+
+The same table `raw.customers` may appear from BigQuery (`live_warehouse`), dbt (`live_dbt`), and Fivetran (`live_fivetran`). All three share the same `stable_id` because `generate_stable_id` uses domain/namespace/container/name, excluding platform. The resolver keeps the richest node (warehouse priority) and merges metadata.
+
+---
+
+## Canonical Type Taxonomy
+
+**File:** `scanner/lineage/engine/canonical.py`
+
+Maps 24 granular `NodeType` values and 13 `EdgeType` values to a strict 5-node, 6-edge canonical taxonomy.
+
+### Canonical Node Types
+
+| Type | Description | Examples |
+|------|-------------|----------|
+| `system` | Infrastructure | Linux server, VM, cloud account |
+| `service` | Tool instance | Snowflake cluster, dbt Cloud, Looker |
+| `job` | Executable unit | DAG, task, workflow, connector, monitor |
+| `dataset` | Data asset | Table, view, model, seed, snapshot, file |
+| `semantic` | Presentation layer | Dashboard, report, workbook, explore |
+
+### Canonical Edge Types
+
+| Type | From -> To | Description |
+|------|-----------|-------------|
+| `hosts` | system -> service | Infrastructure hosting |
+| `runs` | service -> job | Tool executes job |
+| `reads` | job/semantic -> dataset | Data consumption |
+| `writes` | job -> dataset | Data production |
+| `derives` | dataset -> dataset | Derivation chain |
+| `serves` | dataset -> semantic | Data presentation |
+
+---
+
+## Zones and Lanes
+
+**File:** `scanner/lineage/engine/zones.py`
+
+Datasets are classified into zones for bridge rule detection and lane assignment:
+
+| Zone | Detection Signals | Examples |
+|------|-------------------|---------|
+| RAW | dbt source type, schema contains `raw`/`landing` | `raw.customers` |
+| STAGING | dbt path `/staging/`, schema `stg_` | `stg_customers` |
+| INTERMEDIATE | dbt path `/int/`, schema `int_` | `int_customer_orders` |
+| MART | dbt path `/mart/`, schema `marts`/`analytics` | `dim_customers` |
+| ANALYTICS | dbt model default, schema `analytics`/`reporting` | `fct_daily_revenue` |
+
+### Bridge Rules
+
+**File:** `scanner/lineage/engine/bridge.py`
+
+Deterministic rules that fix structural gaps. The `bridge_missing_ingestion` rule detects raw datasets with no upstream writer and creates inferred loader jobs linking ingestion platforms to orphaned raw tables. All inferred nodes carry `inferred=True`, `confidence=0.4`, and evidence from `"bridge_rule"`.
+
+---
+
+## Rendered Views
+
+**File:** `scanner/lineage/engine/views.py`
+
+The `ViewBuilder` produces three pre-computed, deterministically-laid-out views stored with run artifacts.
+
+### Pipeline Overview
+
+Tool-sequence view: `Fivetran -> Snowflake -> dbt -> Snowflake -> Looker`. Groups nodes by `(platform, integration_id)` into service clusters with deterministic X/Y positioning.
+
+### Data Plane
+
+Dataset-to-dataset derivation chains: `raw.customers -> stg_customers -> dim_customers -> dashboard_tile`. Uses topological layout with longest-path layer assignment.
+
+### Lane Pipeline Overview
+
+Five horizontal lanes (Ingestion, Warehouse Raw, Transformation, Warehouse Analytics, Reporting) with orchestrator overlays shown as dashed connections. Inferred nodes render with dashed borders.
+
+---
+
+## Run Versioning
+
+**File:** `scanner/lineage/engine/run_registry.py`
+
+Each extraction creates a `RunRecord` with a 12-character hex `run_id`. The `RunRegistry` provides atomic publish semantics.
+
+```
+start_run(["bigquery", "n8n", "dbt_core"])
+    |
+    v
+RunStatus.RUNNING --success--> RunStatus.COMPLETED
+                  --failure--> RunStatus.FAILED
+```
+
+Each completed run stores artifacts: `graph_dict`, `views` (3 projections), `diagnostics`, `reconciliation` patch results, `stats`, and `bridge_result`. The registry keeps at most `max_history` runs (default 10), and the current run is never evicted.

@@ -1,0 +1,77 @@
+---
+title: Prefect
+description: Connect Prefect to Pallisade for flow monitoring, deployment health, work pool status, and pipeline freshness tracking.
+section: integrations
+order: 11
+---
+
+# Prefect
+
+## Overview
+
+The Prefect integration connects Pallisade to Prefect Cloud or a self-hosted Prefect Server via the REST API. Pallisade monitors flows, flow runs, deployments, and work pools, and computes health metrics including success rates and freshness.
+
+Key capabilities:
+
+- **Flow monitoring** -- list all flows with creation/update timestamps and tags
+- **Flow run tracking** -- status (completed/failed/crashed/cancelled), duration, state messages
+- **Deployment health** -- schedule status, work pool assignment, last polled time
+- **Work pool monitoring** -- pool type (process/docker/kubernetes), concurrency limits, pause status
+- **Health analysis** -- success rates and failure trends over configurable time periods
+- **Freshness** -- hours since last successful flow run per deployment
+
+## Prerequisites
+
+For **Prefect Cloud**:
+- A Prefect Cloud API key
+- Account ID and Workspace ID (found in your Prefect Cloud URL)
+
+For **self-hosted Prefect Server**:
+- Prefect Server running and accessible (default: `http://localhost:4200`)
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Prefect** from the Transformation layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `api_url` | Yes | Prefect API URL (e.g., `https://api.prefect.cloud/api` or `http://localhost:4200/api`) |
+| `api_key` | Yes | Prefect API key |
+| `workspace_id` | No | Prefect Cloud workspace ID |
+
+For Prefect Cloud, the adapter builds the URL as `https://api.prefect.cloud/api/accounts/{account_id}/workspaces/{workspace_id}` when both account and workspace IDs are provided.
+
+3. Click **Test Connection**. Pallisade hits the `/health` endpoint to verify.
+
+<Callout type="tip">
+Your Prefect Cloud API key is generated at **Settings > API Keys** in the Prefect Cloud UI. The account and workspace IDs are in your workspace URL: `https://app.prefect.cloud/account/{account_id}/workspace/{workspace_id}`.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Flows** | ID, name, created/updated timestamps, tags |
+| **Flow runs** | ID, name, state (COMPLETED/FAILED/CRASHED/CANCELLED/RUNNING), start/end time, total run time, deployment ID, tags, state message |
+| **Deployments** | ID, name, flow name, schedule (cron/interval), is_schedule_active, work pool/queue, status |
+| **Work pools** | ID, name, type (process/docker/kubernetes), is_paused, concurrency_limit, status |
+| **Health metrics** | Success rate, avg duration, failure count per flow or deployment |
+| **Freshness** | Hours since last successful flow run |
+
+## Troubleshooting
+
+**"401 Unauthorized"**
+Your API key is invalid or expired. Generate a new one in Prefect Cloud under **Settings > API Keys**.
+
+**Connection refused on self-hosted**
+Ensure Prefect Server is running on the expected port (default 4200). Check that the `/api` suffix is included in the URL.
+
+**No flows found**
+Flows only appear in Prefect after they have been registered (run at least once). If your Prefect deployment is new, trigger a flow run first.
+
+**Work pool shows "NOT_READY"**
+The work pool agent or worker is not running or cannot communicate with the server. Start a Prefect worker targeting the pool.
+
+**Deployment health shows "no_runs"**
+The deployment has not been triggered in the analysis period. Check its schedule configuration or trigger a manual run.

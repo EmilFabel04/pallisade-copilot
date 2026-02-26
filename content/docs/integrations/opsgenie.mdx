@@ -1,0 +1,81 @@
+---
+title: OpsGenie
+description: Connect OpsGenie to Pallisade for automated alert creation when critical data quality or pipeline issues are detected.
+section: integrations
+order: 21
+---
+
+# OpsGenie
+
+## Overview
+
+The OpsGenie integration enables Pallisade to create alerts in OpsGenie when data quality issues, pipeline failures, or freshness violations are detected. Alerts are routed to the configured team and follow your existing escalation policies and on-call schedules.
+
+Key capabilities:
+
+- **Automatic alert creation** -- critical and high-severity findings trigger OpsGenie alerts
+- **Team routing** -- alerts are directed to a specific team for triage
+- **Priority mapping** -- Pallisade finding severity maps to OpsGenie alert priority (P1-P5)
+- **Deduplication** -- alerts include a unique alias to prevent duplicates for ongoing issues
+- **Auto-close** -- alerts are closed when the underlying finding is resolved
+
+## Prerequisites
+
+- An OpsGenie account (Atlassian OpsGenie)
+- An **API key** with Create and Close alert permissions
+- (Optional) A team name for alert routing
+
+<Callout type="tip">
+Create an API integration in OpsGenie under **Settings > Integrations > Add Integration > API**. Copy the API key from the integration settings. If you want alerts routed to a specific team, create the integration under that team's settings.
+</Callout>
+
+## Setup
+
+1. Navigate to **Settings > Integrations** and select **OpsGenie** from the Notifications category.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `api_key` | Yes | OpsGenie API key |
+| `team` | No | Team name for alert routing (optional) |
+
+3. Click **Test Connection** to verify API access and send a test alert.
+
+## What Gets Created
+
+| Finding Severity | OpsGenie Priority |
+|---|---|
+| **Critical** | P1 -- triggers immediate on-call notification |
+| **High** | P2 -- triggers on-call notification |
+| **Medium** | P3 -- logged, no immediate page |
+| **Low** | P5 -- informational |
+
+Each alert includes:
+
+- Finding title as the alert message
+- Affected resource in the alert description
+- Finding severity mapped to OpsGenie priority
+- Tags for finding type and integration source
+- Alias for deduplication (finding_type + resource)
+- Link to Pallisade for investigation details
+
+## Troubleshooting
+
+**"403 Forbidden"**
+The API key lacks the required permissions. Ensure the API integration in OpsGenie has "Create and Update" and "Delete" (for closing) permissions enabled.
+
+**Alerts not routed to the correct team**
+Set the `team` field to the exact team name as it appears in OpsGenie. Team routing is case-sensitive.
+
+**Duplicate alerts**
+Pallisade sets an alias on each alert for deduplication. If you see duplicates, the finding may have been resolved and re-triggered, which creates a new alert with a different alias.
+
+**Alerts are auto-acknowledged or suppressed**
+Check your OpsGenie alert policies and notification policies. Some organizations have rules that auto-acknowledge low-priority alerts or suppress alerts during maintenance windows.
+
+**Test alert not received**
+Ensure the OpsGenie API key is for the correct OpsGenie instance (US vs EU). The US instance uses `api.opsgenie.com` while the EU instance uses `api.eu.opsgenie.com`.
+
+<Callout type="warning">
+Be selective about which severity levels trigger OpsGenie alerts. Routing medium and low findings to OpsGenie can cause alert fatigue. Consider using Slack or Teams for lower-severity notifications.
+</Callout>

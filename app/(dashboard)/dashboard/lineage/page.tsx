@@ -83,16 +83,16 @@ const getLayoutedElements = (
   dagreGraph.setDefaultEdgeLabel(() => ({}));
   dagreGraph.setGraph({
     rankdir: direction,
-    nodesep: 60,
-    ranksep: direction === 'TB' ? 120 : 180,
+    nodesep: 80,
+    ranksep: direction === 'TB' ? 140 : 200,
     align: 'UL',
   });
 
   // Different dimensions for tool nodes vs data asset nodes
   nodes.forEach((node) => {
     const isToolNode = node.type === 'toolNode';
-    const width = isToolNode ? 220 : 170;
-    const height = isToolNode ? 90 : 65;
+    const width = isToolNode ? 240 : 200;
+    const height = isToolNode ? 110 : 100;
     dagreGraph.setNode(node.id, { width, height });
   });
 
@@ -106,8 +106,8 @@ const getLayoutedElements = (
   const layoutedNodes = nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
     const isToolNode = node.type === 'toolNode';
-    const width = isToolNode ? 220 : 170;
-    const height = isToolNode ? 90 : 65;
+    const width = isToolNode ? 240 : 200;
+    const height = isToolNode ? 110 : 100;
     return {
       ...node,
       targetPosition: isHorizontal ? Position.Left : Position.Top,
@@ -695,7 +695,25 @@ export default function LineagePage() {
     }
   }, [stackId]);
 
+  // Clear all cached data when switching pipelines
+  const prevStackIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (stackId !== prevStackIdRef.current) {
+      prevStackIdRef.current = stackId;
+      // Reset all state so previous pipeline's data doesn't persist
+      setLineageData(null);
+      setRenderedView(null);
+      setRenderedOverview(null);
+      setLaneOverview(null);
+      setControlPlaneData(null);
+      setSelectedNode(null);
+      setSelectedEdge(null);
+      setError(null);
+      setActiveRunId(null);
+      setLlmProgress([]);
+      setLlmNodeCount(0);
+      setLlmEdgeCount(0);
+    }
     if (stackId) {
       if (activeTab === 'control-plane') {
         fetchControlPlane();

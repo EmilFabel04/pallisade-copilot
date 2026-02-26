@@ -1,0 +1,207 @@
+---
+title: "Architecture Overview"
+description: "Three-tier architecture, key design decisions, and system-level data flow in the Pallisade platform."
+section: "reference"
+order: 1
+---
+
+## System Architecture
+
+Pallisade is a three-tier application: a Next.js 15 frontend, a FastAPI backend (the `scanner/` directory), and a PostgreSQL database managed through Prisma ORM.
+
+```
++-------------------------------------------------------------+
+|                   Next.js 15 Frontend                       |
+|  React 18 / TypeScript / Tailwind CSS / React Flow          |
+|                                                             |
+|  +-----------+ +----------+ +---------+ +----------+       |
+|  |  Copilot  | | Lineage  | |Schedule | | Sources  |       |
+|  |   Chat    | | Viewer   | | Tasks   | | Browser  |       |
+|  +-----+-----+ +----+-----+ +----+----+ +----+-----+       |
++---------|-----------|-----------|-----------|--------------+
+          |           |           |           |
++---------+-----------+-----------+-----------+--------------+
+|              Next.js API Routes (BFF Layer)                 |
+|         Auth / Sessions / Proxying / CRUD                   |
++--------------------------+----------------------------------+
+                           |
++--------------------------+----------------------------------+
+|              FastAPI Backend  (scanner/)                     |
+|                                                             |
+|  +----------+ +----------+ +----------+ +----------+       |
+|  | Copilot  | | Monitors | | Lineage  | | Coverage |       |
+|  | LLM +    | | Executor | | Engine   | | Scorer   |       |
+|  | Tools    | |          | |          | |          |       |
+|  +----+-----+ +----+-----+ +----+-----+ +----+-----+       |
+|       |            |            |            |              |
+|  +----+------------+------------+------------+------+       |
+|  |              Adapter Layer                       |       |
+|  |  BigQuery / Snowflake / Postgres / Redshift      |       |
+|  |  dbt / Airflow / Looker / Fivetran / SSH         |       |
+|  +--------------------------------------------------+       |
++-----------------------------+-------------------------------+
+                              |
+                   +----------+----------+
+                   |     PostgreSQL       |
+                   |    (Prisma ORM)      |
+                   +---------------------+
+```
+
+### Frontend (Next.js 15)
+
+The frontend is a React 18 application built with TypeScript and Tailwind CSS. Key UI surfaces include:
+
+- **Copilot Chat** -- Streaming AI assistant with tool calling, mode selection, and artifact saving.
+- **Lineage Viewer** -- Three-tab visualization (Data, Control-Plane, Lane Overview) using React Flow and custom SVG lanes.
+- **Schedule Tasks** -- CRUD for cron-scheduled monitors with a run-history timeline.
+- **Sources Browser** -- Warehouse table exploration with schema, row counts, and column details.
+
+The frontend communicates with the FastAPI backend through Next.js API routes that act as a BFF (Backend-for-Frontend) layer. These routes handle authentication via NextAuth, decrypt stored credentials, and proxy requests to the scanner service.
+
+### Backend (FastAPI)
+
+The `scanner/` directory contains the Python backend. It exposes a REST API organized into domain-specific routers:
+
+| Router | Prefix | Responsibility |
+|--------|--------|----------------|
+| `copilot.py` | `/copilot` | LLM chat, streaming SSE, tool execution |
+| `lineage.py` | `/lineage` | Extraction, views, run management, queries |
+| `database.py` | `/database` | Table discovery, connection testing, schema listing |
+| `schedule.py` | `/schedule` | Monitor task execution |
+| `coverage.py` | `/coverage` | Coverage scoring, gap analysis, recommendations |
+| `dbt.py` | `/dbt` | dbt model and manifest parsing |
+| `server.py` | `/server` | SSH-based infrastructure health and certs |
+| `health.py` | `/health` | Liveness check |
+
+### Database (PostgreSQL + Prisma)
+
+The application database is PostgreSQL, accessed through Prisma ORM from the Next.js layer and through raw SQL from the FastAPI layer when needed. The schema contains 40+ models covering authentication, organizations, pipelines, lineage, monitors, copilot sessions, artifacts, and the fix learning loop.
+
+---
+
+## Key Design Decisions
+
+### Schema Pre-Fetch
+
+Before every copilot conversation turn, the backend calls `ToolExecutor.fetch_warehouse_schema()` to pull current table and column metadata from all connected warehouses. This ensures the LLM always has accurate names and types, preventing hallucinated column references.
+
+The fetch uses query-relevance scoring to limit how many tables are included in the context window. Tables are scored based on whether their name, dataset, or column names appear in the user's question, and only the top-scoring tables are sent.
+
+### Dialect-Agnostic Monitors
+
+Monitors generate SQL in a neutral Postgres-compatible dialect and transpile it to the target warehouse using `sqlglot`. This means the same freshness or volume monitor definition works against BigQuery, Snowflake, Postgres, or Redshift without any dialect-specific logic in the monitor code.
+
+### Multi-Warehouse Support
+
+A single pipeline can connect to multiple warehouses simultaneously. Schema keys use a compound format (`BIGQUERY:raw`, `SNOWFLAKE:PUBLIC`) to avoid namespace collisions. When the copilot executes a `query_warehouse` tool call, it either uses the explicitly specified `warehouse` parameter or infers the target from SQL syntax as a fallback.
+
+### Streaming SSE
+
+Copilot responses stream token-by-token via Server-Sent Events. The stream emits typed events:
+
+| Event Type | Description |
+|-----------|-------------|
+| `text_delta` | Incremental text from the LLM |
+| `tool_call_start` | LLM wants to invoke a tool |
+| `tool_call_result` | Tool execution result |
+| `tool_confirmation_required` | Destructive tool needs user approval |
+| `iteration_start` | New LLM reasoning iteration |
+| `done` | Stream complete |
+| `error` | Error occurred |
+
+### Tool Confirmation
+
+Tools that perform destructive or external-write operations (schema changes, GitHub PR creation) are marked with `requires_confirmation: true`. When the LLM invokes one of these tools, the stream emits a `tool_confirmation_required` event and pauses. The frontend displays a confirmation dialog, and execution only continues after the user approves.
+
+### Atomic Run Publishing
+
+The lineage engine uses a `RunRegistry` with atomic publish semantics. Each extraction creates a versioned run. If extraction succeeds, `current_run_id` is atomically updated and the frontend sees the new data. If extraction fails, `current_run_id` stays pointing to the previous successful run -- the frontend never sees a broken state.
+
+### Evidence-Based Lineage
+
+Every lineage edge carries provenance records (`Evidence`) explaining exactly why the relationship was detected. Evidence sources are weighted by reliability (declarative manifests at 1.0, compiled SQL at 0.8, query history at 0.6, regex fallback at 0.3). This enables confidence scoring, explainability in the UI, and deduplication when multiple adapters discover the same edge.
+
+---
+
+## Data Flow: Copilot Chat
+
+```
+User types message
+    |
+    v
+Next.js /api/copilot/chat/route.ts
+    |-- Authenticates via NextAuth session
+    |-- Loads pipeline integrations, decrypts configs
+    |-- Sends POST to FastAPI /api/v1/copilot/chat/stream
+    |
+    v
+FastAPI /copilot/chat/stream
+    |-- Detects interaction mode (ask/debug/plan/create/...)
+    |-- CopilotContextBuilder builds context
+    |       |-- Filters tools by connected integrations
+    |       |-- Fetches engine graph from in-process store
+    |       |-- Applies mode-specific system prompt
+    |
+    |-- CopilotLLM.chat_stream() starts
+    |       |-- ToolExecutor.fetch_warehouse_schema() pre-fetches columns
+    |       |-- Builds system prompt with schema + lineage context
+    |       |-- Calls Anthropic or OpenAI streaming API
+    |       |-- Yields text_delta events
+    |       |-- On tool_use: executes tool, yields result, loops
+    |       |-- On confirmation-required: pauses, yields confirmation event
+    |
+    v
+SSE stream back to frontend
+    |-- Renders tokens in real-time
+    |-- Displays tool call cards inline
+    |-- Shows confirmation dialogs for destructive tools
+```
+
+---
+
+## Data Flow: Lineage Extraction
+
+```
+User clicks "Extract Lineage"
+    |
+    v
+POST /api/pipeline/[stackId]/lineage
+    |-- Fetches CONNECTED pipeline nodes
+    |-- Decrypts configs, injects GitHub credentials
+    |-- POST /api/v1/lineage/investigate  (FastAPI)
+    |-- Returns run_id
+    |
+    v
+ExtractionPipeline (9 steps)
+    0. start_run via RunRegistry
+    1. (optional) LLM planner
+    2. Investigator executes adapters in data-flow order
+    3. Canonicalize types (first pass)
+    4. Deterministic bridge rules
+    5. Re-canonicalize
+    6. (optional) LLM reconciliation
+    7. Build rendered views
+    8. Persist artifacts, atomic publish
+    9. Update store.graph
+    |
+    v
+Frontend polls GET engine?action=runs-current (every 2s)
+    |-- running  -> show "Updating..." badge
+    |-- completed -> fetch unified graph, swap views
+    |-- failed   -> show error, keep old view
+```
+
+---
+
+## Source Files
+
+| Area | Key Files |
+|------|-----------|
+| Frontend entry | `app/(dashboard)/` |
+| API routes (BFF) | `app/api/` |
+| FastAPI routers | `scanner/api/routers/` |
+| Copilot system | `scanner/copilot/llm.py`, `context_builder.py`, `tool_executor.py`, `tools.py`, `modes.py` |
+| Lineage engine | `scanner/lineage/engine/` |
+| Monitors | `scanner/monitors/` |
+| Adapters | `scanner/adapters/` |
+| Database schema | `prisma/schema.prisma` |
