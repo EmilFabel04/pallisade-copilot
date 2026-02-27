@@ -931,8 +931,47 @@ class CopilotContextBuilder:
                                 parser = DbtManifestParser(manifest=manifest)
                                 return parser.parse()
 
-            # If manifest provided directly in config
-            elif config.get("manifest"):
+            # Project folder upload mode — parse raw SQL/YAML files into manifest
+            elif config.get("source_mode") == "project" and config.get("project_files"):
+                project_files = config["project_files"]
+                if isinstance(project_files, dict):
+                    from lineage.dbt_project_parser import parse_dbt_project
+
+                    manifest = parse_dbt_project(
+                        files=project_files,
+                        project_name=config.get("project_name", ""),
+                        warehouse_type=config.get("warehouse_type", "bigquery"),
+                    )
+                    if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                        parser = DbtManifestParser(manifest=manifest)
+                        return parser.parse()
+
+            # GitHub mode — fetch project files from repo then parse
+            elif config.get("source_mode") == "github":
+                github_token = config.get("github_token") or config.get("github", {}).get("token")
+                github_repo = config.get("github_repo")
+                if github_token and github_repo:
+                    from lineage.github_reader import fetch_dbt_project_files
+                    from lineage.dbt_project_parser import parse_dbt_project
+
+                    project_files = await fetch_dbt_project_files(
+                        repo=github_repo,
+                        token=github_token,
+                        branch=config.get("github_branch", "main"),
+                        dbt_root=config.get("dbt_project_path", ""),
+                    )
+                    if project_files:
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=config.get("project_name", ""),
+                            warehouse_type=config.get("warehouse_type", "bigquery"),
+                        )
+                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                            parser = DbtManifestParser(manifest=manifest)
+                            return parser.parse()
+
+            # Fallback: manifest provided directly in config (upload mode or legacy)
+            elif config.get("manifest") and config.get("source_mode", "upload") == "upload":
                 parser = DbtManifestParser(manifest=config["manifest"])
                 return parser.parse()
 

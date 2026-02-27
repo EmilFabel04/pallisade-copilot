@@ -161,6 +161,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'project_files', label: 'dbt Project Folder', type: 'folder', required: false, helperText: 'Select your dbt project folder (models/, dbt_project.yml, etc.)', showWhen: { field: 'source_mode', value: 'project' } },
         // GitHub repo mode
         { name: 'github_repo', label: 'Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repository containing your dbt project', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_token', label: 'GitHub Token', type: 'password', required: false, placeholder: 'ghp_...', helperText: 'Personal access token with repo read access (required for private repos)', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'dbt_project_path', label: 'dbt Project Path', type: 'text', required: false, placeholder: '/ (repo root)', helperText: 'Path to dbt project within the repo (leave empty for root)', showWhen: { field: 'source_mode', value: 'github' } },
         // Common fields

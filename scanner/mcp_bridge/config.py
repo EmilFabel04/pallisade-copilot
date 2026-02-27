@@ -83,6 +83,9 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
             "api_key": "DBT_CLOUD_SERVICE_TOKEN",
             "account_id": "DBT_CLOUD_ACCOUNT_ID",
             "project_dir": "DBT_PROJECT_DIR",
+            "github_token": "DBT_GITHUB_TOKEN",
+            "github_repo": "DBT_GITHUB_REPO",
+            "github_branch": "DBT_GITHUB_BRANCH",
         },
     ),
     # --- Orchestration servers ---

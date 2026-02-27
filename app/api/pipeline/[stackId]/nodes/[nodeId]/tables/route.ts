@@ -31,7 +31,7 @@ export async function GET(
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
-    // Get the pipeline node
+    // Get the pipeline node (include integration for credential resolution)
     const node = await prisma.pipelineNode.findFirst({
       where: {
         id: nodeId,
@@ -42,6 +42,7 @@ export async function GET(
       },
       include: {
         stack: true,
+        integration: true,
       },
     });
 
@@ -49,22 +50,27 @@ export async function GET(
       return NextResponse.json({ error: 'Node not found' }, { status: 404 });
     }
 
-    // Get credentials and cached data from node config
+    // Resolve credentials — prefer Integration table, fall back to legacy PipelineNode.config
     let credentials: Record<string, any> = {};
-    let cachedData: Record<string, any> | null = null;
-    if (node.config) {
+    let cachedData: Record<string, any> | null = (node.config as any)?._cached || null;
+
+    if ((node as any).integrationId && (node as any).integration?.credentials) {
+      try {
+        const intCreds = (node as any).integration.credentials as any;
+        if (intCreds.encrypted) {
+          credentials = JSON.parse(decrypt(intCreds.encrypted));
+        } else {
+          credentials = intCreds;
+        }
+      } catch (e) {
+        console.error('[NODE DATA] Integration credentials parsing failed:', e);
+      }
+    } else if (node.config) {
       try {
         const configJson = node.config as { encrypted?: string; _cached?: any; [key: string]: any };
-
-        // Always extract cached data if present (works for both encrypted and unencrypted)
-        cachedData = configJson._cached || null;
-
         if (configJson.encrypted) {
-          // Decrypt if credentials are encrypted
-          const decrypted = decrypt(configJson.encrypted);
-          credentials = JSON.parse(decrypted);
+          credentials = JSON.parse(decrypt(configJson.encrypted));
         } else {
-          // Config is stored directly (not encrypted)
           const { _cached, ...creds } = configJson;
           credentials = creds;
         }

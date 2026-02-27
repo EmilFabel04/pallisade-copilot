@@ -1837,21 +1837,117 @@ class ToolExecutor:
 
         # Ensure manifest is loaded for DbtIntegration (local dbt)
         if hasattr(dbt_adapter, 'manifest') and dbt_adapter.manifest is None:
-            try:
-                dbt_adapter.load_manifest()
-                logger.info("[dbt] Auto-loaded manifest.json")
-            except FileNotFoundError as e:
-                return None, ToolResult(
-                    success=False,
-                    error=f"dbt manifest.json not found. Ensure dbt compile has been run. Error: {e}"
-                )
-            except Exception as e:
-                return None, ToolResult(
-                    success=False,
-                    error=f"Failed to load dbt manifest: {e}"
-                )
+            # Try project_files or GitHub before falling back to filesystem
+            dbt_config = self._get_dbt_integration_config()
+            manifest = self._resolve_dbt_manifest(dbt_config)
+
+            if manifest:
+                # Set manifest directly on the adapter
+                dbt_adapter.manifest = manifest
+                logger.info("[dbt] Loaded manifest from %s", dbt_config.get("source_mode", "config"))
+            else:
+                # Fall back to loading from local filesystem
+                try:
+                    dbt_adapter.load_manifest()
+                    logger.info("[dbt] Auto-loaded manifest.json from filesystem")
+                except FileNotFoundError as e:
+                    return None, ToolResult(
+                        success=False,
+                        error=f"dbt manifest.json not found. Ensure dbt compile has been run, upload your project, or connect a GitHub repo. Error: {e}"
+                    )
+                except Exception as e:
+                    return None, ToolResult(
+                        success=False,
+                        error=f"Failed to load dbt manifest: {e}"
+                    )
 
         return dbt_adapter, None
+
+    def _get_dbt_integration_config(self) -> Dict[str, Any]:
+        """Get the config dict for the active dbt integration."""
+        for integration in self.context.integrations:
+            if integration.type in ("DBT_CORE", "DBT_CLOUD") and integration.is_active:
+                return integration.config
+        return {}
+
+    def _resolve_dbt_manifest(self, config: Dict[str, Any]) -> Any:
+        """
+        Try to resolve a dbt manifest from project_files or GitHub.
+        Returns the manifest dict or None.
+        """
+        source_mode = config.get("source_mode", "")
+
+        # Project folder upload — parse raw SQL/YAML files
+        if source_mode == "project" and config.get("project_files"):
+            project_files = config["project_files"]
+            if isinstance(project_files, dict):
+                try:
+                    from lineage.dbt_project_parser import parse_dbt_project
+
+                    manifest = parse_dbt_project(
+                        files=project_files,
+                        project_name=config.get("project_name", ""),
+                        warehouse_type=config.get("warehouse_type", "bigquery"),
+                    )
+                    if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                        logger.info("[dbt] Parsed %d models from uploaded project files",
+                                    len(manifest.get("nodes", {})))
+                        return manifest
+                except Exception as e:
+                    logger.warning("[dbt] Project files parsing failed: %s", e)
+
+        # GitHub mode — fetch files from repo
+        if source_mode == "github":
+            github_token = config.get("github_token") or config.get("github", {}).get("token")
+            github_repo = config.get("github_repo")
+            if github_token and github_repo:
+                try:
+                    import asyncio
+                    from lineage.github_reader import fetch_dbt_project_files
+                    from lineage.dbt_project_parser import parse_dbt_project
+
+                    # Run async fetch in sync context
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            project_files = pool.submit(
+                                asyncio.run,
+                                fetch_dbt_project_files(
+                                    repo=github_repo,
+                                    token=github_token,
+                                    branch=config.get("github_branch", "main"),
+                                    dbt_root=config.get("dbt_project_path", ""),
+                                )
+                            ).result()
+                    else:
+                        project_files = loop.run_until_complete(
+                            fetch_dbt_project_files(
+                                repo=github_repo,
+                                token=github_token,
+                                branch=config.get("github_branch", "main"),
+                                dbt_root=config.get("dbt_project_path", ""),
+                            )
+                        )
+
+                    if project_files:
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=config.get("project_name", ""),
+                            warehouse_type=config.get("warehouse_type", "bigquery"),
+                        )
+                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                            logger.info("[dbt] Parsed %d models from GitHub repo %s",
+                                        len(manifest.get("nodes", {})), github_repo)
+                            return manifest
+                except Exception as e:
+                    logger.warning("[dbt] GitHub project fetch failed: %s", e)
+
+        # Fallback: direct manifest in config (upload mode or legacy)
+        if config.get("manifest") and source_mode in ("upload", ""):
+            return config["manifest"]
+
+        return None
 
     async def _execute_get_dbt_model(self, args: Dict[str, Any]) -> ToolResult:
         """Get dbt model details."""
@@ -4084,17 +4180,29 @@ class ToolExecutor:
             await applier.close()
 
     def _get_github_token(self) -> Optional[str]:
-        """Get GitHub token from context integrations."""
+        """Get GitHub token from context integrations.
+
+        Priority: 1) per-tool github_token (explicit classic PAT — has full repo scope),
+                  2) dedicated GITHUB integration (OAuth token — may have limited scope).
+        """
+        # First: per-tool github_token (user explicitly configured a PAT for private repos)
+        for integration in self.context.integrations:
+            config = integration.config or {}
+            token = config.get("github_token")
+            if token:
+                logger.info(f"[GitHub] Found github_token in {integration.type} integration")
+                return token
+
+        # Fallback: dedicated GITHUB integration (OAuth)
         for integration in self.context.integrations:
             if integration.type.upper() == "GITHUB":
                 config = integration.config or {}
                 token = config.get("access_token") or config.get("token")
                 if token:
-                    logger.info(f"[GitHub] Found token in integration config (key: {'access_token' if config.get('access_token') else 'token'})")
+                    logger.info("[GitHub] Found token in GITHUB OAuth integration")
                     return token
-                else:
-                    logger.warning(f"[GitHub] Found GITHUB integration but no token in config. Keys: {list(config.keys())}")
-        logger.warning("[GitHub] No GITHUB integration found in context")
+
+        logger.warning("[GitHub] No GitHub token found in any integration")
         return None
 
     def _get_github_repo(self) -> Optional[Dict[str, str]]:

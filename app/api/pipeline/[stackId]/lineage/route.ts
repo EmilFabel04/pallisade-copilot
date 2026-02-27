@@ -6,16 +6,27 @@ import { decrypt } from '@/lib/crypto';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
-// Helper to decrypt node config
-function decryptNodeConfig(config: any): Record<string, any> | null {
-  if (!config) return null;
-  try {
-    if (config.encrypted) {
-      const decrypted = decrypt(config.encrypted);
-      return JSON.parse(decrypted);
+// Resolve credentials for a node — prefers Integration table, falls back to PipelineNode.config
+function resolveNodeConfig(node: any): Record<string, any> | null {
+  // Prefer Integration table
+  if (node.integrationId && node.integration?.credentials) {
+    try {
+      const creds = node.integration.credentials as any;
+      if (creds.encrypted) {
+        return JSON.parse(decrypt(creds.encrypted));
+      }
+      return creds;
+    } catch (e) {
+      console.error(`[LINEAGE] Failed to decrypt integration creds for ${node.name}:`, e);
     }
-    // Config is not encrypted (legacy data), return as-is
-    return config as Record<string, any>;
+  }
+  // Legacy fallback: PipelineNode.config
+  if (!node.config) return null;
+  try {
+    if (node.config.encrypted) {
+      return JSON.parse(decrypt(node.config.encrypted));
+    }
+    return node.config as Record<string, any>;
   } catch (e) {
     console.error('[LINEAGE] Failed to decrypt config:', e);
     return null;
@@ -49,7 +60,7 @@ export async function POST(
         organizationId,
       },
       include: {
-        nodes: true,
+        nodes: { include: { integration: true } },
       },
     });
 
@@ -94,7 +105,7 @@ export async function POST(
     );
     let githubAttachment: Record<string, any> | null = null;
     if (githubNode) {
-      const ghConfig = decryptNodeConfig(githubNode.config);
+      const ghConfig = resolveNodeConfig(githubNode);
       if (ghConfig?.access_token && ghConfig?.owner) {
         githubAttachment = {
           repo: ghConfig.repo ? `${ghConfig.owner}/${ghConfig.repo}` : ghConfig.owner,
@@ -105,7 +116,7 @@ export async function POST(
     }
 
     for (const node of nodesToProcess) {
-      const decryptedConfig = decryptNodeConfig(node.config);
+      const decryptedConfig = resolveNodeConfig(node);
       // Airflow nodes may have empty config (GitHub-only mode)
       if (!decryptedConfig && node.toolType?.toLowerCase() !== 'airflow') {
         console.warn(`[LINEAGE] Skipping ${node.name}: could not decrypt config`);

@@ -22,9 +22,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ integrations: [], pipelineNodes: [] });
     }
 
-    // Fetch legacy integrations
+    // Optional: filter by stackId if provided
+    const stackId = request.nextUrl.searchParams.get('stackId');
+
+    // Fetch integrations — when stackId is provided, only return integrations
+    // that either: (a) are linked to a node in that stack, or
+    // (b) have NO pipeline nodes at all (standalone OAuth like Slack, GitHub)
+    const integrationWhere: any = { organizationId: user.organizationId };
+    if (stackId) {
+      integrationWhere.OR = [
+        { pipelineNodes: { some: { stackId } } },
+        { pipelineNodes: { none: {} } },
+      ];
+    }
+
     const legacyIntegrations = await prisma.integration.findMany({
-      where: { organizationId: user.organizationId },
+      where: integrationWhere,
       select: {
         id: true,
         name: true,
@@ -43,9 +56,6 @@ export async function GET(request: NextRequest) {
       },
       orderBy: { createdAt: 'desc' },
     });
-
-    // Optional: filter by stackId if provided
-    const stackId = request.nextUrl.searchParams.get('stackId');
 
     // Fetch Pipeline nodes (new approach)
     const pipelineNodes = await prisma.pipelineNode.findMany({

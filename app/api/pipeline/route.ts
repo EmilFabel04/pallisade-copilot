@@ -11,7 +11,7 @@ import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { encrypt, decrypt } from '@/lib/crypto';
 
-// Helper to encrypt node config for secure storage
+// Helper to encrypt node config for secure storage (legacy — kept for _cached data)
 function encryptNodeConfig(config: Record<string, any> | null | undefined): Record<string, any> | undefined {
   if (!config || Object.keys(config).length === 0) {
     return undefined;
@@ -21,8 +21,80 @@ function encryptNodeConfig(config: Record<string, any> | null | undefined): Reco
     return { encrypted };
   } catch (e) {
     console.error('[PIPELINE] Failed to encrypt config:', e);
-    // Fall back to storing unencrypted (not ideal but prevents data loss)
     return config;
+  }
+}
+
+// Keys that are NOT real credentials — skip when deciding whether to create an Integration
+const NON_CREDENTIAL_KEYS = new Set(['_cached', '_autoDiscovered']);
+
+function hasRealCredentials(config: Record<string, any> | null | undefined): boolean {
+  if (!config) return false;
+  return Object.keys(config).some(k => !NON_CREDENTIAL_KEYS.has(k));
+}
+
+/**
+ * Upsert an Integration record for a pipeline node's credentials.
+ * Returns the Integration ID.
+ */
+async function upsertNodeIntegration(
+  organizationId: string,
+  node: { name: string; toolType: string; config: Record<string, any>; status?: string },
+  existingIntegrationId?: string | null,
+): Promise<string | null> {
+  // Strip internal keys to get only real credentials
+  const { _cached, _autoDiscovered, ...credentials } = node.config;
+  if (Object.keys(credentials).length === 0) return existingIntegrationId || null;
+
+  const integrationType = node.toolType.toUpperCase();
+  const encryptedCreds = { encrypted: encrypt(JSON.stringify(credentials)) };
+  const isActive = ['CONNECTED', 'HEALTHY', 'WARNING'].includes(node.status || '');
+
+  // If node already has an integrationId, update that record
+  if (existingIntegrationId) {
+    try {
+      await prisma.integration.update({
+        where: { id: existingIntegrationId },
+        data: {
+          credentials: encryptedCreds,
+          status: isActive ? 'ACTIVE' : 'INACTIVE',
+          name: node.name,
+        },
+      });
+      console.log(`[PIPELINE] Updated Integration ${existingIntegrationId} for ${integrationType}`);
+      return existingIntegrationId;
+    } catch (e) {
+      console.error(`[PIPELINE] Failed to update Integration ${existingIntegrationId}:`, e);
+    }
+  }
+
+  // Upsert Integration record (unique constraint: organizationId + type + name)
+  try {
+    const integration = await prisma.integration.upsert({
+      where: {
+        organizationId_type_name: {
+          organizationId,
+          type: integrationType as any,
+          name: node.name,
+        },
+      },
+      update: {
+        credentials: encryptedCreds,
+        status: isActive ? 'ACTIVE' : 'INACTIVE',
+      },
+      create: {
+        name: node.name,
+        type: integrationType as any,
+        status: isActive ? 'ACTIVE' : 'INACTIVE',
+        credentials: encryptedCreds,
+        organizationId,
+      },
+    });
+    console.log(`[PIPELINE] Upserted Integration ${integration.id} for ${integrationType}`);
+    return integration.id;
+  } catch (e) {
+    console.error(`[PIPELINE] Failed to upsert Integration for ${integrationType}:`, e);
+    return null;
   }
 }
 
@@ -93,21 +165,19 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Get specific stack or first one
+    // Get specific stack or first one (include integration for credential resolution)
+    const nodeInclude = {
+      orderBy: { createdAt: 'asc' as const },
+      include: { integration: true },
+    };
     const stack = stackId
       ? await prisma.pipelineStack.findUnique({
           where: { id: stackId },
-          include: {
-            nodes: { orderBy: { createdAt: 'asc' } },
-            edges: true,
-          },
+          include: { nodes: nodeInclude, edges: true },
         })
       : await prisma.pipelineStack.findFirst({
           where: { organizationId },
-          include: {
-            nodes: { orderBy: { createdAt: 'asc' } },
-            edges: true,
-          },
+          include: { nodes: nodeInclude, edges: true },
         });
 
     // Only fetch stacks list if requested (saves a query on dashboard page loads)
@@ -165,25 +235,45 @@ export async function GET(request: NextRequest) {
         status: stack.status,
         healthScore: stack.healthScore,
         lastScanAt: stack.lastScanAt?.toISOString(),
-        nodes: stack.nodes.map(node => ({
-          id: node.id,
-          name: node.name,
-          layer: node.layer,
-          toolType: node.toolType,
-          // Skip config decryption if excludeConfigs=true (faster dashboard loads)
-          config: excludeConfigs ? null : decryptNodeConfig(node.config),
-          positionX: node.positionX,
-          positionY: node.positionY,
-          status: node.status,
-          lastTestedAt: node.lastTestedAt?.toISOString(),
-          lastError: node.lastError,
-          healthScore: node.healthScore,
-          lastScanAt: node.lastScanAt?.toISOString(),
-          findingsCount: node.findingsCount,
-          criticalCount: node.criticalCount,
-          highCount: node.highCount,
-          integrationId: node.integrationId,
-        })),
+        nodes: stack.nodes.map((node: any) => {
+          let config = null;
+          if (!excludeConfigs) {
+            // Prefer Integration credentials, fall back to legacy PipelineNode.config
+            if (node.integrationId && node.integration?.credentials) {
+              const intCreds = node.integration.credentials as any;
+              try {
+                if (intCreds.encrypted) {
+                  config = JSON.parse(decrypt(intCreds.encrypted));
+                } else {
+                  config = intCreds;
+                }
+              } catch (e) {
+                console.error(`[PIPELINE] Failed to decrypt integration creds for ${node.name}:`, e);
+                config = decryptNodeConfig(node.config);
+              }
+            } else {
+              config = decryptNodeConfig(node.config);
+            }
+          }
+          return {
+            id: node.id,
+            name: node.name,
+            layer: node.layer,
+            toolType: node.toolType,
+            config,
+            positionX: node.positionX,
+            positionY: node.positionY,
+            status: node.status,
+            lastTestedAt: node.lastTestedAt?.toISOString(),
+            lastError: node.lastError,
+            healthScore: node.healthScore,
+            lastScanAt: node.lastScanAt?.toISOString(),
+            findingsCount: node.findingsCount,
+            criticalCount: node.criticalCount,
+            highCount: node.highCount,
+            integrationId: node.integrationId,
+          };
+        }),
         edges: stack.edges.map(edge => ({
           id: edge.id,
           sourceId: edge.sourceId,
@@ -227,36 +317,44 @@ export async function POST(request: NextRequest) {
     const isNew = !id || id === 'new';
 
     if (isNew) {
-      // Create new stack (with optional nodes and edges)
+      // Create new stack
       const stack = await prisma.pipelineStack.create({
         data: {
           name: name || 'My Data Pipeline',
           description: description || null,
           status: nodes.length > 0 ? 'CONFIGURING' : 'DRAFT',
           organizationId,
-          ...(nodes.length > 0 ? {
-            nodes: {
-              create: nodes.map((node: any) => ({
-                name: node.name,
-                layer: node.layer,
-                toolType: node.toolType,
-                config: encryptNodeConfig(node.config),
-                positionX: node.positionX,
-                positionY: node.positionY,
-                status: node.status,
-              })),
-            },
-          } : {}),
         },
-        include: { nodes: true },
       });
 
-      // Create edges if nodes were provided (need node IDs from DB)
-      if (nodes.length > 0 && edges.length > 0) {
-        const nodeIdMap = new Map<string, string>();
-        nodes.forEach((node: any, index: number) => {
-          nodeIdMap.set(node.id, stack.nodes[index].id);
+      // Create nodes, upsert Integration records for credentials
+      const nodeIdMap = new Map<string, string>();
+      for (const node of nodes) {
+        let integrationId: string | null = null;
+        const cachedData = node.config?._cached || null;
+
+        if (hasRealCredentials(node.config)) {
+          integrationId = await upsertNodeIntegration(organizationId, node);
+        }
+
+        const created = await prisma.pipelineNode.create({
+          data: {
+            name: node.name,
+            layer: node.layer,
+            toolType: node.toolType,
+            config: cachedData ? { _cached: cachedData } : undefined,
+            positionX: node.positionX,
+            positionY: node.positionY,
+            status: node.status,
+            stackId: stack.id,
+            ...(integrationId ? { integrationId } : {}),
+          },
         });
+        nodeIdMap.set(node.id, created.id);
+      }
+
+      // Create edges if nodes were provided
+      if (nodes.length > 0 && edges.length > 0) {
 
         // Create edges with mapped IDs
         await Promise.all(
@@ -307,36 +405,59 @@ export async function POST(request: NextRequest) {
         where: { id: { in: nodesToDelete.map(n => n.id) } },
       });
 
-      // Upsert nodes
+      // Build lookup for existing nodes' integrationIds
+      const existingIntegrationIds = new Map<string, string | null>();
+      for (const n of existingStack.nodes) {
+        existingIntegrationIds.set(n.id, (n as any).integrationId || null);
+      }
+
+      // Upsert nodes — credentials go to Integration table, not PipelineNode.config
       const nodeIdMap = new Map<string, string>();
       for (const node of nodes) {
+        const cachedData = node.config?._cached || null;
+
         if (existingNodeIds.has(node.id)) {
-          // Update existing
+          // Update existing node
+          let integrationId = existingIntegrationIds.get(node.id) || null;
+
+          if (hasRealCredentials(node.config)) {
+            integrationId = await upsertNodeIntegration(
+              organizationId, node, integrationId,
+            );
+          }
+
           await prisma.pipelineNode.update({
             where: { id: node.id },
             data: {
               name: node.name,
               layer: node.layer,
               toolType: node.toolType,
-              config: encryptNodeConfig(node.config),
+              config: cachedData ? { _cached: cachedData } : undefined,
               positionX: node.positionX,
               positionY: node.positionY,
               status: node.status,
+              ...(integrationId ? { integrationId } : {}),
             },
           });
           nodeIdMap.set(node.id, node.id);
         } else {
-          // Create new
+          // Create new node
+          let integrationId: string | null = null;
+          if (hasRealCredentials(node.config)) {
+            integrationId = await upsertNodeIntegration(organizationId, node);
+          }
+
           const created = await prisma.pipelineNode.create({
             data: {
               name: node.name,
               layer: node.layer,
               toolType: node.toolType,
-              config: encryptNodeConfig(node.config),
+              config: cachedData ? { _cached: cachedData } : undefined,
               positionX: node.positionX,
               positionY: node.positionY,
               status: node.status,
               stackId: id,
+              ...(integrationId ? { integrationId } : {}),
             },
           });
           nodeIdMap.set(node.id, created.id);

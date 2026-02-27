@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
-import { decrypt } from '@/lib/crypto';
+import { resolveStackIntegrations } from '@/lib/integration-credentials';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -102,189 +102,8 @@ export async function POST(request: Request) {
       { role: 'user' as const, content: message },
     ];
 
-    // Fetch pipeline nodes (integrations) from the selected pipeline
-    // Include all nodes except ERROR status - PENDING nodes with config are valid
-    const pipelineStack = await prisma.pipelineStack.findFirst({
-      where: {
-        organizationId: user.organizationId,
-        ...(effectivePipelineStackId ? { id: effectivePipelineStackId } : {}),
-      },
-      include: {
-        nodes: {
-          where: {
-            status: { notIn: ['ERROR', 'TESTING'] },
-          },
-          select: {
-            id: true,
-            name: true,
-            toolType: true,
-            layer: true,
-            status: true,
-            config: true,
-          },
-        },
-      },
-    });
-
-    console.log(`[COPILOT] Found ${pipelineStack?.nodes.length || 0} pipeline nodes:`,
-      pipelineStack?.nodes.map(n => ({ name: n.name, type: n.toolType, status: n.status, hasConfig: !!n.config })));
-
-    // Convert pipeline nodes to integration format for the scanner
-    // Note: type must be uppercase to match the scanner's tool registry
-    const validActiveStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
-    const integrations = pipelineStack?.nodes.map(node => {
-      // Decrypt credentials if encrypted (same pattern as tables/route.ts)
-      let credentials: Record<string, any> = {};
-      if (node.config) {
-        try {
-          const configJson = node.config as { encrypted?: string; _cached?: any; [key: string]: any };
-
-          if (configJson.encrypted) {
-            // Decrypt if credentials are encrypted
-            const decrypted = decrypt(configJson.encrypted);
-            credentials = JSON.parse(decrypted);
-            console.log(`[COPILOT] Decrypted config for ${node.name} (${node.toolType}), keys:`, Object.keys(credentials));
-          } else {
-            // Config is stored directly (not encrypted)
-            const { _cached, ...creds } = configJson;
-            credentials = creds;
-            console.log(`[COPILOT] Direct config for ${node.name} (${node.toolType}), keys:`, Object.keys(credentials));
-          }
-        } catch (e) {
-          console.error(`[COPILOT] Failed to decrypt credentials for ${node.name}:`, e);
-          credentials = {};
-        }
-      } else {
-        console.log(`[COPILOT] No config for ${node.name} (${node.toolType})`);
-      }
-
-      // Map frontend field names to adapter field names
-      const config = { ...credentials };
-      const toolType = node.toolType.toUpperCase();
-
-      // username -> user (Snowflake, Postgres, Redshift only — other integrations
-      // like Airflow need 'username' kept as-is for their MCP env mappings)
-      const usernameToUserTypes = ['SNOWFLAKE', 'POSTGRES', 'REDSHIFT'];
-      if (usernameToUserTypes.includes(toolType) && config.username && !config.user) {
-        config.user = config.username;
-        delete config.username;
-      }
-
-      // server -> host (SQL Server variants only)
-      const serverToHostTypes = ['SQLSERVER', 'AZURE_SQL', 'AZURE_SYNAPSE'];
-      if (serverToHostTypes.includes(toolType) && config.server && !config.host) {
-        config.host = config.server;
-        delete config.server;
-      }
-
-      // host -> base_url (Airflow pipeline nodes use 'host' but MCP/adapters expect 'base_url')
-      if (toolType === 'AIRFLOW' && config.host && !config.base_url) {
-        config.base_url = config.host;
-        delete config.host;
-      }
-
-      // n8n: host -> base_url (adapter accepts both, but be consistent)
-      if (toolType === 'N8N' && config.host && !config.base_url) {
-        config.base_url = config.host;
-      }
-
-      return {
-        id: node.id,
-        name: node.name,
-        type: node.toolType.toUpperCase(),
-        layer: node.layer.toLowerCase(),
-        status: validActiveStatuses.includes(node.status) ? 'ACTIVE' : node.status,
-        config,
-        metadata: {},
-      };
-    }) || [];
-
-    // Warn about duplicate integration types (e.g. two Airflow nodes)
-    const typeCounts = integrations.reduce((acc, i) => {
-      acc[i.type] = (acc[i.type] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    for (const [type, count] of Object.entries(typeCounts)) {
-      if (count > 1) {
-        console.warn(`[COPILOT] WARNING: ${count} ${type} nodes found in pipeline. Only the first will be used by MCP. Remove duplicates in Pipeline settings.`);
-        const dupes = integrations.filter(i => i.type === type);
-        dupes.forEach((d, idx) => {
-          console.warn(`[COPILOT]   ${type} #${idx + 1}: name="${d.name}", username="${d.config?.username}", base_url="${d.config?.base_url || d.config?.host}"`);
-        });
-      }
-    }
-
-    // Also fetch OAuth integrations (GitHub, Slack, Jira) from the Integration table
-    const oauthIntegrations = await prisma.integration.findMany({
-      where: {
-        organizationId: user.organizationId,
-        status: 'ACTIVE',
-      },
-      select: {
-        id: true,
-        name: true,
-        type: true,
-        status: true,
-        accessToken: true,
-        metadata: true,
-      },
-    });
-
-    console.log(`[COPILOT] Found ${oauthIntegrations.length} OAuth integrations:`, oauthIntegrations.map(o => ({ id: o.id, type: o.type, hasToken: !!o.accessToken })));
-
-    // Convert OAuth integrations to the same format and merge
-    for (const oauth of oauthIntegrations) {
-      // Decrypt access token if present
-      let accessToken = '';
-      if (oauth.accessToken) {
-        try {
-          accessToken = decrypt(oauth.accessToken);
-        } catch (e) {
-          console.error(`[COPILOT] Failed to decrypt token for ${oauth.name}:`, e);
-        }
-      }
-
-      // Check if this type already exists (from pipeline nodes)
-      const existingIdx = integrations.findIndex(i => i.type === oauth.type.toUpperCase());
-      if (existingIdx >= 0) {
-        // Merge the OAuth token into the existing integration's config
-        // This ensures pipeline nodes get the OAuth credentials
-        console.log(`[COPILOT] Merging OAuth token for ${oauth.type} into existing pipeline node at index ${existingIdx}`);
-        integrations[existingIdx].config = {
-          ...integrations[existingIdx].config,
-          access_token: accessToken,
-          token: accessToken,
-        };
-        integrations[existingIdx].metadata = {
-          ...integrations[existingIdx].metadata,
-          ...(oauth.metadata as Record<string, any> || {}),
-        };
-        continue;
-      }
-      console.log(`[COPILOT] No existing pipeline node for ${oauth.type}, adding as standalone integration`);
-
-      integrations.push({
-        id: oauth.id,
-        name: oauth.name,
-        type: oauth.type.toUpperCase(),
-        layer: 'version_control',
-        status: oauth.status === 'ACTIVE' ? 'ACTIVE' : oauth.status,
-        config: {
-          access_token: accessToken,
-          token: accessToken,
-        },
-        metadata: oauth.metadata as Record<string, any> || {},
-      });
-    }
-
-    console.log('[COPILOT] Sending integrations to scanner:', integrations.map(i => ({
-      name: i.name,
-      type: i.type,
-      status: i.status,
-      configKeys: Object.keys(i.config || {}),
-      configKeyCount: Object.keys(i.config || {}).length,
-      hasToken: !!(i.config?.access_token || i.config?.token),
-    })));
+    // Resolve all integration credentials (from Integration table, with legacy PipelineNode fallback)
+    const integrations = await resolveStackIntegrations(effectivePipelineStackId, user.organizationId);
 
     // Fetch lineage data from database to pass to copilot
     let lineageData: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
@@ -353,7 +172,7 @@ export async function POST(request: Request) {
         message,
         messages: conversationHistory, // Full conversation history for context
         session_id: chatSession.id,
-        pipeline_stack_id: pipeline_stack_id || pipelineStack?.id,
+        pipeline_stack_id: effectivePipelineStackId || pipeline_stack_id,
         node_ids,
         referenced_entities,
         model,
@@ -617,105 +436,8 @@ async function handleStreamingChat(
     { role: 'user' as const, content: message },
   ];
 
-  // Fetch integrations from the selected pipeline
-  const pipelineStack = await prisma.pipelineStack.findFirst({
-    where: {
-      organizationId: user.organizationId,
-      ...(effectivePipelineStackId ? { id: effectivePipelineStackId } : {}),
-    },
-    include: {
-      nodes: {
-        where: { status: { notIn: ['ERROR', 'TESTING'] } },
-        select: {
-          id: true, name: true, toolType: true, layer: true,
-          status: true, config: true,
-        },
-      },
-    },
-  });
-
-  const validActiveStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
-  const integrations = pipelineStack?.nodes.map(node => {
-    let credentials: Record<string, any> = {};
-    if (node.config) {
-      try {
-        const configJson = node.config as { encrypted?: string; _cached?: any; [key: string]: any };
-        if (configJson.encrypted) {
-          const decrypted = decrypt(configJson.encrypted);
-          credentials = JSON.parse(decrypted);
-        } else {
-          const { _cached, ...creds } = configJson;
-          credentials = creds;
-        }
-      } catch {
-        credentials = {};
-      }
-    }
-
-    const config = { ...credentials };
-    const toolType = node.toolType.toUpperCase();
-    const usernameToUserTypes = ['SNOWFLAKE', 'POSTGRES', 'REDSHIFT'];
-    if (usernameToUserTypes.includes(toolType) && config.username && !config.user) {
-      config.user = config.username;
-      delete config.username;
-    }
-    const serverToHostTypes = ['SQLSERVER', 'AZURE_SQL', 'AZURE_SYNAPSE'];
-    if (serverToHostTypes.includes(toolType) && config.server && !config.host) {
-      config.host = config.server;
-      delete config.server;
-    }
-    if (toolType === 'AIRFLOW' && config.host && !config.base_url) {
-      config.base_url = config.host;
-      delete config.host;
-    }
-
-    // n8n: host -> base_url
-    if (toolType === 'N8N' && config.host && !config.base_url) {
-      config.base_url = config.host;
-    }
-
-    return {
-      id: node.id,
-      name: node.name,
-      type: node.toolType.toUpperCase(),
-      layer: node.layer.toLowerCase(),
-      status: validActiveStatuses.includes(node.status) ? 'ACTIVE' : node.status,
-      config,
-      metadata: {},
-    };
-  }) || [];
-
-  // Merge OAuth integrations
-  const oauthIntegrations = await prisma.integration.findMany({
-    where: { organizationId: user.organizationId, status: 'ACTIVE' },
-    select: { id: true, name: true, type: true, status: true, accessToken: true, metadata: true },
-  });
-
-  for (const oauth of oauthIntegrations) {
-    let accessToken = '';
-    if (oauth.accessToken) {
-      try { accessToken = decrypt(oauth.accessToken); } catch { /* skip */ }
-    }
-    const existingIdx = integrations.findIndex(i => i.type === oauth.type.toUpperCase());
-    if (existingIdx >= 0) {
-      integrations[existingIdx].config = {
-        ...integrations[existingIdx].config,
-        access_token: accessToken, token: accessToken,
-      };
-      integrations[existingIdx].metadata = {
-        ...integrations[existingIdx].metadata,
-        ...(oauth.metadata as Record<string, any> || {}),
-      };
-      continue;
-    }
-    integrations.push({
-      id: oauth.id, name: oauth.name, type: oauth.type.toUpperCase(),
-      layer: 'version_control',
-      status: oauth.status === 'ACTIVE' ? 'ACTIVE' : oauth.status,
-      config: { access_token: accessToken, token: accessToken },
-      metadata: oauth.metadata as Record<string, any> || {},
-    });
-  }
+  // Resolve all integration credentials (from Integration table, with legacy PipelineNode fallback)
+  const integrations = await resolveStackIntegrations(effectivePipelineStackId, user.organizationId);
 
   // Fetch lineage data
   let lineageData: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
@@ -759,7 +481,7 @@ async function handleStreamingChat(
       message,
       messages: conversationHistory,
       session_id: chatSession.id,
-      pipeline_stack_id: pipeline_stack_id || pipelineStack?.id,
+      pipeline_stack_id: effectivePipelineStackId || pipeline_stack_id,
       node_ids,
       referenced_entities,
       model,

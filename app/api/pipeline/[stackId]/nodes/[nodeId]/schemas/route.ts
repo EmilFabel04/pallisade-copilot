@@ -40,21 +40,35 @@ export async function POST(
       },
       include: {
         stack: true,
+        integration: true,
       },
     });
 
-    // Use config from request body (for unsaved/new nodes) or from saved node
+    // Use config from request body (for unsaved/new nodes) or resolve from Integration/node
     let credentials: Record<string, any> = {};
     let toolType = body.toolType || node?.toolType;
 
     if (body.config && Object.keys(body.config).length > 0) {
       credentials = body.config;
+    } else if ((node as any)?.integrationId && (node as any)?.integration?.credentials) {
+      // Prefer Integration table
+      try {
+        const intCreds = (node as any).integration.credentials as any;
+        if (intCreds.encrypted) {
+          credentials = JSON.parse(decrypt(intCreds.encrypted));
+        } else {
+          credentials = intCreds;
+        }
+      } catch (e) {
+        console.error('[SCHEMAS] Integration credentials decryption failed:', e);
+        return NextResponse.json({ error: 'Failed to decrypt credentials' }, { status: 500 });
+      }
     } else if (node?.config) {
+      // Legacy fallback: PipelineNode.config
       try {
         const configJson = node.config as { encrypted?: string; [key: string]: any };
         if (configJson.encrypted) {
-          const decrypted = decrypt(configJson.encrypted);
-          credentials = JSON.parse(decrypted);
+          credentials = JSON.parse(decrypt(configJson.encrypted));
         } else {
           credentials = configJson;
         }

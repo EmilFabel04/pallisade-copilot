@@ -27,13 +27,13 @@ export async function POST(request: NextRequest) {
             toolType: 'linux_server',
             ...(integrationId ? { id: integrationId } : {}),
           },
-          select: { id: true, name: true, toolType: true, config: true, status: true },
+          include: { integration: true },
           take: 1,
         },
       },
     });
 
-    const serverNode = pipelineStack?.nodes[0];
+    const serverNode = pipelineStack?.nodes[0] as any;
     if (!serverNode) {
       return NextResponse.json({
         success: false,
@@ -42,15 +42,23 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Decrypt server credentials
+    // Resolve credentials — prefer Integration table, fall back to PipelineNode.config
     let credentials: Record<string, any> = {};
     try {
-      const configJson = serverNode.config as { encrypted?: string; [key: string]: any };
-      if (configJson.encrypted) {
-        const decrypted = decrypt(configJson.encrypted);
-        credentials = JSON.parse(decrypted);
-      } else {
-        credentials = { ...configJson };
+      if (serverNode.integrationId && serverNode.integration?.credentials) {
+        const intCreds = serverNode.integration.credentials as any;
+        if (intCreds.encrypted) {
+          credentials = JSON.parse(decrypt(intCreds.encrypted));
+        } else {
+          credentials = { ...intCreds };
+        }
+      } else if (serverNode.config) {
+        const configJson = serverNode.config as { encrypted?: string; [key: string]: any };
+        if (configJson.encrypted) {
+          credentials = JSON.parse(decrypt(configJson.encrypted));
+        } else {
+          credentials = { ...configJson };
+        }
       }
     } catch {
       return NextResponse.json({
