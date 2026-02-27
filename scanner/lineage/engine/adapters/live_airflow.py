@@ -210,11 +210,7 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         except ImportError:
             from integrations.airflow import AirflowIntegration
 
-        client = AirflowIntegration(
-            base_url=config.get("base_url", ""),
-            username=config.get("username", ""),
-            password=config.get("password", ""),
-        )
+        client = AirflowIntegration(config=config)
 
         nodes: List[LineageNode] = []
         try:
@@ -286,11 +282,7 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         except ImportError:
             from integrations.airflow import AirflowIntegration
 
-        client = AirflowIntegration(
-            base_url=config.get("base_url", ""),
-            username=config.get("username", ""),
-            password=config.get("password", ""),
-        )
+        client = AirflowIntegration(config=config)
 
         edges: List[LineageEdge] = []
         try:

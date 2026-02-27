@@ -524,10 +524,15 @@ export async function GET(
           continue;
         }
 
-        // In data view, skip orchestration-domain nodes (n8n tasks/workflows,
+        // In data view, skip orchestration/job/service nodes (n8n tasks/workflows,
         // airflow DAGs/tasks). Remap their edges to the pipeline tool node
         // so the graph shows "n8n → BQ table" instead of "n8n task X → BQ table".
-        if (planeParam === 'data' && eNode.platform_domain === 'orchestration') {
+        const canonicalType = (eNode.canonical_type || '').toLowerCase();
+        if (planeParam === 'data' && (
+          eNode.platform_domain === 'orchestration' ||
+          canonicalType === 'job' ||
+          canonicalType === 'service'
+        )) {
           const intId = eNode.integration_id;
           if (intId) {
             const toolNode = integrationToToolNode.get(intId);

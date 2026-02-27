@@ -125,10 +125,10 @@ export async function POST(
 
       const extractConfig: Record<string, any> = { ...(decryptedConfig || {}) };
 
-      // Attach GitHub config for transform/orchestration nodes
-      if ((node.layer === 'TRANSFORMATION' || node.layer === 'ORCHESTRATION') && githubAttachment) {
+      // Attach GitHub config for transform/orchestration nodes —
+      // only inject from VERSION_CONTROL node if the tool doesn't have its own github_token
+      if ((node.layer === 'TRANSFORMATION' || node.layer === 'ORCHESTRATION') && !extractConfig.github_token && githubAttachment) {
         const isAirflow = node.toolType?.toLowerCase() === 'airflow';
-        const isDbtCoreGithub = node.toolType?.toLowerCase() === 'dbt_core' && extractConfig.source_mode === 'github';
         extractConfig.github = {
           ...githubAttachment,
           ...(isAirflow
@@ -136,9 +136,9 @@ export async function POST(
             : { dbt_root: extractConfig.dbt_project_path || (githubAttachment as any).dbt_root || '' }),
         };
         // For dbt_core GitHub mode, also set github_token directly for manifest fetch
+        const isDbtCoreGithub = node.toolType?.toLowerCase() === 'dbt_core' && extractConfig.source_mode === 'github';
         if (isDbtCoreGithub) {
           extractConfig.github_token = githubAttachment.token;
-          // Use user-specified repo if provided, otherwise fall back to GitHub node's repo
           if (!extractConfig.github_repo) {
             extractConfig.github_repo = githubAttachment.repo;
           }
@@ -172,21 +172,19 @@ export async function POST(
       }, { status: 400 });
     }
 
-    console.log(`[LINEAGE] Starting investigation with ${toolConfigs.length} tools: ${toolConfigs.map(t => t.tool_type).join(', ')}`);
+    console.log(`[LINEAGE] Starting LLM-enhanced investigation with ${toolConfigs.length} tools: ${toolConfigs.map(t => t.tool_type).join(', ')}`);
 
-    // --- Call the Investigator endpoint (single request for all tools) ---
-    const investigateResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/investigate?stack_id=${stackId}`, {
+    // --- Call the LLM-enhanced Investigator (adapters + planner + reconciler) ---
+    const investigateResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/investigate-llm?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        organization_id: organizationId,
         tool_configs: toolConfigs,
-        options: {
-          region: options.region || 'auto',
-          days_back: options.days_back || 30,
-        },
+        use_llm_planner: true,
+        use_llm_reconciler: true,
+        llm_provider: 'anthropic',
       }),
-      signal: AbortSignal.timeout(300000), // 5 minute timeout
+      signal: AbortSignal.timeout(600000), // 10 minute timeout (LLM reconciler needs more time)
     });
 
     if (!investigateResponse.ok) {

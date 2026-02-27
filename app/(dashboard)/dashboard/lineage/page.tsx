@@ -976,9 +976,13 @@ export default function LineagePage() {
   const { flowNodes, flowEdges } = useMemo(() => {
     // Rendered view path: use backend-computed positions
     if (renderedView && renderedView.nodes.length > 0) {
-      // Filter by inferred toggle
+      // Filter by inferred toggle and exclude orchestration nodes from data plane
       const visibleViewNodes = renderedView.nodes.filter(
-        (n) => filters.showInferred || !n.inferred
+        (n) =>
+          (filters.showInferred || !n.inferred) &&
+          n.canonicalType !== 'job' &&
+          n.canonicalType !== 'service' &&
+          n.canonicalType !== 'system'
       );
       const visibleIds = new Set(visibleViewNodes.map((n) => n.id));
 

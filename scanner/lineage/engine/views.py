@@ -50,6 +50,7 @@ from .zones import (
     WAREHOUSE_PLATFORMS,
     assign_lane,
     classify_actor_capability,
+    classify_data_plane_layer,
     classify_dataset_zone,
 )
 
@@ -694,26 +695,38 @@ class ViewBuilder:
         4. Cluster by (database, schema)
         5. Compute deterministic layered layout via topological sort
         """
-        # Step 1: Select relevant nodes
+        # Step 1: Select relevant nodes (datasets + semantic only, no jobs)
         selected_types = {
             CanonicalNodeType.DATASET.value,
             CanonicalNodeType.SEMANTIC.value,
         }
 
-        # Also include JOB nodes that have both upstream and downstream dataset connections
-        # (so the view shows dataset → job → dataset chains)
-        job_node_ids: Set[str] = set()
-        for edge in self.graph.edges.values():
-            src = self.graph.nodes.get(edge.source_id)
-            tgt = self.graph.nodes.get(edge.target_id)
-            if not src or not tgt:
+        # Build bypass edges for JOB nodes: when dataset → job → dataset exists,
+        # create a direct dataset → dataset edge so the data plane stays clean.
+        job_bypass_edges: List[Tuple[str, str]] = []
+        for node in self.graph.nodes.values():
+            ct = node.canonical_type or map_node_type(node).value
+            if ct != CanonicalNodeType.JOB.value:
                 continue
-            src_ct = src.canonical_type or map_node_type(src).value
-            tgt_ct = tgt.canonical_type or map_node_type(tgt).value
-            if src_ct in selected_types and tgt_ct == CanonicalNodeType.JOB.value:
-                job_node_ids.add(tgt.id)
-            if src_ct == CanonicalNodeType.JOB.value and tgt_ct in selected_types:
-                job_node_ids.add(src.id)
+            upstream_datasets: List[str] = []
+            downstream_datasets: List[str] = []
+            for edge in self.graph.edges.values():
+                if edge.target_id == node.id:
+                    src = self.graph.nodes.get(edge.source_id)
+                    if src:
+                        src_ct = src.canonical_type or map_node_type(src).value
+                        if src_ct in selected_types:
+                            upstream_datasets.append(src.id)
+                if edge.source_id == node.id:
+                    tgt = self.graph.nodes.get(edge.target_id)
+                    if tgt:
+                        tgt_ct = tgt.canonical_type or map_node_type(tgt).value
+                        if tgt_ct in selected_types:
+                            downstream_datasets.append(tgt.id)
+            for up_id in upstream_datasets:
+                for down_id in downstream_datasets:
+                    if up_id != down_id:
+                        job_bypass_edges.append((up_id, down_id))
 
         # Step 2: Deduplicate Airflow table refs by FQN
         # Airflow adapter creates table nodes (platform=airflow) that duplicate
@@ -767,7 +780,7 @@ class ViewBuilder:
                 continue
 
             ct = node.canonical_type or map_node_type(node).value
-            if ct not in selected_types and node.id not in job_node_ids:
+            if ct not in selected_types:
                 continue
 
             layer = get_layer(node)
@@ -859,8 +872,33 @@ class ViewBuilder:
                 evidence_count=len(edge.evidence),
             ))
 
-        # Step 5: Compute deterministic layout
-        positions = _topological_layout(view_nodes, view_edges)
+        # Step 4b: Add bypass edges for job nodes (dataset → job → dataset)
+        for src_id, tgt_id in job_bypass_edges:
+            final_src = airflow_remap.get(src_id, src_id)
+            final_tgt = airflow_remap.get(tgt_id, tgt_id)
+            final_src = inferred_remap.get(final_src, final_src)
+            final_tgt = inferred_remap.get(final_tgt, final_tgt)
+            if final_src not in node_id_set or final_tgt not in node_id_set:
+                continue
+            if final_src == final_tgt:
+                continue
+            pair = f"{final_src}→{final_tgt}"
+            if pair in seen_edge_pairs:
+                continue
+            seen_edge_pairs.add(pair)
+            view_edges.append(ViewEdge(
+                id=f"bypass-{final_src}-{final_tgt}",
+                source_id=final_src,
+                target_id=final_tgt,
+                canonical_type="derives",
+                original_type="job_bypass",
+                confidence=0.8,
+                inferred=True,
+                evidence_count=0,
+            ))
+
+        # Step 5: Compute deterministic layout (semantic layers + topological refinement)
+        positions = _semantic_topological_layout(view_nodes, view_edges, self.graph)
         for vn in view_nodes:
             pos = positions.get(vn.id, (0.0, 0.0))
             vn.x = pos[0]
@@ -1036,6 +1074,131 @@ def _topological_layout(
             positions[nid] = (x, y)
 
     return positions
+
+
+def _semantic_topological_layout(
+    nodes: List[ViewNode],
+    edges: List[ViewEdge],
+    graph: LineageGraph,
+) -> Dict[str, Tuple[float, float]]:
+    """
+    Compute layered layout using semantic layer assignment + topological refinement.
+
+    Algorithm:
+    1. Assign each node a semantic layer (0-6) based on metadata
+    2. If all same layer (no diversity), fall back to pure topological sort
+    3. Enforce edge consistency: source layer < target layer
+    4. Within each layer, sort by (cluster_id, topo_order, name)
+    5. Convert to pixel positions
+    """
+    if not nodes:
+        return {}
+
+    node_ids = {n.id for n in nodes}
+    node_map = {n.id: n for n in nodes}
+
+    # Build out-degree for downstream detection
+    out_degree: Dict[str, int] = {n.id: 0 for n in nodes}
+    for e in edges:
+        if e.source_id in node_ids and e.target_id in node_ids:
+            out_degree[e.source_id] = out_degree.get(e.source_id, 0) + 1
+
+    # Step 1: Assign semantic layer to each node
+    semantic_layer: Dict[str, int] = {}
+    for vn in nodes:
+        graph_node = graph.nodes.get(vn.id)
+        if graph_node:
+            ct = graph_node.canonical_type or map_node_type(graph_node).value
+            has_downstream = out_degree.get(vn.id, 0) > 0
+            semantic_layer[vn.id] = classify_data_plane_layer(
+                graph_node, ct, has_downstream_data_edges=has_downstream,
+            )
+        else:
+            # ViewNode without a graph node — derive from metadata
+            semantic_layer[vn.id] = 6 if vn.canonical_type == "semantic" else 1
+
+    # Check diversity — fall back to pure topo if all same layer
+    if len(set(semantic_layer.values())) <= 1:
+        return _topological_layout(nodes, edges)
+
+    # Step 2: Enforce edge consistency (source layer < target layer)
+    changed = True
+    iterations = 0
+    while changed and iterations < 20:
+        changed = False
+        iterations += 1
+        for e in edges:
+            if e.source_id in semantic_layer and e.target_id in semantic_layer:
+                if semantic_layer[e.source_id] >= semantic_layer[e.target_id]:
+                    semantic_layer[e.target_id] = semantic_layer[e.source_id] + 1
+                    changed = True
+
+    # Step 3: Compute topo order for intra-layer sorting
+    topo_order = _compute_topo_order(nodes, edges)
+
+    # Step 4: Group by layer, sort within
+    by_layer: Dict[int, List[str]] = defaultdict(list)
+    for nid, layer in semantic_layer.items():
+        by_layer[layer].append(nid)
+
+    for layer in by_layer:
+        by_layer[layer].sort(key=lambda nid: (
+            node_map[nid].cluster_id or "",
+            topo_order.get(nid, 999),
+            node_map[nid].name,
+        ))
+
+    # Step 5: Pixel positions
+    positions: Dict[str, Tuple[float, float]] = {}
+    for layer_idx, layer in enumerate(sorted(by_layer.keys())):
+        for node_idx, nid in enumerate(by_layer[layer]):
+            positions[nid] = (layer_idx * LAYER_SPACING_X, node_idx * NODE_SPACING_Y)
+
+    return positions
+
+
+def _compute_topo_order(
+    nodes: List[ViewNode],
+    edges: List[ViewEdge],
+) -> Dict[str, int]:
+    """Compute a topological ordering index for each node (Kahn's algorithm)."""
+    node_ids = {n.id for n in nodes}
+    node_map = {n.id: n for n in nodes}
+    in_degree: Dict[str, int] = {n.id: 0 for n in nodes}
+    successors: Dict[str, List[str]] = defaultdict(list)
+
+    for e in edges:
+        if e.source_id in node_ids and e.target_id in node_ids:
+            successors[e.source_id].append(e.target_id)
+            in_degree[e.target_id] = in_degree.get(e.target_id, 0) + 1
+
+    queue = sorted(
+        [nid for nid, deg in in_degree.items() if deg == 0],
+        key=lambda nid: (node_map[nid].cluster_id or "", node_map[nid].name),
+    )
+
+    order: Dict[str, int] = {}
+    idx = 0
+    head = 0
+    while head < len(queue):
+        nid = queue[head]
+        head += 1
+        order[nid] = idx
+        idx += 1
+        for succ in sorted(successors[nid]):
+            if succ not in in_degree:
+                continue
+            in_degree[succ] -= 1
+            if in_degree[succ] == 0:
+                queue.append(succ)
+
+    # Assign unvisited nodes (cycles) a high order
+    for n in nodes:
+        if n.id not in order:
+            order[n.id] = idx
+            idx += 1
+
+    return order
 
 
 def _build_clusters_from_nodes(nodes: List[ViewNode]) -> List[ViewCluster]:

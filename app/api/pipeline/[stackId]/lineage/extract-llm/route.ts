@@ -6,14 +6,27 @@ import { decrypt } from '@/lib/crypto';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
-function decryptNodeConfig(config: any): Record<string, any> | null {
-  if (!config) return null;
-  try {
-    if (config.encrypted) {
-      const decrypted = decrypt(config.encrypted);
-      return JSON.parse(decrypted);
+// Resolve credentials for a node — prefers Integration table, falls back to PipelineNode.config
+function resolveNodeConfig(node: any): Record<string, any> | null {
+  // Prefer Integration table
+  if (node.integrationId && node.integration?.credentials) {
+    try {
+      const creds = node.integration.credentials as any;
+      if (creds.encrypted) {
+        return JSON.parse(decrypt(creds.encrypted));
+      }
+      return creds;
+    } catch (e) {
+      console.error(`[LLM-EXTRACT] Failed to decrypt integration creds for ${node.name}:`, e);
     }
-    return config as Record<string, any>;
+  }
+  // Legacy fallback: PipelineNode.config
+  if (!node.config) return null;
+  try {
+    if (node.config.encrypted) {
+      return JSON.parse(decrypt(node.config.encrypted));
+    }
+    return node.config as Record<string, any>;
   } catch (e) {
     console.error('[LLM-EXTRACT] Failed to decrypt config:', e);
     return null;
@@ -43,7 +56,7 @@ export async function POST(
     // Get the pipeline stack with nodes
     const stack = await prisma.pipelineStack.findFirst({
       where: { id: stackId, organizationId },
-      include: { nodes: true },
+      include: { nodes: { include: { integration: true } } },
     });
 
     if (!stack) {
@@ -51,7 +64,7 @@ export async function POST(
     }
 
     const connectedNodes = stack.nodes.filter(
-      (n) => n.status === 'CONNECTED' || n.status === 'HEALTHY'
+      (n) => n.status === 'CONNECTED' || n.status === 'HEALTHY' || n.status === 'WARNING'
     );
 
     if (connectedNodes.length === 0) {
@@ -77,7 +90,7 @@ export async function POST(
     );
     let githubAttachment: Record<string, any> | null = null;
     if (githubNode) {
-      const ghConfig = decryptNodeConfig(githubNode.config);
+      const ghConfig = resolveNodeConfig(githubNode);
       if (ghConfig?.access_token && ghConfig?.owner) {
         githubAttachment = {
           repo: ghConfig.repo ? `${ghConfig.owner}/${ghConfig.repo}` : ghConfig.owner,
@@ -88,7 +101,7 @@ export async function POST(
     }
 
     for (const node of connectedNodes) {
-      const decryptedConfig = decryptNodeConfig(node.config);
+      const decryptedConfig = resolveNodeConfig(node);
       if (!decryptedConfig && node.toolType?.toLowerCase() !== 'airflow') {
         console.warn(`[LLM-EXTRACT] Skipping ${node.name}: could not decrypt config`);
         continue;
@@ -96,16 +109,17 @@ export async function POST(
 
       const extractConfig: Record<string, any> = { ...(decryptedConfig || {}) };
 
-      // Attach GitHub config for transform/orchestration nodes
-      if ((node.layer === 'TRANSFORMATION' || node.layer === 'ORCHESTRATION') && githubAttachment) {
+      // Attach GitHub config for transform/orchestration nodes —
+      // only inject from VERSION_CONTROL node if the tool doesn't have its own github_token
+      if ((node.layer === 'TRANSFORMATION' || node.layer === 'ORCHESTRATION') && !extractConfig.github_token && githubAttachment) {
         const isAirflow = node.toolType?.toLowerCase() === 'airflow';
-        const isDbtCoreGithub = node.toolType?.toLowerCase() === 'dbt_core' && extractConfig.source_mode === 'github';
         extractConfig.github = {
           ...githubAttachment,
           ...(isAirflow
             ? { dag_directory: extractConfig.dag_directory || 'dags' }
             : { dbt_root: extractConfig.dbt_project_path || (githubAttachment as any).dbt_root || '' }),
         };
+        const isDbtCoreGithub = node.toolType?.toLowerCase() === 'dbt_core' && extractConfig.source_mode === 'github';
         if (isDbtCoreGithub) {
           extractConfig.github_token = githubAttachment.token;
           if (!extractConfig.github_repo) {

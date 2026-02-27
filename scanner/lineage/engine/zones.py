@@ -101,22 +101,35 @@ INFRA_PLATFORMS: Set[str] = {
 _RAW_PATTERNS = [
     r"\braw\b", r"\blanding\b", r"\bstage_raw\b", r"\bsource\b",
     r"\bextract\b", r"\bload\b", r"\bingested\b",
+    # Medallion architecture (Databricks / Delta Lake)
+    r"\bbronze\b",
 ]
 
 _STAGING_PATTERNS = [
     r"\bstg\b", r"\bstaging\b", r"\bstg_\w+",
     r"_staging\b",  # compound: analytics_staging
+    # Medallion architecture
+    r"\bsilver\b",
+    # Alternative naming
+    r"\bclean\b", r"\bcleansed\b",
 ]
 
 _INTERMEDIATE_PATTERNS = [
     r"\bint\b", r"\bintermediate\b", r"\bint_\w+",
     r"_intermediate\b",  # compound: analytics_intermediate
+    # Alternative naming
+    r"\brefined\b", r"\bcurated\b",
 ]
 
 _MART_PATTERNS = [
     r"\bmart\b", r"\bmarts\b", r"\bfct_\w+", r"\bdim_\w+",
     r"\bfact_\w+", r"\bdimension_\w+",
     r"_marts?\b",  # compound: analytics_mart, analytics_marts
+    # Medallion architecture
+    r"\bgold\b",
+    # Alternative naming
+    r"\bpresentation\b", r"\bconsumption\b", r"\bdwh\b",
+    r"\bdata_warehouse\b", r"\bserving\b",
 ]
 
 _ANALYTICS_PATTERNS = [
@@ -194,6 +207,80 @@ def classify_dataset_zone(node: LineageNode) -> DatasetZone:
         return DatasetZone.ANALYTICS
 
     return DatasetZone.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# Data-plane layer classification (for semantic layout)
+# ---------------------------------------------------------------------------
+
+class DataPlaneLayer(Enum):
+    """Semantic layers for the data-plane view (left → right)."""
+    INGESTION = 0       # n8n, Fivetran, Airbyte connectors
+    RAW = 1             # Raw/landing tables
+    STAGING = 2         # dbt staging models, stg_ schemas
+    INTERMEDIATE = 3    # dbt intermediate models
+    MART = 4            # dbt marts, dim_/fct_ tables, analytics
+    SERVING = 5         # Leaf dataset nodes (no downstream data edges)
+    REPORTING = 6       # Dashboards, reports, BI objects
+
+
+_ZONE_TO_LAYER = {
+    DatasetZone.RAW: DataPlaneLayer.RAW.value,
+    DatasetZone.STAGING: DataPlaneLayer.STAGING.value,
+    DatasetZone.INTERMEDIATE: DataPlaneLayer.INTERMEDIATE.value,
+    DatasetZone.MART: DataPlaneLayer.MART.value,
+    DatasetZone.ANALYTICS: DataPlaneLayer.MART.value,
+}
+
+
+def classify_data_plane_layer(
+    node: LineageNode,
+    canonical_type: str,
+    has_downstream_data_edges: bool = True,
+) -> int:
+    """
+    Classify a node into a semantic data-plane layer for layout.
+
+    Uses metadata signals in priority order:
+    1. Canonical type (semantic → REPORTING)
+    2. Platform domain (ingestion → INGESTION, BI → REPORTING)
+    3. Existing classify_dataset_zone() for datasets
+    4. Graph position (leaf nodes → SERVING)
+
+    Returns an integer layer index (0-6).
+    """
+    # Semantic nodes (dashboards, reports) → REPORTING
+    if canonical_type == "semantic":
+        return DataPlaneLayer.REPORTING.value
+
+    # Ingestion platforms → INGESTION
+    platform = (node.platform or "").lower()
+    if platform in INGESTION_PLATFORMS or node.platform_domain == PlatformDomain.INGESTION:
+        return DataPlaneLayer.INGESTION.value
+
+    # BI platforms → REPORTING
+    if node.platform_domain == PlatformDomain.BI:
+        return DataPlaneLayer.REPORTING.value
+
+    # Dataset nodes: classify by zone
+    if canonical_type == "dataset":
+        zone = classify_dataset_zone(node)
+        layer = _ZONE_TO_LAYER.get(zone)
+        if layer is not None:
+            return layer
+
+        # UNKNOWN zone — additional heuristics
+        dbt_type = node.raw_metadata.get("dbt_resource_type", "")
+        if dbt_type == "model":
+            return DataPlaneLayer.MART.value
+
+        if not has_downstream_data_edges:
+            return DataPlaneLayer.SERVING.value
+
+        return DataPlaneLayer.RAW.value
+
+    # Fallback
+    return DataPlaneLayer.RAW.value
 
 
 def classify_actor_capability(node: LineageNode) -> Optional[ActorCapability]:
