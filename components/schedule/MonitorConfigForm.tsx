@@ -87,7 +87,7 @@ export function MonitorConfigForm({
 
         {/* Data Quality monitors */}
         <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Data Quality</p>
-        <div className="grid grid-cols-2 gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 mb-4">
           {MONITOR_TYPES.filter((mt) => !INFRA_TYPES.includes(mt.value)).map((mt) => (
             <button
               key={mt.value}
@@ -104,7 +104,7 @@ export function MonitorConfigForm({
                 setShowAdvanced(false);
               }}
               className={cn(
-                'flex flex-col items-start p-3 rounded-lg text-left transition-colors',
+                'flex flex-col items-start p-3 rounded-lg text-left transition-colors w-[calc(25%-6px)] min-h-[88px]',
                 monitorType === mt.value
                   ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
                   : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
@@ -118,7 +118,7 @@ export function MonitorConfigForm({
 
         {/* Infrastructure monitors */}
         <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Infrastructure</p>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-wrap gap-2">
           {MONITOR_TYPES.filter((mt) => INFRA_TYPES.includes(mt.value)).map((mt) => (
             <button
               key={mt.value}
@@ -129,7 +129,7 @@ export function MonitorConfigForm({
                 setShowAdvanced(false);
               }}
               className={cn(
-                'flex flex-col items-start p-3 rounded-lg text-left transition-colors',
+                'flex flex-col items-start p-3 rounded-lg text-left transition-colors w-[calc(25%-6px)] min-h-[88px]',
                 monitorType === mt.value
                   ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
                   : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'

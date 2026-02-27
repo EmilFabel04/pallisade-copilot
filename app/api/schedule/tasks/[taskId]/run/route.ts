@@ -74,30 +74,65 @@ export async function POST(
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Resolve warehouse config — same pattern as copilot/chat/route.ts
+    // Resolve warehouse config — prefer task's specific integration, fallback to auto-discover
     let integrationConfig: Record<string, any> | null = null;
+    const taskConfig = (task.config as Record<string, any>) || {};
 
-    // Find warehouse pipeline node from the org's pipeline stack
-    const pipelineStack = await prisma.pipelineStack.findFirst({
-      where: { organizationId },
-      include: {
-        nodes: {
-          where: {
-            toolType: { in: WAREHOUSE_TOOL_TYPES },
-            status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
-          },
-          select: { id: true, name: true, toolType: true, config: true },
-          take: 1,
+    // 1. Try task's explicit integrationId (FK to Integration → find its PipelineNode)
+    if (task.integrationId) {
+      const linkedNode = await prisma.pipelineNode.findFirst({
+        where: {
+          integrationId: task.integrationId,
+          toolType: { in: WAREHOUSE_TOOL_TYPES },
+          status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
         },
-      },
-    });
+        select: { id: true, name: true, toolType: true, config: true },
+      });
+      if (linkedNode) {
+        integrationConfig = resolveNodeConfig(linkedNode);
+        console.log(`[Schedule] Resolved warehouse from integrationId: ${linkedNode.name} (${linkedNode.toolType})`);
+      }
+    }
 
-    const warehouseNode = pipelineStack?.nodes[0];
-    if (warehouseNode) {
-      integrationConfig = resolveNodeConfig(warehouseNode);
-      console.log(`[Schedule] Auto-discovered warehouse: ${warehouseNode.name} (${warehouseNode.toolType})`);
-    } else {
-      console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
+    // 2. Try config.nodeId (PipelineNode ID stored when integrationId wasn't a valid FK)
+    if (!integrationConfig && taskConfig.nodeId) {
+      const specificNode = await prisma.pipelineNode.findFirst({
+        where: {
+          id: taskConfig.nodeId,
+          toolType: { in: WAREHOUSE_TOOL_TYPES },
+          status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+        },
+        select: { id: true, name: true, toolType: true, config: true },
+      });
+      if (specificNode) {
+        integrationConfig = resolveNodeConfig(specificNode);
+        console.log(`[Schedule] Resolved warehouse from config.nodeId: ${specificNode.name} (${specificNode.toolType})`);
+      }
+    }
+
+    // 3. Fallback: auto-discover first warehouse node in the org's pipeline stack
+    if (!integrationConfig) {
+      const pipelineStack = await prisma.pipelineStack.findFirst({
+        where: { organizationId },
+        include: {
+          nodes: {
+            where: {
+              toolType: { in: WAREHOUSE_TOOL_TYPES },
+              status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+            },
+            select: { id: true, name: true, toolType: true, config: true },
+            take: 1,
+          },
+        },
+      });
+
+      const warehouseNode = pipelineStack?.nodes[0];
+      if (warehouseNode) {
+        integrationConfig = resolveNodeConfig(warehouseNode);
+        console.log(`[Schedule] Auto-discovered warehouse: ${warehouseNode.name} (${warehouseNode.toolType})`);
+      } else {
+        console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
+      }
     }
 
     // For infrastructure monitors, resolve server connection config

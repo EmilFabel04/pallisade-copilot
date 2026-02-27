@@ -85,12 +85,16 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
 
   if (!open) return null;
 
-  const warehouseIntegrations = integrations.filter((i) =>
-    ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(i.type)
-  );
-  const serverIntegrations = integrations.filter((i) =>
-    ['linux_server'].includes(i.type)
-  );
+  const warehouseIntegrations = integrations.filter((i, idx, arr) => {
+    const t = i.type.toLowerCase();
+    return ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(t) &&
+      arr.findIndex((x) => x.id === i.id) === idx; // deduplicate by id
+  });
+  const serverIntegrations = integrations.filter((i, idx, arr) => {
+    const t = i.type.toLowerCase();
+    return ['linux_server'].includes(t) &&
+      arr.findIndex((x) => x.id === i.id) === idx;
+  });
 
   // Only require monitor type + target table. Advanced config is auto-detected.
   // Exception: CUSTOM_SQL needs SQL, single-column anomaly metrics need a column name.
@@ -169,7 +173,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
         </div>
 
         {/* Content — scrolls vertically when needed, header/footer stay fixed */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-6 space-y-5">
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5">
           {step === 1 && (
             <>
               {/* Task name */}

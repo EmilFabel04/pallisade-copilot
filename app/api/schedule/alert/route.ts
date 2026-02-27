@@ -26,10 +26,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch alert integration configs from the org
+    // Channels come as lowercase (e.g. "slack") but Prisma IntegrationType is uppercase
+    const channelTypesUpper = (channels as string[]).map((c: string) => c.toUpperCase());
     const integrations = await prisma.integration.findMany({
       where: {
         organizationId,
-        type: { in: channels },
+        type: { in: channelTypesUpper as any },
         status: 'ACTIVE',
       },
     });
@@ -39,7 +41,7 @@ export async function POST(request: NextRequest) {
     const results: Array<{ channel: string; success: boolean; error?: string }> = [];
 
     for (const channel of channels as string[]) {
-      const integration = integrations.find((i) => i.type === channel);
+      const integration = integrations.find((i) => i.type.toLowerCase() === channel.toLowerCase());
       const channelConfig = alertConfig?.[channel] || {};
 
       try {

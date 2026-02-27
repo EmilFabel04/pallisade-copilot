@@ -383,9 +383,10 @@ class TaskExecutor:
         Returns the (possibly modified) result dict.
         """
         try:
-            from scanner.copilot.llm import CopilotLLM
+            import openai
+            import os
 
-            llm = CopilotLLM()
+            client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
             details = result_dict.get("details", {})
             # Build context for the LLM
@@ -420,13 +421,16 @@ class TaskExecutor:
                 "Respond with ONLY valid JSON, no markdown."
             )
 
-            llm_result = await llm.chat(
-                message=prompt,
-                system_prompt=system_msg,
-                integrations=[],
+            response = client.chat.completions.create(
+                model="gpt-5.2-mini",
+                max_tokens=512,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt},
+                ],
             )
 
-            response_text = llm_result.get("message", "")
+            response_text = response.choices[0].message.content or "" if response.choices else ""
 
             # Parse LLM response
             import json as json_mod
@@ -702,16 +706,19 @@ class TaskExecutor:
             }
 
         try:
-            from scanner.copilot.llm import CopilotLLM
+            import openai
+            import os
+            import asyncio
 
-            llm = CopilotLLM()
+            client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
             # Build a system message that instructs the LLM to act as a monitor
             system_msg = (
                 "You are a data quality monitor. Execute the user's check instruction "
-                "against the data pipeline. After analysis, respond with a JSON object "
-                "containing: {\"status\": \"PASS\"|\"WARN\"|\"FAIL\", \"message\": \"explanation\", "
-                "\"details\": {}}. Only respond with valid JSON."
+                "against the data pipeline. Use the query_warehouse tool to run SQL queries "
+                "and inspect the data. After analysis, respond with a JSON object "
+                'containing: {"status": "PASS"|"WARN"|"FAIL", "message": "explanation", '
+                '"details": {}}. Only respond with valid JSON.'
             )
 
             # Get integration config for warehouse access
@@ -719,17 +726,109 @@ class TaskExecutor:
                 task.get("integrationId"), task.get("organizationId")
             )
 
-            # Build context with available tools
-            result = await llm.chat(
-                message=prompt,
-                system_prompt=system_msg,
-                integrations=[integration_config] if integration_config else [],
-            )
+            # Set up warehouse query function if integration is available
+            query_func = None
+            dialect = None
+            if integration_config:
+                try:
+                    tool_type = integration_config.get("type", "").lower()
+                    dialect = _detect_dialect(tool_type)
+                    query_func, dialect = _get_query_func(integration_config, dialect)
+                except Exception as e:
+                    logger.warning(f"[Executor] Could not connect warehouse for prompt task: {e}")
+
+            # Define tools for the LLM (OpenAI function calling format)
+            tools = []
+            if query_func:
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": "query_warehouse",
+                        "description": "Execute a read-only SQL SELECT query against the data warehouse.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "sql": {"type": "string", "description": "The SQL SELECT query to execute"},
+                            },
+                            "required": ["sql"],
+                        },
+                    },
+                })
+
+            # Tool-calling loop (max 5 iterations)
+            messages = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": prompt},
+            ]
+            response_text = ""
+            for _ in range(5):
+                api_kwargs = {
+                    "model": "gpt-5.2-mini",
+                    "max_tokens": 1024,
+                    "messages": messages,
+                }
+                if tools:
+                    api_kwargs["tools"] = tools
+
+                response = client.chat.completions.create(**api_kwargs)
+                choice = response.choices[0] if response.choices else None
+                if not choice:
+                    break
+
+                msg = choice.message
+
+                # Check if LLM wants to call tools
+                if choice.finish_reason == "tool_calls" and msg.tool_calls:
+                    # Append assistant message with tool calls
+                    messages.append(msg)
+                    for tool_call in msg.tool_calls:
+                        if tool_call.function.name == "query_warehouse":
+                            try:
+                                args = json.loads(tool_call.function.arguments)
+                            except json.JSONDecodeError:
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": "Error: Invalid tool arguments.",
+                                })
+                                continue
+                            sql = args.get("sql", "")
+                            # Validate read-only
+                            sql_upper = sql.strip().upper()
+                            if not (sql_upper.startswith("SELECT") or (sql_upper.startswith("WITH") and "SELECT" in sql_upper)):
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": "Error: Only SELECT queries are allowed.",
+                                })
+                                continue
+                            try:
+                                rows = await asyncio.to_thread(query_func, sql)
+                                limited = rows[:100] if rows else []
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": json.dumps({"row_count": len(rows), "rows": limited[:20]}, default=str),
+                                })
+                            except Exception as qe:
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": f"Query error: {str(qe)}",
+                                })
+                    continue
+
+                # No tool call — extract final text response
+                response_text = msg.content or ""
+                break
 
             # Try to parse LLM response as JSON for structured result
-            response_text = result.get("message", "")
             try:
-                parsed = json.loads(response_text)
+                # Strip markdown code fences if present
+                cleaned = response_text.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                parsed = json.loads(cleaned)
                 return {
                     "status": parsed.get("status", "PASS").upper(),
                     "message": parsed.get("message", response_text),
