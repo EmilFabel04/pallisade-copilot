@@ -47,6 +47,9 @@ class ToolExecutor:
                 continue
             
             try:
+                if integration.type in self._adapters:
+                    logger.info(f"Skipping duplicate adapter for {integration.type}")
+                    continue
                 adapter = self._create_adapter(integration)
                 if adapter:
                     self._adapters[integration.type] = adapter
@@ -601,13 +604,8 @@ class ToolExecutor:
                     from scanner.integrations.dbt import DbtIntegration
                 return DbtIntegration(integration.config)
             
-            elif integration_type == "AIRFLOW":
-                try:
-                    from integrations.airflow import AirflowIntegration
-                except ImportError:
-                    from scanner.integrations.airflow import AirflowIntegration
-                return AirflowIntegration(integration.config)
-            
+            # AIRFLOW: handled exclusively by MCP server (mcp_airflow__* tools)
+
             elif integration_type == "DAGSTER":
                 try:
                     from integrations.dagster import DagsterIntegration
@@ -1954,211 +1952,6 @@ class ToolExecutor:
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-
-    # ==========================================
-    # AIRFLOW TOOL IMPLEMENTATIONS
-    # ==========================================
-    
-    async def _execute_get_airflow_dag_status(self, args: Dict[str, Any]) -> ToolResult:
-        """Get Airflow DAG status."""
-        dag_id = args["dag_id"]
-        
-        airflow = self._adapters.get("AIRFLOW")
-        if not airflow:
-            return ToolResult(
-                success=False,
-                error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
-            )
-
-        try:
-            dag = airflow.get_dag(dag_id)
-            if not dag:
-                return ToolResult(success=False, error=f"DAG not found: {dag_id}")
-            
-            recent_runs = airflow.get_dag_runs(dag_id, limit=5)
-            
-            return ToolResult(
-                success=True,
-                data={
-                    "dag_id": dag_id,
-                    "is_paused": dag.is_paused,
-                    "schedule": dag.schedule_interval,
-                    "owners": dag.owners,
-                    "recent_runs": [
-                        {
-                            "run_id": run.run_id,
-                            "state": run.state,
-                            "execution_date": run.execution_date.isoformat() if run.execution_date else None,
-                            "duration_seconds": run.duration_seconds,
-                        }
-                        for run in recent_runs
-                    ]
-                }
-            )
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
-    
-    async def _execute_get_airflow_recent_failures(self, args: Dict[str, Any]) -> ToolResult:
-        """Get recent Airflow task failures."""
-        dag_id = args.get("dag_id")
-        limit = args.get("limit", 20)
-
-        airflow = self._adapters.get("AIRFLOW")
-        if not airflow:
-            return ToolResult(
-                success=False,
-                error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
-            )
-
-        try:
-            result = airflow.get_recent_failures(dag_id=dag_id, limit=limit)
-            return ToolResult(success=True, data=result)
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
-
-    async def _execute_get_airflow_task_logs(self, args: Dict[str, Any]) -> ToolResult:
-        """Get Airflow task logs."""
-        dag_id = args["dag_id"]
-        task_id = args["task_id"]
-        run_id = args.get("run_id")
-        
-        airflow = self._adapters.get("AIRFLOW")
-        if not airflow:
-            return ToolResult(
-                success=False,
-                error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
-            )
-
-        try:
-            logs = airflow.get_task_logs(dag_id, task_id, run_id)
-            return ToolResult(
-                success=True,
-                data={
-                    "dag_id": dag_id,
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "logs": logs
-                }
-            )
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
-    
-    async def _execute_get_airflow_dag_lineage(self, args: Dict[str, Any]) -> ToolResult:
-        """Get the lineage subgraph for an Airflow DAG."""
-        dag_id = args["dag_id"]
-        depth = args.get("depth", 3)
-
-        # Try engine store first (has DAG/task/table nodes with evidence)
-        if self.context.engine_store and self.context.engine_store.graph:
-            graph = self.context.engine_store.graph
-            # Find the DAG node by name match
-            dag_node = None
-            for node in graph.nodes.values():
-                if (node.name == dag_id
-                    and node.platform == "airflow"
-                    and node.node_type.value == "dag"):
-                    dag_node = node
-                    break
-
-            if not dag_node:
-                # Help the LLM find the right node
-                airflow_nodes = [
-                    {"name": n.name, "fqn": n.fqn, "type": n.node_type.value, "id": n.id}
-                    for n in graph.nodes.values()
-                    if n.platform == "airflow"
-                ]
-                hint = ""
-                if airflow_nodes:
-                    names = [f"{n['name']} ({n['type']})" for n in airflow_nodes[:10]]
-                    hint = f" Found {len(airflow_nodes)} Airflow nodes in the graph: {', '.join(names)}. Try using the exact name from this list."
-                else:
-                    hint = (
-                        f" No Airflow nodes exist in the lineage graph ({len(graph.nodes)} total nodes). "
-                        f"Try: 1) search_lineage with '*{dag_id}*' to check all nodes, "
-                        f"2) get_lineage_stats to check coverage, "
-                        f"3) get_dag_run_history to get DAG info directly from Airflow API."
-                    )
-                return ToolResult(
-                    success=False,
-                    error=f"Airflow DAG '{dag_id}' not found in the lineage graph.{hint}"
-                )
-
-            # Collect downstream subgraph (DAG → tasks → tables)
-            downstream = self.context.engine_store.get_downstream(
-                dag_node.id, depth=depth
-            )
-            # Also get upstream tables (tables that feed into tasks)
-            upstream = self.context.engine_store.get_upstream(
-                dag_node.id, depth=depth
-            )
-
-            # Combine all nodes
-            all_nodes = {dag_node.id: dag_node}
-            for n in downstream + upstream:
-                all_nodes[n.id] = n
-
-            # Collect relevant edges
-            node_ids = set(all_nodes.keys())
-            edges = []
-            for edge in graph.edges.values():
-                if edge.source_id in node_ids and edge.target_id in node_ids:
-                    edges.append({
-                        "id": edge.id,
-                        "from": edge.source_id,
-                        "to": edge.target_id,
-                        "edge_type": edge.edge_type.value,
-                        "confidence": edge.confidence,
-                        "level": edge.lineage_level.value,
-                    })
-
-            tasks = []
-            tables_read = []
-            tables_written = []
-
-            for n in all_nodes.values():
-                if n.node_type.value == "task":
-                    tasks.append({
-                        "task_id": n.name,
-                        "operator": n.raw_metadata.get("operator", "unknown"),
-                        "is_opaque": n.raw_metadata.get("is_opaque", False),
-                    })
-                elif n.node_type.value == "table":
-                    # Check if it's read or written by looking at edges
-                    is_written = any(
-                        e["edge_type"] == "writes_to" and e["to"] == n.id
-                        for e in edges
-                    )
-                    entry = {"table": n.fqn, "id": n.id}
-                    if is_written:
-                        tables_written.append(entry)
-                    else:
-                        tables_read.append(entry)
-
-            return ToolResult(
-                success=True,
-                data={
-                    "dag_id": dag_id,
-                    "dag_node_id": dag_node.id,
-                    "schedule": dag_node.raw_metadata.get("schedule"),
-                    "task_count": len(tasks),
-                    "tasks": tasks,
-                    "tables_read": tables_read,
-                    "tables_written": tables_written,
-                    "total_nodes": len(all_nodes),
-                    "total_edges": len(edges),
-                    "edges": edges[:50],  # Limit for LLM context
-                },
-            )
-
-        return ToolResult(
-            success=False,
-            error=(
-                "No lineage engine graph available. "
-                "You can still get Airflow info directly: use get_dag_run_history, get_airflow_dag_status, "
-                "or get_airflow_task_logs to investigate the DAG via the Airflow API. "
-                "Use get_github_tree + get_github_file to inspect DAG source code."
-            )
-        )
 
     async def _execute_get_asset_orchestration_context(self, args: Dict[str, Any]) -> ToolResult:
         """Get orchestration context for a data asset via cross-plane edges."""

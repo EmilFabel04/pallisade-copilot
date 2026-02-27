@@ -62,6 +62,7 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
             "location": "BIGQUERY_LOCATION",
             "credentials_json": "BIGQUERY_KEY_FILE",
         },
+        key_aliases={"credentials_json": "credentials"},
     ),
     "postgres": MCPServerConfig(
         name="postgres",
@@ -87,7 +88,7 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
     # --- Orchestration servers ---
     "airflow": MCPServerConfig(
         name="airflow",
-        command=["python", "-m", "astro_airflow_mcp"],
+        command=["python", "-m", "mcp_bridge.servers.airflow_server"],
         supported_integration_types={"AIRFLOW"},
         tool_prefix="mcp_airflow",
         env_mapping={
@@ -96,7 +97,7 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
             "password": "AIRFLOW_PASSWORD",
             "api_key": "AIRFLOW_AUTH_TOKEN",
         },
-        key_aliases={"base_url": "host"},  # pipeline nodes store URL as "host"
+        key_aliases={"base_url": "host"},
     ),
     # --- Custom Pallisade servers ---
     "lineage": MCPServerConfig(

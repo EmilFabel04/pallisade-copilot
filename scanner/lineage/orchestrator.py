@@ -75,6 +75,8 @@ class CrossToolLineageOrchestrator:
     DBT_TYPES = {"DBT_CLOUD", "DBT_CORE"}
     ORCHESTRATOR_TYPES = {"AIRFLOW", "DAGSTER", "PREFECT"}
     BI_TYPES = {"LOOKER", "TABLEAU", "POWERBI", "METABASE"}
+    # Integration types that don't produce lineage — skip silently
+    SKIP_TYPES = {"N8N", "LINUX_SERVER", "SLACK", "GITHUB", "JIRA"}
 
     def __init__(
         self,
@@ -189,7 +191,7 @@ class CrossToolLineageOrchestrator:
                 tasks.append(self._extract_orchestrator(integration))
             elif int_type in self.BI_TYPES:
                 tasks.append(self._extract_bi_tool(integration))
-            else:
+            elif int_type not in self.SKIP_TYPES:
                 logger.warning(f"Unknown integration type: {int_type}")
 
         if not tasks:
@@ -230,11 +232,24 @@ class CrossToolLineageOrchestrator:
             graph = None
 
             if int_type == "BIGQUERY":
-                parser = BigQueryParser(config=config)
+                from adapters.bigquery import BigQueryAdapter
+                adapter = BigQueryAdapter(config)
+                if not adapter.connect():
+                    raise RuntimeError("Failed to connect to BigQuery")
+                parser = BigQueryParser(
+                    client=adapter._client,
+                    project_id=config.get("project_id", ""),
+                    region=config.get("location", "us"),
+                    selected_datasets=config.get("datasets"),
+                )
                 graph = parser.parse()
 
             elif int_type == "SNOWFLAKE":
-                parser = SnowflakeQueryParser(config=config)
+                from adapters.snowflake import SnowflakeAdapter
+                adapter = SnowflakeAdapter(config)
+                if not adapter.connect():
+                    raise RuntimeError("Failed to connect to Snowflake")
+                parser = SnowflakeQueryParser(connection=adapter._connection)
                 graph = parser.parse()
 
             elif int_type == "POSTGRES" or int_type == "REDSHIFT":

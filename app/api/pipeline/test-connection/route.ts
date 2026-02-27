@@ -374,32 +374,67 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: false, message: 'Airflow host URL is required for API mode' });
           }
 
-          // API mode — ping the Airflow health endpoint
+          // API mode — two-step test:
+          // 1) Health endpoint (usually public) to verify URL is correct
+          // 2) Authenticated endpoint (/dags) to verify credentials work
           const username = config.username;
           const password = config.password;
-          const headers: Record<string, string> = { 'Accept': 'application/json' };
-          if (username && password) {
-            headers['Authorization'] = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-          }
+          const cleanHost = host.replace(/\/+$/, '');
 
-          const healthUrl = `${host.replace(/\/$/, '')}/api/v1/health`;
-          const afResponse = await fetch(healthUrl, {
-            headers,
+          // Step 1: Health check (no auth needed on most setups)
+          const healthResponse = await fetch(`${cleanHost}/api/v1/health`, {
+            headers: { 'Accept': 'application/json' },
             signal: AbortSignal.timeout(10000),
           });
 
-          if (afResponse.ok) {
-            const data = await afResponse.json();
-            const status = data?.metadatabase?.status || 'unknown';
+          if (!healthResponse.ok) {
+            return NextResponse.json({
+              success: false,
+              message: `Cannot reach Airflow at ${cleanHost} (HTTP ${healthResponse.status}). Verify the URL is correct and Airflow is running.`,
+            });
+          }
+
+          // Step 2: Test an authenticated endpoint to verify credentials
+          if (!username || !password) {
+            // No credentials — health passed, warn about auth
             return NextResponse.json({
               success: true,
-              message: `Connected to Airflow (metadb: ${status})`
+              message: 'Airflow is reachable but no credentials provided. API calls requiring auth will fail.',
             });
-          } else if (afResponse.status === 401 || afResponse.status === 403) {
-            return NextResponse.json({ success: false, message: 'Invalid Airflow credentials' });
-          } else {
-            return NextResponse.json({ success: false, message: `Airflow API error: ${afResponse.status}` });
           }
+
+          const auth = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+          const dagsResponse = await fetch(`${cleanHost}/api/v1/dags?limit=1`, {
+            headers: {
+              'Authorization': auth,
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (dagsResponse.ok) {
+            const data = await dagsResponse.json();
+            const dagCount = data.total_entries ?? data.dags?.length ?? 0;
+            return NextResponse.json({
+              success: true,
+              message: `Connected to Airflow (${dagCount} DAG${dagCount !== 1 ? 's' : ''} found)`,
+            });
+          }
+
+          if (dagsResponse.status === 401 || dagsResponse.status === 403) {
+            return NextResponse.json({
+              success: false,
+              message:
+                'Airflow is reachable but rejected authentication (HTTP ' + dagsResponse.status + '). ' +
+                'Check your username/password. If using Airflow 2.x, ensure the REST API auth backend is enabled: ' +
+                'set AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth in your Airflow environment.',
+            });
+          }
+
+          return NextResponse.json({
+            success: false,
+            message: `Airflow API returned HTTP ${dagsResponse.status}. Check Airflow logs for details.`,
+          });
         } catch (error) {
           const msg = error instanceof Error ? error.message : 'Unknown error';
           return NextResponse.json({ success: false, message: `Failed to connect to Airflow: ${msg}` });

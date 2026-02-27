@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 from contextlib import AsyncExitStack
 from typing import Any, Dict, List, Optional, Set
 
@@ -45,12 +46,13 @@ class MCPClientManager:
         self._sessions: Dict[str, ClientSession] = {}
         self._exit_stack = AsyncExitStack()
         self._tools_cache: Dict[str, List[Dict]] = {}
+        self._temp_files: List[str] = []
 
     async def start_servers(self) -> None:
         """Start MCP servers based on connected integrations."""
         await self._exit_stack.__aenter__()
 
-        # Collect integration types
+        # Collect integration types — use FIRST config per type, warn on duplicates
         integration_types: Set[str] = set()
         integration_configs: Dict[str, Dict] = {}
         for integration in self.integrations:
@@ -59,12 +61,23 @@ class MCPClientManager:
                 if hasattr(integration, "type")
                 else str(integration.get("type", "")).upper()
             )
-            integration_types.add(itype)
             config = (
                 integration.config
                 if hasattr(integration, "config")
                 else integration.get("config", {})
             )
+            if itype in integration_configs:
+                iname = (
+                    integration.name
+                    if hasattr(integration, "name")
+                    else integration.get("name", "unknown")
+                )
+                logger.warning(
+                    f"Duplicate {itype} integration '{iname}' — "
+                    f"ignoring (using first config). Remove duplicate nodes in Pipeline settings."
+                )
+                continue
+            integration_types.add(itype)
             integration_configs[itype] = config or {}
 
         # Start external MCP servers
@@ -126,6 +139,25 @@ class MCPClientManager:
             logger.info(f"MCP '{server_name}': set env vars {mapped_vars}")
         else:
             logger.warning(f"MCP '{server_name}': no credentials mapped — server will use defaults")
+
+        # Handle env vars that expect file paths but received JSON content.
+        # e.g. BIGQUERY_KEY_FILE gets raw service account JSON instead of a path.
+        for env_var in list(env.keys()):
+            if env_var.endswith("_KEY_FILE") or env_var.endswith("_CREDENTIALS_FILE"):
+                val = env.get(env_var, "")
+                if val.strip().startswith("{"):
+                    # Write JSON to a temp file and replace env var with the path
+                    tmp = tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".json", prefix=f"mcp_{server_name}_",
+                        delete=False,
+                    )
+                    tmp.write(val)
+                    tmp.close()
+                    env[env_var] = tmp.name
+                    self._temp_files.append(tmp.name)
+                    logger.info(
+                        f"MCP '{server_name}': wrote {env_var} credentials to temp file"
+                    )
 
         # Build command (substitute placeholders from credentials)
         command = []
@@ -333,4 +365,11 @@ class MCPClientManager:
         finally:
             self._sessions.clear()
             self._tools_cache.clear()
+            # Clean up temp credential files
+            for path in self._temp_files:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            self._temp_files.clear()
             logger.info("All MCP servers shut down")

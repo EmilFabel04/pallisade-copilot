@@ -102,10 +102,13 @@ export async function POST(request: Request) {
       { role: 'user' as const, content: message },
     ];
 
-    // Fetch pipeline nodes (integrations) from the database
+    // Fetch pipeline nodes (integrations) from the selected pipeline
     // Include all nodes except ERROR status - PENDING nodes with config are valid
     const pipelineStack = await prisma.pipelineStack.findFirst({
-      where: { organizationId: user.organizationId },
+      where: {
+        organizationId: user.organizationId,
+        ...(effectivePipelineStackId ? { id: effectivePipelineStackId } : {}),
+      },
       include: {
         nodes: {
           where: {
@@ -195,6 +198,21 @@ export async function POST(request: Request) {
         metadata: {},
       };
     }) || [];
+
+    // Warn about duplicate integration types (e.g. two Airflow nodes)
+    const typeCounts = integrations.reduce((acc, i) => {
+      acc[i.type] = (acc[i.type] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    for (const [type, count] of Object.entries(typeCounts)) {
+      if (count > 1) {
+        console.warn(`[COPILOT] WARNING: ${count} ${type} nodes found in pipeline. Only the first will be used by MCP. Remove duplicates in Pipeline settings.`);
+        const dupes = integrations.filter(i => i.type === type);
+        dupes.forEach((d, idx) => {
+          console.warn(`[COPILOT]   ${type} #${idx + 1}: name="${d.name}", username="${d.config?.username}", base_url="${d.config?.base_url || d.config?.host}"`);
+        });
+      }
+    }
 
     // Also fetch OAuth integrations (GitHub, Slack, Jira) from the Integration table
     const oauthIntegrations = await prisma.integration.findMany({
@@ -599,9 +617,12 @@ async function handleStreamingChat(
     { role: 'user' as const, content: message },
   ];
 
-  // Fetch integrations (same logic as non-streaming path)
+  // Fetch integrations from the selected pipeline
   const pipelineStack = await prisma.pipelineStack.findFirst({
-    where: { organizationId: user.organizationId },
+    where: {
+      organizationId: user.organizationId,
+      ...(effectivePipelineStackId ? { id: effectivePipelineStackId } : {}),
+    },
     include: {
       nodes: {
         where: { status: { notIn: ['ERROR', 'TESTING'] } },

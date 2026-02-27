@@ -377,52 +377,9 @@ class ToolRegistry:
         
         # ==========================================
         # ORCHESTRATION TOOLS (Airflow)
+        # Airflow DAG/run/task tools are provided by the MCP server
+        # (mcp_airflow__*). Only lineage-graph tools remain here.
         # ==========================================
-        
-        self._register(Tool(
-            name="get_airflow_dag_status",
-            description="Get the status of an Airflow DAG including recent runs and current state.",
-            category=ToolCategory.ORCHESTRATION,
-            parameters=[
-                ToolParameter("dag_id", "string", "The DAG ID"),
-            ],
-            required_integrations={"AIRFLOW"},
-        ))
-        
-        self._register(Tool(
-            name="get_airflow_task_logs",
-            description="Get logs for a specific Airflow task execution.",
-            category=ToolCategory.ORCHESTRATION,
-            parameters=[
-                ToolParameter("dag_id", "string", "The DAG ID"),
-                ToolParameter("task_id", "string", "The task ID"),
-                ToolParameter("run_id", "string", "The run ID (execution date)", required=False),
-            ],
-            required_integrations={"AIRFLOW"},
-        ))
-        
-        self._register(Tool(
-            name="get_airflow_recent_failures",
-            description="Get recent task failures for a DAG or all DAGs.",
-            category=ToolCategory.ORCHESTRATION,
-            parameters=[
-                ToolParameter("dag_id", "string", "The DAG ID (optional)", required=False),
-                ToolParameter("hours", "integer", "How many hours back to look", required=False, default=24),
-                ToolParameter("limit", "integer", "Maximum failures to return", required=False, default=20),
-            ],
-            required_integrations={"AIRFLOW"},
-        ))
-
-        self._register(Tool(
-            name="get_airflow_dag_lineage",
-            description="Get the lineage subgraph for an Airflow DAG — shows the DAG's tasks, their upstream/downstream table dependencies, and how they connect to warehouse tables. Use when the user asks about what tables a DAG reads/writes, or the data flow through an orchestration pipeline.",
-            category=ToolCategory.ORCHESTRATION,
-            parameters=[
-                ToolParameter("dag_id", "string", "The DAG ID to get lineage for"),
-                ToolParameter("depth", "integer", "How many hops to traverse from the DAG node", required=False, default=3),
-            ],
-            required_integrations={"AIRFLOW"},
-        ))
 
         self._register(Tool(
             name="get_asset_orchestration_context",
