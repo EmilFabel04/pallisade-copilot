@@ -266,25 +266,11 @@ async def extract_dbt_lineage(
         from scanner.lineage.parsers.dbt import DbtManifestParser
 
     manifest = None
+    source_mode = config.get("source_mode", "")
 
-    # Try to get manifest from config directly
-    if config.get("manifest"):
-        manifest = config["manifest"]
-        # dbt_core stores manifest as a JSON string — parse it
-        if isinstance(manifest, str):
-            import json
-            try:
-                manifest = json.loads(manifest)
-            except json.JSONDecodeError as e:
-                logger.error(f"[dbt] Failed to parse manifest JSON string: {e}")
-                manifest = None
-    elif config.get("manifest_path"):
-        import json
-        with open(config["manifest_path"]) as f:
-            manifest = json.load(f)
-
+    # Check source_mode first — project and github modes take priority over stale manifest
     # If dbt Core with project folder upload, parse raw project files
-    if not manifest and config.get("source_mode") == "project":
+    if source_mode == "project" and config.get("project_files"):
         project_files = config.get("project_files")
         if project_files and isinstance(project_files, dict):
             try:
@@ -307,7 +293,7 @@ async def extract_dbt_lineage(
                 logger.warning(f"[dbt] Project files parsing failed: {parse_err}")
 
     # If dbt Core with GitHub source mode, fetch raw project files from repo
-    if not manifest and config.get("source_mode") == "github":
+    if not manifest and source_mode == "github":
         github_token = config.get("github", {}).get("token") or config.get("github_token")
         github_repo = config.get("github_repo")
         if github_token and github_repo:
@@ -336,6 +322,23 @@ async def extract_dbt_lineage(
                     logger.warning(f"[dbt] No project files found in GitHub repo: {github_repo}")
             except Exception as gh_err:
                 logger.warning(f"[dbt] GitHub project fetch failed: {gh_err}")
+
+    # Fallback: manifest provided directly in config (upload mode or legacy)
+    if not manifest and source_mode in ("upload", ""):
+        if config.get("manifest"):
+            manifest = config["manifest"]
+            # dbt_core stores manifest as a JSON string — parse it
+            if isinstance(manifest, str):
+                import json
+                try:
+                    manifest = json.loads(manifest)
+                except json.JSONDecodeError as e:
+                    logger.error(f"[dbt] Failed to parse manifest JSON string: {e}")
+                    manifest = None
+        elif config.get("manifest_path"):
+            import json
+            with open(config["manifest_path"]) as f:
+                manifest = json.load(f)
 
     # If dbt Cloud, try to fetch manifest from API
     if not manifest and integration_type == "DBT_CLOUD":
@@ -2286,10 +2289,14 @@ async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[st
         # Pre-process dbt_core nodes: parse project zip or fetch from GitHub
         # (must happen here since the investigator runs synchronously in a thread)
         for tc in request.tool_configs:
-            if tc.tool_type.lower() != "dbt_core" or tc.config.get("manifest"):
+            if tc.tool_type.lower() != "dbt_core":
                 continue
 
             source_mode = tc.config.get("source_mode", "")
+
+            # Skip if manifest exists AND source_mode is upload/unset (not overriding with github/project)
+            if tc.config.get("manifest") and source_mode in ("upload", ""):
+                continue
 
             # Project folder upload: parse files dict
             if source_mode == "project" and tc.config.get("project_files"):
@@ -2445,9 +2452,11 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
 
         # Pre-process dbt_core nodes (same as standard investigate)
         for tc in request.tool_configs:
-            if tc.tool_type.lower() != "dbt_core" or tc.config.get("manifest"):
+            if tc.tool_type.lower() != "dbt_core":
                 continue
             source_mode = tc.config.get("source_mode", "")
+            if tc.config.get("manifest") and source_mode in ("upload", ""):
+                continue
             if source_mode == "project" and tc.config.get("project_files"):
                 try:
                     try:
@@ -2599,9 +2608,11 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
 
             # Pre-process dbt_core configs (same pattern as investigate-llm)
             for tc in request.tool_configs:
-                if tc.tool_type.lower() != "dbt_core" or tc.config.get("manifest"):
+                if tc.tool_type.lower() != "dbt_core":
                     continue
                 source_mode = tc.config.get("source_mode", "")
+                if tc.config.get("manifest") and source_mode in ("upload", ""):
+                    continue
                 if source_mode == "project" and tc.config.get("project_files"):
                     try:
                         try:

@@ -70,7 +70,7 @@ export async function POST(
 
     // All connected nodes that can participate in investigation
     const connectedNodes = stack.nodes.filter(
-      (n) => n.status === 'CONNECTED' || n.status === 'HEALTHY'
+      (n) => n.status === 'CONNECTED' || n.status === 'HEALTHY' || n.status === 'WARNING'
     );
 
     if (connectedNodes.length === 0) {
@@ -227,6 +227,7 @@ export async function POST(
             schema: schema || lineageNode.schema_name,
             tableName,
             nodeType: lineageNode.node_type || 'table',
+            platform: lineageNode.platform || null,
             description: lineageNode.description,
             criticality: lineageNode.criticality?.toUpperCase() || 'MEDIUM',
             rowCount: lineageNode.row_count,
@@ -237,6 +238,7 @@ export async function POST(
           },
           update: {
             nodeType: lineageNode.node_type || 'table',
+            platform: lineageNode.platform || undefined,
             description: lineageNode.description,
             rowCount: lineageNode.row_count,
             upstreamCount: lineageNode.upstream_count || 0,
@@ -457,6 +459,7 @@ export async function GET(
         schema: n.schema,
         tableName: n.tableName,
         nodeType: n.nodeType,
+        platform: n.platform,
         description: n.description,
         criticality: n.criticality,
         rowCount: n.rowCount,

@@ -805,6 +805,7 @@ model LineageNode {
 
   // Node metadata
   nodeType       String      @default("table") // table, view, source, model
+  platform       String?     // Source tool: bigquery, dbt_core, n8n, airflow, etc.
   description    String?     @db.Text
   owner          String?
   tags           String[]
