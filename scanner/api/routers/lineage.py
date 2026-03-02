@@ -2288,6 +2288,20 @@ async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
     except ImportError:
         from scanner.lineage.github_reader import fetch_dbt_project_files_with_fallback
 
+    # Extract warehouse database/project_id from sibling tool configs
+    # so dbt models get the correct namespace for cross-domain dedup
+    warehouse_database = ""
+    for tc in tool_configs:
+        tl = tc.tool_type.lower() if hasattr(tc, "tool_type") else ""
+        cfg = tc.config if hasattr(tc, "config") else {}
+        if tl in ("bigquery", "snowflake", "postgres", "redshift"):
+            warehouse_database = cfg.get("project_id") or cfg.get("database") or ""
+            if warehouse_database:
+                _log.info("[dbt-preprocess] Found warehouse database=%r from %s config", warehouse_database, tl)
+                break
+    if not warehouse_database:
+        _log.warning("[dbt-preprocess] No warehouse project_id/database found in sibling tool configs")
+
     for tc in tool_configs:
         if tc.tool_type.lower() != "dbt_core":
             continue
@@ -2306,6 +2320,7 @@ async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
                     manifest = parse_dbt_project(
                         files=project_files,
                         project_name=tc.config.get("project_name", ""),
+                        default_database=warehouse_database,
                         warehouse_type=tc.config.get("warehouse_type", "bigquery"),
                     )
                     if manifest and (manifest.get("nodes") or manifest.get("sources")):
@@ -2330,6 +2345,7 @@ async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
                         manifest = parse_dbt_project(
                             files=project_files,
                             project_name=tc.config.get("project_name", ""),
+                            default_database=warehouse_database,
                             warehouse_type=tc.config.get("warehouse_type", "bigquery"),
                         )
                         if manifest and (manifest.get("nodes") or manifest.get("sources")):
@@ -2487,11 +2503,17 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
 
         registry = _get_run_registry(_current_stack_id)
         store = _get_engine_store(_current_stack_id)
+        # Resolve LLM API key from environment based on provider
+        import os
+        _llm_key = os.environ.get(
+            "OPENAI_API_KEY" if request.llm_provider == "openai" else "ANTHROPIC_API_KEY"
+        )
         pipeline_config = ExtractionPipelineConfig(
             use_llm_planner=request.use_llm_planner,
             use_llm_reconciler=request.use_llm_reconciler,
             llm_provider=request.llm_provider,
             llm_model=request.llm_model,
+            llm_api_key=_llm_key,
         )
 
         run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)

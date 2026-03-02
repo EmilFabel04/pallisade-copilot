@@ -180,7 +180,7 @@ export async function POST(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         tool_configs: toolConfigs,
-        use_llm_planner: false,
+        use_llm_planner: true,
         use_llm_reconciler: false,
         llm_provider: 'openai',
       }),

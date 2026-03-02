@@ -290,6 +290,28 @@ class ResolverPipeline:
             else:
                 non_cross.append(node)
 
+        # Fallback: when a transform node has empty schema (e.g., dbt project
+        # parser can't resolve model schemas), match by (namespace, name).
+        # Build index of solo warehouse nodes keyed by (namespace, name).
+        _wh_by_ns_name: Dict[Tuple[str, str], List[Tuple[str, str, str]]] = defaultdict(list)
+        for key, group in cross_candidates.items():
+            if len(group) == 1 and group[0].platform_domain.value == "warehouse":
+                _wh_by_ns_name[(key[0], key[2])].append(key)
+
+        # Move schema-less transform singletons into their warehouse group
+        keys_to_remove: List[Tuple[str, str, str]] = []
+        for key, group in list(cross_candidates.items()):
+            if (len(group) == 1
+                    and group[0].platform_domain.value == "transform"
+                    and not key[1]):  # empty schema
+                wh_keys = _wh_by_ns_name.get((key[0], key[2]), [])
+                if len(wh_keys) == 1:
+                    # Unambiguous match — merge into the warehouse group
+                    cross_candidates[wh_keys[0]].extend(group)
+                    keys_to_remove.append(key)
+        for key in keys_to_remove:
+            del cross_candidates[key]
+
         cross_merged: List[LineageNode] = []
         for key, group in cross_candidates.items():
             if len(group) == 1:

@@ -510,24 +510,34 @@ class CrossToolEdgeSynthesizer:
         """
         Create edges for ingestion tool nodes (Fivetran, Airbyte).
 
-        When connectors/connections emit destination table nodes that match
-        existing warehouse table nodes (by canonical FQN), the resolver merges
-        them. This method creates POPULATES edges from ingestion connector
-        nodes to the merged warehouse table nodes.
+        Two matching paths:
+        1. Synced table nodes (node_role=synced_table) → match by table name
+           to warehouse tables. Creates direct synced_table → warehouse_table.
+        2. Connector/source nodes → match by connector metadata to warehouse
+           tables (legacy path for adapters that still emit connector nodes).
 
-        connector/connection → warehouse_table (POPULATES)
+        synced_table / connector → warehouse_table (POPULATES)
         """
         from .engine.platforms import INGESTION_PLATFORMS
         edges_created = 0
         ingestion_platforms = INGESTION_PLATFORMS
 
-        # Find ingestion source/pipeline nodes
-        ingestion_node_ids = set()
+        # Find synced table nodes (individual source tables from ingestion)
+        synced_table_ids = set()
+        # Find ingestion source/pipeline nodes (connector-level)
+        ingestion_connector_ids = set()
+
         for node_type in (NodeType.SOURCE, NodeType.PIPELINE):
             for node_id in self._by_type.get(node_type, set()):
                 node = self.graph.nodes.get(node_id)
                 if node and node.platform in ingestion_platforms:
-                    ingestion_node_ids.add(node_id)
+                    ingestion_connector_ids.add(node_id)
+
+        for node_id in self._by_type.get(NodeType.TABLE, set()):
+            node = self.graph.nodes.get(node_id)
+            if (node and node.platform in ingestion_platforms
+                    and node.raw_metadata.get("node_role") == "synced_table"):
+                synced_table_ids.add(node_id)
 
         # Find warehouse table nodes (from any platform).
         # Include NodeType.SOURCE because dbt sources represent physical
@@ -545,16 +555,45 @@ class CrossToolEdgeSynthesizer:
                 warehouse_table_ids.add(node_id)
 
         logger.info(
-            "[CrossTool] Ingestion synthesis: %d ingestion nodes, %d warehouse targets",
-            len(ingestion_node_ids), len(warehouse_table_ids),
+            "[CrossTool] Ingestion synthesis: %d synced tables, %d connectors, %d warehouse targets",
+            len(synced_table_ids), len(ingestion_connector_ids), len(warehouse_table_ids),
         )
 
-        for ingestion_id in ingestion_node_ids:
+        # Path 1: Direct synced_table → warehouse_table by name match
+        # Build warehouse name index for fast lookup
+        wh_by_name: dict[str, list[str]] = {}
+        for table_id in warehouse_table_ids:
+            node = self.graph.nodes.get(table_id)
+            if node and node.name:
+                wh_by_name.setdefault(node.name.lower(), []).append(table_id)
+
+        for synced_id in synced_table_ids:
+            synced_node = self.graph.nodes.get(synced_id)
+            if not synced_node or not synced_node.name:
+                continue
+            candidates = wh_by_name.get(synced_node.name.lower(), [])
+            for wh_id in candidates:
+                wh_node = self.graph.nodes.get(wh_id)
+                if not wh_node:
+                    continue
+                edge = self._create_edge(
+                    synced_id, wh_id,
+                    EdgeType.POPULATES,
+                    synthesis_source="ingestion_synced_table",
+                )
+                if edge:
+                    edges_created += 1
+                    logger.info(
+                        "[CrossTool] Synthesized edge: %s → %s (synced_table)",
+                        synced_node.fqn, wh_node.fqn,
+                    )
+
+        # Path 2: Connector-level matching (legacy path)
+        for ingestion_id in ingestion_connector_ids:
             ingestion_node = self.graph.nodes.get(ingestion_id)
             if not ingestion_node:
                 continue
 
-            # Get connector name to match against table metadata
             connector_name = (
                 ingestion_node.raw_metadata.get("connector_name")
                 or ingestion_node.raw_metadata.get("connection_name")
@@ -564,14 +603,7 @@ class CrossToolEdgeSynthesizer:
                 ingestion_node.raw_metadata.get("schema", "")
                 or ingestion_node.raw_metadata.get("connector_schema", "")
             ).lower()
-            synced_tables = ingestion_node.raw_metadata.get("synced_tables", [])
 
-            logger.info(
-                "[CrossTool] Ingestion node: %s (name=%s, schema=%s, synced_tables=%s)",
-                ingestion_id, connector_name, ingestion_schema, synced_tables[:5] if synced_tables else "[]",
-            )
-
-            # Look for tables that were populated by this connector
             for table_id in warehouse_table_ids:
                 table_node = self.graph.nodes.get(table_id)
                 if not table_node:

@@ -535,7 +535,22 @@ class CorrelationEngine:
             src_bridge = node_id_bridge.get(edge.source_id)
             tgt_bridge = node_id_bridge.get(edge.target_id)
 
-            if src_bridge:
+            if src_bridge and tgt_bridge:
+                # Both endpoints map to warehouse nodes — create one
+                # fully-bridged edge instead of two partial ones.
+                source_ref = f"investigator:bridge:{tool_type}:{edge.discovered_from}"
+                corr_edges.append(_make_correlation_edge(
+                    src_bridge, tgt_bridge,
+                    edge.edge_type, 0.85, source_ref,
+                    f"Bridge: {tool_type} both endpoints match warehouse tables",
+                ))
+                self._record_table_connection(
+                    tool_type, src_bridge, is_write=False,
+                )
+                self._record_table_connection(
+                    tool_type, tgt_bridge, is_write=True,
+                )
+            elif src_bridge:
                 # Edge: adapter_table → something
                 # Bridge: warehouse_table → something
                 source_ref = f"investigator:bridge:{tool_type}:{edge.discovered_from}"
@@ -547,8 +562,7 @@ class CorrelationEngine:
                 self._record_table_connection(
                     tool_type, src_bridge, is_write=False,
                 )
-
-            if tgt_bridge:
+            elif tgt_bridge:
                 # Edge: something → adapter_table
                 # Bridge: something → warehouse_table
                 source_ref = f"investigator:bridge:{tool_type}:{edge.discovered_from}"

@@ -81,6 +81,10 @@ class LiveDbtAdapter(BaseLineageAdapter):
             return []
 
         namespace = config.get("namespace", "")
+        if not namespace:
+            namespace = self._infer_namespace(manifest)
+        logger.info("[LiveDbt] Using namespace=%r for %d nodes, %d sources",
+                    namespace, len(manifest.get("nodes", {})), len(manifest.get("sources", {})))
         integration_id = config.get("integration_id")
         hint = self.case_hint
         now = datetime.utcnow()
@@ -113,6 +117,8 @@ class LiveDbtAdapter(BaseLineageAdapter):
             return []
 
         namespace = config.get("namespace", "")
+        if not namespace:
+            namespace = self._infer_namespace(manifest)
         hint = self.case_hint
         now = datetime.utcnow()
         edges: List[LineageEdge] = []
@@ -170,6 +176,23 @@ class LiveDbtAdapter(BaseLineageAdapter):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _infer_namespace(self, manifest: Dict) -> str:
+        """Infer namespace from the manifest's database field.
+
+        For BigQuery the database IS the GCP project_id, which matches
+        the namespace used by the warehouse adapter.  This ensures
+        cross-domain dedup can pair dbt models with their BQ counterparts.
+        """
+        # Check nodes first (models), then sources
+        for section in ("nodes", "sources"):
+            for resource in manifest.get(section, {}).values():
+                db = resource.get("database", "")
+                if db:
+                    ns = normalize_identifier(db, self.case_hint)
+                    logger.debug("[LiveDbt] Inferred namespace from manifest: %s", ns)
+                    return ns
+        return ""
+
     def _source_to_node(
         self, source: Dict, namespace: str, hint: str, now: datetime,
         integration_id: Optional[str] = None,
@@ -224,7 +247,9 @@ class LiveDbtAdapter(BaseLineageAdapter):
 
         node_type, asset_kind = _DBT_TYPE_MAP.get(resource_type, (NodeType.MODEL, AssetKind.MODEL))
 
-        # Models materialised in the warehouse share the warehouse domain
+        # Models are transformations that produce warehouse assets.
+        # Using TRANSFORM domain enables the resolver's cross-domain dedup
+        # to merge dbt models with their BigQuery view/table counterparts.
         asset_id = generate_asset_id("warehouse", "dbt", namespace, container, name)
 
         return LineageNode(
@@ -235,7 +260,7 @@ class LiveDbtAdapter(BaseLineageAdapter):
             database=db,
             schema=schema,
             platform="dbt",
-            platform_domain=PlatformDomain.WAREHOUSE,
+            platform_domain=PlatformDomain.TRANSFORM,
             asset_kind=asset_kind,
             namespace=namespace,
             description=model.get("description"),
