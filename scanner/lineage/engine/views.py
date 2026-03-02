@@ -902,6 +902,38 @@ class ViewBuilder:
                 evidence_count=0,
             ))
 
+        # Step 4c: Transitive reduction — remove shortcut edges.
+        # BigQuery job history resolves view chains to underlying base tables,
+        # creating edges that bypass intermediate views (e.g., raw.customers →
+        # int_customer_orders instead of raw.customers → stg_customers →
+        # int_customer_orders).  Remove an edge A→C when a 2-hop path A→B→C
+        # already exists, preferring the multi-hop path.
+        adj: Dict[str, Set[str]] = defaultdict(set)
+        for e in view_edges:
+            adj[e.source_id].add(e.target_id)
+
+        reduced_edges: List[ViewEdge] = []
+        for edge in view_edges:
+            has_alt = any(
+                edge.target_id in adj[mid]
+                for mid in adj[edge.source_id]
+                if mid != edge.target_id
+            )
+            if has_alt:
+                logger.debug(
+                    "[ViewBuilder] Removed transitive edge: %s → %s",
+                    edge.source_id, edge.target_id,
+                )
+            else:
+                reduced_edges.append(edge)
+
+        if len(reduced_edges) < len(view_edges):
+            logger.info(
+                "[ViewBuilder] Transitive reduction: %d → %d edges (removed %d shortcuts)",
+                len(view_edges), len(reduced_edges), len(view_edges) - len(reduced_edges),
+            )
+        view_edges = reduced_edges
+
         # Step 5: Compute deterministic layout (semantic layers + topological refinement)
         positions = _semantic_topological_layout(view_nodes, view_edges, self.graph)
         for vn in view_nodes:

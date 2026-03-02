@@ -290,25 +290,107 @@ class ResolverPipeline:
             else:
                 non_cross.append(node)
 
-        # Fallback: when a transform node has empty schema (e.g., dbt project
-        # parser can't resolve model schemas), match by (namespace, name).
-        # Build index of solo warehouse nodes keyed by (namespace, name).
+        # Fallback indexes for matching transforms to warehouse nodes
+        # when exact (namespace, schema, name) doesn't match.
+        # Index 1: (namespace, name) — ignores schema differences
         _wh_by_ns_name: Dict[Tuple[str, str], List[Tuple[str, str, str]]] = defaultdict(list)
+        # Index 2: name-only — catches namespace mismatches
+        _wh_by_name: Dict[str, List[Tuple[str, str, str]]] = defaultdict(list)
         for key, group in cross_candidates.items():
-            if len(group) == 1 and group[0].platform_domain.value == "warehouse":
+            has_warehouse = any(n.platform_domain.value == "warehouse" for n in group)
+            if has_warehouse:
                 _wh_by_ns_name[(key[0], key[2])].append(key)
+                _wh_by_name[key[2]].append(key)
 
-        # Move schema-less transform singletons into their warehouse group
+        # Debug: dump cross_candidates to file for inspection
+        import os as _os
+        _debug_path = _os.path.join(_os.path.dirname(__file__), "_cross_debug.log")
+        with open(_debug_path, "w") as _f:
+            _f.write("=== cross_candidates ===\n")
+            for key, group in cross_candidates.items():
+                _f.write(f"  key={key}  nodes=[{', '.join(f'{n.platform}:{n.platform_domain.value}:{n.name}:{n.schema!r}:{n.namespace!r}' for n in group)}]\n")
+            _f.write("\n=== _wh_by_ns_name ===\n")
+            for ns_name, wh_keys in _wh_by_ns_name.items():
+                _f.write(f"  {ns_name} → {wh_keys}\n")
+            _f.write("\n=== _wh_by_name ===\n")
+            for name, wh_keys in _wh_by_name.items():
+                _f.write(f"  {name} → {wh_keys}\n")
+            _f.write("\n=== non_cross nodes ===\n")
+            for n in non_cross:
+                _f.write(f"  {n.platform}:{n.platform_domain.value}:{n.name}:{n.schema!r}:{n.namespace!r}\n")
+
+        # Move unmatched transform singletons into their warehouse group
+        # using cascading fallback: namespace+name → name-only
         keys_to_remove: List[Tuple[str, str, str]] = []
         for key, group in list(cross_candidates.items()):
             if (len(group) == 1
-                    and group[0].platform_domain.value == "transform"
-                    and not key[1]):  # empty schema
+                    and group[0].platform_domain.value == "transform"):
+                # Fallback 1: match by (namespace, name) ignoring schema
                 wh_keys = _wh_by_ns_name.get((key[0], key[2]), [])
                 if len(wh_keys) == 1:
-                    # Unambiguous match — merge into the warehouse group
+                    logger.info("[Resolver] Fallback merge (ns+name): transform key=%s → warehouse key=%s", key, wh_keys[0])
                     cross_candidates[wh_keys[0]].extend(group)
                     keys_to_remove.append(key)
+                    continue
+                # Fallback 2: match by name only (catches namespace mismatches)
+                name_keys = _wh_by_name.get(key[2], [])
+                if len(name_keys) == 1:
+                    logger.info("[Resolver] Fallback merge (name-only): transform key=%s → warehouse key=%s", key, name_keys[0])
+                    cross_candidates[name_keys[0]].extend(group)
+                    keys_to_remove.append(key)
+                    continue
+                # Fallback 3: multiple warehouse matches — pick the one with
+                # a real warehouse platform (bigquery/snowflake/postgres) over
+                # dbt-source-only groups, or match by database.
+                _candidates = wh_keys or name_keys
+                if len(_candidates) > 1:
+                    tnode = group[0]
+                    # Prefer groups that contain a real warehouse platform
+                    real_wh = [
+                        wk for wk in _candidates
+                        if any(n.platform in _WH_PLATFORMS for n in cross_candidates[wk])
+                    ]
+                    if len(real_wh) == 1:
+                        logger.info("[Resolver] Fallback merge (real-wh): transform key=%s → warehouse key=%s", key, real_wh[0])
+                        cross_candidates[real_wh[0]].extend(group)
+                        keys_to_remove.append(key)
+                        continue
+                    # Schema affinity: dbt models materialize into
+                    # analytics/staging/marts, NOT raw. Exclude raw-schema
+                    # groups to disambiguate.
+                    _RAW_SCHEMAS = {"raw", "source", "sources", "landing", "ingestion"}
+                    _active = real_wh if len(real_wh) > 1 else _candidates
+                    non_raw = [
+                        wk for wk in _active
+                        if wk[1].lower() not in _RAW_SCHEMAS
+                    ]
+                    if len(non_raw) == 1:
+                        logger.info("[Resolver] Fallback merge (schema-affinity): transform key=%s → warehouse key=%s", key, non_raw[0])
+                        cross_candidates[non_raw[0]].extend(group)
+                        keys_to_remove.append(key)
+                        continue
+
+                    # Try matching by database
+                    if tnode.database:
+                        db_match = [
+                            wk for wk in _candidates
+                            if any(
+                                (n.database or "").lower() == tnode.database.lower()
+                                for n in cross_candidates[wk]
+                            )
+                        ]
+                        if len(db_match) == 1:
+                            logger.info("[Resolver] Fallback merge (db-match): transform key=%s → warehouse key=%s", key, db_match[0])
+                            cross_candidates[db_match[0]].extend(group)
+                            keys_to_remove.append(key)
+                            continue
+
+                logger.warning(
+                    "[Resolver] Transform singleton NOT merged: key=%s, "
+                    "node=%s:%s:%s, wh_keys=%s, name_keys=%s",
+                    key, group[0].platform, group[0].schema, group[0].name,
+                    wh_keys, name_keys,
+                )
         for key in keys_to_remove:
             del cross_candidates[key]
 
@@ -493,7 +575,14 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
     for p in secondary.raw_metadata.get("discovered_platforms", []):
         if p not in primary_platforms:
             primary_platforms.append(p)
-    if secondary.platform and secondary.platform not in primary_platforms:
+    # Only add secondary platform if it represents a real discovery.
+    # dbt sources are just metadata pointers to warehouse tables — they
+    # shouldn't brand the merged node as "dbt".
+    _secondary_is_dbt_source = (
+        secondary.platform == "dbt"
+        and secondary.raw_metadata.get("dbt_resource_type") == "source"
+    )
+    if secondary.platform and secondary.platform not in primary_platforms and not _secondary_is_dbt_source:
         primary_platforms.append(secondary.platform)
 
     # Preserve dbt resource type info so the UI can identify dbt models after dedup.

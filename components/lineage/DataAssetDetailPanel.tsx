@@ -27,6 +27,24 @@ import {
   getCrossLinkedOrchestration,
 } from './types';
 
+// Platform → color mapping for colored badges (mirrors UnifiedNodes.tsx PLATFORM_COLORS)
+const _PLATFORM_BADGE_COLORS: Record<string, string> = {
+  bigquery: '#3B82F6',
+  snowflake: '#3B82F6',
+  postgres: '#3B82F6',
+  redshift: '#3B82F6',
+  databricks: '#3B82F6',
+  dbt: '#F59E0B',
+  dbt_core: '#F59E0B',
+  fivetran: '#10B981',
+  airbyte: '#10B981',
+  looker: '#8B5CF6',
+  tableau: '#8B5CF6',
+  metabase: '#8B5CF6',
+  powerbi: '#8B5CF6',
+  power_bi: '#8B5CF6',
+};
+
 interface DataAssetDetailPanelProps {
   node: UnifiedLineageNode;
   allNodes: UnifiedLineageNode[];
@@ -691,19 +709,50 @@ export function DataAssetDetailPanel({
           )}
         </div>
 
+        {/* ─── dbt Transformation Details ──────────────────── */}
+        {(node.materialization || node.platforms?.includes('dbt')) && (
+          <div className="space-y-3 border-t border-[var(--subtle-border)] pt-3">
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">
+              Transformation
+            </label>
+            {node.materialization && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-[var(--muted)]">Materialization</span>
+                <span className="px-2 py-0.5 text-[11px] font-medium capitalize bg-amber-500/15 text-amber-300 rounded">
+                  {node.materialization}
+                </span>
+              </div>
+            )}
+            {node.nodeType && node.nodeType !== node.category && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-[var(--muted)]">Resource Type</span>
+                <span className="text-[13px] text-[var(--text)] capitalize">{node.nodeType}</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ─── Platforms (multi-platform provenance) ────────── */}
         {node.platforms && node.platforms.length > 0 && (
           <div>
             <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Discovered In</label>
             <div className="flex flex-wrap gap-1.5 mt-1.5">
-              {node.platforms.map((p) => (
-                <span
-                  key={p}
-                  className="px-2 py-1 text-[11px] font-medium capitalize bg-indigo-500/15 text-indigo-300 rounded border border-indigo-500/20"
-                >
-                  {p}
-                </span>
-              ))}
+              {node.platforms.map((p) => {
+                const color = _PLATFORM_BADGE_COLORS[p.toLowerCase()] || '#94A3B8';
+                return (
+                  <span
+                    key={p}
+                    className="px-2 py-1 text-[11px] font-semibold capitalize rounded"
+                    style={{
+                      backgroundColor: `${color}20`,
+                      color: color,
+                      border: `1px solid ${color}40`,
+                    }}
+                  >
+                    {p}
+                  </span>
+                );
+              })}
             </div>
           </div>
         )}

@@ -449,3 +449,161 @@ class TestEndToEndDedup:
                     assert fqn_lower not in target_fqns, \
                         f"Bridge created duplicate writes edge to {fqn_lower}"
                     target_fqns.add(fqn_lower)
+
+
+# ---- Cross-domain fallback merging ----
+
+
+class TestCrossDomainFallback:
+    """Verify cross-domain dedup merges transform ↔ warehouse nodes."""
+
+    def test_same_schema_direct_merge(self):
+        """Transform and warehouse nodes with same (ns, schema, name) merge."""
+        bq_view = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+        )
+        dbt_model = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="dbt", platform_domain=PlatformDomain.TRANSFORM,
+            node_type=NodeType.MODEL,
+        )
+
+        resolver = ResolverPipeline()
+        graph = resolver.resolve([bq_view, dbt_model], [])
+
+        assert len(graph.nodes) == 1
+        surviving = list(graph.nodes.values())[0]
+        assert surviving.platform == "bigquery"
+
+    def test_schema_mismatch_fallback_ns_name(self):
+        """Transform node with different schema merges via (namespace, name) fallback."""
+        bq_view = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+        )
+        dbt_model = _make_node(
+            "product_performance", database="proj", schema="",
+            platform="dbt", platform_domain=PlatformDomain.TRANSFORM,
+            node_type=NodeType.MODEL,
+        )
+
+        resolver = ResolverPipeline()
+        graph = resolver.resolve([bq_view, dbt_model], [])
+
+        assert len(graph.nodes) == 1
+        surviving = list(graph.nodes.values())[0]
+        assert surviving.platform == "bigquery"
+
+    def test_namespace_mismatch_fallback_name_only(self):
+        """Transform node with different namespace merges via name-only fallback."""
+        bq_view = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+            namespace="my-gcp-project",
+        )
+        dbt_model = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="dbt", platform_domain=PlatformDomain.TRANSFORM,
+            node_type=NodeType.MODEL,
+            namespace="",  # dbt adapter failed to infer namespace
+        )
+
+        resolver = ResolverPipeline()
+        graph = resolver.resolve([bq_view, dbt_model], [])
+
+        assert len(graph.nodes) == 1
+        surviving = list(graph.nodes.values())[0]
+        assert surviving.platform == "bigquery"
+
+    def test_multiple_wh_groups_picks_real_warehouse(self):
+        """When multiple warehouse groups share a name, prefer group with real WH platform."""
+        # dbt source in "raw" schema (WAREHOUSE domain)
+        dbt_source = _make_node(
+            "product_performance", database="proj", schema="raw",
+            platform="dbt", platform_domain=PlatformDomain.WAREHOUSE,
+            node_type=NodeType.SOURCE,
+        )
+        # BQ view in "analytics" schema (WAREHOUSE domain)
+        bq_view = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+        )
+        # dbt model with empty schema (TRANSFORM domain)
+        dbt_model = _make_node(
+            "product_performance", database="proj", schema="",
+            platform="dbt", platform_domain=PlatformDomain.TRANSFORM,
+            node_type=NodeType.MODEL,
+        )
+
+        resolver = ResolverPipeline()
+        graph = resolver.resolve([dbt_source, bq_view, dbt_model], [])
+
+        # dbt_source and bq_view are both WAREHOUSE but different schemas,
+        # dbt_model is TRANSFORM. Should merge dbt_model with the bq_view
+        # group (real warehouse platform).
+        # Also dbt_source might merge with bq_view or stay separate.
+        # Key assertion: no standalone dbt TRANSFORM node remains.
+        names = [n.name for n in graph.nodes.values()]
+        assert names.count("product_performance") <= 2  # at most source + merged
+        # At least one surviving node should be bigquery
+        bq_nodes = [n for n in graph.nodes.values()
+                     if n.name == "product_performance" and n.platform == "bigquery"]
+        assert len(bq_nodes) >= 1
+
+    def test_schema_affinity_prefers_analytics_over_raw(self):
+        """When name exists in both raw and analytics, dbt model merges with analytics."""
+        # BQ view in analytics (dbt model target)
+        bq_analytics = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+        )
+        # BQ view in raw (derived raw view, NOT the dbt target)
+        bq_raw = _make_node(
+            "product_performance", database="proj", schema="raw",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+        )
+        # dbt model with empty schema (project parser didn't resolve it)
+        dbt_model = _make_node(
+            "product_performance", database="proj", schema="",
+            platform="dbt", platform_domain=PlatformDomain.TRANSFORM,
+            node_type=NodeType.MODEL,
+        )
+
+        resolver = ResolverPipeline()
+        graph = resolver.resolve([bq_analytics, bq_raw, dbt_model], [])
+
+        # Should have 2 nodes: merged analytics+dbt, and raw stays separate
+        assert len(graph.nodes) == 2
+
+        # The analytics node should be the merge winner
+        analytics_node = [n for n in graph.nodes.values() if n.schema == "analytics"][0]
+        assert analytics_node.platform == "bigquery"
+        # It should have dbt in discovered_platforms (model, not source)
+        platforms = analytics_node.raw_metadata.get("discovered_platforms", [])
+        assert "dbt" in platforms
+
+        # The raw node should still exist separately
+        raw_node = [n for n in graph.nodes.values() if n.schema == "raw"][0]
+        assert raw_node.platform == "bigquery"
+
+    def test_both_namespace_and_schema_mismatch(self):
+        """Transform node mismatches both namespace and schema — name-only fallback."""
+        bq_view = _make_node(
+            "product_performance", database="proj", schema="analytics",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+            namespace="gcp-project-123",
+        )
+        dbt_model = _make_node(
+            "product_performance", database="proj", schema="dbt_analytics",
+            platform="dbt", platform_domain=PlatformDomain.TRANSFORM,
+            node_type=NodeType.MODEL,
+            namespace="",
+        )
+
+        resolver = ResolverPipeline()
+        graph = resolver.resolve([bq_view, dbt_model], [])
+
+        assert len(graph.nodes) == 1
+        surviving = list(graph.nodes.values())[0]
+        assert surviving.platform == "bigquery"

@@ -49,6 +49,12 @@ import {
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
+  // Ingestion-domain datasets should use 'source' category (green)
+  if (vn.platformDomain === 'ingestion' &&
+      (vn.originalType === 'table' || vn.originalType === 'source')) {
+    return 'source';
+  }
+
   // Use originalType when it maps directly to a known category
   const ot = vn.originalType as UnifiedNodeCategory;
   const knownCategories: UnifiedNodeCategory[] = [
@@ -890,34 +896,49 @@ export default function LineagePage() {
     };
   }, [filteredNodes]);
 
-  // Build merged edges/nodes for the detail panel
-  // Falls back to rendered-view edges when unified data has no data-level edges
+  // Build edges for the detail panel with transitive reduction applied.
+  // Removes shortcut edges (e.g., raw table → intermediate model) so BFS
+  // shows the correct multi-hop path through intermediate views.
   const panelEdges = useMemo(() => {
-    const unifiedEdges = lineageData?.edges || [];
-    // Check if unified edges include actual data edges (not just synthetic tool edges)
-    const hasDataEdges = unifiedEdges.some(
+    const allEdges = lineageData?.edges || [];
+    if (!allEdges.length) return allEdges;
+
+    // Separate data-level edges from synthetic tool edges
+    const dataEdges = allEdges.filter(
       (e) =>
         e.edgeType !== 'pipeline_flow' &&
         e.edgeType !== 'contains' &&
         e.edgeType !== 'produces' &&
         e.edgeType !== 'reads_from'
     );
-    if (hasDataEdges) return unifiedEdges;
+    const nonDataEdges = allEdges.filter(
+      (e) =>
+        e.edgeType === 'pipeline_flow' ||
+        e.edgeType === 'contains' ||
+        e.edgeType === 'produces' ||
+        e.edgeType === 'reads_from'
+    );
 
-    // Fallback: adapt rendered view edges to unified format with lineage- prefix
-    if (!renderedView?.edges?.length) return unifiedEdges;
+    // Transitive reduction: remove edge A→C when a 2-hop path A→B→C exists
+    const adj = new Map<string, Set<string>>();
+    for (const e of dataEdges) {
+      if (!adj.has(e.source)) adj.set(e.source, new Set());
+      adj.get(e.source)!.add(e.target);
+    }
 
-    const adaptedEdges: UnifiedLineageEdge[] = renderedView.edges.map((ve) => ({
-      id: ve.id,
-      source: `lineage-${ve.sourceId}`,
-      target: `lineage-${ve.targetId}`,
-      edgeType: ve.canonicalType || 'derives',
-      animated: true,
-      confidence: ve.confidence,
-      columns: [],
-    }));
-    return [...unifiedEdges, ...adaptedEdges];
-  }, [lineageData?.edges, renderedView?.edges]);
+    const reduced = dataEdges.filter((edge) => {
+      const neighbors = adj.get(edge.source);
+      if (!neighbors) return true;
+      for (const mid of neighbors) {
+        if (mid !== edge.target && adj.get(mid)?.has(edge.target)) {
+          return false; // shortcut — a multi-hop path exists
+        }
+      }
+      return true;
+    });
+
+    return [...reduced, ...nonDataEdges];
+  }, [lineageData?.edges]);
 
   const panelNodes = useMemo(() => {
     const unifiedNodes = lineageData?.nodes || [];
