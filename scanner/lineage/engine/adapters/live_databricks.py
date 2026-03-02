@@ -47,10 +47,7 @@ class LiveDatabricksAdapter(BaseLineageAdapter):
     """
 
     def __init__(self, adapter_id: str = "live_databricks", **kwargs):
-        self._id = adapter_id
-
-    def id(self) -> str:
-        return self._id
+        super().__init__(adapter_id, **kwargs)
 
     def capabilities(self) -> Set[Capability]:
         return {
@@ -533,28 +530,6 @@ class LiveDatabricksAdapter(BaseLineageAdapter):
             )
             return None
 
-    # ------------------------------------------------------------------
-    # Edge helper
-    # ------------------------------------------------------------------
-
-    def _make_edge(
-        self,
-        source_id: str,
-        target_id: str,
-        edge_type: EdgeType,
-        level: LineageLevel,
-        confidence: float,
-        source_ref: str,
-        now: datetime,
-        snippet: Optional[str] = None,
-        plane: LinePlane = LinePlane.DATA,
-    ) -> LineageEdge:
-        ev = Evidence(
-            adapter_id=self._id,
-            source_ref=source_ref,
-            observed_at=now,
-            snippet=snippet[:200] if snippet else None,
-        )
         edge_id = generate_edge_id(
             source_id, target_id,
             edge_type.value, level.value,

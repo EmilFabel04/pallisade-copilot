@@ -31,39 +31,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Default heuristic: discover data assets first (warehouse), then map
-# transforms, then connect ingestion writers, then orchestration/infra
+# transforms, then connect ingestion writers, then orchestration/infra.
+# Derived from the platform registry (single source of truth).
+from .platforms import PLATFORM_REGISTRY
+
 HEURISTIC_ORDER: Dict[str, int] = {
-    # Warehouses first — discover all tables
-    "bigquery": 10,
-    "snowflake": 11,
-    "postgres": 12,
-    "redshift": 13,
-    "databricks": 14,
-    # Transformation next — map dbt models to warehouse tables
-    "dbt_core": 20,
-    "dbt_cloud": 21,
-    # Ingestion — connect loaders to raw tables
-    "fivetran": 30,
-    "airbyte": 31,
-    "n8n": 32,
-    # Orchestration — connect DAGs/workflows
-    "airflow": 40,
-    "dagster": 41,
-    "prefect": 42,
-    # Reporting — connect dashboards to analytics
-    "looker": 50,
-    "tableau": 51,
-    "powerbi": 52,
-    "metabase": 53,
-    # Quality
-    "elementary": 60,
-    # Infrastructure
-    "linux_server": 70,
-    "ssh": 71,
-    "github": 80,
-    "gitlab": 81,
-    # Storage
-    "storage": 90,
+    name: info.heuristic_order
+    for name, info in PLATFORM_REGISTRY.items()
+    if name == info.name  # exclude aliases
 }
 
 

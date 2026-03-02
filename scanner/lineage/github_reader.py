@@ -115,18 +115,28 @@ async def fetch_dbt_project_files(
     api_base = "https://api.github.com"
     files: Dict[str, str] = {}
 
+    # Sanitize dbt_root: strip /, ., whitespace that break prefix matching.
+    # GitHub tree paths are relative (e.g., "models/stg_orders.sql"), never
+    # start with "/" or "./", so those values would filter out everything.
+    dbt_root = (dbt_root or "").strip().strip("/").strip(".")
+
     try:
         async with aiohttp.ClientSession() as session:
             # Get the tree recursively for the branch
             tree_url = f"{api_base}/repos/{repo}/git/trees/{branch}?recursive=1"
             async with session.get(tree_url, headers=headers) as resp:
                 if resp.status != 200:
-                    logger.warning(f"[GitHub] Failed to get tree for {repo}@{branch}: {resp.status}")
+                    logger.warning(f"[GitHub] Failed to get tree for {repo}@{branch}: HTTP {resp.status}")
                     return {}
                 tree_data = await resp.json()
 
             tree_items = tree_data.get("tree", [])
-            prefix = f"{dbt_root}/" if dbt_root and not dbt_root.endswith("/") else (dbt_root or "")
+            prefix = f"{dbt_root}/" if dbt_root else ""
+
+            logger.debug(
+                f"[GitHub] Tree for {repo}@{branch}: {len(tree_items)} items, "
+                f"dbt_root='{dbt_root}', prefix='{prefix}'"
+            )
 
             # Filter to relevant files within the dbt root
             relevant_files: List[str] = []
@@ -146,6 +156,18 @@ async def fetch_dbt_project_files(
                     if any(p in ("target", "dbt_packages", "dbt_modules", ".git", "logs") for p in rel_parts):
                         continue
                     relevant_files.append(path)
+
+            if not relevant_files:
+                sample_paths = [
+                    item.get("path", "") for item in tree_items
+                    if item.get("type") == "blob"
+                ][:20]
+                logger.warning(
+                    f"[GitHub] 0 dbt files matched in {repo}@{branch}. "
+                    f"dbt_root='{dbt_root}', prefix='{prefix}', "
+                    f"total tree blobs={sum(1 for i in tree_items if i.get('type') == 'blob')}. "
+                    f"Sample paths: {sample_paths}"
+                )
 
             logger.info(f"[GitHub] Found {len(relevant_files)} dbt project files in {repo}")
 
@@ -172,6 +194,32 @@ async def fetch_dbt_project_files(
 
     logger.info(f"[GitHub] Fetched {len(files)} dbt project files from {repo}")
     return files
+
+
+async def fetch_dbt_project_files_with_fallback(
+    repo: str,
+    token: str,
+    branch: str = "main",
+    dbt_root: str = "",
+) -> tuple:
+    """
+    Try project files first, fall back to manifest.json.
+
+    Returns:
+        Tuple of (project_files: Dict[str, str], manifest: Optional[Dict]).
+        At most one will be non-empty.
+    """
+    files = await fetch_dbt_project_files(repo, token, branch, dbt_root)
+    manifest = None
+    if not files:
+        logger.info(f"[GitHub] No project files found in {repo}, trying manifest.json fallback")
+        manifest = await fetch_dbt_manifest(repo, token, branch, dbt_root)
+        if not manifest:
+            logger.warning(
+                f"[GitHub] No dbt files or manifest found in {repo}@{branch}. "
+                f"Check dbt_project_path config and ensure repo contains .sql/.yml files."
+            )
+    return files, manifest
 
 
 async def read_dbt_project_config(

@@ -6,10 +6,19 @@ via capabilities, and the engine orchestrates them generically.
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Set, Any, Optional, Type
 
-from ..graph import LineageNode, LineageEdge
+from ..graph import (
+    EdgeType,
+    Evidence,
+    LineageEdge,
+    LineageLevel,
+    LineageNode,
+    LinePlane,
+)
+from .ids import generate_edge_id
 
 
 class Capability(Enum):
@@ -34,10 +43,12 @@ class BaseLineageAdapter(ABC):
     No adapter may emit vendor-specific IDs as the only identifier.
     """
 
-    @abstractmethod
+    def __init__(self, adapter_id: str = "", **kwargs):
+        self._id = adapter_id
+
     def id(self) -> str:
         """Unique identifier for this adapter instance."""
-        ...
+        return self._id
 
     @abstractmethod
     def capabilities(self) -> Set[Capability]:
@@ -71,6 +82,43 @@ class BaseLineageAdapter(ABC):
         Override in subclasses.
         """
         return "lower"
+
+    def _make_edge(
+        self,
+        source_id: str,
+        target_id: str,
+        edge_type: EdgeType,
+        level: LineageLevel,
+        confidence: float,
+        source_ref: str,
+        now: datetime,
+        snippet: Optional[str] = None,
+        plane: LinePlane = LinePlane.DATA,
+    ) -> LineageEdge:
+        """Create a lineage edge with evidence from this adapter."""
+        ev = Evidence(
+            adapter_id=self.id(),
+            source_ref=source_ref,
+            observed_at=now,
+            snippet=snippet[:200] if snippet else None,
+        )
+        edge_id = generate_edge_id(
+            source_id, target_id,
+            edge_type.value, level.value,
+            source_ref,
+        )
+        return LineageEdge(
+            id=edge_id,
+            source_id=source_id,
+            target_id=target_id,
+            edge_type=edge_type,
+            lineage_level=level,
+            confidence=confidence,
+            discovered_from=source_ref,
+            discovered_at=now,
+            evidence=[ev],
+            plane=plane,
+        )
 
 
 class AdapterRegistry:

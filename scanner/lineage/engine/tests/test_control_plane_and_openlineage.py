@@ -440,10 +440,10 @@ class TestOpenLineageMapper:
 
     def test_infer_platform_domain_orchestration(self):
         assert _infer_platform_domain("airflow") == PlatformDomain.ORCHESTRATION
-        assert _infer_platform_domain("spark") == PlatformDomain.ORCHESTRATION
 
     def test_infer_platform_domain_transform(self):
         assert _infer_platform_domain("dbt") == PlatformDomain.TRANSFORM
+        assert _infer_platform_domain("spark") == PlatformDomain.TRANSFORM
 
     def test_infer_platform_domain_other(self):
         assert _infer_platform_domain("unknown") == PlatformDomain.OTHER

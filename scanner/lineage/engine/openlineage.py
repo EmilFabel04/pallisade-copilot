@@ -66,17 +66,8 @@ def _parse_namespace(namespace: str) -> Tuple[str, str]:
 
 def _infer_platform_domain(platform: str) -> PlatformDomain:
     """Infer PlatformDomain from platform name."""
-    warehouse_platforms = {"bigquery", "snowflake", "postgres", "redshift", "databricks", "trino", "duckdb"}
-    orchestration_platforms = {"airflow", "dagster", "prefect", "spark", "flink", "n8n"}
-    transform_platforms = {"dbt", "sqlmesh"}
-
-    if platform in warehouse_platforms:
-        return PlatformDomain.WAREHOUSE
-    elif platform in orchestration_platforms:
-        return PlatformDomain.ORCHESTRATION
-    elif platform in transform_platforms:
-        return PlatformDomain.TRANSFORM
-    return PlatformDomain.OTHER
+    from .platforms import get_domain
+    return get_domain(platform)
 
 
 def _event_type_to_health(event_type: str) -> HealthStatus:

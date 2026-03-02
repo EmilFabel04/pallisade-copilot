@@ -402,10 +402,8 @@ class DiagnosticsBuilder:
             if node.platform:
                 integrations.add(node.platform.lower())
 
-        ingestion_tools = integrations & {
-            "n8n", "airbyte", "fivetran", "meltano", "stitch",
-            "hevo", "matillion", "rivery",
-        }
+        from .platforms import INGESTION_PLATFORMS
+        ingestion_tools = integrations & INGESTION_PLATFORMS
 
         # If ingestion tools exist but raw datasets have no upstream
         dataset_roots = self._find_dataset_roots()
@@ -425,7 +423,8 @@ class DiagnosticsBuilder:
             })
 
         # If transform tools exist but no warehouse_analytics datasets
-        transform_tools = integrations & {"dbt", "dbt_core", "spark", "dataform"}
+        from .platforms import TRANSFORM_PLATFORMS
+        transform_tools = integrations & TRANSFORM_PLATFORMS
         if transform_tools:
             transform_nodes = [
                 n for n in self.graph.nodes.values()
@@ -832,15 +831,11 @@ class PatchApplier:
             PlatformDomain.OTHER,
         )
         # Better domain inference from the node type + platform
+        from .platforms import get_domain
         platform_lower = patch.platform.lower()
-        if platform_lower in ("n8n", "airbyte", "fivetran", "meltano", "stitch"):
-            domain = PlatformDomain.INGESTION
-        elif platform_lower in ("dbt", "dbt_core", "spark", "dataform"):
-            domain = PlatformDomain.TRANSFORM
-        elif platform_lower in ("bigquery", "snowflake", "postgres", "redshift"):
-            domain = PlatformDomain.WAREHOUSE
-        elif platform_lower in ("looker", "tableau", "powerbi", "metabase"):
-            domain = PlatformDomain.BI
+        inferred_domain = get_domain(platform_lower)
+        if inferred_domain != PlatformDomain.OTHER:
+            domain = inferred_domain
 
         node = LineageNode(
             id=patch.canonical_id,

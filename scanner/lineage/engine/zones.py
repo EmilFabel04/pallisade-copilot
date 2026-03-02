@@ -14,9 +14,17 @@ Lane ordering (left → right):
 
 import re
 from enum import Enum
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 
 from ..graph import LineageNode, PlatformDomain, NodeType
+from .platforms import (
+    INGESTION_PLATFORMS,
+    TRANSFORM_PLATFORMS,
+    ORCHESTRATION_PLATFORMS,
+    REPORTING_PLATFORMS,
+    WAREHOUSE_PLATFORMS,
+    INFRA_PLATFORMS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -61,36 +69,8 @@ LANE_ORDER: Dict[str, int] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Ingestion tools (platforms that load data into warehouses)
-# ---------------------------------------------------------------------------
-
-INGESTION_PLATFORMS: Set[str] = {
-    "n8n", "airbyte", "fivetran", "meltano", "stitch",
-    "hevo", "matillion", "rivery", "singer",
-}
-
-TRANSFORM_PLATFORMS: Set[str] = {
-    "dbt", "dbt_core", "dbt_cloud", "spark", "dataform",
-}
-
-ORCHESTRATION_PLATFORMS: Set[str] = {
-    "airflow", "dagster", "prefect",
-}
-
-REPORTING_PLATFORMS: Set[str] = {
-    "looker", "tableau", "powerbi", "metabase", "superset",
-    "mode", "sigma", "thoughtspot",
-}
-
-WAREHOUSE_PLATFORMS: Set[str] = {
-    "bigquery", "snowflake", "postgres", "redshift", "databricks",
-    "trino", "duckdb", "mysql", "mssql",
-}
-
-INFRA_PLATFORMS: Set[str] = {
-    "linux", "linux_server", "ssh", "github", "gitlab",
-}
+# Platform sets are re-exported from platforms.py (single source of truth).
+# Import above: INGESTION_PLATFORMS, TRANSFORM_PLATFORMS, etc.
 
 
 # ---------------------------------------------------------------------------
@@ -253,9 +233,9 @@ def classify_data_plane_layer(
     if canonical_type == "semantic":
         return DataPlaneLayer.REPORTING.value
 
-    # Ingestion platforms → INGESTION
+    # Ingestion platforms → INGESTION (but NOT destination tables in warehouses)
     platform = (node.platform or "").lower()
-    if platform in INGESTION_PLATFORMS or node.platform_domain == PlatformDomain.INGESTION:
+    if (platform in INGESTION_PLATFORMS and node.platform_domain != PlatformDomain.WAREHOUSE) or node.platform_domain == PlatformDomain.INGESTION:
         return DataPlaneLayer.INGESTION.value
 
     # BI platforms → REPORTING

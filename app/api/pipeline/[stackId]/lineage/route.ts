@@ -180,9 +180,9 @@ export async function POST(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         tool_configs: toolConfigs,
-        use_llm_planner: true,
-        use_llm_reconciler: true,
-        llm_provider: 'anthropic',
+        use_llm_planner: false,
+        use_llm_reconciler: false,
+        llm_provider: 'openai',
       }),
       signal: AbortSignal.timeout(600000), // 10 minute timeout (LLM reconciler needs more time)
     });

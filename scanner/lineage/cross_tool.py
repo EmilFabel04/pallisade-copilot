@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import logging
 import hashlib
 
-from .graph import LineageGraph, LineageNode, LineageEdge, NodeType, EdgeType
+from .graph import LineageGraph, LineageNode, LineageEdge, NodeType, EdgeType, PlatformDomain
 from .canonical import CanonicalResolver, CanonicalIdentity, normalize_to_canonical_fqn
 
 logger = logging.getLogger(__name__)
@@ -517,8 +517,9 @@ class CrossToolEdgeSynthesizer:
 
         connector/connection → warehouse_table (POPULATES)
         """
+        from .engine.platforms import INGESTION_PLATFORMS
         edges_created = 0
-        ingestion_platforms = {"fivetran", "airbyte"}
+        ingestion_platforms = INGESTION_PLATFORMS
 
         # Find ingestion source/pipeline nodes
         ingestion_node_ids = set()
@@ -528,13 +529,25 @@ class CrossToolEdgeSynthesizer:
                 if node and node.platform in ingestion_platforms:
                     ingestion_node_ids.add(node_id)
 
-        # Find warehouse table nodes (from any platform)
+        # Find warehouse table nodes (from any platform).
+        # Include NodeType.SOURCE because dbt sources represent physical
+        # warehouse tables (they have platform_domain=WAREHOUSE).
         warehouse_table_ids = set()
-        for node_type in (NodeType.TABLE, NodeType.VIEW, NodeType.MATERIALIZED_VIEW):
+        for node_type in (NodeType.TABLE, NodeType.VIEW, NodeType.MATERIALIZED_VIEW, NodeType.SOURCE):
             for node_id in self._by_type.get(node_type, set()):
                 node = self.graph.nodes.get(node_id)
-                if node and node.platform not in ingestion_platforms:
-                    warehouse_table_ids.add(node_id)
+                if not node or node.platform in ingestion_platforms:
+                    continue
+                # For SOURCE nodes, only include those representing warehouse
+                # assets (e.g. dbt sources), not ingestion/API sources.
+                if node_type == NodeType.SOURCE and node.platform_domain != PlatformDomain.WAREHOUSE:
+                    continue
+                warehouse_table_ids.add(node_id)
+
+        logger.info(
+            "[CrossTool] Ingestion synthesis: %d ingestion nodes, %d warehouse targets",
+            len(ingestion_node_ids), len(warehouse_table_ids),
+        )
 
         for ingestion_id in ingestion_node_ids:
             ingestion_node = self.graph.nodes.get(ingestion_id)
@@ -547,22 +560,24 @@ class CrossToolEdgeSynthesizer:
                 or ingestion_node.raw_metadata.get("connection_name")
                 or ingestion_node.name
             )
-            dest_schema = ingestion_node.raw_metadata.get("schema", "")
+            ingestion_schema = (
+                ingestion_node.raw_metadata.get("schema", "")
+                or ingestion_node.raw_metadata.get("connector_schema", "")
+            ).lower()
+            synced_tables = ingestion_node.raw_metadata.get("synced_tables", [])
 
-            # Look for tables that were discovered via this connector
+            logger.info(
+                "[CrossTool] Ingestion node: %s (name=%s, schema=%s, synced_tables=%s)",
+                ingestion_id, connector_name, ingestion_schema, synced_tables[:5] if synced_tables else "[]",
+            )
+
+            # Look for tables that were populated by this connector
             for table_id in warehouse_table_ids:
                 table_node = self.graph.nodes.get(table_id)
                 if not table_node:
                     continue
 
-                # Match: table was discovered via same connector or schema matches
-                discovered_via = table_node.raw_metadata.get("discovered_via", "")
-                table_connector = table_node.raw_metadata.get("connector_name", "")
-
-                if (
-                    discovered_via in ("fivetran_connector", "airbyte_connection")
-                    and table_connector == connector_name
-                ):
+                if self._is_ingestion_destination(table_node, connector_name, ingestion_schema, ingestion_node):
                     edge = self._create_edge(
                         ingestion_id,
                         table_id,
@@ -571,12 +586,83 @@ class CrossToolEdgeSynthesizer:
                     )
                     if edge:
                         edges_created += 1
-                        logger.debug(
-                            f"Synthesized edge: {ingestion_node.fqn} → {table_node.fqn} (ingestion)"
+                        logger.info(
+                            f"[CrossTool] Synthesized edge: {ingestion_node.fqn} → {table_node.fqn} (ingestion)"
                         )
 
         self.stats.ingestion_edges = edges_created
         return edges_created
+
+    def _is_ingestion_destination(
+        self,
+        table_node: LineageNode,
+        connector_name: str,
+        ingestion_schema: str,
+        ingestion_node: LineageNode,
+    ) -> bool:
+        """Stack-agnostic check: was this table populated by this ingestion connector?
+
+        Uses multiple matching strategies so that the match works regardless
+        of whether nodes were merged (losing metadata) or not.
+        """
+        meta = table_node.raw_metadata
+        ingestion_platform = ingestion_node.platform
+
+        # Strategy 1: explicit metadata — works when ingestion adapter set it
+        # or when the resolver preserved it during merge (Step 7)
+        table_connector = (
+            meta.get("ingestion_connector")
+            or meta.get("connector_name")
+            or meta.get("connection_name")
+            or ""
+        )
+        discovered_via = meta.get("discovered_via", "")
+        if (
+            discovered_via in ("fivetran_connector", "airbyte_connection")
+            and table_connector == connector_name
+        ):
+            return True
+
+        # Strategy 2: ingestion_platform metadata matches (set during merge)
+        if (
+            meta.get("ingestion_platform") == ingestion_platform
+            and table_connector
+            and table_connector == connector_name
+        ):
+            return True
+
+        # Strategy 3: ingestion connector's schema matches table's schema
+        # Fivetran creates schemas named after the connector (e.g., "stripe"),
+        # Airbyte uses source namespace. If connector name matches table schema,
+        # the table likely came from that connector.
+        if (
+            ingestion_schema
+            and table_node.schema
+            and table_node.schema.lower() == ingestion_schema
+        ):
+            return True
+
+        # Strategy 4: connector name matches table schema
+        # Common pattern: Fivetran connector "google_ads" → schema "google_ads"
+        if (
+            connector_name
+            and table_node.schema
+            and table_node.schema.lower() == connector_name.lower()
+        ):
+            return True
+
+        # Strategy 5: table name appears in connector's synced_tables list
+        # The ingestion adapter stores the list of table names it syncs
+        # (e.g., ["customers", "orders", "products"]). Match warehouse tables
+        # by name regardless of schema differences (Postgres "public" vs
+        # BigQuery "raw").
+        synced_tables = ingestion_node.raw_metadata.get("synced_tables", [])
+        if synced_tables and table_node.name:
+            table_name_lower = table_node.name.lower()
+            if table_name_lower in synced_tables:
+                return True
+
+        return False
 
     def merge_duplicate_nodes(self) -> int:
         """

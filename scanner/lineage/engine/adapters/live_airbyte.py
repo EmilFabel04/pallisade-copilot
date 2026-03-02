@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Set
 from ...graph import (
     AssetKind,
     EdgeType,
-    Evidence,
     LineageEdge,
     LineageLevel,
     LineageNode,
@@ -23,7 +22,7 @@ from ...graph import (
     PlatformDomain,
 )
 from ..adapter import BaseLineageAdapter, Capability
-from ..ids import generate_asset_id, generate_edge_id, normalize_identifier
+from ..ids import generate_asset_id, normalize_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +39,7 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
     """
 
     def __init__(self, adapter_id: str = "live_airbyte", **kwargs):
-        self._id = adapter_id
-
-    def id(self) -> str:
-        return self._id
+        super().__init__(adapter_id, **kwargs)
 
     def capabilities(self) -> Set[Capability]:
         return {
@@ -71,7 +67,6 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
         integration_id = config.get("integration_id")
         workspace_id = config.get("workspace_id") or getattr(client, "workspace_id", None)
         now = datetime.utcnow()
-        hint = self.case_hint
         nodes: List[LineageNode] = []
 
         # Discover sources
@@ -109,69 +104,26 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
             streams = conn.get("syncCatalog", {}).get("streams", [])
             stream_count = len(streams)
 
-            # Connection node
+            # Connection node — only connector/pipeline nodes,
+            # NOT destination table nodes. Warehouse tables come from the
+            # warehouse adapter; cross-tool synthesis creates connector → table edges.
             conn_node = self._make_connection_node(
                 conn_id, conn_name, source_id, dest_id,
                 schedule_type, status, stream_count,
                 namespace, integration_id, now,
             )
-            nodes.append(conn_node)
 
-            # Destination table nodes from streams
-            dest_info = dest_lookup.get(dest_id, {})
-            dest_type = dest_info.get("destinationType") or dest_info.get("destinationName", "")
-            dest_namespace_def = conn.get("namespaceDefinition", "source")
-            dest_namespace_fmt = conn.get("namespaceFormat", "")
-            dest_prefix = conn.get("prefix", "")
-
+            # Store synced stream names on the connection for cross-tool matching
+            stream_names = []
             for stream_entry in streams:
-                stream_config = stream_entry.get("config", {})
                 stream_def = stream_entry.get("stream", {})
-                stream_name = stream_def.get("name", "")
-                stream_namespace = stream_def.get("namespace", "")
+                sn = stream_def.get("name", "")
+                if sn:
+                    stream_names.append(sn)
+            conn_node.raw_metadata["synced_streams"] = stream_names
+            conn_node.raw_metadata["schema"] = conn_name
 
-                if not stream_name:
-                    continue
-
-                # Determine destination schema
-                if dest_namespace_def == "destination":
-                    dest_schema = dest_namespace_fmt or "public"
-                elif dest_namespace_def == "source" and stream_namespace:
-                    dest_schema = stream_namespace
-                else:
-                    dest_schema = "public"
-
-                table_name = f"{dest_prefix}{stream_name}" if dest_prefix else stream_name
-
-                norm_schema = normalize_identifier(dest_schema, hint)
-                norm_table = normalize_identifier(table_name, hint)
-                container = f".{norm_schema}"
-                fqn = f"{norm_schema}.{norm_table}"
-
-                table_asset_id = generate_asset_id(
-                    "warehouse", "airbyte", namespace, container, norm_table,
-                )
-
-                table_node = LineageNode(
-                    id=table_asset_id,
-                    name=norm_table,
-                    fqn=fqn,
-                    node_type=NodeType.TABLE,
-                    schema=norm_schema,
-                    platform="airbyte",
-                    platform_domain=PlatformDomain.WAREHOUSE,
-                    asset_kind=AssetKind.TABLE,
-                    namespace=namespace,
-                    observed_at=now,
-                    sources=[self._id],
-                    integration_id=integration_id,
-                    raw_metadata={
-                        "discovered_via": "airbyte_connection",
-                        "connection_name": conn_name,
-                        "destination_type": dest_type,
-                    },
-                )
-                nodes.append(table_node)
+            nodes.append(conn_node)
 
         logger.info(
             f"[LiveAirbyte] Discovered {len(nodes)} assets "
@@ -186,15 +138,21 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
             return []
 
         namespace = config.get("namespace", "airbyte")
+        dest_platform = config.get("destination_platform", "").lower()
+        dest_namespace_cfg = config.get("destination_namespace", "")
+        dest_database = config.get("destination_database", "")
         workspace_id = config.get("workspace_id") or getattr(client, "workspace_id", None)
         now = datetime.utcnow()
         hint = self.case_hint
         edges: List[LineageEdge] = []
 
+        # Use warehouse identity for destination table IDs (must match discover_assets)
+        table_system = dest_platform or "airbyte"
+        table_namespace = dest_namespace_cfg or namespace
+
         connections_raw = self._safe_call(client.get_connections, workspace_id)
 
         for conn in connections_raw:
-            conn_id = conn.get("connectionId") or conn.get("id", "")
             conn_name = conn.get("name", "unknown")
             source_id = conn.get("sourceId", "")
             dest_namespace_def = conn.get("namespaceDefinition", "source")
@@ -242,10 +200,18 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
 
                 norm_schema = normalize_identifier(dest_schema, hint)
                 norm_table = normalize_identifier(table_name, hint)
-                container = f".{norm_schema}"
+
+                # Build container matching discover_assets
+                if dest_platform == "bigquery" and dest_namespace_cfg:
+                    database = dest_namespace_cfg
+                elif dest_database:
+                    database = dest_database
+                else:
+                    database = ""
+                container = f"{database}.{norm_schema}" if database else f".{norm_schema}"
 
                 table_asset_id = generate_asset_id(
-                    "warehouse", "airbyte", namespace, container, norm_table,
+                    "warehouse", table_system, table_namespace, container, norm_table,
                 )
 
                 source_ref = f"airbyte:{conn_name}:stream:{norm_schema}.{norm_table}"
@@ -381,28 +347,6 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
             },
         )
 
-    # ------------------------------------------------------------------
-    # Edge helpers
-    # ------------------------------------------------------------------
-
-    def _make_edge(
-        self,
-        source_id: str,
-        target_id: str,
-        edge_type: EdgeType,
-        level: LineageLevel,
-        confidence: float,
-        source_ref: str,
-        now: datetime,
-        snippet: Optional[str] = None,
-        plane: LinePlane = LinePlane.DATA,
-    ) -> LineageEdge:
-        ev = Evidence(
-            adapter_id=self._id,
-            source_ref=source_ref,
-            observed_at=now,
-            snippet=snippet[:200] if snippet else None,
-        )
         edge_id = generate_edge_id(
             source_id, target_id,
             edge_type.value, level.value,

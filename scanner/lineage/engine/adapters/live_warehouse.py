@@ -7,6 +7,8 @@ and converts their output (old-format LineageGraph) into canonical engine nodes/
 with full evidence provenance.
 """
 
+import hashlib
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
@@ -63,6 +65,7 @@ class LiveWarehouseAdapter(BaseLineageAdapter):
         self._id = adapter_id
         self._platform = kwargs.get("platform", "bigquery")
         self._case = _PLATFORM_CASE_HINTS.get(self._platform, "lower")
+        self._parser_cache: Dict[str, Any] = {}  # config_hash → parsed graph
 
     def id(self) -> str:
         return self._id
@@ -101,7 +104,39 @@ class LiveWarehouseAdapter(BaseLineageAdapter):
     # ------------------------------------------------------------------
 
     def _run_parser(self, config: Dict[str, Any]):
-        """Instantiate and run the platform-specific parser, return old-format LineageGraph."""
+        """Instantiate and run the platform-specific parser, return old-format LineageGraph.
+
+        Results are cached so that discover_assets() and extract_lineage()
+        don't re-run the same expensive queries (INFORMATION_SCHEMA, job history, etc.).
+        """
+        cache_key = self._make_cache_key(config)
+        if cache_key in self._parser_cache:
+            logger.info(f"[LiveWarehouse] Using cached parse for {self._platform}")
+            return self._parser_cache[cache_key]
+
+        graph = self._parse_fresh(config)
+        if graph is not None:
+            self._parser_cache[cache_key] = graph
+        return graph
+
+    def _make_cache_key(self, config: Dict[str, Any]) -> str:
+        """Deterministic hash of config values that affect parsing."""
+        platform = config.get("platform", self._platform)
+        conn = config.get("connection_config", {})
+        opts = config.get("parser_options", {})
+        key_data = json.dumps({
+            "platform": platform,
+            "project_id": conn.get("project_id", "") or conn.get("project", ""),
+            "account": conn.get("account", ""),
+            "database": conn.get("database", ""),
+            "datasets": sorted(conn.get("datasets", []) if isinstance(conn.get("datasets"), list) else []),
+            "region": opts.get("region", "auto"),
+            "days_back": opts.get("days_back", 30),
+        }, sort_keys=True)
+        return hashlib.sha256(key_data.encode()).hexdigest()[:16]
+
+    def _parse_fresh(self, config: Dict[str, Any]):
+        """Run the platform-specific parser without caching."""
         platform = config.get("platform", self._platform)
         conn_config = config.get("connection_config", {})
         options = config.get("parser_options", {})

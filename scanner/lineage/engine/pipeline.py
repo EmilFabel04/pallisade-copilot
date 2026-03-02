@@ -5,6 +5,7 @@ Steps:
 0. Start run_id via RunRegistry
 1. (optional) LLM planner → adapter execution order
 2. Investigator executes adapters → raw nodes/edges; resolver → graph
+2.5. Cross-tool edge synthesis (ingestion→warehouse, dbt↔warehouse, BI↔warehouse)
 3. Canonicalize types (first pass)
 4. Deterministic bridge rules (uses canonical types to identify orphans)
 5. Re-canonicalize (bridge-added nodes)
@@ -20,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from ..cross_tool import CrossToolEdgeSynthesizer
 from .bridge import BridgeRuleEngine
 from .canonical import canonicalize_graph_in_place
 from .investigator import InvestigationResult, LineageInvestigator, ToolConfig
@@ -72,6 +74,12 @@ async def run_extraction_pipeline(
 
         graph = result.graph
 
+        # Step 2.5: Cross-tool edge synthesis
+        # Creates edges across tool boundaries (ingestion→warehouse,
+        # dbt↔warehouse, BI↔warehouse, orchestrator↔tables).
+        # Must run AFTER resolver dedup but BEFORE canonicalize and bridge.
+        synthesis_dict = _run_cross_tool_synthesis(graph, run_id)
+
         # Step 3: Canonicalize (first pass)
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
@@ -113,6 +121,7 @@ async def run_extraction_pipeline(
             reconciliation=reconciliation_dict,
             stats={
                 **result.stats,
+                "cross_tool_synthesis": synthesis_dict,
                 "bridge": bridge_dict,
                 "views_built": list(views.keys()),
                 "run_id": run_id,
@@ -173,6 +182,39 @@ async def _run_investigation(
         result = await asyncio.to_thread(investigator.run, tool_configs)
 
     return result
+
+
+def _run_cross_tool_synthesis(
+    graph: Any,
+    run_id: str,
+) -> Optional[Dict[str, int]]:
+    """Run cross-tool edge synthesis (non-fatal on failure).
+
+    Creates edges across tool boundaries:
+    - Ingestion connector → warehouse table (POPULATES)
+    - dbt source ↔ warehouse table
+    - dbt model → materialization target
+    - BI dashboard ← warehouse table
+    - Orchestrator task ↔ tables
+    """
+    try:
+        synthesizer = CrossToolEdgeSynthesizer(graph=graph)
+        stats = synthesizer.synthesize_all()
+        if stats.total_edges_created > 0 or stats.nodes_merged > 0:
+            logger.info(
+                "[Pipeline:%s] Cross-tool synthesis: %d edges created, %d nodes merged",
+                run_id,
+                stats.total_edges_created,
+                stats.nodes_merged,
+            )
+        return stats.to_dict()
+    except Exception as e:
+        logger.warning(
+            "[Pipeline:%s] Cross-tool synthesis failed (non-fatal): %s",
+            run_id,
+            e,
+        )
+        return None
 
 
 async def _run_reconciliation(

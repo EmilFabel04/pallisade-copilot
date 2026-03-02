@@ -728,11 +728,11 @@ class ViewBuilder:
                     if up_id != down_id:
                         job_bypass_edges.append((up_id, down_id))
 
-        # Step 2: Deduplicate Airflow table refs by FQN
-        # Airflow adapter creates table nodes (platform=airflow) that duplicate
-        # warehouse table nodes. Keep warehouse version, remap edges.
+        # Step 2: Safety-net dedup for tool-platform table nodes.
+        # The resolver should catch these; this is a warning-only fallback.
+        _DEDUP_PLATFORMS = {"airflow", "fivetran"}
         warehouse_fqn_map: Dict[str, str] = {}  # FQN → node ID
-        airflow_remap: Dict[str, str] = {}  # airflow node ID → warehouse node ID
+        airflow_remap: Dict[str, str] = {}  # duplicate node ID → warehouse node ID
 
         for node in self.graph.nodes.values():
             ct = node.canonical_type or map_node_type(node).value
@@ -744,8 +744,13 @@ class ViewBuilder:
             fqn = node.fqn
             if not fqn:
                 continue
-            if node.platform == "airflow":
+            if node.platform in _DEDUP_PLATFORMS:
                 if fqn in warehouse_fqn_map:
+                    logger.warning(
+                        "[ViewBuilder] Resolver missed dedup: %s (platform=%s, fqn=%s) "
+                        "duplicates %s — remapping as safety net",
+                        node.id, node.platform, fqn, warehouse_fqn_map[fqn],
+                    )
                     airflow_remap[node.id] = warehouse_fqn_map[fqn]
             elif fqn not in warehouse_fqn_map:
                 warehouse_fqn_map[fqn] = node.id

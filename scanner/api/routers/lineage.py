@@ -1126,8 +1126,9 @@ def _rebuild_engine_from_cache() -> None:
             )
 
         # --- Cross-tool edge synthesis ---
-        dbt_manifest = _get_collected_results().get("dbt_manifest")
-        if dbt_manifest and store.graph:
+        # Runs for ALL pipelines (not just when dbt is present) so that
+        # ingestion→warehouse POPULATES edges are always synthesized.
+        if store.graph:
             try:
                 try:
                     from lineage.canonical import CanonicalResolver
@@ -1136,13 +1137,15 @@ def _rebuild_engine_from_cache() -> None:
                     from scanner.lineage.canonical import CanonicalResolver
                     from scanner.lineage.cross_tool import CrossToolEdgeSynthesizer
 
+                dbt_manifest = _get_collected_results().get("dbt_manifest")
                 dbt_cfg = _get_collected_results().get("dbt_config") or {}
                 resolver = CanonicalResolver(
                     default_warehouse=dbt_cfg.get("warehouse_type", "bigquery"),
                     project_id=dbt_cfg.get("namespace", ""),
                 )
-                resolver.register_dbt_sources(dbt_manifest.get("sources", {}))
-                resolver.register_dbt_model_targets(dbt_manifest.get("nodes", {}))
+                if dbt_manifest:
+                    resolver.register_dbt_sources(dbt_manifest.get("sources", {}))
+                    resolver.register_dbt_model_targets(dbt_manifest.get("nodes", {}))
 
                 # Patch dbt node schemas if GitHub-derived schema mapping is available
                 schema_mapping = _get_collected_results().get("schema_mapping")
@@ -2265,6 +2268,80 @@ class InvestigateResponse(BaseModel):
     errors: List[str] = []
 
 
+async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
+    """Resolve dbt_core tool configs in-place: parse project files or fetch manifest.
+
+    Shared helper used by all investigate/extract endpoints to avoid
+    code duplication. Handles project-upload and GitHub source modes,
+    with a manifest.json fallback when project files are empty.
+    """
+    import logging
+    _log = logger_instance or logging.getLogger(__name__)
+
+    try:
+        from lineage.dbt_project_parser import parse_dbt_project
+    except ImportError:
+        from scanner.lineage.dbt_project_parser import parse_dbt_project
+
+    try:
+        from lineage.github_reader import fetch_dbt_project_files_with_fallback
+    except ImportError:
+        from scanner.lineage.github_reader import fetch_dbt_project_files_with_fallback
+
+    for tc in tool_configs:
+        if tc.tool_type.lower() != "dbt_core":
+            continue
+
+        source_mode = tc.config.get("source_mode", "")
+
+        # Skip if manifest exists AND source_mode is upload/unset
+        if tc.config.get("manifest") and source_mode in ("upload", ""):
+            continue
+
+        # Project folder upload: parse files dict
+        if source_mode == "project" and tc.config.get("project_files"):
+            try:
+                project_files = tc.config["project_files"]
+                if isinstance(project_files, dict):
+                    manifest = parse_dbt_project(
+                        files=project_files,
+                        project_name=tc.config.get("project_name", ""),
+                        warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                    )
+                    if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                        tc.config["manifest"] = manifest
+                        _log.info(f"[dbt-preprocess] Parsed project files: {len(manifest.get('nodes', {}))} models")
+            except Exception as parse_err:
+                _log.warning(f"[dbt-preprocess] Project files parsing failed: {parse_err}")
+
+        # GitHub mode: fetch project files with manifest.json fallback
+        elif source_mode == "github":
+            github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
+            github_repo = tc.config.get("github_repo")
+            if github_token and github_repo:
+                try:
+                    project_files, fallback_manifest = await fetch_dbt_project_files_with_fallback(
+                        repo=github_repo,
+                        token=github_token,
+                        branch=tc.config.get("github_branch", "main"),
+                        dbt_root=tc.config.get("dbt_project_path", ""),
+                    )
+                    if project_files:
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=tc.config.get("project_name", ""),
+                            warehouse_type=tc.config.get("warehouse_type", "bigquery"),
+                        )
+                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                            tc.config["manifest"] = manifest
+                            _log.info(f"[dbt-preprocess] Parsed from GitHub: {github_repo} ({len(manifest.get('nodes', {}))} models)")
+                    elif fallback_manifest:
+                        tc.config["manifest"] = fallback_manifest
+                        _log.info(f"[dbt-preprocess] Using manifest.json fallback from GitHub: {github_repo}")
+                except Exception as gh_err:
+                    _log.warning(f"[dbt-preprocess] GitHub fetch failed: {gh_err}")
+
+
 @router.post("/lineage/investigate", response_model=InvestigateResponse)
 async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[str] = Query(None)):
     """
@@ -2286,70 +2363,8 @@ async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[st
         except ImportError:
             from scanner.lineage.engine.investigator import ToolConfig
 
-        # Pre-process dbt_core nodes: parse project zip or fetch from GitHub
-        # (must happen here since the investigator runs synchronously in a thread)
-        for tc in request.tool_configs:
-            if tc.tool_type.lower() != "dbt_core":
-                continue
-
-            source_mode = tc.config.get("source_mode", "")
-
-            # Skip if manifest exists AND source_mode is upload/unset (not overriding with github/project)
-            if tc.config.get("manifest") and source_mode in ("upload", ""):
-                continue
-
-            # Project folder upload: parse files dict
-            if source_mode == "project" and tc.config.get("project_files"):
-                try:
-                    try:
-                        from lineage.dbt_project_parser import parse_dbt_project
-                    except ImportError:
-                        from scanner.lineage.dbt_project_parser import parse_dbt_project
-
-                    project_files = tc.config["project_files"]
-                    if isinstance(project_files, dict):
-                        manifest = parse_dbt_project(
-                            files=project_files,
-                            project_name=tc.config.get("project_name", ""),
-                            warehouse_type=tc.config.get("warehouse_type", "bigquery"),
-                        )
-                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
-                            tc.config["manifest"] = manifest
-                            _logger.info(f"[Investigator] Parsed dbt project files: {len(manifest.get('nodes', {}))} models")
-                except Exception as parse_err:
-                    _logger.warning(f"[Investigator] Project files parsing failed: {parse_err}")
-
-            # GitHub mode: fetch raw project files and parse
-            elif source_mode == "github":
-                github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
-                github_repo = tc.config.get("github_repo")
-                if github_token and github_repo:
-                    try:
-                        try:
-                            from lineage.github_reader import fetch_dbt_project_files
-                            from lineage.dbt_project_parser import parse_dbt_project
-                        except ImportError:
-                            from scanner.lineage.github_reader import fetch_dbt_project_files
-                            from scanner.lineage.dbt_project_parser import parse_dbt_project
-
-                        project_files = await fetch_dbt_project_files(
-                            repo=github_repo,
-                            token=github_token,
-                            branch=tc.config.get("github_branch", "main"),
-                            dbt_root=tc.config.get("dbt_project_path", ""),
-                        )
-                        if project_files:
-                            manifest = parse_dbt_project(
-                                files=project_files,
-                                project_name=tc.config.get("project_name", ""),
-                                warehouse_type=tc.config.get("warehouse_type", "bigquery"),
-                            )
-                            tc.config["manifest"] = manifest
-                            _logger.info(f"[Investigator] Parsed dbt project from GitHub: {github_repo} ({len(manifest.get('nodes', {}))} models)")
-                        else:
-                            _logger.warning(f"[Investigator] No project files found in GitHub: {github_repo}")
-                    except Exception as gh_err:
-                        _logger.warning(f"[Investigator] GitHub project fetch failed: {gh_err}")
+        # Pre-process dbt_core configs (parse project files or fetch from GitHub)
+        await _preprocess_dbt_configs(request.tool_configs, _logger)
 
         tool_configs = [
             ToolConfig(
@@ -2450,55 +2465,8 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         except ImportError:
             from scanner.lineage.engine.investigator import ToolConfig
 
-        # Pre-process dbt_core nodes (same as standard investigate)
-        for tc in request.tool_configs:
-            if tc.tool_type.lower() != "dbt_core":
-                continue
-            source_mode = tc.config.get("source_mode", "")
-            if tc.config.get("manifest") and source_mode in ("upload", ""):
-                continue
-            if source_mode == "project" and tc.config.get("project_files"):
-                try:
-                    try:
-                        from lineage.dbt_project_parser import parse_dbt_project
-                    except ImportError:
-                        from scanner.lineage.dbt_project_parser import parse_dbt_project
-                    project_files = tc.config["project_files"]
-                    if isinstance(project_files, dict):
-                        manifest = parse_dbt_project(
-                            files=project_files,
-                            project_name=tc.config.get("project_name", ""),
-                            warehouse_type=tc.config.get("warehouse_type", "bigquery"),
-                        )
-                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
-                            tc.config["manifest"] = manifest
-                except Exception as parse_err:
-                    _logger.warning(f"[Investigator-LLM] Project files parsing failed: {parse_err}")
-            elif source_mode == "github":
-                github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
-                github_repo = tc.config.get("github_repo")
-                if github_token and github_repo:
-                    try:
-                        try:
-                            from lineage.github_reader import fetch_dbt_project_files
-                            from lineage.dbt_project_parser import parse_dbt_project
-                        except ImportError:
-                            from scanner.lineage.github_reader import fetch_dbt_project_files
-                            from scanner.lineage.dbt_project_parser import parse_dbt_project
-                        project_files = await fetch_dbt_project_files(
-                            repo=github_repo, token=github_token,
-                            branch=tc.config.get("github_branch", "main"),
-                            dbt_root=tc.config.get("dbt_project_path", ""),
-                        )
-                        if project_files:
-                            manifest = parse_dbt_project(
-                                files=project_files,
-                                project_name=tc.config.get("project_name", ""),
-                                warehouse_type=tc.config.get("warehouse_type", "bigquery"),
-                            )
-                            tc.config["manifest"] = manifest
-                    except Exception as gh_err:
-                        _logger.warning(f"[Investigator-LLM] GitHub fetch failed: {gh_err}")
+        # Pre-process dbt_core configs (parse project files or fetch from GitHub)
+        await _preprocess_dbt_configs(request.tool_configs, _logger)
 
         tool_configs = [
             ToolConfig(
@@ -2606,55 +2574,8 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
                 from scanner.lineage.engine.investigator import ToolConfig
                 from scanner.lineage.engine.llm_extractor import LLMExtractorConfig, LLMLineageExtractor
 
-            # Pre-process dbt_core configs (same pattern as investigate-llm)
-            for tc in request.tool_configs:
-                if tc.tool_type.lower() != "dbt_core":
-                    continue
-                source_mode = tc.config.get("source_mode", "")
-                if tc.config.get("manifest") and source_mode in ("upload", ""):
-                    continue
-                if source_mode == "project" and tc.config.get("project_files"):
-                    try:
-                        try:
-                            from lineage.dbt_project_parser import parse_dbt_project
-                        except ImportError:
-                            from scanner.lineage.dbt_project_parser import parse_dbt_project
-                        project_files = tc.config["project_files"]
-                        if isinstance(project_files, dict):
-                            manifest = parse_dbt_project(
-                                files=project_files,
-                                project_name=tc.config.get("project_name", ""),
-                                warehouse_type=tc.config.get("warehouse_type", "bigquery"),
-                            )
-                            if manifest and (manifest.get("nodes") or manifest.get("sources")):
-                                tc.config["manifest"] = manifest
-                    except Exception as parse_err:
-                        _logger.warning(f"[LLM-Extract] Project files parsing failed: {parse_err}")
-                elif source_mode == "github":
-                    github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
-                    github_repo = tc.config.get("github_repo")
-                    if github_token and github_repo:
-                        try:
-                            try:
-                                from lineage.github_reader import fetch_dbt_project_files
-                                from lineage.dbt_project_parser import parse_dbt_project
-                            except ImportError:
-                                from scanner.lineage.github_reader import fetch_dbt_project_files
-                                from scanner.lineage.dbt_project_parser import parse_dbt_project
-                            project_files = await fetch_dbt_project_files(
-                                repo=github_repo, token=github_token,
-                                branch=tc.config.get("github_branch", "main"),
-                                dbt_root=tc.config.get("dbt_project_path", ""),
-                            )
-                            if project_files:
-                                manifest = parse_dbt_project(
-                                    files=project_files,
-                                    project_name=tc.config.get("project_name", ""),
-                                    warehouse_type=tc.config.get("warehouse_type", "bigquery"),
-                                )
-                                tc.config["manifest"] = manifest
-                        except Exception as gh_err:
-                            _logger.warning(f"[LLM-Extract] GitHub fetch failed: {gh_err}")
+            # Pre-process dbt_core configs (shared helper with fallback)
+            await _preprocess_dbt_configs(request.tool_configs, _logger)
 
             # Build ToolConfig list
             tool_configs = [

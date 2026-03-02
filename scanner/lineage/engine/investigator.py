@@ -15,8 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..graph import (
     EdgeType,
@@ -28,61 +27,28 @@ from ..graph import (
     LinePlane,
     PlatformDomain,
 )
-from .adapter import AdapterRegistry, BaseLineageAdapter
+from .adapter import AdapterRegistry
 from .bridge import BridgeRuleEngine
-from .ids import generate_edge_id, normalize_identifier
-from .planner import ExtractionPlan, PlannerInput, plan_heuristic, plan_with_llm
+from .ids import generate_edge_id
+from .platforms import (
+    PLATFORM_REGISTRY,
+    ToolCategory,
+    WAREHOUSE_PLATFORMS,
+)
+from .planner import PlannerInput, plan_heuristic, plan_with_llm
 from .resolver import ResolverConfig, ResolverPipeline
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Enums & constants
+# Derived constants (from platform registry)
 # ---------------------------------------------------------------------------
 
-class ToolCategory(Enum):
-    WAREHOUSE = "warehouse"
-    INGESTION = "ingestion"
-    TRANSFORMATION = "transformation"
-    ORCHESTRATION = "orchestration"
-    REPORTING = "reporting"
-    INFRASTRUCTURE = "infrastructure"
-    VERSION_CONTROL = "version_control"
-    QUALITY = "quality"
-
-
 TOOL_TYPE_TO_CATEGORY: Dict[str, ToolCategory] = {
-    # Warehouses
-    "bigquery": ToolCategory.WAREHOUSE,
-    "snowflake": ToolCategory.WAREHOUSE,
-    "postgres": ToolCategory.WAREHOUSE,
-    "redshift": ToolCategory.WAREHOUSE,
-    "databricks": ToolCategory.WAREHOUSE,
-    # Ingestion
-    "fivetran": ToolCategory.INGESTION,
-    "airbyte": ToolCategory.INGESTION,
-    "n8n": ToolCategory.INGESTION,
-    # Transformation
-    "dbt_cloud": ToolCategory.TRANSFORMATION,
-    "dbt_core": ToolCategory.TRANSFORMATION,
-    # Orchestration
-    "airflow": ToolCategory.ORCHESTRATION,
-    "dagster": ToolCategory.ORCHESTRATION,
-    "prefect": ToolCategory.ORCHESTRATION,
-    # Reporting / BI
-    "looker": ToolCategory.REPORTING,
-    "tableau": ToolCategory.REPORTING,
-    "powerbi": ToolCategory.REPORTING,
-    "metabase": ToolCategory.REPORTING,
-    # Infrastructure
-    "linux_server": ToolCategory.INFRASTRUCTURE,
-    "ssh": ToolCategory.INFRASTRUCTURE,
-    # Version Control
-    "github": ToolCategory.VERSION_CONTROL,
-    "gitlab": ToolCategory.VERSION_CONTROL,
-    # Quality
-    "elementary": ToolCategory.QUALITY,
+    name: info.category
+    for name, info in PLATFORM_REGISTRY.items()
+    if name == info.name  # exclude aliases
 }
 
 INVESTIGATION_ORDER: Dict[ToolCategory, int] = {
@@ -97,35 +63,9 @@ INVESTIGATION_ORDER: Dict[ToolCategory, int] = {
 }
 
 TOOL_TO_ADAPTER: Dict[str, str] = {
-    "bigquery": "live_warehouse",
-    "snowflake": "live_warehouse",
-    "postgres": "live_warehouse",
-    "redshift": "live_warehouse",
-    "dbt_cloud": "live_dbt",
-    "dbt_core": "live_dbt",
-    "airflow": "live_airflow",
-    "dagster": "live_dagster",
-    "prefect": "live_prefect",
-    "n8n": "live_n8n",
-    "fivetran": "live_fivetran",
-    "airbyte": "live_airbyte",
-    "looker": "live_looker",
-    "tableau": "live_tableau",
-    "powerbi": "live_powerbi",
-    "metabase": "live_metabase",
-    "databricks": "live_databricks",
-    "elementary": "live_elementary",
-    "storage": "live_storage",
-    "linux_server": "live_linux",
-    "ssh": "live_linux",
-    "github": "live_github",
-    "gitlab": "live_github",
-}
-
-# Platforms that represent actual warehouses (for resolving canonical FQNs)
-WAREHOUSE_PLATFORMS = {
-    "bigquery", "snowflake", "postgres", "redshift", "databricks",
-    "trino", "duckdb", "mysql", "mssql",
+    name: info.adapter_id
+    for name, info in PLATFORM_REGISTRY.items()
+    if info.adapter_id and name == info.name  # exclude aliases
 }
 
 
@@ -890,10 +830,34 @@ class LineageInvestigator:
         tool_names = [tc.tool_type for tc in sorted_configs]
         context.log_step("investigator", f"Investigation plan: {tool_names}")
 
+        # Pre-compute destination warehouse info for ingestion adapters
+        # so Fivetran/Airbyte can generate FQNs that match warehouse nodes.
+        _WAREHOUSE_TOOLS = {"bigquery", "snowflake", "postgres", "redshift"}
+        _dest_warehouse_info: Dict[str, Any] = {}
+        for tc in sorted_configs:
+            tl = tc.tool_type.lower()
+            if tl in _WAREHOUSE_TOOLS:
+                cfg = tc.config or {}
+                if not _dest_warehouse_info:
+                    _dest_warehouse_info = {
+                        "destination_platform": tl,
+                        "destination_namespace": cfg.get("project_id", "") or cfg.get("project", "") or cfg.get("database", ""),
+                        "destination_database": cfg.get("database", ""),
+                    }
+                break  # use first warehouse found
+
+        # Categories that don't contribute to data lineage — skip entirely
+        _SKIP_CATEGORIES = {ToolCategory.INFRASTRUCTURE, ToolCategory.VERSION_CONTROL}
+
         # Phase 2 — sequential extraction with correlation
         for tc in sorted_configs:
             tool_type = tc.tool_type.lower()
             category = tc.category
+
+            if category in _SKIP_CATEGORIES:
+                context.log_step(tool_type, f"Skipping {tool_type} ({category.value}) — not part of data lineage")
+                continue
+
             context.log_step(tool_type, f"Beginning investigation ({category.value})")
 
             profile = ToolProfile(
@@ -914,6 +878,10 @@ class LineageInvestigator:
                 adapter_id = f"{adapter_type}_{tc.integration_id or 'default'}"
                 adapter = self.registry.create(adapter_type, adapter_id)
                 adapter_config = _build_adapter_config(tc)
+
+                # Inject destination warehouse info into ingestion adapters
+                if tool_type in ("fivetran", "airbyte") and _dest_warehouse_info:
+                    adapter_config.update(_dest_warehouse_info)
 
                 nodes = adapter.discover_assets(adapter_config)
                 edges = adapter.extract_lineage(adapter_config)

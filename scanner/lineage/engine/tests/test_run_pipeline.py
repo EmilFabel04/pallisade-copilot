@@ -544,3 +544,212 @@ class TestPipelineRunId:
         record = registry.get_run(run_id)
         assert record.artifacts.stats["run_id"] == run_id
         assert "views_built" in record.artifacts.stats
+
+
+# =====================================================================
+# Cross-Tool Synthesis Tests
+# =====================================================================
+
+
+class TestPipelineCrossToolSynthesis:
+    """Cross-tool synthesis creates edges between ingestion and warehouse nodes."""
+
+    @pytest.mark.asyncio
+    async def test_fivetran_to_bigquery_edges_synthesized(self):
+        """Fivetran connector should get POPULATES edges to matching BQ tables."""
+        from scanner.lineage.engine.pipeline import (
+            ExtractionPipelineConfig,
+            run_extraction_pipeline,
+        )
+        from scanner.lineage.engine.investigator import InvestigationResult
+
+        graph = LineageGraph()
+
+        # Fivetran source service node
+        ft_source = _make_node(
+            "Postgres", NodeType.SOURCE, "fivetran", PlatformDomain.INGESTION,
+        )
+        ft_source.raw_metadata = {
+            "source_service": "postgres",
+            "node_role": "external_source",
+        }
+        graph.add_node(ft_source)
+
+        # Fivetran connector with synced_tables metadata
+        ft_connector = _make_node(
+            "my_connector", NodeType.SOURCE, "fivetran", PlatformDomain.INGESTION,
+        )
+        ft_connector.raw_metadata = {
+            "service": "postgres",
+            "schema": "raw",
+            "connector_name": "my_connector",
+            "synced_tables": ["customers", "orders"],
+        }
+        graph.add_node(ft_connector)
+
+        # Source -> connector edge
+        graph.add_edge(_make_edge(ft_source.id, ft_connector.id, EdgeType.DERIVED_FROM))
+
+        # BigQuery raw tables (matching synced_tables names)
+        for name in ["customers", "orders"]:
+            node = _make_node(
+                name, NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+                database="my-project", schema="raw",
+            )
+            graph.add_node(node)
+
+        mock_result = InvestigationResult(
+            success=True,
+            context=MagicMock(to_dict=MagicMock(return_value={})),
+            graph=graph,
+            stats={},
+            errors=[],
+            duration_ms=50,
+        )
+
+        registry = RunRegistry()
+        store = MagicMock()
+        config = ExtractionPipelineConfig()
+
+        with patch(
+            "scanner.lineage.engine.pipeline._run_investigation",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            run_id = await run_extraction_pipeline([], registry, store, config)
+
+        record = registry.get_run(run_id)
+        assert record.status == RunStatus.COMPLETED
+
+        # Check that POPULATES edges were created by cross-tool synthesis
+        final_graph = store.graph
+        populates_edges = [
+            e for e in final_graph.edges.values()
+            if e.edge_type == EdgeType.POPULATES
+        ]
+        assert len(populates_edges) >= 2, (
+            f"Expected at least 2 POPULATES edges (connector→customers, connector→orders), "
+            f"got {len(populates_edges)}"
+        )
+
+        # Verify synthesis stats in artifacts
+        stats = record.artifacts.stats
+        assert "cross_tool_synthesis" in stats
+        assert stats["cross_tool_synthesis"]["ingestion_edges"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_fivetran_to_dbt_source_nodes_synthesized(self):
+        """Fivetran connector should get POPULATES edges to dbt SOURCE nodes.
+
+        When raw BigQuery tables are only discovered via dbt (as NodeType.SOURCE
+        with PlatformDomain.WAREHOUSE), they must still be matched as ingestion
+        destinations.
+        """
+        from scanner.lineage.engine.pipeline import (
+            ExtractionPipelineConfig,
+            run_extraction_pipeline,
+        )
+        from scanner.lineage.engine.investigator import InvestigationResult
+
+        graph = LineageGraph()
+
+        # Fivetran connector with synced_tables metadata
+        ft_connector = _make_node(
+            "my_connector", NodeType.SOURCE, "fivetran", PlatformDomain.INGESTION,
+        )
+        ft_connector.raw_metadata = {
+            "service": "postgres",
+            "schema": "raw",
+            "connector_name": "my_connector",
+            "synced_tables": ["customers", "orders"],
+        }
+        graph.add_node(ft_connector)
+
+        # dbt SOURCE nodes representing raw BigQuery tables
+        # These have NodeType.SOURCE + PlatformDomain.WAREHOUSE
+        for name in ["customers", "orders"]:
+            node = _make_node(
+                name, NodeType.SOURCE, "dbt", PlatformDomain.WAREHOUSE,
+                database="my-project", schema="raw",
+            )
+            graph.add_node(node)
+
+        mock_result = InvestigationResult(
+            success=True,
+            context=MagicMock(to_dict=MagicMock(return_value={})),
+            graph=graph,
+            stats={},
+            errors=[],
+            duration_ms=50,
+        )
+
+        registry = RunRegistry()
+        store = MagicMock()
+        config = ExtractionPipelineConfig()
+
+        with patch(
+            "scanner.lineage.engine.pipeline._run_investigation",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            run_id = await run_extraction_pipeline([], registry, store, config)
+
+        record = registry.get_run(run_id)
+        assert record.status == RunStatus.COMPLETED
+
+        # Check that POPULATES edges were created from connector to dbt sources
+        final_graph = store.graph
+        populates_edges = [
+            e for e in final_graph.edges.values()
+            if e.edge_type == EdgeType.POPULATES
+        ]
+        assert len(populates_edges) >= 2, (
+            f"Expected at least 2 POPULATES edges (connector→dbt source customers, "
+            f"connector→dbt source orders), got {len(populates_edges)}"
+        )
+
+        # Verify synthesis stats
+        stats = record.artifacts.stats
+        assert stats["cross_tool_synthesis"]["ingestion_edges"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_synthesis_stats_in_artifacts(self):
+        """Cross-tool synthesis stats should appear in run artifacts even with 0 edges."""
+        from scanner.lineage.engine.pipeline import (
+            ExtractionPipelineConfig,
+            run_extraction_pipeline,
+        )
+        from scanner.lineage.engine.investigator import InvestigationResult
+
+        # Graph with only warehouse tables (no ingestion nodes)
+        graph = LineageGraph()
+        for name in ["customers", "orders"]:
+            node = _make_node(
+                name, NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+                database="my-project", schema="analytics",
+            )
+            graph.add_node(node)
+
+        mock_result = InvestigationResult(
+            success=True,
+            context=MagicMock(to_dict=MagicMock(return_value={})),
+            graph=graph,
+            stats={},
+            errors=[],
+            duration_ms=50,
+        )
+
+        registry = RunRegistry()
+        store = MagicMock()
+
+        with patch(
+            "scanner.lineage.engine.pipeline._run_investigation",
+            new_callable=AsyncMock,
+            return_value=mock_result,
+        ):
+            run_id = await run_extraction_pipeline(
+                [], registry, store, ExtractionPipelineConfig(),
+            )
+
+        record = registry.get_run(run_id)
+        assert "cross_tool_synthesis" in record.artifacts.stats

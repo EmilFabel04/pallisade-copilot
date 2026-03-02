@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Set
 from ...graph import (
     AssetKind,
     EdgeType,
-    Evidence,
     LineageEdge,
     LineageLevel,
     LineageNode,
@@ -23,7 +22,7 @@ from ...graph import (
     PlatformDomain,
 )
 from ..adapter import BaseLineageAdapter, Capability
-from ..ids import generate_asset_id, generate_edge_id, normalize_identifier
+from ..ids import generate_asset_id, normalize_identifier
 from ..sql_lineage import SQLLineageExtractor
 
 logger = logging.getLogger(__name__)
@@ -41,10 +40,7 @@ class LiveMetabaseAdapter(BaseLineageAdapter):
     """
 
     def __init__(self, adapter_id: str = "live_metabase", **kwargs):
-        self._id = adapter_id
-
-    def id(self) -> str:
-        return self._id
+        super().__init__(adapter_id, **kwargs)
 
     def capabilities(self) -> Set[Capability]:
         return {
@@ -369,28 +365,6 @@ class LiveMetabaseAdapter(BaseLineageAdapter):
 
         return self._get_sql_extractor().extract_source_tables(sql)
 
-    # ------------------------------------------------------------------
-    # Edge helpers
-    # ------------------------------------------------------------------
-
-    def _make_edge(
-        self,
-        source_id: str,
-        target_id: str,
-        edge_type: EdgeType,
-        level: LineageLevel,
-        confidence: float,
-        source_ref: str,
-        now: datetime,
-        snippet: Optional[str] = None,
-        plane: LinePlane = LinePlane.DATA,
-    ) -> LineageEdge:
-        ev = Evidence(
-            adapter_id=self._id,
-            source_ref=source_ref,
-            observed_at=now,
-            snippet=snippet[:200] if snippet else None,
-        )
         edge_id = generate_edge_id(
             source_id, target_id,
             edge_type.value, level.value,

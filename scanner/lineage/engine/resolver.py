@@ -115,8 +115,9 @@ class ResolverPipeline:
                 graph.add_edge(edge)
             else:
                 unresolved += 1
-                logger.debug(
-                    f"Unresolved edge: {edge.source_id} -> {edge.target_id} "
+                logger.warning(
+                    f"Unresolved edge: {edge.source_id[:12]}→{edge.target_id[:12]} "
+                    f"from={edge.discovered_from} "
                     f"(source_exists={edge.source_id in graph.nodes}, "
                     f"target_exists={edge.target_id in graph.nodes})"
                 )
@@ -233,9 +234,90 @@ class ResolverPipeline:
         merged = fqn_merged + no_short
         fqn_deduped = self.stats.nodes_deduplicated - stable_deduped
 
+        # Pass 2.5: database-qualified dedup for WAREHOUSE domain.
+        # When different adapters discover the same physical table
+        # (e.g., Fivetran sees destination table, BigQuery sees it via parser),
+        # they share (database, schema, name) but differ in namespace/system.
+        # Key: (database, schema, name) — only for WAREHOUSE domain with database set.
+        by_db_qual: Dict[Tuple[str, str, str], List[LineageNode]] = defaultdict(list)
+        no_db: List[LineageNode] = []
+        for node in merged:
+            if (node.platform_domain.value == "warehouse"
+                    and node.database and node.name):
+                key = (
+                    node.database.lower(),
+                    (node.schema or "").lower(),
+                    node.name.lower(),
+                )
+                by_db_qual[key].append(node)
+            else:
+                no_db.append(node)
+
+        db_merged: List[LineageNode] = []
+        for key, group in by_db_qual.items():
+            if len(group) == 1:
+                db_merged.append(group[0])
+                continue
+            group.sort(key=lambda n: (
+                _domain_priority(n.platform_domain.value),
+                0 if n.platform in _WH_PLATFORMS else 1,
+            ))
+            primary = group[0]
+            for secondary in group[1:]:
+                _merge_node_metadata(primary, secondary)
+                id_remap[secondary.id] = primary.id
+                self.stats.nodes_deduplicated += 1
+            db_merged.append(primary)
+
+        merged = db_merged + no_db
+        db_deduped = self.stats.nodes_deduplicated - stable_deduped - fqn_deduped
+
+        # Third pass: cross-domain dedup for warehouse ↔ transform.
+        # dbt/transform nodes and warehouse nodes often represent the same
+        # physical table but have different platform_domain values.
+        # Key: (namespace, schema, name) — domain-independent.
+        _CROSS_DOMAINS = {"warehouse", "transform"}
+        cross_candidates: Dict[Tuple[str, str, str], List[LineageNode]] = defaultdict(list)
+        non_cross: List[LineageNode] = []
+        for node in merged:
+            if node.platform_domain.value in _CROSS_DOMAINS and node.name:
+                key = (
+                    (node.namespace or "").lower(),
+                    (node.schema or "").lower(),
+                    node.name.lower(),
+                )
+                cross_candidates[key].append(node)
+            else:
+                non_cross.append(node)
+
+        cross_merged: List[LineageNode] = []
+        for key, group in cross_candidates.items():
+            if len(group) == 1:
+                cross_merged.append(group[0])
+                continue
+            # Only merge if the group contains nodes from different domains
+            domains = {n.platform_domain.value for n in group}
+            if len(domains) <= 1:
+                cross_merged.extend(group)
+                continue
+            group.sort(key=lambda n: (
+                _domain_priority(n.platform_domain.value),
+                0 if n.platform in _WH_PLATFORMS else 1,
+            ))
+            primary = group[0]
+            for secondary in group[1:]:
+                _merge_node_metadata(primary, secondary)
+                id_remap[secondary.id] = primary.id
+                self.stats.nodes_deduplicated += 1
+            cross_merged.append(primary)
+
+        merged = cross_merged + non_cross
+        cross_deduped = self.stats.nodes_deduplicated - stable_deduped - fqn_deduped - db_deduped
+
         logger.info(
-            "[Resolver] Dedup: %d nodes → %d unique (%d merged by stable_id, %d by schema+name)",
-            len(nodes), len(merged), stable_deduped, fqn_deduped,
+            "[Resolver] Dedup: %d nodes → %d unique "
+            "(%d stable_id, %d schema+name, %d db-qualified, %d cross-domain)",
+            len(nodes), len(merged), stable_deduped, fqn_deduped, db_deduped, cross_deduped,
         )
 
         return merged, id_remap
@@ -329,7 +411,7 @@ class ResolverPipeline:
 
 
 # Platforms that are real warehouses (vs dbt which also uses WAREHOUSE domain)
-_WH_PLATFORMS = {"bigquery", "snowflake", "postgres", "redshift"}
+from .platforms import WAREHOUSE_PLATFORMS as _WH_PLATFORMS
 
 
 # Priority for deduplication: lower = higher priority
@@ -396,6 +478,16 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
         dbt_resource = secondary.raw_metadata.get("dbt_resource_type")
         if dbt_resource and dbt_resource in ("model", "seed", "snapshot"):
             primary.raw_metadata["dbt_resource_type"] = dbt_resource
+
+    # Preserve ingestion provenance when merging ingestion dest → warehouse.
+    # When a warehouse node wins the merge over an ingestion destination node,
+    # keep the ingestion metadata so cross-tool edge synthesis can still link them.
+    for key in ("ingestion_platform", "ingestion_connector",
+                "discovered_via", "connector_name", "connection_name",
+                "synced_tables", "synced_schemas", "schema",
+                "service", "sync_frequency"):
+        if not primary.raw_metadata.get(key) and secondary.raw_metadata.get(key):
+            primary.raw_metadata[key] = secondary.raw_metadata[key]
 
     # Prefer primary's integration_id (warehouse priority), fallback to secondary
     if not primary.integration_id and secondary.integration_id:

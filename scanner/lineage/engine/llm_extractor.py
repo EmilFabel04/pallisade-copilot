@@ -12,6 +12,7 @@ the *actual extraction* — the LLM decides what to query, interprets results,
 and builds the graph itself.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -46,32 +47,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Tool-type → category mapping for the system prompt
+# Tool-type → category mapping for the system prompt (derived from registry)
 # ---------------------------------------------------------------------------
 
+from .platforms import PLATFORM_REGISTRY
+
 _TOOL_CATEGORY: Dict[str, str] = {
-    "bigquery": "warehouse",
-    "snowflake": "warehouse",
-    "postgres": "warehouse",
-    "redshift": "warehouse",
-    "databricks": "warehouse",
-    "dbt_cloud": "transformation",
-    "dbt_core": "transformation",
-    "n8n": "orchestration",
-    "airflow": "orchestration",
-    "dagster": "orchestration",
-    "prefect": "orchestration",
-    "fivetran": "ingestion",
-    "airbyte": "ingestion",
-    "looker": "reporting",
-    "tableau": "reporting",
-    "powerbi": "reporting",
-    "metabase": "reporting",
-    "linux_server": "infrastructure",
-    "ssh": "infrastructure",
-    "github": "version_control",
-    "gitlab": "version_control",
-    "elementary": "quality",
+    name: info.category.value
+    for name, info in PLATFORM_REGISTRY.items()
+    if name == info.name  # exclude aliases
 }
 
 # Category → query tool name
@@ -777,7 +761,7 @@ class LLMLineageExtractor:
 
         client = openai.AsyncOpenAI(api_key=api_key, max_retries=3)
         tools = _to_openai_tools(_build_tool_definitions())
-        model = self.config.model or "gpt-4o"
+        model = self.config.model or "gpt-5-mini"
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -788,15 +772,23 @@ class LLMLineageExtractor:
             if self._extraction_complete:
                 break
 
+            # Brief pause between iterations to respect rate limits
+            if iteration > 0:
+                await asyncio.sleep(1.0)
+
             try:
-                response = await client.chat.completions.create(
+                # GPT-5 models only support default temperature (1)
+                create_kwargs = dict(
                     model=model,
-                    max_tokens=self.config.max_tokens,
-                    temperature=self.config.temperature,
+                    max_completion_tokens=self.config.max_tokens,
                     messages=messages,
                     tools=tools,
                 )
+                if not model.startswith("gpt-5"):
+                    create_kwargs["temperature"] = self.config.temperature
+                response = await client.chat.completions.create(**create_kwargs)
             except Exception as e:
+                logger.error(f"[LLMExtractor] OpenAI API error (model={model}): {e}")
                 yield ExtractionEvent("error", {"message": f"LLM API error: {str(e)}", "iteration": iteration})
                 break
 

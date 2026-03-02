@@ -781,7 +781,7 @@ export default function LineagePage() {
     }
   };
 
-  // LLM-powered extraction with SSE streaming
+  // Adapter-based extraction (calls adapters directly, LLM only for reconciliation)
   const extractWithLLM = async () => {
     if (!stackId) return;
 
@@ -795,78 +795,46 @@ export default function LineagePage() {
       // Clear existing lineage first
       await fetch(`/api/pipeline/${stackId}/lineage`, { method: 'DELETE' });
 
-      const res = await fetch(`/api/pipeline/${stackId}/lineage/extract-llm`, {
+      setLlmProgress([{ type: 'phase', message: 'Starting adapter-based extraction...' }]);
+
+      const res = await fetch(`/api/pipeline/${stackId}/lineage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ llmProvider: 'openai' }),
       });
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        setError(errorData.error || 'LLM extraction failed');
+        setError(errorData.error || 'Extraction failed');
         setLlmExtracting(false);
         return;
       }
 
-      const reader = res.body?.getReader();
-      if (!reader) {
-        setError('No stream from server');
-        setLlmExtracting(false);
-        return;
+      const data = await res.json();
+      const totalNodes = data.stats?.total_nodes || 0;
+      const totalEdges = data.stats?.total_edges || 0;
+
+      setLlmNodeCount(totalNodes);
+      setLlmEdgeCount(totalEdges);
+      setLlmProgress(prev => [
+        ...prev,
+        { type: 'complete', message: `Done: ${totalNodes} nodes, ${totalEdges} edges` },
+      ]);
+
+      // Save snapshot and refresh
+      try {
+        await fetch(`/api/pipeline/${stackId}/lineage/engine?action=save-snapshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+      } catch {
+        console.warn('[LINEAGE] Failed to save snapshot (non-fatal)');
       }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-            const { type, data } = event;
-
-            if (type === 'phase') {
-              setLlmProgress(prev => [...prev.slice(-29), { type: 'phase', message: data.message }]);
-            } else if (type === 'tool_call') {
-              setLlmProgress(prev => [...prev.slice(-29), { type: 'tool', message: `Calling ${data.tool}...` }]);
-            } else if (type === 'node_added') {
-              setLlmNodeCount(data.total_nodes || 0);
-              setLlmProgress(prev => [...prev.slice(-29), { type: 'node', message: `Added ${data.node_type}: ${data.name}` }]);
-            } else if (type === 'edge_added') {
-              setLlmEdgeCount(data.total_edges || 0);
-            } else if (type === 'error') {
-              setLlmProgress(prev => [...prev.slice(-29), { type: 'error', message: data.message }]);
-            } else if (type === 'complete') {
-              setLlmProgress(prev => [...prev.slice(-29), { type: 'complete', message: `Done: ${data.stats?.total_nodes || 0} nodes, ${data.stats?.total_edges || 0} edges` }]);
-            } else if (type === 'persisted') {
-              // Extraction persisted — save snapshot to DB for restart recovery, then refresh
-              try {
-                await fetch(`/api/pipeline/${stackId}/lineage/engine?action=save-snapshot`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({}),
-                });
-              } catch {
-                console.warn('[LLM-EXTRACT] Failed to save snapshot (non-fatal)');
-              }
-              await fetchLineage();
-            }
-          } catch {
-            // Ignore parse errors on partial SSE chunks
-          }
-        }
-      }
+      await fetchLineage();
 
       setLlmExtracting(false);
     } catch (err) {
-      setError('LLM extraction failed');
+      setError('Extraction failed');
       setLlmExtracting(false);
     }
   };
