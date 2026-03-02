@@ -179,6 +179,10 @@ function engineNodeToUnified(
   } else if (nodeType === 'monitor') {
     category = 'test';
     layer = 'WAREHOUSE';
+  } else if (nodeType === 'table' && eNode.platform_domain === 'ingestion') {
+    // Ingestion tables (e.g., Fivetran synced tables) — green table nodes
+    category = 'table';
+    layer = 'INGESTION';
   } else if (eNode.platform_domain === 'bi') {
     // Catch-all for BI domain nodes
     category = 'dashboard';

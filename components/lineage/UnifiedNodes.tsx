@@ -27,7 +27,28 @@ import {
   FileBarChart,
 } from 'lucide-react';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
-import { CATEGORY_VISUALS, type UnifiedNodeCategory } from './types';
+import { CATEGORY_VISUALS, CATEGORY_LAYER_MAP, type UnifiedNodeCategory } from './types';
+
+// Map platform names to layer colors for multi-platform badges / split indicators
+const PLATFORM_COLORS: Record<string, string> = {
+  bigquery: LAYER_COLORS.WAREHOUSE,
+  snowflake: LAYER_COLORS.WAREHOUSE,
+  postgres: LAYER_COLORS.WAREHOUSE,
+  redshift: LAYER_COLORS.WAREHOUSE,
+  databricks: LAYER_COLORS.WAREHOUSE,
+  dbt: LAYER_COLORS.TRANSFORMATION,
+  dbt_core: LAYER_COLORS.TRANSFORMATION,
+  fivetran: LAYER_COLORS.INGESTION,
+  airbyte: LAYER_COLORS.INGESTION,
+  looker: LAYER_COLORS.REPORTING,
+  tableau: LAYER_COLORS.REPORTING,
+  metabase: LAYER_COLORS.REPORTING,
+  powerbi: LAYER_COLORS.REPORTING,
+  power_bi: LAYER_COLORS.REPORTING,
+};
+function getPlatformColor(platform: string): string {
+  return PLATFORM_COLORS[platform.toLowerCase()] || '#94A3B8';
+}
 
 interface ToolNodeData {
   name: string;
@@ -387,14 +408,31 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   const visuals = CATEGORY_VISUALS[data.category] || CATEGORY_VISUALS.table;
   const shortName = data.tableName || data.name?.split('.').pop() || data.name;
 
+  // Multi-platform detection (e.g., merged dbt + BigQuery node)
+  const platforms = data.platforms || [];
+  const isMultiPlatform = platforms.length > 1;
+
+  // Layer-aware coloring: when the node's layer doesn't match the category's
+  // default layer, use the layer color instead (e.g., ingestion TABLE nodes
+  // should be green, not the default blue for tables).
+  const defaultLayer = CATEGORY_LAYER_MAP[data.category];
+  const layerOverride = data.layer && data.layer !== defaultLayer;
+  const primaryColor = layerOverride ? (LAYER_COLORS[data.layer] || visuals.color) : visuals.color;
+  const primaryBg = layerOverride
+    ? `${primaryColor}20` // 12% opacity hex
+    : visuals.bgColor;
+  const primaryLabel = layerOverride
+    ? data.layer.charAt(0) + data.layer.slice(1).toLowerCase()
+    : visuals.label;
+
   // Determine overall health status
   const hasIssues = data.issues && data.issues.total > 0;
   const hasCritical = data.issues && data.issues.critical > 0;
   const hasHigh = data.issues && data.issues.high > 0;
   const isStale = data.freshnessStatus === 'stale';
 
-  // Determine border color based on health
-  let borderColor = visuals.borderColor;
+  // Determine border color based on health, then platform
+  let borderColor = primaryColor;
   if (hasCritical) {
     borderColor = '#EF4444'; // red
   } else if (hasHigh || isStale) {
@@ -405,137 +443,153 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
 
   return (
     <div
-      className="relative px-3 py-2.5 rounded-lg border min-w-[160px] max-w-[220px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02]"
+      className="relative rounded-lg border min-w-[160px] max-w-[220px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02] overflow-hidden"
       style={{
         borderColor: isInferred ? '#F59E0B60' : borderColor,
-        backgroundColor: isInferred ? 'rgba(245,158,11,0.06)' : visuals.bgColor,
+        backgroundColor: isInferred ? 'rgba(245,158,11,0.06)' : primaryBg,
         opacity: data.isOverlay ? 0.5 : isInferred ? 0.75 : 1,
         borderStyle: (data.isOverlay || isInferred) ? 'dashed' : 'solid',
       }}
     >
-      {/* Input handle (left side) */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="!w-2.5 !h-2.5 !border-2"
-        style={{
-          backgroundColor: visuals.color,
-          borderColor: 'var(--subtle-border)',
-        }}
-      />
-
-      {/* Header with icon, type and status */}
-      <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2">
-          <div style={{ color: visuals.color }}>{getDataAssetIcon(data.category)}</div>
-          <span
-            className="text-[10px] uppercase tracking-wide font-medium"
-            style={{ color: visuals.color }}
-          >
-            {visuals.label}
-          </span>
-          {data.category === 'model' && data.nodeType && data.nodeType !== 'model' && (
-            <span className="text-[9px] text-[var(--text-faint)] lowercase">
-              · {data.nodeType}
-            </span>
-          )}
-          {isInferred && (
-            <span className="text-[8px] text-amber-400/70 font-medium uppercase tracking-wide">
-              inferred
-            </span>
-          )}
-        </div>
-        {/* Status indicators */}
-        <div className="flex items-center gap-1">
-          {data.freshnessStatus === 'fresh' && (
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Fresh" />
-          )}
-          {isStale && (
-            <div className="flex items-center" title={`Stale (${data.freshnessHours}h ago)`}>
-              <Clock className="w-3 h-3 text-amber-400" />
-            </div>
-          )}
-          {hasCritical && (
-            <div className="flex items-center" title={`${data.issues?.critical} critical issues`}>
-              <AlertCircle className="w-3 h-3 text-red-400" />
-            </div>
-          )}
-          {!hasCritical && hasHigh && (
-            <div className="flex items-center" title={`${data.issues?.high} high severity issues`}>
-              <AlertCircle className="w-3 h-3 text-amber-400" />
-            </div>
-          )}
-          {!hasIssues && !isStale && data.freshnessStatus !== 'unknown' && (
-            <CheckCircle className="w-3 h-3 text-emerald-400" />
-          )}
-        </div>
-      </div>
-
-      {/* Name */}
-      <div className="text-sm font-mono text-[var(--text)] truncate" title={data.fullName || data.name}>
-        {shortName}
-      </div>
-
-      {/* Metadata row */}
-      <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-[var(--muted)]">
-        {(data.upstreamCount ?? 0) > 0 && <span>↑{data.upstreamCount}</span>}
-        {(data.downstreamCount ?? 0) > 0 && <span>↓{data.downstreamCount}</span>}
-        {data.rowCount !== undefined && data.rowCount > 0 && (
-          <span>{data.rowCount.toLocaleString()} rows</span>
-        )}
-        {(data.columnCount ?? 0) > 0 && (
-          <span>{data.columnCount} cols</span>
-        )}
-        {data.materialization && (
-          <span className="capitalize">{data.materialization}</span>
-        )}
-      </div>
-
-      {/* Platform provenance badges (only when multi-platform) */}
-      {data.platforms && data.platforms.length > 1 && (
-        <div className="flex items-center gap-1 mt-1">
-          {data.platforms.map((p) => (
-            <span
-              key={p}
-              className="px-1 py-0.5 text-[8px] font-medium uppercase tracking-wide rounded bg-[var(--hover-bg)] text-[var(--muted)] border border-[var(--subtle-border)]"
-            >
-              {p}
-            </span>
+      {/* Split color strip for multi-platform nodes (e.g., dbt + BigQuery) */}
+      {isMultiPlatform && (
+        <div className="flex h-1.5">
+          {platforms.map((p) => (
+            <div key={p} className="flex-1" style={{ backgroundColor: getPlatformColor(p) }} />
           ))}
         </div>
       )}
 
-      {/* Issue badges */}
-      {hasIssues && (
-        <div className="flex items-center gap-1.5 mt-2">
-          {data.issues!.critical > 0 && (
-            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-red-500/25 text-red-300 rounded">
-              {data.issues!.critical}C
+      <div className="px-3 py-2.5">
+        {/* Input handle (left side) */}
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="!w-2.5 !h-2.5 !border-2"
+          style={{
+            backgroundColor: primaryColor,
+            borderColor: 'var(--subtle-border)',
+          }}
+        />
+
+        {/* Header with icon, type and status */}
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div style={{ color: primaryColor }}>{getDataAssetIcon(data.category)}</div>
+            <span
+              className="text-[10px] uppercase tracking-wide font-medium"
+              style={{ color: primaryColor }}
+            >
+              {primaryLabel}
             </span>
+            {data.category === 'model' && data.nodeType && data.nodeType !== 'model' && (
+              <span className="text-[9px] text-[var(--text-faint)] lowercase">
+                · {data.nodeType}
+              </span>
+            )}
+            {isInferred && (
+              <span className="text-[8px] text-amber-400/70 font-medium uppercase tracking-wide">
+                inferred
+              </span>
+            )}
+          </div>
+          {/* Status indicators */}
+          <div className="flex items-center gap-1">
+            {data.freshnessStatus === 'fresh' && (
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Fresh" />
+            )}
+            {isStale && (
+              <div className="flex items-center" title={`Stale (${data.freshnessHours}h ago)`}>
+                <Clock className="w-3 h-3 text-amber-400" />
+              </div>
+            )}
+            {hasCritical && (
+              <div className="flex items-center" title={`${data.issues?.critical} critical issues`}>
+                <AlertCircle className="w-3 h-3 text-red-400" />
+              </div>
+            )}
+            {!hasCritical && hasHigh && (
+              <div className="flex items-center" title={`${data.issues?.high} high severity issues`}>
+                <AlertCircle className="w-3 h-3 text-amber-400" />
+              </div>
+            )}
+            {!hasIssues && !isStale && data.freshnessStatus !== 'unknown' && (
+              <CheckCircle className="w-3 h-3 text-emerald-400" />
+            )}
+          </div>
+        </div>
+
+        {/* Name */}
+        <div className="text-sm font-mono text-[var(--text)] truncate" title={data.fullName || data.name}>
+          {shortName}
+        </div>
+
+        {/* Metadata row */}
+        <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 mt-1.5 text-[10px] text-[var(--muted)]">
+          {(data.upstreamCount ?? 0) > 0 && <span>↑{data.upstreamCount}</span>}
+          {(data.downstreamCount ?? 0) > 0 && <span>↓{data.downstreamCount}</span>}
+          {data.rowCount !== undefined && data.rowCount > 0 && (
+            <span>{data.rowCount.toLocaleString()} rows</span>
           )}
-          {data.issues!.high > 0 && (
-            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-orange-500/25 text-orange-300 rounded">
-              {data.issues!.high}H
-            </span>
+          {(data.columnCount ?? 0) > 0 && (
+            <span>{data.columnCount} cols</span>
           )}
-          {(data.issues!.medium > 0 || data.issues!.low > 0) && (
-            <span className="px-1.5 py-0.5 text-[9px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)] rounded">
-              +{data.issues!.medium + data.issues!.low}
-            </span>
+          {data.materialization && (
+            <span className="capitalize">{data.materialization}</span>
           )}
         </div>
-      )}
 
-      {/* Output handle (right side) */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!w-2.5 !h-2.5 !border-2"
-        style={{
-          backgroundColor: visuals.color,
-          borderColor: 'var(--subtle-border)',
-        }}
-      />
+        {/* Platform provenance badges — colored per platform */}
+        {isMultiPlatform && (
+          <div className="flex items-center gap-1 mt-1.5">
+            {platforms.map((p) => (
+              <span
+                key={p}
+                className="px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wide rounded"
+                style={{
+                  backgroundColor: `${getPlatformColor(p)}20`,
+                  color: getPlatformColor(p),
+                  border: `1px solid ${getPlatformColor(p)}40`,
+                }}
+              >
+                {p}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Issue badges */}
+        {hasIssues && (
+          <div className="flex items-center gap-1.5 mt-2">
+            {data.issues!.critical > 0 && (
+              <span className="px-1.5 py-0.5 text-[9px] font-medium bg-red-500/25 text-red-300 rounded">
+                {data.issues!.critical}C
+              </span>
+            )}
+            {data.issues!.high > 0 && (
+              <span className="px-1.5 py-0.5 text-[9px] font-medium bg-orange-500/25 text-orange-300 rounded">
+                {data.issues!.high}H
+              </span>
+            )}
+            {(data.issues!.medium > 0 || data.issues!.low > 0) && (
+              <span className="px-1.5 py-0.5 text-[9px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)] rounded">
+                +{data.issues!.medium + data.issues!.low}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Output handle (right side) */}
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!w-2.5 !h-2.5 !border-2"
+          style={{
+            backgroundColor: primaryColor,
+            borderColor: 'var(--subtle-border)',
+          }}
+        />
+      </div>
     </div>
   );
 }

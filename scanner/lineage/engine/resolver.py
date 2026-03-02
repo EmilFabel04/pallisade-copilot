@@ -487,6 +487,9 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
 
     # Merge discovered_platforms for multi-platform provenance
     primary_platforms = primary.raw_metadata.setdefault("discovered_platforms", [])
+    # Ensure primary's own platform is included
+    if primary.platform and primary.platform not in primary_platforms:
+        primary_platforms.append(primary.platform)
     for p in secondary.raw_metadata.get("discovered_platforms", []):
         if p not in primary_platforms:
             primary_platforms.append(p)
