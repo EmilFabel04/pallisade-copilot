@@ -4,6 +4,40 @@
 
 ---
 
+## What is this? (Plain English)
+
+The lineage system answers: **"Where does my data come from, where does it go, and what happens along the way?"**
+
+It connects to every tool in your data stack — databases (BigQuery, Snowflake), ingestion tools (Fivetran, Airbyte), transformation layers (dbt), orchestrators (Airflow, Dagster), and BI dashboards (Looker, Tableau, Power BI, Metabase) — and builds a single unified graph showing how data flows between all of them.
+
+**How it works in 6 steps:**
+
+1. **Discover** — Each tool adapter connects to its API and finds what exists (tables, views, models, dashboards, workflows)
+2. **Extract** — Each adapter also extracts relationships (which table feeds which view, which model depends on which source)
+3. **Merge** — The resolver takes all nodes and edges from every adapter and merges duplicates. The same physical table discovered by BigQuery AND dbt becomes ONE node, not two.
+4. **Bridge** — Deterministic rules fill in obvious gaps (e.g., Fivetran syncs data but no explicit edge exists → synthesize one)
+5. **Render** — The view builder arranges nodes into lanes by domain (Ingestion → Warehouse → Transformation → BI)
+6. **Display** — The frontend renders the graph with ReactFlow, color-coded: green (ingestion), blue (warehouse), orange (transformation), purple (BI)
+
+**Domains** — every node belongs to one:
+
+| Domain | Color | Tools | Role |
+|--------|-------|-------|------|
+| Ingestion | Green | Fivetran, Airbyte, n8n, S3/GCS | Raw data entering the warehouse |
+| Warehouse | Blue | BigQuery, Snowflake, Postgres, Databricks | Physical tables and views |
+| Transformation | Orange | dbt models, seeds, snapshots | Code that transforms raw → analytics |
+| Orchestration | Gray | Airflow, Dagster, Prefect | Schedulers that trigger pipelines |
+| BI / Reporting | Purple | Looker, Tableau, Power BI, Metabase | Dashboards consuming warehouse data |
+| Quality | — | Elementary | Test monitors watching for data issues |
+
+**Edge confidence** — every relationship has a reliability score:
+- 1.0 = declarative (dbt manifest says so)
+- 0.9 = API metadata (tool API confirms it)
+- 0.7–0.8 = SQL parsing / query history
+- 0.3–0.6 = regex / heuristic matching
+
+---
+
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
@@ -285,50 +319,58 @@ registry = create_default_registry()
 adapter = registry.create("live_warehouse", "bq-prod", project_id="my-project")
 ```
 
-### Live Adapters (17 total)
+### Live Adapters (18 total)
 
 #### Warehouse
 
-| Adapter | Tool | Nodes | Edges | Notes |
-|---------|------|-------|-------|-------|
-| `live_warehouse` | BigQuery, Snowflake, Postgres, Redshift | TABLE, VIEW, SOURCE | Table-level lineage from queries/views | SQL parsing via sqlglot, platform-specific case hints |
-| `live_dbt` | dbt Core/Cloud manifest | MODEL, SOURCE, SEED, SNAPSHOT | DEPENDS_ON (confidence 1.0) | Declarative — highest confidence |
+| Adapter | Tool | Domain | Nodes | Edges | Notes |
+|---------|------|--------|-------|-------|-------|
+| `live_warehouse` | BigQuery, Snowflake, Postgres, Redshift | WAREHOUSE | TABLE, VIEW, MAT_VIEW | DEPENDS_ON (view defs, 0.9), DERIVED_FROM (job history, 0.7) | SQL parsing via sqlglot, Postgres/Redshift parser is stub |
+| `live_dbt` | dbt Core/Cloud manifest | TRANSFORM + WAREHOUSE | MODEL (TRANSFORM), SOURCE (WAREHOUSE), SEED, SNAPSHOT | DEPENDS_ON (manifest, 1.0) | Sources use WAREHOUSE domain for stable_id merge with BQ tables |
+| `live_databricks` | Databricks (Unity Catalog) | WAREHOUSE | TABLE, VIEW, MAT_VIEW | DEPENDS_ON (table+column, 0.9–0.95) | Only adapter with both table AND column lineage from live API |
 
 #### BI / Reporting
 
-| Adapter | Tool | Nodes | Edges | Notes |
-|---------|------|-------|-------|-------|
-| `live_looker` | Looker | DASHBOARD, MODEL | Model→Dashboard, Table→Dashboard | SQL parsing of tile queries and explore definitions |
-| `live_metabase` | Metabase | DASHBOARD, QUESTION | Card→Dashboard, Table→Card | Handles native SQL and GUI query modes |
-| `live_tableau` | Tableau | WORKBOOK, DATASET | Datasource→Workbook, Table→Datasource | Connection metadata parsing |
-| `live_powerbi` | Power BI | REPORT, DATASET | Dataset→Report, Table→Dataset | Datasource connection string parsing |
+| Adapter | Tool | Domain | Nodes | Edges | Notes |
+|---------|------|--------|-------|-------|-------|
+| `live_looker` | Looker | BI | DASHBOARD, MODEL | READS_FROM (SQL/explore, 0.8–0.9) | SQL parsing of tile queries and explore definitions |
+| `live_metabase` | Metabase | BI | DASHBOARD, QUESTION | DEPENDS_ON (card), READS_FROM (SQL/GUI, 0.8–0.9) | GUI queries use synthetic IDs (`metabase_table_{id}`) |
+| `live_tableau` | Tableau | BI | WORKBOOK, DATASET | READS_FROM (datasource, 0.8) | Connection metadata parsing |
+| `live_powerbi` | Power BI | BI | REPORT, DATASET | READS_FROM (connection, 0.7) | Only creates edges when `connectionDetails.path` has 2+ parts |
 
 #### Orchestration
 
-| Adapter | Tool | Nodes | Edges | Notes |
-|---------|------|-------|-------|-------|
-| `live_airflow` | Apache Airflow | DAG, TASK | DAG→Task, Task→Task, Task↔Table | Static DAG parsing or REST API mode |
-| `live_dagster` | Dagster | TASK (assets), PIPELINE | Asset→Asset, Asset→Table, Schedule→Asset | compute_kind hinting for materialization |
-| `live_prefect` | Prefect | FLOW, PIPELINE | Deployment→Flow, Flow↔Table | Tag-based table refs (`reads:schema.table`) |
-| `live_n8n` | n8n | WORKFLOW, TASK | Workflow→Task, Task↔Table | DB node parameter extraction + SQL regex |
+| Adapter | Tool | Domain | Nodes | Edges | Notes |
+|---------|------|--------|-------|-------|-------|
+| `live_airflow` | Apache Airflow | ORCHESTRATION + WAREHOUSE | DAG, TASK, TABLE | DEPENDS_ON (control), READS_FROM/WRITES_TO (cross, 0.8) | Static DAG parsing or REST API mode |
+| `live_dagster` | Dagster | ORCHESTRATION | TASK, PIPELINE, SENSOR | DEPENDS_ON (control), MATERIALIZES (cross, 0.8) | compute_kind hinting for materialization |
+| `live_prefect` | Prefect | ORCHESTRATION | FLOW, PIPELINE | DEPENDS_ON (control), READS_FROM/WRITES_TO (tags, 0.5–0.6) | Table refs require tag conventions (`reads:schema.table`) |
+| `live_n8n` | n8n | ORCHESTRATION | WORKFLOW, TASK | DEPENDS_ON (control), READS_FROM/WRITES_TO (DB nodes, 0.7) | DB node parameter extraction + SQL regex |
 
 #### Ingestion
 
-| Adapter | Tool | Nodes | Edges | Notes |
-|---------|------|-------|-------|-------|
-| `live_fivetran` | Fivetran | SOURCE, TABLE | Connector→Table (POPULATES) | Connector schema introspection |
-| `live_airbyte` | Airbyte | SOURCE, PIPELINE, TABLE | Connection→Table (POPULATES) | syncCatalog stream mapping |
-| `live_storage` | S3, GCS, ADLS | SOURCE (buckets) | Storage→Table via known_mappings | Discovery-only unless mappings configured |
+| Adapter | Tool | Domain | Nodes | Edges | Notes |
+|---------|------|--------|-------|-------|-------|
+| `live_fivetran` | Fivetran | INGESTION | TABLE (per synced table) | None (cross-tool synthesis) | No edges emitted — relies on CrossToolEdgeSynthesizer name-matching |
+| `live_airbyte` | Airbyte | INGESTION | SOURCE, PIPELINE/STREAM | DERIVED_FROM (1.0), POPULATES (1.0) | syncCatalog stream mapping |
+| `live_storage` | S3, GCS, ADLS | INGESTION | SOURCE/FILE (buckets) | POPULATES (only w/ known_mappings, 0.9) | Discovery-only unless mappings configured |
 
 #### Other
 
-| Adapter | Tool | Nodes | Edges | Notes |
-|---------|------|-------|-------|-------|
-| `live_elementary` | Elementary | MONITOR | Monitor→Table (MONITORS) | Data quality health enrichment |
-| `live_openlineage` | Marquez, OL backends | From events | From events | Maps standard OpenLineage RunEvents |
-| `live_databricks` | Databricks | NOTEBOOK, TABLE | Notebook↔Table | Unity Catalog integration |
-| `live_linux` | Linux servers | DATASET (server) | None | Infrastructure discovery only |
-| `live_github` | GitHub | (stub) | (stub) | Placeholder for future code-level lineage |
+| Adapter | Tool | Domain | Nodes | Edges | Notes |
+|---------|------|--------|-------|-------|-------|
+| `live_elementary` | Elementary | CATALOG | MONITOR | MONITORS (1.0) | Data quality health enrichment, queries warehouse directly |
+| `live_openlineage` | Marquez, OL backends | Varies | Varies (event-dependent) | Varies | Universal adapter for any OpenLineage-compatible tool |
+| `live_linux` | Linux servers | OTHER | DATASET (server metadata) | None | Infrastructure discovery only |
+| `live_github` | GitHub/GitLab | OTHER | None (stub) | None (stub) | Placeholder for future code-level lineage |
+
+### Static/Reference Adapters (3)
+
+| Adapter | Purpose | Nodes | Edges |
+|---------|---------|-------|-------|
+| `transform_artifact` | Generic transform manifest JSON | MODEL, SOURCE | DEPENDS_ON (table+column) |
+| `warehouse_catalog` | INFORMATION_SCHEMA JSON fixture | TABLE, VIEW, MAT_VIEW | DEPENDS_ON (from view SQL) |
+| `bi_query` | BI tool export JSON fixture | DASHBOARD, DATASET | READS_FROM (tool+table+column) |
 
 ### SQL Parsing
 
@@ -352,23 +394,49 @@ Column-level lineage traces columns through CTEs and returns `ColumnMapping` obj
 
 **File:** `scanner/lineage/engine/resolver.py`
 
-The `ResolverPipeline` normalizes and deduplicates after all adapters run:
+The `ResolverPipeline` normalizes and deduplicates after all adapters run. This is the most complex part of the engine — it ensures that the same physical table discovered by multiple tools becomes a single node.
 
-```
-Step 1: Normalize identifiers (case_hint per adapter)
-Step 2: Deduplicate nodes by stable_id
-         (priority: warehouse > transform > BI > orchestration > ingestion)
-Step 3: Remap edge references through dedup mapping
-Step 4: Merge edges by (source, target, type, level)
-         → merge evidence, compute weighted confidence
-```
+### Node Dedup Pipeline (4 passes)
 
-**Why it matters:** The same table `raw.customers` appears as:
-- A BigQuery TABLE from `live_warehouse`
-- A dbt SOURCE from `live_dbt`
-- A Fivetran destination from `live_fivetran`
+**Pass 1 — stable_id dedup:**
+Groups nodes by `stable_id = SHA256(platform_domain|namespace|db.schema|name)`. Same physical identity from different adapters (e.g., BigQuery view + dbt source — both WAREHOUSE domain) → merge. Winner: real warehouse platform (bigquery/snowflake) > dbt by priority sort.
 
-All three get the same `stable_id` (since `generate_stable_id` uses domain/namespace/container/name, excluding platform). The resolver keeps the richest node (warehouse priority) and merges metadata from all three.
+**Pass 2 — Schema+name dedup:**
+Key: `(platform_domain, namespace, schema, name)`. Same domain, same namespace+schema+name but different `database` values → merge. Catches cases where dbt omits the database field but BigQuery includes project_id.
+
+**Pass 2.5 — DB-qualified dedup (WAREHOUSE only):**
+Key: `(database, schema, name)`. Catches cases where different adapters use different namespaces but the same physical database+schema+table.
+
+**Pass 3 — Cross-domain dedup (WAREHOUSE ↔ TRANSFORM):**
+The critical pass that merges dbt models with their BigQuery/Snowflake table counterparts. These have different `platform_domain` values so they can't match in earlier passes.
+
+Primary key: `(namespace, schema, name)` across both domains. When exact match works, nodes are grouped together. When it doesn't (schema or namespace mismatch), a cascading fallback runs:
+
+1. **(namespace, name)** — ignores schema differences (dbt model has empty schema but BQ view has `analytics`)
+2. **Name-only** — catches namespace mismatches (dbt adapter inferred different namespace)
+3. **Real-warehouse priority** — when multiple warehouse groups match, prefer the one containing a real warehouse platform (bigquery/snowflake/postgres) over dbt-source-only groups
+4. **Schema affinity** — when multiple real warehouse groups match, exclude groups with raw/ingestion schemas (`raw`, `source`, `landing`). dbt models materialize into analytics/staging/marts, not raw.
+5. **Database match** — disambiguate by database field
+
+After fallback, groups with mixed domains (WAREHOUSE + TRANSFORM) are merged. Winner: warehouse platform.
+
+### Why it matters
+
+The same table `raw.customers` appears as:
+- A BigQuery TABLE from `live_warehouse` (WAREHOUSE domain)
+- A dbt SOURCE from `live_dbt` (WAREHOUSE domain — sources are metadata pointers)
+- A Fivetran synced table from `live_fivetran` (INGESTION domain)
+
+The BQ table and dbt source share the same `stable_id` → merged in Pass 1. The Fivetran node has INGESTION domain → not in cross-domain pass, stays separate (linked via CrossToolEdgeSynthesizer instead).
+
+A dbt MODEL `analytics.dim_customers` (TRANSFORM domain) and its BigQuery VIEW counterpart `analytics.dim_customers` (WAREHOUSE domain) have different stable_ids (different domains) → NOT merged in Pass 1. They merge in Pass 3 (cross-domain) by matching `(namespace, schema, name)`.
+
+### Edge Merging
+
+After node dedup, edges are remapped through the `id_remap` dict, then grouped by `(source_id, target_id, edge_type, level)`. Multiple edges between the same nodes are merged:
+- All evidence records are accumulated
+- Maximum confidence is taken
+- Confidence is re-weighted by evidence source type
 
 **Weighted confidence:**
 
@@ -857,6 +925,36 @@ Run all engine tests:
 ```bash
 pytest scanner/lineage/engine/tests/ -v
 ```
+
+---
+
+## Tool Compatibility & Known Gaps
+
+### Fully supported combinations (any combo works)
+
+- **Any warehouse** (BigQuery, Snowflake, Databricks) + **dbt** — cross-domain dedup merges models with tables
+- **Any ingestion tool** (Fivetran, Airbyte) + **any warehouse** — CrossToolEdgeSynthesizer creates POPULATES edges
+- **Any orchestrator** (Airflow, Dagster, Prefect, n8n) + **any warehouse** — adapters create READS_FROM/WRITES_TO cross-plane edges
+- **Any BI tool** (Looker, Tableau, Power BI, Metabase) + **any warehouse** — adapters create READS_FROM cross-plane edges
+- **Elementary** + any warehouse — MONITORS edges from test results
+- **OpenLineage** as universal fallback for any OL-compatible tool
+
+### Known gaps and limitations
+
+| Area | Gap | Impact |
+|------|-----|--------|
+| **Postgres/Redshift** | Warehouse parser is a stub — no view definition parsing or job history | Only table catalog emitted; no edges between views and base tables |
+| **Fivetran** | No edges emitted by adapter — relies on CrossToolEdgeSynthesizer name-matching | Fragile if Fivetran synced table names don't match warehouse table names exactly |
+| **Prefect** | Table references require manual tag conventions (`reads:schema.table`, `writes:schema.table`) | Without tags, Prefect flows have no data-plane edges. Confidence only 0.5–0.6 even with tags |
+| **Power BI** | Only creates warehouse edges when `connectionDetails.path` has 2+ parts | Simple database connections produce no cross-plane edges |
+| **Metabase** | GUI-built queries use synthetic IDs (`metabase_table_{id}`) | Can't resolve to real table names without additional Metabase metadata lookups |
+| **Cloud Storage** (S3/GCS/ADLS) | Without explicit `known_mappings`, only bucket nodes — no edges | Storage nodes float disconnected unless paired with Fivetran/Airbyte |
+| **GitHub** | Stub adapter — no-op | No code-level lineage (planned future feature) |
+| **Linux Server** | Metadata-only node | No lineage edges — infrastructure marker only |
+| **Column lineage** | Only Databricks and dbt adapters produce column-level edges | No column lineage from BigQuery, Snowflake, or any BI tools |
+| **dbt schema** | dbt project parser sometimes produces empty schema for models | Requires resolver cross-domain fallback cascade to merge with warehouse nodes |
+| **Multi-warehouse** | Namespace must be consistent across dbt and warehouse adapter configs | Different project_ids between dbt config and warehouse config prevent cross-domain merging |
+| **Snowflake + Fivetran** | Fivetran synced table names must match Snowflake table names after case normalization | Case-sensitivity issues possible (Snowflake is UPPER by default, Fivetran may be lower) |
 
 ---
 
