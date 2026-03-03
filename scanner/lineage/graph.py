@@ -226,19 +226,19 @@ def generate_stable_id(
 ) -> str:
     """Generate a deterministic stable ID from physical identity components.
 
-    Does NOT include system/platform so that the same physical asset
-    discovered by different adapters (e.g. postgres vs dbt) gets the
+    Uses platform_domain (not system/platform) so that the same physical
+    asset discovered by different adapters (e.g. postgres vs dbt) gets the
     same stable_id for deduplication.
 
-    When *environment_scope* is set, it disambiguates the same
-    (namespace, container, name) in different environments or instances
-    (e.g. dev vs prod, or two BigQuery projects with the same namespace).
-    Empty scope preserves backward-compatible behavior.
+    The key ALWAYS has 5 pipe-delimited fields:
+        platform_domain | environment_scope | namespace | container | name
+
+    When *environment_scope* is empty the field is still present as an
+    empty segment between pipes, ensuring a single consistent formula.
+    This disambiguates the same (namespace, container, name) across
+    environments/instances (e.g. dev vs prod, two BigQuery projects).
     """
-    if environment_scope:
-        key = f"{platform_domain}|{environment_scope}|{namespace}|{container}|{name}".lower()
-    else:
-        key = f"{platform_domain}|{namespace}|{container}|{name}".lower()
+    key = f"{platform_domain}|{environment_scope}|{namespace}|{container}|{name}".lower()
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 

@@ -1544,6 +1544,42 @@ async def engine_stats(stack_id: Optional[str] = Query(None)):
     return CoverageStatsResponse(**coverage.to_dict())
 
 
+@router.get("/lineage/engine/producers")
+async def engine_producers(
+    dataset_id: Optional[str] = Query(None, description="Filter to a specific dataset"),
+    stack_id: Optional[str] = Query(None),
+):
+    """Return the producer index: for each dataset, which jobs write to it
+    and which services run those jobs.
+
+    Reads from the current run's artifacts.  Returns empty dict if no
+    run has completed or no producer index was computed.
+    """
+    registry = _get_run_registry(stack_id)
+    if not registry.current_run_id:
+        return {"producers": {}, "totalDatasets": 0, "totalProducers": 0}
+
+    record = registry.get_run(registry.current_run_id)
+    if not record or not record.artifacts.producer_index:
+        return {"producers": {}, "totalDatasets": 0, "totalProducers": 0}
+
+    index = record.artifacts.producer_index
+
+    if dataset_id:
+        producers = index.get(dataset_id, [])
+        return {
+            "producers": {dataset_id: producers} if producers else {},
+            "totalDatasets": 1 if producers else 0,
+            "totalProducers": len(producers),
+        }
+
+    return {
+        "producers": index,
+        "totalDatasets": len(index),
+        "totalProducers": sum(len(v) for v in index.values()),
+    }
+
+
 @router.get("/lineage/engine/export")
 async def engine_export(
     fmt: str = Query("json", description="Format: json, graphml, dot"),

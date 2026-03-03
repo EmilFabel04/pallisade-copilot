@@ -243,7 +243,9 @@ class TestDataPlane:
 
         assert view.view_type == "data_plane"
         for node in view.nodes:
-            assert node.canonical_type in ("dataset", "semantic", "job")
+            assert node.canonical_type in ("dataset", "semantic"), (
+                f"Node {node.id} has unexpected canonical_type={node.canonical_type}"
+            )
 
     def test_has_edges(self, pipeline_graph):
         builder = ViewBuilder(pipeline_graph)
@@ -327,10 +329,14 @@ class TestInferredNodes:
         bridge.canonical_type = "dataset"
         pipeline_graph.add_node(bridge)
 
-        # Add an inferred edge
-        some_node_id = list(pipeline_graph.nodes.keys())[0]
+        # Add an inferred edge from an existing dataset (not a JOB, which
+        # would be filtered out of the data plane).
+        dataset_node_id = next(
+            nid for nid, n in pipeline_graph.nodes.items()
+            if n.canonical_type == "dataset"
+        )
         inf_edge = _make_edge(
-            some_node_id, bridge.id, EdgeType.DERIVED_FROM,
+            dataset_node_id, bridge.id, EdgeType.DERIVED_FROM,
             confidence=0.5, inferred=True,
         )
         inf_edge.canonical_edge_type = "derives"
@@ -456,6 +462,123 @@ class TestSerialization:
             assert "targetId" in d
             assert "canonicalType" in d
             assert "evidenceCount" in d
+
+    def test_bypass_edge_evidence_refs_in_to_dict(self):
+        """ViewEdge.to_dict() includes evidenceRefs only when non-empty."""
+        edge_with = ViewEdge(
+            id="e1", source_id="a", target_id="b",
+            canonical_type="derives", original_type="job_bypass",
+            confidence=0.7, inferred=True, evidence_count=2,
+            evidence_refs=["edge:x", "edge:y"],
+        )
+        d = edge_with.to_dict()
+        assert "evidenceRefs" in d
+        assert d["evidenceRefs"] == ["edge:x", "edge:y"]
+
+        edge_without = ViewEdge(
+            id="e2", source_id="a", target_id="b",
+            canonical_type="derives", original_type="derives",
+            confidence=1.0, inferred=False, evidence_count=1,
+        )
+        d2 = edge_without.to_dict()
+        assert "evidenceRefs" not in d2
+
+
+# ---- Bypass edge tests ----
+
+@pytest.fixture
+def graph_with_job_between_datasets() -> LineageGraph:
+    """Graph: source_table → etl_job → target_table.
+
+    Used to test that bypass edges replace the dataset→job→dataset
+    path in the data plane view.
+    """
+    graph = LineageGraph()
+
+    src = _make_node(
+        "source_table", NodeType.TABLE, "bigquery",
+        PlatformDomain.WAREHOUSE, database="raw", schema="data",
+        fqn="raw.data.source_table",
+    )
+    job = _make_node(
+        "etl_transform", NodeType.TASK, "airflow",
+        PlatformDomain.ORCHESTRATION,
+    )
+    tgt = _make_node(
+        "target_table", NodeType.TABLE, "bigquery",
+        PlatformDomain.WAREHOUSE, database="analytics", schema="marts",
+        fqn="analytics.marts.target_table",
+    )
+
+    graph.add_node(src)
+    graph.add_node(job)
+    graph.add_node(tgt)
+
+    e1 = _make_edge(src.id, job.id, EdgeType.READS_FROM, confidence=0.9)
+    e2 = _make_edge(job.id, tgt.id, EdgeType.WRITES_TO, confidence=0.7)
+    graph.add_edge(e1)
+    graph.add_edge(e2)
+
+    canonicalize_graph_in_place(graph.nodes, graph.edges)
+    return graph
+
+
+class TestBypassEdges:
+    def test_bypass_creates_direct_dataset_edge(self, graph_with_job_between_datasets):
+        """JOB node excluded from data plane; bypass edge connects datasets."""
+        builder = ViewBuilder(graph_with_job_between_datasets)
+        view = builder.build_data_plane()
+
+        # Job should be excluded
+        assert all(n.canonical_type != "job" for n in view.nodes)
+        # Both datasets should be present
+        assert len(view.nodes) == 2
+        # Bypass edge should exist
+        bypass = [e for e in view.edges if e.original_type == "job_bypass"]
+        assert len(bypass) == 1
+        assert bypass[0].inferred is True
+        assert bypass[0].canonical_type == "derives"
+
+    def test_bypass_confidence_is_min_capped(self, graph_with_job_between_datasets):
+        """Bypass confidence = min(source edges), capped at 0.8."""
+        builder = ViewBuilder(graph_with_job_between_datasets)
+        view = builder.build_data_plane()
+
+        bypass = [e for e in view.edges if e.original_type == "job_bypass"]
+        assert len(bypass) == 1
+        # min(0.9, 0.7) = 0.7, cap at 0.8 → 0.7 (already below cap)
+        assert bypass[0].confidence == 0.7
+
+    def test_bypass_evidence_refs_present(self, graph_with_job_between_datasets):
+        """Bypass edges carry evidence_refs pointing to original edges."""
+        builder = ViewBuilder(graph_with_job_between_datasets)
+        view = builder.build_data_plane()
+
+        bypass = [e for e in view.edges if e.original_type == "job_bypass"]
+        assert len(bypass) == 1
+        assert len(bypass[0].evidence_refs) == 2
+        # Each original edge contributes 1 evidence item
+        assert bypass[0].evidence_count == 2
+
+    def test_no_dangling_edges_in_data_plane(self, pipeline_graph):
+        """Every edge in data plane must reference nodes that exist in the view."""
+        builder = ViewBuilder(pipeline_graph)
+        view = builder.build_data_plane()
+
+        node_ids = {n.id for n in view.nodes}
+        for edge in view.edges:
+            assert edge.source_id in node_ids, f"Dangling source: {edge.source_id}"
+            assert edge.target_id in node_ids, f"Dangling target: {edge.target_id}"
+
+    def test_fivetran_job_excluded_from_data_plane(self, pipeline_graph):
+        """Fivetran connector (JOB canonical type) must not appear in data plane."""
+        builder = ViewBuilder(pipeline_graph)
+        view = builder.build_data_plane()
+
+        for node in view.nodes:
+            assert node.canonical_type not in ("job", "service"), (
+                f"Node {node.id} (type={node.canonical_type}) should not be in data plane"
+            )
 
 
 # ---- Topological layout unit tests ----

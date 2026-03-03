@@ -1218,6 +1218,32 @@ class TestEnvironmentScopeDedup:
         })
         assert scope == "my-gcp-project"
 
+    def test_stable_id_consistent_formula(self):
+        """stable_id always uses 5-field formula regardless of scope value.
+
+        The key format is always: platform_domain|environment_scope|namespace|container|name
+        so that empty scope doesn't change the number of pipe delimiters.
+        """
+        # With empty scope, key is "warehouse||ns|db.schema|tbl"
+        id_empty = generate_stable_id("warehouse", "ns", "db.schema", "tbl", "")
+        # With None-like scope (default), key is "warehouse||ns|db.schema|tbl"
+        id_default = generate_stable_id("warehouse", "ns", "db.schema", "tbl")
+        assert id_empty == id_default
+
+        # With a scope, key is "warehouse|prod|ns|db.schema|tbl"
+        id_scoped = generate_stable_id("warehouse", "ns", "db.schema", "tbl", "prod")
+        assert id_scoped != id_empty
+
+    def test_node_stable_id_none_scope_equals_empty_scope(self):
+        """LineageNode.stable_id treats None and '' scope identically."""
+        node_none = _make_node("orders", database="proj", schema="raw")
+        node_none.environment_scope = None
+
+        node_empty = _make_node("orders", database="proj", schema="raw")
+        node_empty.environment_scope = ""
+
+        assert node_none.stable_id == node_empty.stable_id
+
     def test_fivetran_auto_scope_from_destination_config(self):
         """Fivetran adapter auto-computes scope from destination_config."""
         client = _mock_fivetran_client()

@@ -360,3 +360,68 @@ class TestCanonicalizeGraphInPlace:
         canonicalize_graph_in_place(nodes, edges)
         assert node.inferred is True
         assert node.canonical_type == "dataset"
+
+    def test_preserves_adapter_set_canonical_edge_type(self):
+        """When adapter explicitly sets canonical_edge_type, canonicalize must not overwrite."""
+        job = _make_node("sync", NodeType.CONNECTOR, PlatformDomain.INGESTION)
+        table = _make_node("raw_orders", NodeType.TABLE, PlatformDomain.WAREHOUSE)
+        edge = _make_edge(job.id, table.id, EdgeType.POPULATES)
+        edge.canonical_edge_type = "writes"  # Explicitly set by bridge/adapter
+
+        nodes = {job.id: job, table.id: table}
+        edges = {edge.id: edge}
+
+        canonicalize_graph_in_place(nodes, edges)
+        assert edge.canonical_edge_type == "writes"  # Preserved, not re-inferred
+
+    def test_infers_canonical_edge_when_not_set(self):
+        """When canonical_edge_type is None, canonicalize fills it in."""
+        job = _make_node("sync", NodeType.CONNECTOR, PlatformDomain.INGESTION)
+        table = _make_node("raw_orders", NodeType.TABLE, PlatformDomain.WAREHOUSE)
+        edge = _make_edge(job.id, table.id, EdgeType.POPULATES)
+        assert edge.canonical_edge_type is None
+
+        nodes = {job.id: job, table.id: table}
+        edges = {edge.id: edge}
+
+        canonicalize_graph_in_place(nodes, edges)
+        assert edge.canonical_edge_type == "writes"
+
+    def test_dataset_to_dataset_reads_becomes_derives(self):
+        """READS_FROM between two datasets should be canonicalized to 'derives'."""
+        src = _make_node("source_table", NodeType.TABLE, PlatformDomain.WAREHOUSE)
+        tgt = _make_node("target_table", NodeType.TABLE, PlatformDomain.WAREHOUSE)
+        edge = _make_edge(src.id, tgt.id, EdgeType.READS_FROM)
+
+        nodes = {src.id: src, tgt.id: tgt}
+        edges = {edge.id: edge}
+
+        canonicalize_graph_in_place(nodes, edges)
+        assert edge.canonical_edge_type == "derives"
+
+
+# ---- map_edge_type_explicit tests ----
+
+class TestMapEdgeTypeExplicit:
+    """Test the single-source-of-truth edge mapping function."""
+
+    def test_job_writes_to_dataset(self):
+        from scanner.lineage.engine.canonical import map_edge_type_explicit
+        job = _make_node("loader", NodeType.CONNECTOR, PlatformDomain.INGESTION)
+        table = _make_node("raw", NodeType.TABLE, PlatformDomain.WAREHOUSE)
+        result = map_edge_type_explicit(EdgeType.WRITES_TO, job, table)
+        assert result == CanonicalEdgeType.WRITES
+
+    def test_service_triggers_job(self):
+        from scanner.lineage.engine.canonical import map_edge_type_explicit
+        svc = _make_node("fivetran", NodeType.PIPELINE, PlatformDomain.INGESTION)
+        job = _make_node("sync", NodeType.CONNECTOR, PlatformDomain.INGESTION)
+        result = map_edge_type_explicit(EdgeType.TRIGGERS, svc, job)
+        assert result == CanonicalEdgeType.RUNS
+
+    def test_dataset_to_semantic_serves(self):
+        from scanner.lineage.engine.canonical import map_edge_type_explicit
+        table = _make_node("metrics", NodeType.TABLE, PlatformDomain.WAREHOUSE)
+        dash = _make_node("revenue", NodeType.DASHBOARD, PlatformDomain.BI)
+        result = map_edge_type_explicit(EdgeType.READS_FROM, table, dash)
+        assert result == CanonicalEdgeType.SERVES

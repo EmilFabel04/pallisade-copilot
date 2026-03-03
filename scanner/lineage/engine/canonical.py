@@ -218,6 +218,24 @@ def infer_canonical_edge_type(
     return mapped or CanonicalEdgeType.DERIVES
 
 
+def map_edge_type_explicit(
+    adapter_edge_type: EdgeType,
+    from_node: LineageNode,
+    to_node: LineageNode,
+) -> CanonicalEdgeType:
+    """Map an adapter edge type using full node context (dict + semantic overrides).
+
+    Single source of truth for edge type mapping.  Adapters and bridge code
+    should call this (and set ``edge.canonical_edge_type = result.value``)
+    instead of manually choosing a CanonicalEdgeType.  When the edge already
+    has ``canonical_edge_type`` set, ``canonicalize_graph_in_place`` will
+    preserve it.
+    """
+    from_canonical = map_node_type(from_node)
+    to_canonical = map_node_type(to_node)
+    return infer_canonical_edge_type(from_canonical, to_canonical, adapter_edge_type)
+
+
 def generate_urn(node: LineageNode) -> str:
     """Generate a stable URN for a node.
 
@@ -283,6 +301,12 @@ def canonicalize_graph_in_place(
             needs_mapping.add(node.id)
 
     for edge in edges.values():
+        # Respect explicitly set canonical_edge_type from adapters/bridge/
+        # cross-tool synthesis.  Only infer when not already set (mirrors
+        # the node preservation guard above at line 278).
+        if edge.canonical_edge_type:
+            continue
+
         # Get source/target canonical types for smart edge inference
         source = nodes.get(edge.source_id)
         target = nodes.get(edge.target_id)

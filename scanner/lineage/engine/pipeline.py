@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 from ..cross_tool import CrossToolEdgeSynthesizer
 from .bridge import BridgeRuleEngine
 from .canonical import canonicalize_graph_in_place
+from .indexes import build_producer_index
 from .investigator import InvestigationResult, LineageInvestigator, ToolConfig
 from .run_registry import RunArtifacts, RunRegistry
 from .views import ViewBuilder
@@ -99,6 +100,22 @@ async def run_extraction_pipeline(
         if bridge_result.total_changes > 0:
             canonicalize_graph_in_place(graph.nodes, graph.edges)
 
+        # Step 5.5: Build producer index (needs canonical types from step 5)
+        producer_index_dict = None
+        try:
+            producer_index = build_producer_index(graph)
+            producer_index_dict = producer_index.to_dict()
+            logger.info(
+                "[Pipeline:%s] Producer index: %d datasets, %d producers",
+                run_id, producer_index.total_datasets,
+                producer_index.total_producers,
+            )
+        except Exception as e:
+            logger.warning(
+                "[Pipeline:%s] Producer index failed (non-fatal): %s",
+                run_id, e,
+            )
+
         # Step 6: LLM Reconciliation (optional)
         reconciliation_dict = None
         if config.use_llm_reconciler and config.llm_api_key:
@@ -127,6 +144,7 @@ async def run_extraction_pipeline(
                 "run_id": run_id,
             },
             bridge_result=bridge_dict,
+            producer_index=producer_index_dict,
         )
 
         registry.complete_run(run_id, artifacts)

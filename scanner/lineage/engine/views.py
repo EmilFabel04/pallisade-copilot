@@ -56,6 +56,18 @@ from .zones import (
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class _BypassInfo:
+    """Metadata for a bypass edge that replaces a dataset→job→dataset path."""
+    upstream_id: str
+    downstream_id: str
+    upstream_edge_id: str
+    downstream_edge_id: str
+    min_confidence: float
+    total_evidence: int
+
+
 # Layout constants
 LAYER_SPACING_X = 300  # px between layers (left-to-right)
 NODE_SPACING_Y = 130   # px between nodes within a layer
@@ -113,9 +125,10 @@ class ViewEdge:
     confidence: float
     inferred: bool
     evidence_count: int
+    evidence_refs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "id": self.id,
             "sourceId": self.source_id,
             "targetId": self.target_id,
@@ -125,6 +138,9 @@ class ViewEdge:
             "inferred": self.inferred,
             "evidenceCount": self.evidence_count,
         }
+        if self.evidence_refs:
+            d["evidenceRefs"] = self.evidence_refs
+        return d
 
 
 @dataclass
@@ -701,32 +717,41 @@ class ViewBuilder:
             CanonicalNodeType.SEMANTIC.value,
         }
 
-        # Build bypass edges for JOB nodes: when dataset → job → dataset exists,
-        # create a direct dataset → dataset edge so the data plane stays clean.
-        job_bypass_edges: List[Tuple[str, str]] = []
+        # Build bypass edges for JOB nodes: when dataset → job → dataset
+        # exists, create a direct dataset → dataset derives edge so the
+        # data plane stays clean.  Carry confidence and evidence from the
+        # original edges for provenance.
+        job_bypass_edges: List[_BypassInfo] = []
         for node in self.graph.nodes.values():
             ct = node.canonical_type or map_node_type(node).value
             if ct != CanonicalNodeType.JOB.value:
                 continue
-            upstream_datasets: List[str] = []
-            downstream_datasets: List[str] = []
+            upstream_pairs: List[Tuple[str, LineageEdge]] = []
+            downstream_pairs: List[Tuple[str, LineageEdge]] = []
             for edge in self.graph.edges.values():
                 if edge.target_id == node.id:
                     src = self.graph.nodes.get(edge.source_id)
                     if src:
                         src_ct = src.canonical_type or map_node_type(src).value
                         if src_ct in selected_types:
-                            upstream_datasets.append(src.id)
+                            upstream_pairs.append((src.id, edge))
                 if edge.source_id == node.id:
                     tgt = self.graph.nodes.get(edge.target_id)
                     if tgt:
                         tgt_ct = tgt.canonical_type or map_node_type(tgt).value
                         if tgt_ct in selected_types:
-                            downstream_datasets.append(tgt.id)
-            for up_id in upstream_datasets:
-                for down_id in downstream_datasets:
+                            downstream_pairs.append((tgt.id, edge))
+            for up_id, up_edge in upstream_pairs:
+                for down_id, down_edge in downstream_pairs:
                     if up_id != down_id:
-                        job_bypass_edges.append((up_id, down_id))
+                        job_bypass_edges.append(_BypassInfo(
+                            upstream_id=up_id,
+                            downstream_id=down_id,
+                            upstream_edge_id=up_edge.id,
+                            downstream_edge_id=down_edge.id,
+                            min_confidence=min(up_edge.confidence, down_edge.confidence),
+                            total_evidence=len(up_edge.evidence) + len(down_edge.evidence),
+                        ))
 
         # Step 2: Safety-net dedup for tool-platform table nodes.
         # The resolver should catch these; this is a warning-only fallback.
@@ -877,10 +902,12 @@ class ViewBuilder:
                 evidence_count=len(edge.evidence),
             ))
 
-        # Step 4b: Add bypass edges for job nodes (dataset → job → dataset)
-        for src_id, tgt_id in job_bypass_edges:
-            final_src = airflow_remap.get(src_id, src_id)
-            final_tgt = airflow_remap.get(tgt_id, tgt_id)
+        # Step 4b: Add bypass edges for job nodes (dataset → job → dataset).
+        # Confidence = min(source edges) capped at 0.8; evidence refs point
+        # to the two original edges for provenance.
+        for bypass in job_bypass_edges:
+            final_src = airflow_remap.get(bypass.upstream_id, bypass.upstream_id)
+            final_tgt = airflow_remap.get(bypass.downstream_id, bypass.downstream_id)
             final_src = inferred_remap.get(final_src, final_src)
             final_tgt = inferred_remap.get(final_tgt, final_tgt)
             if final_src not in node_id_set or final_tgt not in node_id_set:
@@ -891,15 +918,17 @@ class ViewBuilder:
             if pair in seen_edge_pairs:
                 continue
             seen_edge_pairs.add(pair)
+            confidence = min(bypass.min_confidence, 0.8)
             view_edges.append(ViewEdge(
                 id=f"bypass-{final_src}-{final_tgt}",
                 source_id=final_src,
                 target_id=final_tgt,
                 canonical_type="derives",
                 original_type="job_bypass",
-                confidence=0.8,
+                confidence=confidence,
                 inferred=True,
-                evidence_count=0,
+                evidence_count=bypass.total_evidence,
+                evidence_refs=[bypass.upstream_edge_id, bypass.downstream_edge_id],
             ))
 
         # Step 4c: Transitive reduction — remove shortcut edges.

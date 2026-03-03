@@ -787,12 +787,11 @@ export async function GET(
       }
       allNodes = allNodes.filter((n) => connectedNodeIds.has(n.id));
     } else {
-      // In data view, exclude INGESTION tool nodes entirely — their synced_table
-      // data assets connect directly to warehouse tables via CrossTool edges.
-      // Ingestion tools (Fivetran, Airbyte, etc.) only appear in Pipeline Overview.
-      const dataViewToolNodes = planeParam === 'data'
-        ? toolNodes.filter((n) => n.layer !== 'INGESTION')
-        : toolNodes;
+      // Node filtering is handled by the engine's ViewBuilder via
+      // canonical_type (dataset + semantic only in data plane).  No
+      // layer-based pruning here — disconnected tool nodes are removed
+      // by the orphan-prune step below.
+      const dataViewToolNodes = toolNodes;
 
       allNodes = [...dataViewToolNodes, ...dataAssetNodes];
       allEdges = [...pipelineEdges, ...tableEdges, ...syntheticEdges];

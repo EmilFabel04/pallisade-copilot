@@ -35,6 +35,7 @@ class RunArtifacts:
     reconciliation: Optional[Dict[str, Any]] = None
     stats: Dict[str, Any] = field(default_factory=dict)
     bridge_result: Optional[Dict[str, Any]] = None
+    producer_index: Optional[Dict[str, Any]] = None
 
 
 @dataclass
