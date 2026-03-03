@@ -2401,9 +2401,22 @@ async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[st
 
         registry = _get_run_registry(_current_stack_id)
         store = _get_engine_store(_current_stack_id)
-        pipeline_config = ExtractionPipelineConfig()
+
+        # Build tool_nodes list so Pipeline Overview shows ALL integrated tools
+        _tool_nodes = [
+            {
+                "tool_type": tc.tool_type,
+                "integration_id": tc.integration_id or "",
+                "name": tc.tool_type.replace("_", " ").title(),
+                "layer": tc.layer or "",
+            }
+            for tc in request.tool_configs
+        ]
+
+        pipeline_config = ExtractionPipelineConfig(tool_nodes=_tool_nodes)
 
         run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
+        store.tool_nodes = _tool_nodes
 
         # Build response from run record
         record = registry.get_run(run_id)
@@ -2503,6 +2516,18 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
 
         registry = _get_run_registry(_current_stack_id)
         store = _get_engine_store(_current_stack_id)
+
+        # Build tool_nodes list so Pipeline Overview shows ALL integrated tools
+        _tool_nodes = [
+            {
+                "tool_type": tc.tool_type,
+                "integration_id": tc.integration_id or "",
+                "name": tc.tool_type.replace("_", " ").title(),
+                "layer": tc.layer or "",
+            }
+            for tc in request.tool_configs
+        ]
+
         # Resolve LLM API key from environment based on provider
         import os
         _llm_key = os.environ.get(
@@ -2514,9 +2539,11 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
             llm_provider=request.llm_provider,
             llm_model=request.llm_model,
             llm_api_key=_llm_key,
+            tool_nodes=_tool_nodes,
         )
 
         run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
+        store.tool_nodes = _tool_nodes
 
         # Build response from run record
         record = registry.get_run(run_id)

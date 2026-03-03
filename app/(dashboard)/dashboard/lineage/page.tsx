@@ -186,6 +186,41 @@ function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode)
 // Lane Overview Canvas — renders the lane-based pipeline overview
 // Uses pre-positioned nodes from backend (no Dagre needed)
 // ---------------------------------------------------------------------------
+
+// Tool category icon based on tool name
+function _laneToolIcon(name: string, color: string) {
+  const n = name.toLowerCase();
+  const cls = "w-4 h-4";
+  const props = { className: cls, fill: "none", stroke: color, viewBox: "0 0 24 24", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+
+  // Ingestion tools
+  if (n.includes('fivetran') || n.includes('airbyte') || n.includes('stitch'))
+    return <svg {...props}><path d="M12 3v18M3 12l4-4 4 4M13 8l4-4 4 4" /><path d="M7 16h10" strokeDasharray="2 2" /></svg>;
+  // Warehouse / database
+  if (n.includes('bigquery') || n.includes('snowflake') || n.includes('postgres') || n.includes('redshift') || n.includes('databricks'))
+    return <svg {...props}><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" /><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" /></svg>;
+  // Transformation
+  if (n.includes('dbt'))
+    return <svg {...props}><path d="M16 3l5 5-5 5" /><path d="M21 8H9" /><path d="M8 21l-5-5 5-5" /><path d="M3 16h12" /></svg>;
+  // Orchestration
+  if (n.includes('airflow') || n.includes('n8n') || n.includes('dagster') || n.includes('prefect'))
+    return <svg {...props}><circle cx="12" cy="12" r="3" /><path d="M12 2v4m0 12v4m-7.07-2.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-2.93 7.07l-2.83-2.83M6.76 6.76L3.93 3.93" /></svg>;
+  // BI / Reporting
+  if (n.includes('looker') || n.includes('tableau') || n.includes('metabase') || n.includes('powerbi'))
+    return <svg {...props}><rect x="3" y="12" width="4" height="9" rx="1" /><rect x="10" y="7" width="4" height="14" rx="1" /><rect x="17" y="3" width="4" height="18" rx="1" /></svg>;
+  // Default: generic tool
+  return <svg {...props}><rect x="3" y="3" width="18" height="18" rx="4" /><path d="M9 9h6m-6 3h4m-4 3h6" /></svg>;
+}
+
+// Lane stage descriptions
+const LANE_DESCRIPTIONS: Record<string, string> = {
+  ingestion: 'Extract & Load',
+  warehouse_raw: 'Raw Storage',
+  transformation: 'Transform & Model',
+  warehouse_analytics: 'Curated Data',
+  reporting: 'Dashboards & BI',
+};
+
 function LaneOverviewCanvas({
   data,
   loading,
@@ -204,7 +239,7 @@ function LaneOverviewCanvas({
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 red-spinner" />
-          <p className="text-sm text-[var(--muted)]">Loading lane overview...</p>
+          <p className="text-sm text-[var(--muted)]">Loading pipeline overview...</p>
         </div>
       </div>
     );
@@ -212,20 +247,35 @@ function LaneOverviewCanvas({
 
   if (!data || !data.nodes || data.nodes.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full">
-        <svg className="w-16 h-16 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7" />
-        </svg>
-        <p className="text-[var(--muted)] text-[15px] mb-2">No lane overview available</p>
-        <p className="text-[var(--text-faint)] text-[13px] mb-4">
-          Extract lineage from the Data Lineage tab first
+      <div className="flex flex-col items-center justify-center h-full gap-1">
+        <div className="w-16 h-16 rounded-2xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)] flex items-center justify-center mb-3">
+          <svg className="w-8 h-8 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zm0 9.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 13.5h.75m0 0v3.75m0-3.75h3.75" />
+          </svg>
+        </div>
+        <p className="text-[var(--text-secondary)] text-[15px] font-medium">No pipeline overview yet</p>
+        <p className="text-[var(--text-faint)] text-[13px] mb-5">
+          Build lineage to see your data pipeline
         </p>
         <button
           onClick={onExtract}
           disabled={extracting || !stackId}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium transition-all shadow-lg shadow-[var(--accent)]/20"
         >
-          {extracting ? 'Building...' : 'Build Lineage'}
+          {extracting ? (
+            <>
+              <div className="w-3.5 h-3.5 red-spinner" />
+              Building...
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              Build Lineage
+            </>
+          )}
         </button>
       </div>
     );
@@ -235,181 +285,270 @@ function LaneOverviewCanvas({
   const nodes = data.nodes;
   const edges = data.edges;
 
-  // Tool box dimensions (larger than old node cards)
-  const BOX_W = 200;
-  const BOX_H = 56;
-  const LANE_PADDING = 40;
+  // Layout dimensions
+  const BOX_W = 224;
+  const BOX_H = 76;
+  const LANE_PAD = 48;
+  const HEADER_H = 72;
+  const PAD = 32;
+
+  // Compute coordinate space
+  const allX = nodes.map(n => n.x);
+  const allY = nodes.map(n => n.y);
+  const minX = Math.min(...allX, 0) - LANE_PAD - PAD;
+  const maxX = Math.max(...allX, 0) + BOX_W + LANE_PAD + PAD;
+  const minY = Math.min(...allY, 0) - HEADER_H - PAD;
+  const maxY = Math.max(...allY, 0) + BOX_H + PAD + 24;
+
+  const totalW = maxX - minX;
+  const totalH = maxY - minY;
+  const offX = -minX;
+  const offY = -minY;
 
   // Build a node map for edge drawing
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
-  // Compute bounds for the SVG viewBox
-  const allX = nodes.map(n => n.x);
-  const allY = nodes.map(n => n.y);
-  const minX = Math.min(...allX, 0) - LANE_PADDING - 20;
-  const maxX = Math.max(...allX, 0) + BOX_W + LANE_PADDING + 20;
-  const minY = -60;  // room for lane headers
-  const maxY = Math.max(...allY, 0) + BOX_H + 40;
-
-  const viewWidth = maxX - minX;
-  const viewHeight = maxY - minY;
-
   return (
     <div className="w-full h-full overflow-auto relative bg-[var(--surface-sunken)]">
-      <svg
-        width="100%"
-        height="100%"
-        viewBox={`${minX} ${minY} ${viewWidth} ${viewHeight}`}
-        className="min-w-full min-h-full"
-      >
-        {/* Lane backgrounds */}
-        {lanes.map((lane) => {
-          const laneColor = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
-          return (
-            <g key={lane.name}>
-              <rect
-                x={lane.x - LANE_PADDING}
-                y={minY}
-                width={BOX_W + LANE_PADDING * 2}
-                height={viewHeight}
-                fill={`${laneColor}08`}
-                rx={8}
-              />
-              {/* Lane header */}
-              <text
-                x={lane.x + BOX_W / 2}
-                y={minY + 22}
-                textAnchor="middle"
-                fill={laneColor}
-                fontSize={12}
-                fontWeight={600}
-                fontFamily="system-ui, sans-serif"
-              >
-                {lane.label}
-              </text>
-            </g>
-          );
-        })}
+      <div className="relative" style={{ width: totalW, height: totalH, minWidth: '100%', minHeight: '100%' }}>
 
-        {/* Flow arrows between tool boxes */}
-        <defs>
-          <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill="var(--text-faint)" />
-          </marker>
-        </defs>
-        {edges.map((edge) => {
-          const src = nodeMap.get(edge.sourceId);
-          const tgt = nodeMap.get(edge.targetId);
-          if (!src || !tgt) return null;
+        {/* Subtle dot grid background */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage: 'radial-gradient(circle, var(--text-faint) 0.5px, transparent 0.5px)',
+            backgroundSize: '20px 20px',
+            opacity: 0.12,
+          }}
+        />
 
-          const x1 = src.x + BOX_W;
-          const y1 = src.y + BOX_H / 2;
-          const x2 = tgt.x;
-          const y2 = tgt.y + BOX_H / 2;
-          const midX = (x1 + x2) / 2;
-          const path = `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`;
-
-          return (
-            <path
-              key={edge.id}
-              d={path}
-              fill="none"
-              stroke="var(--text-faint)"
-              strokeWidth={2}
-              markerEnd="url(#arrowhead)"
-            />
-          );
-        })}
-
-        {/* Tool boxes */}
-        {nodes.map((node) => {
-          const lane = node.metadata?.lane as PipelineLaneName | undefined;
-          const laneColor = lane ? LANE_COLORS[lane] || '#6366F1' : '#6366F1';
-          const isOrch = node.metadata?.isOrchestrator;
-          const isInfra = node.metadata?.isInfra;
-          const assetCount = node.metadata?.assetCount as number | undefined;
-
-          // Orchestrators get orange accent, infra gets a muted purple
-          const accentColor = isOrch ? '#FB923C' : laneColor;
-
-          return (
-            <g key={node.id}>
-              {/* Box background */}
-              <rect
-                x={node.x}
-                y={node.y}
-                width={BOX_W}
-                height={BOX_H}
-                rx={10}
-                fill={isOrch ? 'rgba(251,146,60,0.06)' : 'var(--overlay-faint)'}
-                stroke={`${accentColor}50`}
-                strokeWidth={1.5}
-                strokeDasharray={isOrch ? '5,3' : undefined}
-              />
-              {/* Left accent bar */}
-              <rect
-                x={node.x}
-                y={node.y + 8}
-                width={4}
-                height={BOX_H - 16}
-                rx={2}
-                fill={accentColor}
-              />
-              {/* Tool name */}
-              <text
-                x={node.x + 16}
-                y={node.y + 24}
-                fill="var(--text)"
-                fontSize={13}
-                fontWeight={600}
-                fontFamily="system-ui, sans-serif"
-              >
-                {node.name.length > 20 ? node.name.slice(0, 20) + '…' : node.name}
-              </text>
-              {/* Asset count subtitle */}
-              <text
-                x={node.x + 16}
-                y={node.y + 42}
-                fill="var(--muted)"
-                fontSize={10}
-                fontFamily="system-ui, sans-serif"
-              >
-                {isOrch ? 'orchestrator' : isInfra ? 'infrastructure' : (
-                  assetCount ? `${assetCount} asset${assetCount !== 1 ? 's' : ''}` : 'tool'
-                )}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-
-      {/* Legend — only show lanes present */}
-      <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px]">
+        {/* Lane columns */}
         {lanes.map((lane) => {
           const color = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
+          const lx = lane.x + offX - LANE_PAD;
+          const lw = BOX_W + LANE_PAD * 2;
+          const desc = LANE_DESCRIPTIONS[lane.name] || '';
+
           return (
-            <div key={lane.name} className="flex items-center gap-1">
-              <div className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color }} />
-              <span className="text-[var(--muted)]">{lane.label}</span>
+            <div
+              key={lane.name}
+              className="absolute top-0 pointer-events-none"
+              style={{ left: lx, width: lw, height: '100%' }}
+            >
+              {/* Lane gradient background */}
+              <div
+                className="absolute inset-x-2 inset-y-0 rounded-2xl"
+                style={{ background: `linear-gradient(180deg, ${color}0C 0%, ${color}04 30%, transparent 70%)` }}
+              />
+              {/* Top glow line */}
+              <div
+                className="absolute top-0 inset-x-6 h-px"
+                style={{ background: `linear-gradient(90deg, transparent, ${color}30, transparent)` }}
+              />
+              {/* Lane header */}
+              <div className="flex flex-col items-center pt-5 gap-1">
+                <div
+                  className="px-3.5 py-1 rounded-full text-[11px] font-semibold tracking-wider uppercase"
+                  style={{ color, background: `${color}14`, border: `1px solid ${color}20` }}
+                >
+                  {lane.label}
+                </div>
+                {desc && (
+                  <span className="text-[9px] tracking-wide uppercase text-[var(--text-faint)]">{desc}</span>
+                )}
+              </div>
             </div>
           );
         })}
-      </div>
 
-      {/* Stats overlay */}
-      {data.stats && (
-        <div className="absolute top-4 right-4 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] space-y-1">
-          <div className="text-[var(--muted)]">
-            <span className="text-[var(--text)] font-medium">{data.stats.totalNodes}</span> tools
-            {data.stats.totalEdges > 0 && (
-              <>
-                {' / '}
-                <span className="text-[var(--text)] font-medium">{data.stats.totalEdges}</span> flows
-              </>
-            )}
-          </div>
+        {/* SVG layer for connections */}
+        <svg
+          className="absolute inset-0 pointer-events-none"
+          width={totalW}
+          height={totalH}
+          style={{ zIndex: 1 }}
+        >
+          <defs>
+            {/* Edge gradients — one per edge with source→target lane colors */}
+            {edges.map((edge) => {
+              const src = nodeMap.get(edge.sourceId);
+              const tgt = nodeMap.get(edge.targetId);
+              if (!src || !tgt) return null;
+              const srcLane = src.metadata?.lane as PipelineLaneName | undefined;
+              const tgtLane = tgt.metadata?.lane as PipelineLaneName | undefined;
+              const c1 = srcLane ? LANE_COLORS[srcLane] || '#6366F1' : '#6366F1';
+              const c2 = tgtLane ? LANE_COLORS[tgtLane] || '#6366F1' : '#6366F1';
+              return (
+                <linearGradient key={`g-${edge.id}`} id={`eg-${edge.id}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor={c1} stopOpacity={0.6} />
+                  <stop offset="100%" stopColor={c2} stopOpacity={0.6} />
+                </linearGradient>
+              );
+            })}
+          </defs>
+
+          {edges.map((edge) => {
+            const src = nodeMap.get(edge.sourceId);
+            const tgt = nodeMap.get(edge.targetId);
+            if (!src || !tgt) return null;
+
+            const x1 = src.x + offX + BOX_W;
+            const y1 = src.y + offY + BOX_H / 2;
+            const x2 = tgt.x + offX;
+            const y2 = tgt.y + offY + BOX_H / 2;
+            const dx = Math.abs(x2 - x1) * 0.45;
+            const path = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
+
+            return (
+              <g key={edge.id}>
+                {/* Glow layer */}
+                <path d={path} fill="none" stroke={`url(#eg-${edge.id})`} strokeWidth={6} opacity={0.08} />
+                {/* Main stroke */}
+                <path d={path} fill="none" stroke={`url(#eg-${edge.id})`} strokeWidth={1.5} strokeLinecap="round" />
+                {/* Animated flow particle */}
+                <circle r="2.5" opacity={0.7}>
+                  <animate attributeName="opacity" values="0;0.7;0.7;0" dur="3.5s" repeatCount="indefinite" />
+                  <animateMotion dur="3.5s" repeatCount="indefinite" path={path} />
+                </circle>
+                {/* Arrowhead dot at target */}
+                <circle cx={x2 - 1} cy={y2} r="3" fill={`url(#eg-${edge.id})`} opacity={0.5} />
+              </g>
+            );
+          })}
+        </svg>
+
+        {/* Tool cards */}
+        {nodes.map((node) => {
+          const lane = node.metadata?.lane as PipelineLaneName | undefined;
+          const color = lane ? LANE_COLORS[lane] || '#6366F1' : '#6366F1';
+          const isOrch = node.metadata?.isOrchestrator;
+          const isInfra = node.metadata?.isInfra;
+          const assetCount = node.metadata?.assetCount as number | undefined;
+          const accent = isOrch ? '#FB923C' : color;
+
+          return (
+            <div
+              key={node.id}
+              className="absolute"
+              style={{
+                left: node.x + offX,
+                top: node.y + offY,
+                width: BOX_W,
+                height: BOX_H,
+                zIndex: 2,
+              }}
+            >
+              <div
+                className={`
+                  group relative w-full h-full rounded-xl overflow-hidden
+                  transition-all duration-200 cursor-default
+                  bg-[var(--surface)] backdrop-blur-sm
+                  hover:translate-y-[-1px]
+                  ${isOrch ? 'border border-dashed' : 'border'}
+                `}
+                style={{
+                  borderColor: `${accent}22`,
+                  boxShadow: `0 1px 3px rgba(0,0,0,0.2), 0 0 0 0 ${accent}00`,
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.borderColor = `${accent}50`;
+                  e.currentTarget.style.boxShadow = `0 8px 24px rgba(0,0,0,0.3), 0 0 20px ${accent}15`;
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.borderColor = `${accent}22`;
+                  e.currentTarget.style.boxShadow = `0 1px 3px rgba(0,0,0,0.2), 0 0 0 0 ${accent}00`;
+                }}
+              >
+                {/* Left accent bar */}
+                <div
+                  className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full"
+                  style={{ background: accent }}
+                />
+
+                {/* Top inner glow */}
+                <div
+                  className="absolute inset-x-0 top-0 h-px"
+                  style={{ background: `linear-gradient(90deg, transparent 10%, ${accent}20, transparent 90%)` }}
+                />
+
+                {/* Card content */}
+                <div className="flex items-center gap-3 pl-5 pr-3 h-full">
+                  {/* Icon container */}
+                  <div
+                    className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors"
+                    style={{ background: `${accent}10`, border: `1px solid ${accent}15` }}
+                  >
+                    {_laneToolIcon(node.name, accent)}
+                  </div>
+
+                  {/* Text content */}
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className="text-[13px] font-semibold text-[var(--text)] truncate leading-tight"
+                      title={node.name}
+                    >
+                      {node.name}
+                    </div>
+                    <div className="text-[10px] text-[var(--muted)] mt-1 flex items-center gap-1.5">
+                      {isOrch ? (
+                        <span className="flex items-center gap-1">
+                          <span className="w-1 h-1 rounded-full bg-orange-400/60" />
+                          Orchestrator
+                        </span>
+                      ) : isInfra ? (
+                        <span className="flex items-center gap-1">
+                          <span className="w-1 h-1 rounded-full bg-purple-400/60" />
+                          Infrastructure
+                        </span>
+                      ) : assetCount ? (
+                        <span>{assetCount} asset{assetCount !== 1 ? 's' : ''}</span>
+                      ) : (
+                        <span>Tool</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Asset count badge */}
+                  {assetCount != null && assetCount > 0 && !isOrch && !isInfra && (
+                    <div
+                      className="px-2 py-0.5 rounded-md text-[10px] font-bold tabular-nums shrink-0"
+                      style={{ color: accent, background: `${accent}12` }}
+                    >
+                      {assetCount}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Bottom legend bar */}
+        <div
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 px-5 py-2.5 rounded-xl border border-[var(--subtle-border)] text-[11px] z-10"
+          style={{ background: 'var(--surface)', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}
+        >
+          {lanes.map((lane) => {
+            const c = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
+            return (
+              <div key={lane.name} className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c, boxShadow: `0 0 6px ${c}40` }} />
+                <span className="text-[var(--text-secondary)] font-medium">{lane.label}</span>
+              </div>
+            );
+          })}
+          {data.stats && (
+            <>
+              <div className="w-px h-3.5 bg-[var(--border-medium)]" />
+              <span className="text-[var(--muted)]">
+                <span className="text-[var(--text)] font-semibold">{data.stats.totalNodes}</span> tools
+                <span className="mx-1 text-[var(--text-faint)]">/</span>
+                <span className="text-[var(--text)] font-semibold">{data.stats.totalEdges}</span> flows
+              </span>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

@@ -531,6 +531,9 @@ export async function GET(
         // In data view, skip orchestration/job/service nodes (n8n tasks/workflows,
         // airflow DAGs/tasks). Remap their edges to the pipeline tool node
         // so the graph shows "n8n → BQ table" instead of "n8n task X → BQ table".
+        // Exception: INGESTION service/job nodes are NOT remapped — their synced_table
+        // data assets connect directly to warehouse tables via CrossTool edges, so the
+        // ingestion tool node should not appear in the data lineage view.
         const canonicalType = (eNode.canonical_type || '').toLowerCase();
         if (planeParam === 'data' && (
           eNode.platform_domain === 'orchestration' ||
@@ -540,7 +543,7 @@ export async function GET(
           const intId = eNode.integration_id;
           if (intId) {
             const toolNode = integrationToToolNode.get(intId);
-            if (toolNode) {
+            if (toolNode && toolNode.layer !== 'INGESTION') {
               engineIdToUnifiedId.set(eNode.id, toolNode.id);
             }
           }
@@ -727,6 +730,10 @@ export async function GET(
           });
         }
       }
+
+      // INGESTION tools (Fivetran, Airbyte, etc.) are NOT shown in the data lineage view.
+      // Their synced_table data assets connect directly to warehouse tables via CrossTool
+      // synthesis edges. The ingestion tool node itself only appears in Pipeline Overview.
     }
 
     // For REPORTING nodes: connect from leaf tables to reporting tools
@@ -780,8 +787,33 @@ export async function GET(
       }
       allNodes = allNodes.filter((n) => connectedNodeIds.has(n.id));
     } else {
-      allNodes = [...toolNodes, ...dataAssetNodes];
+      // In data view, exclude INGESTION tool nodes entirely — their synced_table
+      // data assets connect directly to warehouse tables via CrossTool edges.
+      // Ingestion tools (Fivetran, Airbyte, etc.) only appear in Pipeline Overview.
+      const dataViewToolNodes = planeParam === 'data'
+        ? toolNodes.filter((n) => n.layer !== 'INGESTION')
+        : toolNodes;
+
+      allNodes = [...dataViewToolNodes, ...dataAssetNodes];
       allEdges = [...pipelineEdges, ...tableEdges, ...syntheticEdges];
+
+      // Prune pipeline tool nodes that have no edges (they'd appear as
+      // disconnected orphans). Data asset nodes are always kept.
+      const connectedToolIds = new Set<string>();
+      for (const edge of allEdges) {
+        connectedToolIds.add(edge.source);
+        connectedToolIds.add(edge.target);
+      }
+      const dataViewToolNodeIds = new Set(dataViewToolNodes.map((n) => n.id));
+      allNodes = allNodes.filter(
+        (n) => !dataViewToolNodeIds.has(n.id) || connectedToolIds.has(n.id)
+      );
+
+      // Clean up edges referencing removed nodes
+      const allNodeIds = new Set(allNodes.map((n) => n.id));
+      allEdges = allEdges.filter(
+        (e) => allNodeIds.has(e.source) && allNodeIds.has(e.target)
+      );
     }
 
     // Compute real upstream/downstream counts from edges

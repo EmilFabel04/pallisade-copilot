@@ -273,8 +273,11 @@ def canonicalize_graph_in_place(
     unmapped_edge_types: Set[str] = set()
 
     for node in nodes.values():
-        canonical = map_node_type(node)
-        node.canonical_type = canonical.value
+        # Respect explicitly set canonical_type from adapters (e.g., "service", "job").
+        # Only fall back to map_node_type when no canonical_type was set.
+        if not node.canonical_type:
+            canonical = map_node_type(node)
+            node.canonical_type = canonical.value
         node.urn = generate_urn(node)
         if is_needs_mapping(node):
             needs_mapping.add(node.id)

@@ -140,7 +140,7 @@ Every entity in the graph is a `LineageNode`:
 | `tags` | str[] | User-assigned tags |
 | `raw_metadata` | dict | Adapter-specific metadata |
 
-**Property:** `stable_id` — deterministic hash from `(domain, namespace, container, name)`. Excludes platform so the same table discovered by BigQuery and dbt gets the same stable_id, enabling cross-adapter deduplication.
+**Property:** `stable_id` — deterministic hash from `(domain, environment_scope, namespace, container, name)`. Excludes platform so the same table discovered by BigQuery and dbt gets the same stable_id, enabling cross-adapter deduplication. The `environment_scope` field prevents accidental merges across different environments (e.g., dev vs prod BigQuery projects, or different Snowflake accounts). It is computed automatically by `compute_environment_scope()` based on platform type — for BigQuery it uses `project_id`, for Snowflake `account.region`, for Fivetran `group_id`, and for dbt `target_name.database`.
 
 ### LineageEdge
 
@@ -351,7 +351,7 @@ adapter = registry.create("live_warehouse", "bq-prod", project_id="my-project")
 
 | Adapter | Tool | Domain | Nodes | Edges | Notes |
 |---------|------|--------|-------|-------|-------|
-| `live_fivetran` | Fivetran | INGESTION | TABLE (per synced table) | None (cross-tool synthesis) | No edges emitted — relies on CrossToolEdgeSynthesizer name-matching |
+| `live_fivetran` | Fivetran | INGESTION | SERVICE, CONNECTOR (job), TABLE (per synced table) | TRIGGERS (service→connector, 0.95), WRITES_TO (connector→table, 0.9) | Emits deterministic edges + service/job nodes. When `destination_config` is available, also emits warehouse-domain destination table nodes that merge with warehouse-discovered tables via resolver dedup. CrossToolEdgeSynthesizer serves as fallback for synced_table→warehouse_table name-matching. |
 | `live_airbyte` | Airbyte | INGESTION | SOURCE, PIPELINE/STREAM | DERIVED_FROM (1.0), POPULATES (1.0) | syncCatalog stream mapping |
 | `live_storage` | S3, GCS, ADLS | INGESTION | SOURCE/FILE (buckets) | POPULATES (only w/ known_mappings, 0.9) | Discovery-only unless mappings configured |
 
@@ -458,6 +458,8 @@ EVIDENCE_WEIGHTS = {
 
 Maps the 24 granular `NodeType` values and 13 `EdgeType` values to a strict **5-node, 6-edge** canonical taxonomy. This normalization enables consistent rendering and lane assignment regardless of which adapter discovered the node.
 
+**Important:** `canonicalize_graph_in_place()` respects explicitly set `canonical_type` values from adapters. If an adapter sets `canonical_type="service"` or `canonical_type="job"` on a node, canonicalization preserves it. Only nodes without an explicit `canonical_type` are mapped via `map_node_type()`. This prevents the Fivetran service node (which has `node_type=SOURCE` but `canonical_type="service"`) from being incorrectly mapped to `dataset`.
+
 ### Canonical Node Types
 
 | Type | Description | Examples |
@@ -503,7 +505,7 @@ OTHER → infrastructure
 
 **File:** `scanner/lineage/engine/bridge.py`
 
-Deterministic (non-LLM) rules that fix structural gaps in the graph. Currently implements one rule:
+Deterministic (non-LLM) rules that fix structural gaps in the graph. Uses scored matching to assign orphaned raw datasets to the correct ingestion job.
 
 ### Rule: `bridge_missing_ingestion`
 
@@ -513,13 +515,27 @@ Deterministic (non-LLM) rules that fix structural gaps in the graph. Currently i
 1. Find ingestion platforms in graph (n8n, airbyte, fivetran, etc.)
 2. Find raw datasets with `canonical_type == "dataset"` and `zone == RAW`
 3. Check if any raw dataset has no upstream writer (no `writes` or `runs` edge from a `service` or `job` node)
+4. Datasets with existing Fivetran destination WRITES_TO edges are NOT classified as orphans
+
+**Scored Matching:** Each orphaned raw dataset is scored against candidate ingestion jobs using multiple strategies:
+
+| Strategy | Score | Description |
+|----------|-------|-------------|
+| `adapter_destination_table` | 0.95 | Job has a direct WRITES_TO edge to a warehouse table matching the orphan by name |
+| `adapter_destination_schema` | 0.9 | Job writes to the same warehouse schema as the orphan |
+| `synced_table_name` | 0.85 | Orphan table name appears in the job's `synced_tables` metadata list |
+| `schema_match` | 0.7 | Orphan schema matches the job's destination schema |
+| `namespace_match` | 0.5 | Orphan is in the same namespace as the job |
+
+The highest-scoring match wins. Alternative matches are recorded for explainability.
 
 **Fix:**
-1. Create an **inferred loader job** per ingestion platform: `urn:job:{platform}:unknown_loader::{integration_id}`
-2. Create **writes edges** from loader → each orphaned raw dataset
-3. Connect **ingestion service → loader** via `runs` edge
+1. If a matching job is found, create a **writes edge** from job → orphaned raw dataset
+2. If no match is found, create an **inferred Unknown Loader job** per ingestion platform: `urn:job:{platform}:unknown_loader::{integration_id}`
+3. Create **writes edges** from loader → each unmatched orphaned raw dataset
+4. Connect **ingestion service → loader** via `runs` edge
 
-All inferred nodes/edges are marked `inferred=True` with `confidence=0.4` and evidence from `"bridge_rule"`.
+All inferred nodes/edges are marked `inferred=True` with `confidence ≤ 0.5` and evidence from `"bridge_rule"`.
 
 **Example:**
 ```
@@ -630,34 +646,37 @@ Fivetran → Snowflake → dbt → Snowflake → Looker
 
 **Type:** `data_plane`
 
-Dataset-to-dataset derivation chains:
+Dataset-to-dataset derivation chains showing pure data flow:
 
 ```
 raw.customers → stg_customers → dim_customers → dashboard_tile
 ```
 
-- Selects DATASET + SEMANTIC nodes
-- Includes JOB nodes that have both upstream and downstream dataset connections
+- Selects DATASET + SEMANTIC nodes only
+- **Excludes service, job, and system nodes** — these belong in Pipeline Overview
+- JOB nodes are bypassed: when `dataset → job → dataset` exists, a direct bypass edge is created so the data plane stays clean
+- Deduplicates Airflow/Fivetran table refs with warehouse nodes by FQN (safety-net for resolver misses)
+- Deduplicates inferred bridge nodes with real extracted nodes by FQN
 - Topological layout (longest-path layer assignment)
-- Deduplicates Airflow table refs with warehouse nodes by FQN
+- Nodes with explicitly set `canonical_type` (e.g., `"service"`, `"job"`) are preserved by canonicalization and correctly excluded from the data view
 
-### Lane Pipeline Overview
+### Lane Pipeline Overview (Pipeline Overview)
 
 **Type:** `lane_pipeline_overview`
 
-Fixed-lane layout with five horizontal lanes:
+Fixed-lane layout with five horizontal lanes showing all integrated tools:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ INGESTION        │ Fivetran, n8n Loader (inferred)          │
 ├──────────────────┼──────────────────────────────────────────┤
-│ WAREHOUSE (RAW)  │ raw.customers, raw.orders, raw.events    │
+│ WAREHOUSE (RAW)  │ BigQuery (raw.customers, raw.orders)     │
 ├──────────────────┼──────────────────────────────────────────┤
-│ TRANSFORMATION   │ stg_customers, int_customer_orders        │
+│ TRANSFORMATION   │ dbt (stg_customers, int_customer_orders) │
 ├──────────────────┼──────────────────────────────────────────┤
-│ WAREHOUSE (ANALYTICS) │ dim_customers, fct_daily_revenue    │
+│ WAREHOUSE (ANALYTICS) │ BigQuery (dim_customers, fct_daily) │
 ├──────────────────┼──────────────────────────────────────────┤
-│ REPORTING        │ Dashboard: Customer Overview              │
+│ REPORTING        │ Looker (Customer Overview Dashboard)     │
 └──────────────────┴──────────────────────────────────────────┘
 
 Orchestrator overlay (dashed lines):
@@ -668,6 +687,7 @@ Orchestrator overlay (dashed lines):
 - Orchestration nodes rendered as overlays, not in data lanes
 - Inferred nodes shown with dashed borders
 - System/infra nodes excluded from lanes
+- **Step 2 (tool_nodes merge):** Merges `tool_nodes` from the pipeline stack into the view. Tools that didn't produce engine graph nodes (e.g., infrastructure servers, orchestrators without adapters) are still shown in the Pipeline Overview. Both `investigate` and `investigate-llm` API endpoints populate `store.tool_nodes` from `request.tool_configs` so all integrated tools appear.
 
 ### View Data Structures
 
@@ -848,10 +868,18 @@ User clicks "Extract Lineage"
     │   ├─ Status: completed → fetch unified graph, atomic swap
     │   └─ Status: failed → show error, keep old view
     │
-    └─ GET /api/pipeline/[stackId]/lineage/unified
+    └─ GET /api/pipeline/[stackId]/lineage/unified?plane=data|control|all
         ├─ Merges PipelineNodes (tool layer) with Engine graph (data layer)
         ├─ Deduplicates Airflow table refs with warehouse nodes
         ├─ Creates synthetic edges (tool ↔ data asset)
+        ├─ Filters by view:
+        │   ├─ data: Excludes service/job/orchestration engine nodes (remaps
+        │   │        their edges to pipeline tool nodes). INGESTION tool nodes
+        │   │        are excluded entirely — synced_table data assets connect
+        │   │        directly to warehouse tables via CrossTool edges.
+        │   ├─ control: Only engine nodes with control-plane edges, pruning
+        │   │           disconnected nodes.
+        │   └─ all: Full merged graph.
         └─ Returns UnifiedLineageResponse
 ```
 
@@ -944,7 +972,7 @@ pytest scanner/lineage/engine/tests/ -v
 | Area | Gap | Impact |
 |------|-----|--------|
 | **Postgres/Redshift** | Warehouse parser is a stub — no view definition parsing or job history | Only table catalog emitted; no edges between views and base tables |
-| **Fivetran** | No edges emitted by adapter — relies on CrossToolEdgeSynthesizer name-matching | Fragile if Fivetran synced table names don't match warehouse table names exactly |
+| **Fivetran** | Without `destination_config`, relies on CrossToolEdgeSynthesizer name-matching for synced_table → warehouse_table links | Provide `destination_config` (platform, project_id/database, dataset/schema) to get deterministic WRITES_TO edges with confidence 0.9 |
 | **Prefect** | Table references require manual tag conventions (`reads:schema.table`, `writes:schema.table`) | Without tags, Prefect flows have no data-plane edges. Confidence only 0.5–0.6 even with tags |
 | **Power BI** | Only creates warehouse edges when `connectionDetails.path` has 2+ parts | Simple database connections produce no cross-plane edges |
 | **Metabase** | GUI-built queries use synthetic IDs (`metabase_table_{id}`) | Can't resolve to real table names without additional Metabase metadata lookups |
@@ -954,7 +982,7 @@ pytest scanner/lineage/engine/tests/ -v
 | **Column lineage** | Only Databricks and dbt adapters produce column-level edges | No column lineage from BigQuery, Snowflake, or any BI tools |
 | **dbt schema** | dbt project parser sometimes produces empty schema for models | Requires resolver cross-domain fallback cascade to merge with warehouse nodes |
 | **Multi-warehouse** | Namespace must be consistent across dbt and warehouse adapter configs | Different project_ids between dbt config and warehouse config prevent cross-domain merging |
-| **Snowflake + Fivetran** | Fivetran synced table names must match Snowflake table names after case normalization | Case-sensitivity issues possible (Snowflake is UPPER by default, Fivetran may be lower) |
+| **Snowflake + Fivetran** | Without `destination_config`, synced table names must match Snowflake table names after case normalization | Provide `destination_config` to bypass name-matching. Case hints (`_DEST_CASE_HINTS`) auto-normalize per platform |
 
 ---
 
