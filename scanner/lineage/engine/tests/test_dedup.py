@@ -703,10 +703,12 @@ class TestFivetranDeterministicEdges:
         adapter = self._adapter()
         edges = adapter.extract_lineage(self._base_config(client))
 
-        # 2 enabled tables → 2 edges
-        assert len(edges) == 2
-        for edge in edges:
-            assert edge.edge_type == EdgeType.WRITES_TO
+        # Filter to WRITES_TO edges only (excludes service→job RUNS edges)
+        writes_edges = [e for e in edges if e.edge_type == EdgeType.WRITES_TO]
+
+        # 2 enabled tables → 2 WRITES_TO edges
+        assert len(writes_edges) == 2
+        for edge in writes_edges:
             assert edge.confidence == 0.9
             assert edge.canonical_edge_type == "writes"
             assert edge.inferred is False
@@ -714,17 +716,19 @@ class TestFivetranDeterministicEdges:
             assert "fivetran_connector:conn_abc" in edge.evidence[0].source_ref
 
     def test_edges_skip_disabled_tables(self):
-        """Disabled tables should get no edges."""
+        """Disabled tables should get no WRITES_TO edges."""
         client = _mock_fivetran_client()
         adapter = self._adapter()
         edges = adapter.extract_lineage(self._base_config(client))
 
+        # Filter to WRITES_TO edges
+        writes_edges = [e for e in edges if e.edge_type == EdgeType.WRITES_TO]
+        target_ids = {e.target_id for e in writes_edges}
         # 'deleted' table is disabled → only 2 edges (users + orders)
-        target_ids = {e.target_id for e in edges}
         assert len(target_ids) == 2
 
     def test_edge_targets_match_synced_table_nodes(self):
-        """Edge targets match the synced_table node IDs from discover_assets."""
+        """WRITES_TO edge targets match the synced_table node IDs from discover_assets."""
         client = _mock_fivetran_client()
         adapter = self._adapter()
         config = self._base_config(client)
@@ -736,13 +740,19 @@ class TestFivetranDeterministicEdges:
             n.id for n in nodes
             if n.raw_metadata.get("node_role") == "synced_table"
         }
-        edge_target_ids = {e.target_id for e in edges}
+        # Filter to synced_table WRITES_TO edges (exclude RUNS + destination edges)
+        writes_edges = [
+            e for e in edges
+            if e.edge_type == EdgeType.WRITES_TO
+            and "schema_mapping" in (e.evidence[0].source_ref if e.evidence else "")
+        ]
+        edge_target_ids = {e.target_id for e in writes_edges}
 
-        # Every edge target should match a synced_table node
+        # Every synced_table WRITES_TO edge target should match a synced_table node
         assert edge_target_ids == synced_table_ids
 
     def test_skips_internal_connectors(self):
-        """fivetran_metadata and fivetran_log connectors produce no edges."""
+        """fivetran_metadata and fivetran_log connectors produce no data nodes/edges."""
         internal = MagicMock()
         internal.id = "conn_internal"
         internal.name = "fivetran_metadata"
@@ -754,11 +764,15 @@ class TestFivetranDeterministicEdges:
 
         nodes = adapter.discover_assets(self._base_config(client))
         edges = adapter.extract_lineage(self._base_config(client))
-        assert len(nodes) == 0
-        assert len(edges) == 0
+        # Only the service node should exist (no connectors, no synced tables)
+        data_nodes = [n for n in nodes if n.canonical_type != "service"]
+        assert len(data_nodes) == 0
+        # No WRITES_TO edges (only possible RUNS edges to non-existent connectors)
+        writes_edges = [e for e in edges if e.edge_type == EdgeType.WRITES_TO]
+        assert len(writes_edges) == 0
 
     def test_connector_job_id_consistent(self):
-        """Connector JOB node ID from discover_assets matches edge source in extract_lineage."""
+        """Connector JOB node ID from discover_assets matches WRITES_TO edge source."""
         client = _mock_fivetran_client()
         adapter = self._adapter()
         config = self._base_config(client)
@@ -770,20 +784,22 @@ class TestFivetranDeterministicEdges:
         assert len(job_nodes) == 1
         job_id = job_nodes[0].id
 
-        # All edges should originate from this job node
-        for edge in edges:
+        # All WRITES_TO edges should originate from the connector job node
+        writes_edges = [e for e in edges if e.edge_type == EdgeType.WRITES_TO]
+        for edge in writes_edges:
             assert edge.source_id == job_id
 
     def test_fallback_ids_without_destination_config(self):
-        """Without destination_platform, edges use Fivetran-domain IDs."""
+        """Without destination_platform, WRITES_TO edges use Fivetran-domain IDs."""
         client = _mock_fivetran_client()
         adapter = self._adapter()
         # No destination_platform in config
         edges = adapter.extract_lineage(self._base_config(client))
 
-        assert len(edges) == 2
+        writes_edges = [e for e in edges if e.edge_type == EdgeType.WRITES_TO]
+        assert len(writes_edges) == 2
         # Verify edges were created with ingestion-domain IDs
-        for edge in edges:
+        for edge in writes_edges:
             assert edge.target_id
             assert edge.evidence[0].source_ref.startswith("fivetran_connector:")
 
@@ -849,25 +865,18 @@ class TestScoredIngestionBridge:
     """Verify scored matching for ingestion bridging."""
 
     def test_synced_table_name_wins(self):
-        """Orphan name in job's synced_tables -> matched with highest priority."""
+        """Orphan name in job's synced_tables -> matched via synced_table_name.
+
+        No existing warehouse writes edges, so only metadata-based strategies
+        fire. synced_table_name (0.85) beats same_schema (0.8).
+        """
         job = _ingestion_job("stripe_connector", synced_tables=["charges", "customers"],
                              dest_schema="stripe")
         orphan = _raw_dataset("customers", schema="stripe")
 
-        # Add a known table so the job has downstream writes
-        known = _raw_dataset("charges", schema="stripe")
-        writes_edge = LineageEdge(
-            id="edge:job->charges",
-            source_id=job.id, target_id=known.id,
-            edge_type=EdgeType.WRITES_TO,
-            lineage_level=LineageLevel.TABLE,
-            canonical_edge_type="writes",
-        )
-
         graph = _make_bridge_graph(
             ingestion_jobs=[job],
-            existing_writes=[writes_edge],
-            orphans=[known, orphan],
+            orphans=[orphan],
         )
         engine = BridgeRuleEngine(graph)
         result = engine.apply_all()
@@ -887,25 +896,19 @@ class TestScoredIngestionBridge:
         assert diag[0].match_strategy == "synced_table_name"
 
     def test_same_schema_match(self):
-        """Orphan in same schema as existing job writes -> matched to that job."""
+        """Orphan in same schema as job dest_schema -> matched via same_schema.
+
+        No existing warehouse writes edges, so only metadata-based strategies
+        fire. same_schema (0.8) is the top match when synced_table_name doesn't apply.
+        """
         job = _ingestion_job("postgres_connector", dest_schema="pg_public")
 
-        # Job already writes to a table in schema "pg_public"
-        known = _raw_dataset("orders", schema="pg_public")
-        writes_edge = LineageEdge(
-            id="edge:job->orders",
-            source_id=job.id, target_id=known.id,
-            edge_type=EdgeType.WRITES_TO,
-            lineage_level=LineageLevel.TABLE,
-            canonical_edge_type="writes",
-        )
-
+        # Orphan is in the same schema as the job's dest_schema
         orphan = _raw_dataset("invoices", schema="pg_public")
 
         graph = _make_bridge_graph(
             ingestion_jobs=[job],
-            existing_writes=[writes_edge],
-            orphans=[known, orphan],
+            orphans=[orphan],
         )
         engine = BridgeRuleEngine(graph)
         result = engine.apply_all()
@@ -1188,3 +1191,356 @@ class TestEnvironmentScopeDedup:
 
         # Different scopes → should NOT merge even though names match
         assert len(graph.nodes) == 2
+
+    def test_compute_environment_scope_fivetran(self):
+        """compute_environment_scope returns group_id for Fivetran."""
+        scope = compute_environment_scope("fivetran", {"group_id": "grp_abc123"})
+        assert scope == "grp_abc123"
+
+    def test_compute_environment_scope_fivetran_account_id(self):
+        """compute_environment_scope falls back to account_id for Fivetran."""
+        scope = compute_environment_scope("fivetran", {"account_id": "ACCT-XY"})
+        assert scope == "acct-xy"
+
+    def test_compute_environment_scope_dbt(self):
+        """compute_environment_scope returns target_name.database for dbt."""
+        scope = compute_environment_scope("dbt", {
+            "target_name": "prod",
+            "database": "analytics",
+        })
+        assert scope == "prod.analytics"
+
+    def test_compute_environment_scope_dbt_warehouse_fallback(self):
+        """compute_environment_scope dbt falls back to warehouse_type delegation."""
+        scope = compute_environment_scope("dbt", {
+            "warehouse_type": "bigquery",
+            "project_id": "my-gcp-project",
+        })
+        assert scope == "my-gcp-project"
+
+    def test_fivetran_auto_scope_from_destination_config(self):
+        """Fivetran adapter auto-computes scope from destination_config."""
+        client = _mock_fivetran_client()
+        cls = _import_fivetran_adapter()
+        adapter = cls()
+        config = {
+            "client": client,
+            "namespace": "test-ns",
+            "integration_id": "ft-001",
+            "destination_config": {
+                "platform": "bigquery",
+                "project_id": "my-bq-project",
+            },
+        }
+        nodes = adapter.discover_assets(config)
+        # All nodes should get the BigQuery project as scope
+        scoped_nodes = [n for n in nodes if n.environment_scope == "my-bq-project"]
+        assert len(scoped_nodes) > 0
+        # Specifically, synced_table nodes should have it
+        synced = [n for n in nodes if n.raw_metadata.get("node_role") == "synced_table"]
+        for n in synced:
+            assert n.environment_scope == "my-bq-project"
+
+
+# ---- Fivetran destination config tests ----
+
+
+class TestFivetranDestinationConfig:
+    """Verify Fivetran adapter emits warehouse-domain destination nodes and edges."""
+
+    @staticmethod
+    def _adapter():
+        cls = _import_fivetran_adapter()
+        return cls()
+
+    def _base_config(self, client, **overrides):
+        cfg = {
+            "client": client,
+            "namespace": "test-ns",
+            "integration_id": "ft-001",
+            "destination_config": {
+                "platform": "bigquery",
+                "project_id": "my-project",
+                "dataset": "raw_pg",
+            },
+        }
+        cfg.update(overrides)
+        return cfg
+
+    def test_destination_config_emits_warehouse_nodes(self):
+        """With destination_config, adapter emits WAREHOUSE-domain nodes."""
+        client = _mock_fivetran_client()
+        adapter = self._adapter()
+        nodes = adapter.discover_assets(self._base_config(client))
+
+        dest_nodes = [
+            n for n in nodes
+            if n.raw_metadata.get("node_role") == "fivetran_destination"
+        ]
+        # 2 enabled tables → 2 destination nodes
+        assert len(dest_nodes) == 2
+        for n in dest_nodes:
+            assert n.platform == "bigquery"
+            assert n.platform_domain == PlatformDomain.WAREHOUSE
+            assert n.database == "my-project"
+            assert n.schema == "raw_pg"
+            assert n.environment_scope == "my-project"
+            assert len(n.evidence) == 1
+            assert "fivetran_connector" in n.evidence[0].source_ref
+
+    def test_destination_edges_target_warehouse_ids(self):
+        """WRITES_TO edges target warehouse-domain node IDs when destination_config present."""
+        client = _mock_fivetran_client()
+        adapter = self._adapter()
+        config = self._base_config(client)
+
+        nodes = adapter.discover_assets(config)
+        edges = adapter.extract_lineage(config)
+
+        dest_node_ids = {
+            n.id for n in nodes
+            if n.raw_metadata.get("node_role") == "fivetran_destination"
+        }
+
+        # There should be edges targeting destination node IDs
+        dest_edges = [e for e in edges if e.target_id in dest_node_ids]
+        assert len(dest_edges) == 2
+        for edge in dest_edges:
+            assert edge.edge_type == EdgeType.WRITES_TO
+            assert edge.confidence == 0.9
+            assert edge.canonical_edge_type == "writes"
+            assert edge.inferred is False
+            assert "destination_mapping" in edge.evidence[0].source_ref
+
+    def test_destination_nodes_merge_with_warehouse_discovered(self):
+        """Fivetran destination nodes merge with BQ-discovered nodes via resolver."""
+        client = _mock_fivetran_client()
+        adapter = self._adapter()
+        config = self._base_config(client)
+
+        ft_nodes = adapter.discover_assets(config)
+        ft_edges = adapter.extract_lineage(config)
+
+        # Create a BQ-discovered table that should merge with Fivetran destination
+        bq_users = _make_node(
+            "users", database="my-project", schema="raw_pg",
+            platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+            namespace="my-project",
+        )
+        bq_users.environment_scope = "my-project"
+
+        all_nodes = ft_nodes + [bq_users]
+        resolver = ResolverPipeline()
+        graph = resolver.resolve(all_nodes, ft_edges)
+
+        # "users" from Fivetran dest + BQ should merge into 1 node
+        users_nodes = [
+            n for n in graph.nodes.values()
+            if n.name == "users" and n.platform_domain == PlatformDomain.WAREHOUSE
+        ]
+        assert len(users_nodes) == 1
+        # The merged node should have BQ as platform (warehouse priority)
+        assert users_nodes[0].platform == "bigquery"
+
+    def test_without_destination_config_no_warehouse_nodes(self):
+        """Without destination_config, no warehouse-domain nodes are emitted."""
+        client = _mock_fivetran_client()
+        adapter = self._adapter()
+        config = {
+            "client": client,
+            "namespace": "test-ns",
+            "integration_id": "ft-001",
+            # No destination_config
+        }
+        nodes = adapter.discover_assets(config)
+        dest_nodes = [
+            n for n in nodes
+            if n.raw_metadata.get("node_role") == "fivetran_destination"
+        ]
+        assert len(dest_nodes) == 0
+
+    def test_service_node_created(self):
+        """discover_assets creates a Fivetran SERVICE node."""
+        client = _mock_fivetran_client()
+        adapter = self._adapter()
+        nodes = adapter.discover_assets(self._base_config(client))
+
+        service_nodes = [
+            n for n in nodes if n.canonical_type == "service"
+        ]
+        assert len(service_nodes) == 1
+        assert service_nodes[0].name == "Fivetran"
+        assert service_nodes[0].platform == "fivetran"
+        assert service_nodes[0].platform_domain == PlatformDomain.INGESTION
+
+    def test_runs_edges_service_to_connector(self):
+        """extract_lineage creates RUNS edges from service to connector jobs."""
+        client = _mock_fivetran_client()
+        adapter = self._adapter()
+        config = self._base_config(client)
+
+        nodes = adapter.discover_assets(config)
+        edges = adapter.extract_lineage(config)
+
+        service_node = next(n for n in nodes if n.canonical_type == "service")
+        job_nodes = [n for n in nodes if n.raw_metadata.get("node_role") == "connector_job"]
+
+        runs_edges = [
+            e for e in edges
+            if e.source_id == service_node.id and e.canonical_edge_type == "runs"
+        ]
+        assert len(runs_edges) == 1  # 1 connector → 1 RUNS edge
+        assert runs_edges[0].target_id == job_nodes[0].id
+        assert runs_edges[0].confidence == 0.95
+        assert runs_edges[0].edge_type == EdgeType.TRIGGERS
+        assert runs_edges[0].plane == LinePlane.CONTROL
+
+
+# ---- Bridge adapter-destination scoring tests ----
+
+
+class TestAdapterDestinationBridgeScoring:
+    """Verify bridge scoring uses adapter destination edges for matching."""
+
+    def test_adapter_destination_table_match_wins(self):
+        """Job with warehouse WRITES_TO edge to 'charges' -> orphan 'charges' matched."""
+        job = _ingestion_job("stripe_connector", synced_tables=["charges"],
+                             dest_schema="stripe")
+        # Create a warehouse destination table that the job writes to
+        dest_table = _raw_dataset("charges", schema="stripe")
+        dest_table.canonical_type = "dataset"
+
+        writes_edge = LineageEdge(
+            id="edge:job->charges_dest",
+            source_id=job.id, target_id=dest_table.id,
+            edge_type=EdgeType.WRITES_TO,
+            lineage_level=LineageLevel.TABLE,
+            confidence=0.9,
+            canonical_edge_type="writes",
+            inferred=False,  # adapter edge, not bridge-inferred
+        )
+
+        # A different orphan with same name in different schema
+        orphan = _raw_dataset("charges", schema="raw_stripe")
+
+        graph = _make_bridge_graph(
+            ingestion_jobs=[job],
+            existing_writes=[writes_edge],
+            orphans=[dest_table, orphan],
+        )
+        engine = BridgeRuleEngine(graph)
+        result = engine.apply_all()
+
+        # orphan should be matched via adapter_destination_table (score 0.95)
+        diag = [d for d in result.diagnostics if d.dataset_id == orphan.id]
+        assert len(diag) == 1
+        assert diag[0].match_strategy == "adapter_destination_table"
+
+    def test_adapter_destination_schema_match(self):
+        """Job writes to warehouse table in 'stripe' schema -> orphan 'refunds' in same schema matched."""
+        job = _ingestion_job("stripe_connector", synced_tables=["charges"],
+                             dest_schema="stripe")
+        dest_table = _raw_dataset("charges", schema="stripe")
+        dest_table.canonical_type = "dataset"
+
+        writes_edge = LineageEdge(
+            id="edge:job->charges_dest",
+            source_id=job.id, target_id=dest_table.id,
+            edge_type=EdgeType.WRITES_TO,
+            lineage_level=LineageLevel.TABLE,
+            confidence=0.9,
+            canonical_edge_type="writes",
+            inferred=False,
+        )
+
+        # New orphan in same schema but not in synced_tables
+        orphan = _raw_dataset("refunds", schema="stripe")
+
+        graph = _make_bridge_graph(
+            ingestion_jobs=[job],
+            existing_writes=[writes_edge],
+            orphans=[dest_table, orphan],
+        )
+        engine = BridgeRuleEngine(graph)
+        result = engine.apply_all()
+
+        diag = [d for d in result.diagnostics if d.dataset_id == orphan.id]
+        assert len(diag) == 1
+        # adapter_destination_schema (0.9) beats same_schema (0.8) and synced_table_name
+        assert diag[0].match_strategy == "adapter_destination_schema"
+
+    def test_two_jobs_compete_highest_score_wins(self):
+        """Two ingestion jobs match, highest score wins with alternatives recorded."""
+        job1 = _ingestion_job("stripe_connector",
+                              synced_tables=["payments"],
+                              dest_schema="stripe")
+        job2 = _ingestion_job("backup_connector",
+                              synced_tables=[],
+                              dest_schema="stripe")  # same schema → same_schema match
+
+        # job1 has a direct warehouse destination edge for "charges"
+        dest_table = _raw_dataset("charges", schema="stripe")
+        dest_table.canonical_type = "dataset"
+        writes_edge = LineageEdge(
+            id="edge:job1->charges",
+            source_id=job1.id, target_id=dest_table.id,
+            edge_type=EdgeType.WRITES_TO,
+            lineage_level=LineageLevel.TABLE,
+            confidence=0.9,
+            canonical_edge_type="writes",
+            inferred=False,
+        )
+
+        # Orphan in stripe schema — both jobs match but via different strategies
+        orphan = _raw_dataset("payments", schema="stripe")
+
+        graph = _make_bridge_graph(
+            ingestion_jobs=[job1, job2],
+            existing_writes=[writes_edge],
+            orphans=[dest_table, orphan],
+        )
+        engine = BridgeRuleEngine(graph)
+        result = engine.apply_all()
+
+        diag = [d for d in result.diagnostics if d.dataset_id == orphan.id]
+        assert len(diag) == 1
+        # job1 should win: adapter_destination_table (0.95) + synced_table_name (0.85)
+        # vs job2: same_schema (0.8)
+        assert diag[0].matched_job_id == job1.id
+        # Alternatives should record job2's match
+        assert len(diag[0].alternatives) > 0
+        alt_job_ids = {a["job_id"] for a in diag[0].alternatives}
+        assert job2.id in alt_job_ids
+
+    def test_fivetran_destination_edges_prevent_orphan(self):
+        """Orphan with existing Fivetran WRITES_TO edge is NOT classified as orphan."""
+        job = _ingestion_job("stripe_connector", synced_tables=["charges"],
+                             dest_schema="stripe")
+        # Dataset with existing adapter-created WRITES_TO from the job
+        dataset = _raw_dataset("charges", schema="stripe")
+        dataset.canonical_type = "dataset"
+
+        writes_edge = LineageEdge(
+            id="edge:job->charges",
+            source_id=job.id, target_id=dataset.id,
+            edge_type=EdgeType.WRITES_TO,
+            lineage_level=LineageLevel.TABLE,
+            confidence=0.9,
+            canonical_edge_type="writes",
+            inferred=False,
+        )
+
+        graph = _make_bridge_graph(
+            ingestion_jobs=[job],
+            existing_writes=[writes_edge],
+            orphans=[dataset],
+        )
+        engine = BridgeRuleEngine(graph)
+        result = engine.apply_all()
+
+        # Dataset already has a writer → should NOT be bridged
+        bridge_edges_to_dataset = [
+            e for e in result.added_edges
+            if e.target_id == dataset.id and e.canonical_edge_type == "writes"
+        ]
+        assert len(bridge_edges_to_dataset) == 0

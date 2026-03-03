@@ -24,9 +24,17 @@ from ...graph import (
     PlatformDomain,
 )
 from ..adapter import BaseLineageAdapter, Capability
-from ..ids import generate_asset_id, normalize_identifier
+from ..ids import compute_environment_scope, generate_asset_id, normalize_identifier
 
 logger = logging.getLogger(__name__)
+
+# Case conventions for destination warehouse platforms
+_DEST_CASE_HINTS = {
+    "bigquery": "lower",
+    "snowflake": "upper",
+    "postgres": "lower",
+    "redshift": "lower",
+}
 
 
 class LiveFivetranAdapter(BaseLineageAdapter):
@@ -39,6 +47,13 @@ class LiveFivetranAdapter(BaseLineageAdapter):
         integration_id: Pallisade integration ID for linking
         fivetran_config: Dict with api_key, api_secret for FivetranIntegration
         environment_scope: (optional) disambiguates same asset across envs
+        destination_config: (optional) dict with destination warehouse details:
+            platform: "bigquery" | "snowflake" | "postgres"
+            project_id: (BQ) GCP project ID
+            database: (SF/PG) database name
+            dataset / schema: warehouse schema/dataset name override
+            account, region: (SF) account details
+            host, port: (PG) connection details
     """
 
     def __init__(self, adapter_id: str = "live_fivetran", **kwargs):
@@ -60,16 +75,27 @@ class LiveFivetranAdapter(BaseLineageAdapter):
     # ------------------------------------------------------------------
 
     def discover_assets(self, config: Dict[str, Any]) -> List[LineageNode]:
-        """Discover Fivetran connectors and their destination tables."""
+        """Discover Fivetran connectors and their destination tables.
+
+        When ``destination_config`` is provided, also emits WAREHOUSE-domain
+        destination table nodes that will merge with warehouse-discovered
+        tables via the resolver's stable_id dedup.
+        """
         client = self._get_client(config)
         if not client:
             return []
 
         namespace = config.get("namespace", "fivetran")
         integration_id = config.get("integration_id")
-        env_scope = config.get("environment_scope", "") or ""
         now = datetime.utcnow()
         nodes: List[LineageNode] = []
+
+        # Compute environment scope: explicit > destination_config > empty
+        env_scope = config.get("environment_scope", "")
+        dest_cfg = config.get("destination_config", {}) or {}
+        dest_platform = dest_cfg.get("platform", "")
+        if not env_scope and dest_cfg:
+            env_scope = compute_environment_scope(dest_platform, dest_cfg)
 
         try:
             connectors = client.get_connectors()
@@ -79,6 +105,12 @@ class LiveFivetranAdapter(BaseLineageAdapter):
 
         # Internal Fivetran connectors that are not part of data lineage
         _INTERNAL_SERVICES = {"fivetran_metadata", "fivetran_log"}
+
+        # Create Fivetran service node (one per adapter invocation)
+        service_node = self._make_service_node(
+            namespace, integration_id, env_scope, now,
+        )
+        nodes.append(service_node)
 
         for connector in connectors:
             service = getattr(connector, "service", "unknown")
@@ -91,8 +123,6 @@ class LiveFivetranAdapter(BaseLineageAdapter):
 
             # Discover individual synced tables from the connector schema.
             # Each enabled table becomes an INGESTION TABLE node (green).
-            # We skip service-level and connector-level nodes — the user
-            # wants to see only the actual tables being synced.
             connector_id_attr = getattr(connector, "id", "")
             dest_schema = getattr(connector, "schema", "") or connector_name
             try:
@@ -134,6 +164,7 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                             )
                             table_node.environment_scope = env_scope or None
                             nodes.append(table_node)
+
                 # Create a connector JOB node for edge attribution
                 connector_job_id = generate_asset_id(
                     "ingestion", "fivetran", namespace,
@@ -169,25 +200,39 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                 connector_job_node.environment_scope = env_scope or None
                 nodes.append(connector_job_node)
 
+                # When destination warehouse is known, emit warehouse-domain
+                # destination table nodes that merge with warehouse-discovered
+                # tables via the resolver's stable_id dedup.
+                if dest_platform and synced_tables:
+                    dest_nodes = self._emit_destination_nodes(
+                        synced_tables, dest_cfg, dest_schema,
+                        connector_id_attr, connector_name, service,
+                        integration_id, env_scope, now,
+                    )
+                    nodes.extend(dest_nodes)
+
                 logger.info(
-                    "[LiveFivetran] Connector %s: dest_schema=%s, synced_tables=%s",
+                    "[LiveFivetran] Connector %s: dest_schema=%s, synced_tables=%s, "
+                    "dest_nodes=%d",
                     connector_name, dest_schema, synced_tables,
+                    len(dest_nodes) if dest_platform and synced_tables else 0,
                 )
             except Exception as e:
                 logger.warning("[LiveFivetran] Schema fetch failed for %s: %s", connector_name, e)
 
-        logger.info(f"[LiveFivetran] Discovered {len(nodes)} nodes (synced tables + connector jobs)")
+        logger.info(f"[LiveFivetran] Discovered {len(nodes)} nodes (synced tables + connector jobs + destinations)")
         return nodes
 
     def extract_lineage(self, config: Dict[str, Any]) -> List[LineageEdge]:
-        """Extract deterministic connector → synced table edges.
+        """Extract deterministic connector → destination table edges.
 
         Creates WRITES_TO edges from each connector JOB to each synced
-        table node (created by ``discover_assets``), using the Fivetran
-        schema-mapping API as evidence. The CrossToolEdgeSynthesizer then
-        matches synced table nodes to warehouse-discovered nodes by name,
-        avoiding schema mismatches (Fivetran's ``dest_schema`` often differs
-        from the actual warehouse dataset name).
+        table node (created by ``discover_assets``). When ``destination_config``
+        is provided, also emits direct edges to warehouse-domain destination
+        tables (these merge with warehouse-discovered nodes via resolver).
+
+        Also creates RUNS edges from the Fivetran service node to each
+        connector JOB.
         """
         client = self._get_client(config)
         if not client:
@@ -197,6 +242,9 @@ class LiveFivetranAdapter(BaseLineageAdapter):
         now = datetime.utcnow()
         edges: List[LineageEdge] = []
 
+        dest_cfg = config.get("destination_config", {}) or {}
+        dest_platform = dest_cfg.get("platform", "")
+
         try:
             connectors = client.get_connectors()
         except Exception as e:
@@ -204,6 +252,11 @@ class LiveFivetranAdapter(BaseLineageAdapter):
             return []
 
         _INTERNAL_SERVICES = {"fivetran_metadata", "fivetran_log"}
+
+        # Service node ID for RUNS edges (must match discover_assets)
+        service_node_id = generate_asset_id(
+            "ingestion", "fivetran", namespace, "", "fivetran_service",
+        )
 
         for connector in connectors:
             service = getattr(connector, "service", "unknown")
@@ -220,6 +273,19 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                 "ingestion", "fivetran", namespace,
                 "", f"connector_{connector_id_attr}",
             )
+
+            # RUNS edge: service → connector job
+            runs_edge = self._make_edge(
+                service_node_id, connector_job_id,
+                EdgeType.TRIGGERS, LineageLevel.TOOL,
+                confidence=0.95,
+                source_ref=f"fivetran_api:service_runs_connector:{connector_id_attr}",
+                now=now,
+                snippet=f"Fivetran service runs connector '{connector_name}'",
+                plane=LinePlane.CONTROL,
+            )
+            runs_edge.canonical_edge_type = "runs"
+            edges.append(runs_edge)
 
             try:
                 schemas = client.get_connector_schema(connector_id_attr)
@@ -240,11 +306,9 @@ class LiveFivetranAdapter(BaseLineageAdapter):
 
                     norm_table = normalize_identifier(tname, self.case_hint)
 
-                    # Target the synced_table node from discover_assets()
-                    # using the same ID formula. The CrossToolEdgeSynthesizer
-                    # handles matching synced_table → warehouse_table by name,
-                    # avoiding schema mismatches (Fivetran dest_schema often
-                    # differs from the actual warehouse dataset name).
+                    # Edge 1: connector_job → synced_table (Fivetran domain)
+                    # The CrossToolEdgeSynthesizer uses these as fallback when
+                    # destination_config is not available.
                     container = f"{service}.{src_schema_name}"
                     table_asset_id = generate_asset_id(
                         "ingestion", "fivetran", namespace,
@@ -269,6 +333,18 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                     )
                     edge.canonical_edge_type = "writes"
                     edges.append(edge)
+
+                    # Edge 2: connector_job → warehouse destination table
+                    # Only when destination_config is known. These edges target
+                    # warehouse-FQN node IDs that merge with warehouse-discovered
+                    # tables via the resolver.
+                    if dest_platform:
+                        dest_edge = self._make_destination_edge(
+                            connector_job_id, connector_id_attr, connector_name,
+                            tname, dest_cfg, dest_schema, now,
+                        )
+                        if dest_edge:
+                            edges.append(dest_edge)
 
         logger.info(f"[LiveFivetran] Extracted {len(edges)} deterministic edges")
         return edges
@@ -296,7 +372,156 @@ class LiveFivetranAdapter(BaseLineageAdapter):
         return FivetranIntegration(fivetran_config)
 
     # ------------------------------------------------------------------
-    # Node helpers
+    # Destination helpers
+    # ------------------------------------------------------------------
+
+    def _emit_destination_nodes(
+        self,
+        synced_tables: List[str],
+        dest_cfg: Dict[str, Any],
+        dest_schema_fallback: str,
+        connector_id: str,
+        connector_name: str,
+        service: str,
+        integration_id: Optional[str],
+        env_scope: str,
+        now: datetime,
+    ) -> List[LineageNode]:
+        """Emit warehouse-domain destination table nodes.
+
+        These nodes use the same ID formula as the warehouse adapter so
+        the resolver merges them with warehouse-discovered tables.
+        """
+        dest_platform = dest_cfg.get("platform", "")
+        hint = _DEST_CASE_HINTS.get(dest_platform, "lower")
+        dest_database = normalize_identifier(
+            dest_cfg.get("project_id") or dest_cfg.get("database") or "",
+            hint,
+        )
+        dest_schema_name = normalize_identifier(
+            dest_cfg.get("dataset") or dest_cfg.get("schema") or dest_schema_fallback,
+            hint,
+        )
+        dest_scope = compute_environment_scope(dest_platform, dest_cfg)
+
+        nodes: List[LineageNode] = []
+        for tname in synced_tables:
+            norm_name = normalize_identifier(tname, hint)
+            container = f"{dest_database}.{dest_schema_name}"
+            fqn = ".".join(p for p in [dest_database, dest_schema_name, norm_name] if p)
+
+            dest_table_id = generate_asset_id(
+                "warehouse", dest_platform, dest_database, container, norm_name,
+            )
+            dest_node = LineageNode(
+                id=dest_table_id,
+                name=norm_name,
+                fqn=fqn,
+                node_type=NodeType.TABLE,
+                platform=dest_platform,
+                platform_domain=PlatformDomain.WAREHOUSE,
+                asset_kind=AssetKind.TABLE,
+                database=dest_database,
+                schema=dest_schema_name,
+                namespace=dest_database,
+                environment_scope=dest_scope or env_scope or None,
+                observed_at=now,
+                sources=[self._id],
+                integration_id=integration_id,
+                evidence=[Evidence(
+                    adapter_id=self._id,
+                    source_ref=(
+                        f"fivetran_connector:{connector_id}"
+                        f":destination:{dest_schema_name}.{norm_name}"
+                    ),
+                    observed_at=now,
+                    snippet="Discovered as Fivetran sync destination",
+                )],
+                raw_metadata={
+                    "node_role": "fivetran_destination",
+                    "source_connector": connector_name,
+                    "source_service": service,
+                },
+            )
+            nodes.append(dest_node)
+        return nodes
+
+    def _make_destination_edge(
+        self,
+        connector_job_id: str,
+        connector_id: str,
+        connector_name: str,
+        tname: str,
+        dest_cfg: Dict[str, Any],
+        dest_schema_fallback: str,
+        now: datetime,
+    ) -> Optional[LineageEdge]:
+        """Create a WRITES_TO edge from connector job to warehouse destination table."""
+        dest_platform = dest_cfg.get("platform", "")
+        hint = _DEST_CASE_HINTS.get(dest_platform, "lower")
+        dest_database = normalize_identifier(
+            dest_cfg.get("project_id") or dest_cfg.get("database") or "",
+            hint,
+        )
+        dest_schema_name_norm = normalize_identifier(
+            dest_cfg.get("dataset") or dest_cfg.get("schema") or dest_schema_fallback,
+            hint,
+        )
+        norm_name = normalize_identifier(tname, hint)
+        container = f"{dest_database}.{dest_schema_name_norm}"
+
+        dest_table_id = generate_asset_id(
+            "warehouse", dest_platform, dest_database, container, norm_name,
+        )
+        source_ref = (
+            f"fivetran_connector:{connector_id}"
+            f":destination_mapping:{dest_schema_name_norm}.{norm_name}"
+        )
+        dest_fqn = ".".join(
+            p for p in [dest_database, dest_schema_name_norm, norm_name] if p
+        )
+        edge = self._make_edge(
+            connector_job_id, dest_table_id,
+            EdgeType.WRITES_TO, LineageLevel.TABLE,
+            confidence=0.9,
+            source_ref=source_ref,
+            now=now,
+            snippet=(
+                f"Fivetran '{connector_name}' syncs {tname} → {dest_fqn}"
+            ),
+            plane=LinePlane.CROSS,
+        )
+        edge.canonical_edge_type = "writes"
+        return edge
+
+    def _make_service_node(
+        self,
+        namespace: str,
+        integration_id: Optional[str],
+        env_scope: str,
+        now: datetime,
+    ) -> LineageNode:
+        """Create a SERVICE node for the Fivetran instance."""
+        service_id = generate_asset_id(
+            "ingestion", "fivetran", namespace, "", "fivetran_service",
+        )
+        return LineageNode(
+            id=service_id,
+            name="Fivetran",
+            fqn=f"fivetran.{namespace}.service",
+            node_type=NodeType.SOURCE,
+            platform="fivetran",
+            platform_domain=PlatformDomain.INGESTION,
+            canonical_type="service",
+            namespace=namespace,
+            environment_scope=env_scope or None,
+            observed_at=now,
+            sources=[self._id],
+            integration_id=integration_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Node helpers (legacy)
     # ------------------------------------------------------------------
 
     def _make_connector_node(

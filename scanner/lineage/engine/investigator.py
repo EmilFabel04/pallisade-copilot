@@ -853,10 +853,31 @@ class LineageInvestigator:
             if tl in _WAREHOUSE_TOOLS:
                 cfg = tc.config or {}
                 if not _dest_warehouse_info:
+                    # Build nested destination_config that adapters expect
+                    dest_cfg: Dict[str, Any] = {"platform": tl}
+                    # BigQuery keys
+                    for k in ("project_id", "project"):
+                        if cfg.get(k):
+                            dest_cfg["project_id"] = cfg[k]
+                            break
+                    # Database (Snowflake/Postgres/Redshift)
+                    if cfg.get("database"):
+                        dest_cfg["database"] = cfg["database"]
+                    # Schema / dataset
+                    for k in ("dataset", "default_dataset", "schema"):
+                        if cfg.get(k):
+                            dest_cfg["dataset"] = cfg[k]
+                            break
+                    # Snowflake-specific
+                    for k in ("account", "region"):
+                        if cfg.get(k):
+                            dest_cfg[k] = cfg[k]
+                    # Postgres/Redshift-specific
+                    for k in ("host", "port"):
+                        if cfg.get(k):
+                            dest_cfg[k] = cfg[k]
                     _dest_warehouse_info = {
-                        "destination_platform": tl,
-                        "destination_namespace": cfg.get("project_id", "") or cfg.get("project", "") or cfg.get("database", ""),
-                        "destination_database": cfg.get("database", ""),
+                        "destination_config": dest_cfg,
                     }
                 break  # use first warehouse found
 

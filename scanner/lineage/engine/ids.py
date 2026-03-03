@@ -123,4 +123,21 @@ def compute_environment_scope(
             return scope.lower()
         return ""
 
+    elif p == "fivetran":
+        # Fivetran group_id scopes all connectors in an account
+        group_id = config.get("group_id", "") or config.get("account_id", "")
+        return group_id.lower()
+
+    elif p == "dbt":
+        # dbt scope derived from target warehouse identity
+        target = config.get("target_name", "")
+        database = config.get("database", "")
+        if target and database:
+            return f"{target}.{database}".lower()
+        # Fallback: delegate to the warehouse type if available
+        wh_type = config.get("warehouse_type", "")
+        if wh_type:
+            return compute_environment_scope(wh_type, config)
+        return ""
+
     return ""

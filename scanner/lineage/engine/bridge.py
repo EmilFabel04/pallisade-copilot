@@ -106,7 +106,27 @@ class BridgeRuleEngine:
         engine = BridgeRuleEngine(graph)
         result = engine.apply_all()
         # result.added_nodes / result.added_edges are already in the graph
+
+    Extensibility:
+        Register additional scoring strategies via ``register_scoring_strategy``
+        for future adapters (Airbyte, n8n, etc.).
     """
+
+    # Class-level registry for additional scoring strategies.
+    # Each entry is (name, scorer_fn) where scorer_fn(orphan, job, graph)
+    # returns Optional[Tuple[float, str, str]] = (score, strategy_name, reason)
+    _extra_scoring_strategies: List = []
+
+    @classmethod
+    def register_scoring_strategy(cls, name: str, scorer_fn) -> None:
+        """Register an additional scoring strategy for orphan matching.
+
+        Args:
+            name: Human-readable strategy name.
+            scorer_fn: Callable(orphan, job, graph) -> Optional[Tuple[float, str, str]]
+                Returns (score, strategy_name, reason) or None if no match.
+        """
+        cls._extra_scoring_strategies.append((name, scorer_fn))
 
     def __init__(self, graph: LineageGraph):
         self.graph = graph
@@ -318,6 +338,13 @@ class BridgeRuleEngine:
     ) -> Tuple[Optional[LineageNode], float, str, str, List[Dict[str, Any]]]:
         """Score an orphan against all ingestion jobs.
 
+        Strategies are evaluated in priority order (all evaluated, highest wins):
+        0. adapter_destination_table (0.95) — job has warehouse WRITES_TO edge matching orphan name
+        0b. adapter_destination_schema (0.9) — job writes to warehouse tables in orphan's schema
+        1. synced_table_name (0.85) — orphan name in job metadata synced_tables
+        2. same_schema (0.8) — job writes to same schema as orphan
+        3. connector_schema_match (0.6) — connector name matches orphan schema
+
         Returns:
             (best_job, best_score, best_strategy, best_reason, alternatives)
         """
@@ -328,6 +355,35 @@ class BridgeRuleEngine:
 
         for job in jobs:
             jid = job.id
+
+            # Strategy 0: Direct adapter destination edges (score 0.95/0.9)
+            # If this job already writes to warehouse tables via adapter edges
+            # (not bridge-inferred), use those as strong signals.
+            job_dest_schemas: Set[str] = set()
+            for down_id in self.graph._downstream.get(jid, set()):
+                down_node = self.graph.nodes.get(down_id)
+                if (down_node
+                        and down_node.platform_domain == PlatformDomain.WAREHOUSE
+                        and not down_node.inferred):
+                    if down_node.schema:
+                        job_dest_schemas.add(down_node.schema.lower())
+                    if (down_node.name
+                            and orphan_name
+                            and orphan_name == down_node.name.lower()):
+                        candidates.append((
+                            0.95, "adapter_destination_table",
+                            f"Job '{job.name}' writes to warehouse table "
+                            f"'{down_node.name}' matching orphan '{orphan_name}'",
+                            job,
+                        ))
+
+            if orphan_schema and orphan_schema in job_dest_schemas:
+                candidates.append((
+                    0.9, "adapter_destination_schema",
+                    f"Job '{job.name}' writes to warehouse schema "
+                    f"'{orphan_schema}', orphan '{orphan_name}' is in same schema",
+                    job,
+                ))
 
             # Strategy 1: name in synced_tables (score 0.85)
             if orphan_name and orphan_name in job_tables.get(jid, set()):
@@ -358,6 +414,16 @@ class BridgeRuleEngine:
                     f"Connector name '{connector_name}' matches orphan schema '{orphan_schema}'",
                     job,
                 ))
+
+            # Run any registered extra strategies (future adapters)
+            for _name, scorer_fn in self._extra_scoring_strategies:
+                try:
+                    result = scorer_fn(orphan, job, self.graph)
+                    if result:
+                        score, strategy, reason = result
+                        candidates.append((score, strategy, reason, job))
+                except Exception:
+                    logger.debug("[Bridge] Extra strategy '%s' failed", _name, exc_info=True)
 
         if not candidates:
             return None, 0.0, "", "", []
