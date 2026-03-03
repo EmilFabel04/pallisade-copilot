@@ -201,7 +201,7 @@ class ResolverPipeline:
         # for the same physical table (e.g. dbt omits database field,
         # giving FQN "raw.customers" vs BigQuery's "project.raw.customers").
         # Key: (platform_domain, namespace, schema, name) — database-independent.
-        by_short: Dict[Tuple[str, str, str, str], List[LineageNode]] = defaultdict(list)
+        by_short: Dict[Tuple[str, str, str, str, str], List[LineageNode]] = defaultdict(list)
         no_short: List[LineageNode] = []
         for node in merged:
             if node.name:
@@ -210,6 +210,7 @@ class ResolverPipeline:
                     (node.namespace or "").lower(),
                     (node.schema or "").lower(),
                     node.name.lower(),
+                    (node.environment_scope or "").lower(),
                 )
                 by_short[key].append(node)
             else:
@@ -239,7 +240,7 @@ class ResolverPipeline:
         # (e.g., Fivetran sees destination table, BigQuery sees it via parser),
         # they share (database, schema, name) but differ in namespace/system.
         # Key: (database, schema, name) — only for WAREHOUSE domain with database set.
-        by_db_qual: Dict[Tuple[str, str, str], List[LineageNode]] = defaultdict(list)
+        by_db_qual: Dict[Tuple[str, str, str, str], List[LineageNode]] = defaultdict(list)
         no_db: List[LineageNode] = []
         for node in merged:
             if (node.platform_domain.value == "warehouse"
@@ -248,6 +249,7 @@ class ResolverPipeline:
                     node.database.lower(),
                     (node.schema or "").lower(),
                     node.name.lower(),
+                    (node.environment_scope or "").lower(),
                 )
                 by_db_qual[key].append(node)
             else:
@@ -277,7 +279,7 @@ class ResolverPipeline:
         # physical table but have different platform_domain values.
         # Key: (namespace, schema, name) — domain-independent.
         _CROSS_DOMAINS = {"warehouse", "transform"}
-        cross_candidates: Dict[Tuple[str, str, str], List[LineageNode]] = defaultdict(list)
+        cross_candidates: Dict[Tuple[str, str, str, str], List[LineageNode]] = defaultdict(list)
         non_cross: List[LineageNode] = []
         for node in merged:
             if node.platform_domain.value in _CROSS_DOMAINS and node.name:
@@ -285,22 +287,23 @@ class ResolverPipeline:
                     (node.namespace or "").lower(),
                     (node.schema or "").lower(),
                     node.name.lower(),
+                    (node.environment_scope or "").lower(),
                 )
                 cross_candidates[key].append(node)
             else:
                 non_cross.append(node)
 
         # Fallback indexes for matching transforms to warehouse nodes
-        # when exact (namespace, schema, name) doesn't match.
-        # Index 1: (namespace, name) — ignores schema differences
-        _wh_by_ns_name: Dict[Tuple[str, str], List[Tuple[str, str, str]]] = defaultdict(list)
-        # Index 2: name-only — catches namespace mismatches
-        _wh_by_name: Dict[str, List[Tuple[str, str, str]]] = defaultdict(list)
+        # when exact (namespace, schema, name, scope) doesn't match.
+        # Index 1: (namespace, name, scope) — ignores schema differences
+        _wh_by_ns_name: Dict[Tuple[str, str, str], List[Tuple[str, str, str, str]]] = defaultdict(list)
+        # Index 2: (name, scope) — catches namespace mismatches
+        _wh_by_name: Dict[Tuple[str, str], List[Tuple[str, str, str, str]]] = defaultdict(list)
         for key, group in cross_candidates.items():
             has_warehouse = any(n.platform_domain.value == "warehouse" for n in group)
             if has_warehouse:
-                _wh_by_ns_name[(key[0], key[2])].append(key)
-                _wh_by_name[key[2]].append(key)
+                _wh_by_ns_name[(key[0], key[2], key[3])].append(key)
+                _wh_by_name[(key[2], key[3])].append(key)
 
         # Debug: dump cross_candidates to file for inspection
         import os as _os
@@ -321,19 +324,19 @@ class ResolverPipeline:
 
         # Move unmatched transform singletons into their warehouse group
         # using cascading fallback: namespace+name → name-only
-        keys_to_remove: List[Tuple[str, str, str]] = []
+        keys_to_remove: List[Tuple[str, str, str, str]] = []
         for key, group in list(cross_candidates.items()):
             if (len(group) == 1
                     and group[0].platform_domain.value == "transform"):
-                # Fallback 1: match by (namespace, name) ignoring schema
-                wh_keys = _wh_by_ns_name.get((key[0], key[2]), [])
+                # Fallback 1: match by (namespace, name, scope) ignoring schema
+                wh_keys = _wh_by_ns_name.get((key[0], key[2], key[3]), [])
                 if len(wh_keys) == 1:
                     logger.info("[Resolver] Fallback merge (ns+name): transform key=%s → warehouse key=%s", key, wh_keys[0])
                     cross_candidates[wh_keys[0]].extend(group)
                     keys_to_remove.append(key)
                     continue
-                # Fallback 2: match by name only (catches namespace mismatches)
-                name_keys = _wh_by_name.get(key[2], [])
+                # Fallback 2: match by (name, scope) (catches namespace mismatches)
+                name_keys = _wh_by_name.get((key[2], key[3]), [])
                 if len(name_keys) == 1:
                     logger.info("[Resolver] Fallback merge (name-only): transform key=%s → warehouse key=%s", key, name_keys[0])
                     cross_candidates[name_keys[0]].extend(group)

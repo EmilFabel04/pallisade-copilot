@@ -90,10 +90,17 @@ class LiveDbtAdapter(BaseLineageAdapter):
         now = datetime.utcnow()
         nodes: List[LineageNode] = []
 
+        # Derive environment scope from config or manifest target database.
+        # For BQ, database == project_id which is the correct scope.
+        env_scope = config.get("environment_scope", "")
+        if not env_scope:
+            env_scope = self._infer_environment_scope(manifest, config)
+
         # Process sources
         for key, source in manifest.get("sources", {}).items():
             node = self._source_to_node(source, namespace, hint, now, integration_id)
             if node:
+                node.environment_scope = env_scope or None
                 nodes.append(node)
 
         # Process models, seeds, snapshots
@@ -102,6 +109,7 @@ class LiveDbtAdapter(BaseLineageAdapter):
             if resource_type in ("model", "seed", "snapshot"):
                 node = self._model_to_node(model, namespace, hint, now, integration_id)
                 if node:
+                    node.environment_scope = env_scope or None
                     nodes.append(node)
 
         logger.info(f"[LiveDbt] Discovered {len(nodes)} assets from manifest")
@@ -191,6 +199,33 @@ class LiveDbtAdapter(BaseLineageAdapter):
                     ns = normalize_identifier(db, self.case_hint)
                     logger.debug("[LiveDbt] Inferred namespace from manifest: %s", ns)
                     return ns
+        return ""
+
+    def _infer_environment_scope(self, manifest: Dict, config: Dict[str, Any]) -> str:
+        """Infer environment scope from manifest or config.
+
+        For BigQuery, database == project_id which is the correct scope.
+        For Snowflake, we need account + region + database.
+        Falls back to compute_environment_scope using warehouse_type + config.
+        """
+        from ..ids import compute_environment_scope
+
+        # If connection_config is passed, use the standard helper
+        conn_config = config.get("connection_config", {})
+        if conn_config:
+            scope = compute_environment_scope(self._warehouse_type, conn_config)
+            if scope:
+                return scope
+
+        # Infer from manifest's first resource database field
+        # For BQ: database = project_id = scope
+        if self._warehouse_type == "bigquery":
+            for section in ("nodes", "sources"):
+                for resource in manifest.get(section, {}).values():
+                    db = resource.get("database", "")
+                    if db:
+                        return db.lower()
+
         return ""
 
     def _source_to_node(

@@ -222,14 +222,23 @@ class TimeWindow:
 def generate_stable_id(
     platform_domain: str, namespace: str,
     container: str, name: str,
+    environment_scope: str = "",
 ) -> str:
     """Generate a deterministic stable ID from physical identity components.
 
     Does NOT include system/platform so that the same physical asset
     discovered by different adapters (e.g. postgres vs dbt) gets the
     same stable_id for deduplication.
+
+    When *environment_scope* is set, it disambiguates the same
+    (namespace, container, name) in different environments or instances
+    (e.g. dev vs prod, or two BigQuery projects with the same namespace).
+    Empty scope preserves backward-compatible behavior.
     """
-    key = f"{platform_domain}|{namespace}|{container}|{name}".lower()
+    if environment_scope:
+        key = f"{platform_domain}|{environment_scope}|{namespace}|{container}|{name}".lower()
+    else:
+        key = f"{platform_domain}|{namespace}|{container}|{name}".lower()
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
@@ -288,6 +297,7 @@ class LineageNode:
     platform_domain: PlatformDomain = PlatformDomain.OTHER
     asset_kind: AssetKind = AssetKind.UNKNOWN
     namespace: Optional[str] = None  # account/project/env
+    environment_scope: Optional[str] = None  # disambiguates same asset across envs/instances
     observed_at: Optional[datetime] = None
     sources: List[str] = field(default_factory=list)  # adapter ids
 
@@ -306,6 +316,7 @@ class LineageNode:
             self.namespace or "",
             container,
             self.name,
+            self.environment_scope or "",
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -335,6 +346,7 @@ class LineageNode:
             "platform_domain": self.platform_domain.value,
             "asset_kind": self.asset_kind.value,
             "namespace": self.namespace,
+            "environment_scope": self.environment_scope,
             "observed_at": self.observed_at.isoformat() if self.observed_at else None,
             "sources": self.sources,
             "integration_id": self.integration_id,
@@ -755,6 +767,7 @@ class LineageGraph:
                 platform_domain=PlatformDomain(node_data.get("platform_domain", "other")),
                 asset_kind=AssetKind(node_data.get("asset_kind", "unknown")),
                 namespace=node_data.get("namespace"),
+                environment_scope=node_data.get("environment_scope"),
                 observed_at=datetime.fromisoformat(observed_at) if observed_at else None,
                 sources=node_data.get("sources", []),
                 integration_id=node_data.get("integration_id"),

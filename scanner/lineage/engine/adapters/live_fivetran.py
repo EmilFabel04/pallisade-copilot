@@ -1,11 +1,11 @@
 """
 Live Fivetran Adapter — extracts lineage from Fivetran connectors.
 
-Maps Fivetran connectors to ingestion-plane nodes and creates edges
-to the destination warehouse tables they populate. Each connector
-becomes a SOURCE node on the INGESTION domain, and each synced table
-becomes a TABLE node on the WAREHOUSE domain (matching existing
-warehouse nodes for dedup by the resolver).
+Maps Fivetran connectors to ingestion-plane nodes and creates
+deterministic WRITES_TO edges to the destination warehouse tables.
+Each connector becomes a CONNECTOR (job) node on the INGESTION domain,
+and each synced table becomes a TABLE node. Edges from connector jobs
+to destination tables carry API-sourced evidence.
 """
 
 import logging
@@ -14,13 +14,17 @@ from typing import Any, Dict, List, Optional, Set
 
 from ...graph import (
     AssetKind,
+    EdgeType,
+    Evidence,
     LineageEdge,
+    LineageLevel,
     LineageNode,
+    LinePlane,
     NodeType,
     PlatformDomain,
 )
 from ..adapter import BaseLineageAdapter, Capability
-from ..ids import generate_asset_id
+from ..ids import generate_asset_id, normalize_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,7 @@ class LiveFivetranAdapter(BaseLineageAdapter):
         namespace: Identifier for this Fivetran account (e.g., "acme-prod")
         integration_id: Pallisade integration ID for linking
         fivetran_config: Dict with api_key, api_secret for FivetranIntegration
+        environment_scope: (optional) disambiguates same asset across envs
     """
 
     def __init__(self, adapter_id: str = "live_fivetran", **kwargs):
@@ -62,8 +67,8 @@ class LiveFivetranAdapter(BaseLineageAdapter):
 
         namespace = config.get("namespace", "fivetran")
         integration_id = config.get("integration_id")
+        env_scope = config.get("environment_scope", "") or ""
         now = datetime.utcnow()
-        hint = self.case_hint
         nodes: List[LineageNode] = []
 
         try:
@@ -127,7 +132,43 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                                     "synced_tables": synced_tables,
                                 },
                             )
+                            table_node.environment_scope = env_scope or None
                             nodes.append(table_node)
+                # Create a connector JOB node for edge attribution
+                connector_job_id = generate_asset_id(
+                    "ingestion", "fivetran", namespace,
+                    "", f"connector_{connector_id_attr}",
+                )
+                connector_job_node = LineageNode(
+                    id=connector_job_id,
+                    name=f"{connector_name} connector",
+                    fqn=f"fivetran.{namespace}.connector.{connector_name}".lower(),
+                    node_type=NodeType.CONNECTOR,
+                    platform="fivetran",
+                    platform_domain=PlatformDomain.INGESTION,
+                    asset_kind=AssetKind.CONNECTOR,
+                    namespace=namespace,
+                    canonical_type="job",
+                    observed_at=now,
+                    sources=[self._id],
+                    integration_id=integration_id,
+                    evidence=[Evidence(
+                        adapter_id=self._id,
+                        source_ref=f"fivetran_api:connector:{connector_id_attr}",
+                        observed_at=now,
+                    )],
+                    raw_metadata={
+                        "service": service,
+                        "connector_id": connector_id_attr,
+                        "connector_name": connector_name,
+                        "dest_schema": dest_schema,
+                        "synced_tables": list(synced_tables),
+                        "node_role": "connector_job",
+                    },
+                )
+                connector_job_node.environment_scope = env_scope or None
+                nodes.append(connector_job_node)
+
                 logger.info(
                     "[LiveFivetran] Connector %s: dest_schema=%s, synced_tables=%s",
                     connector_name, dest_schema, synced_tables,
@@ -135,20 +176,102 @@ class LiveFivetranAdapter(BaseLineageAdapter):
             except Exception as e:
                 logger.warning("[LiveFivetran] Schema fetch failed for %s: %s", connector_name, e)
 
-        logger.info(f"[LiveFivetran] Discovered {len(nodes)} synced table nodes")
+        logger.info(f"[LiveFivetran] Discovered {len(nodes)} nodes (synced tables + connector jobs)")
         return nodes
 
-    def extract_lineage(self, config: Dict[str, Any]) -> List[LineageEdge]:  # noqa: ARG002
-        """Extract edges for the Fivetran ingestion flow.
+    def extract_lineage(self, config: Dict[str, Any]) -> List[LineageEdge]:
+        """Extract deterministic connector → synced table edges.
 
-        Synced table → warehouse table edges are handled by cross-tool
-        synthesis (name-based matching in CrossToolLinker.synthesize_ingestion_edges)
-        because Fivetran source schema names often differ from the actual
-        warehouse dataset names (e.g., Postgres "public" vs BigQuery "raw").
+        Creates WRITES_TO edges from each connector JOB to each synced
+        table node (created by ``discover_assets``), using the Fivetran
+        schema-mapping API as evidence. The CrossToolEdgeSynthesizer then
+        matches synced table nodes to warehouse-discovered nodes by name,
+        avoiding schema mismatches (Fivetran's ``dest_schema`` often differs
+        from the actual warehouse dataset name).
         """
-        # All Fivetran edges are created by cross-tool synthesis
-        # (synced_table → warehouse_table POPULATES edges).
-        return []
+        client = self._get_client(config)
+        if not client:
+            return []
+
+        namespace = config.get("namespace", "fivetran")
+        now = datetime.utcnow()
+        edges: List[LineageEdge] = []
+
+        try:
+            connectors = client.get_connectors()
+        except Exception as e:
+            logger.error(f"[LiveFivetran] extract_lineage: Failed to get connectors: {e}")
+            return []
+
+        _INTERNAL_SERVICES = {"fivetran_metadata", "fivetran_log"}
+
+        for connector in connectors:
+            service = getattr(connector, "service", "unknown")
+            connector_name = getattr(connector, "name", "") or getattr(connector, "schema", "")
+
+            if service in _INTERNAL_SERVICES or connector_name in _INTERNAL_SERVICES:
+                continue
+
+            connector_id_attr = getattr(connector, "id", "")
+            dest_schema = getattr(connector, "schema", "") or connector_name
+
+            # Connector JOB node ID (must match discover_assets)
+            connector_job_id = generate_asset_id(
+                "ingestion", "fivetran", namespace,
+                "", f"connector_{connector_id_attr}",
+            )
+
+            try:
+                schemas = client.get_connector_schema(connector_id_attr)
+            except Exception as e:
+                logger.warning(
+                    "[LiveFivetran] extract_lineage: schema fetch failed for %s: %s",
+                    connector_name, e,
+                )
+                continue
+
+            for src_schema_name, schema_data in schemas.items():
+                tables_data = schema_data.get("tables", [])
+                for t in tables_data:
+                    tname = getattr(t, "name", "") if hasattr(t, "name") else t.get("name", "")
+                    enabled = getattr(t, "enabled", True) if hasattr(t, "enabled") else t.get("enabled", True)
+                    if not tname or not enabled:
+                        continue
+
+                    norm_table = normalize_identifier(tname, self.case_hint)
+
+                    # Target the synced_table node from discover_assets()
+                    # using the same ID formula. The CrossToolEdgeSynthesizer
+                    # handles matching synced_table → warehouse_table by name,
+                    # avoiding schema mismatches (Fivetran dest_schema often
+                    # differs from the actual warehouse dataset name).
+                    container = f"{service}.{src_schema_name}"
+                    table_asset_id = generate_asset_id(
+                        "ingestion", "fivetran", namespace,
+                        container, norm_table,
+                    )
+
+                    source_ref = (
+                        f"fivetran_connector:{connector_id_attr}"
+                        f":schema_mapping:{src_schema_name}.{tname}"
+                    )
+                    edge = self._make_edge(
+                        connector_job_id, table_asset_id,
+                        EdgeType.WRITES_TO, LineageLevel.TABLE,
+                        confidence=0.9,
+                        source_ref=source_ref,
+                        now=now,
+                        snippet=(
+                            f"Fivetran connector '{connector_name}' syncs "
+                            f"{tname} to {dest_schema}"
+                        ),
+                        plane=LinePlane.CROSS,
+                    )
+                    edge.canonical_edge_type = "writes"
+                    edges.append(edge)
+
+        logger.info(f"[LiveFivetran] Extracted {len(edges)} deterministic edges")
+        return edges
 
     # ------------------------------------------------------------------
     # Client helper

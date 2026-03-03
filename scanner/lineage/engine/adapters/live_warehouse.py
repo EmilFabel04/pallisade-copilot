@@ -236,9 +236,13 @@ class LiveWarehouseAdapter(BaseLineageAdapter):
 
     def _convert_nodes(self, graph, config: Dict[str, Any]) -> List[LineageNode]:
         """Convert old-format LineageGraph nodes to engine-canonical nodes."""
+        from ..ids import compute_environment_scope
         platform = config.get("platform", self._platform)
         namespace = config.get("connection_config", {}).get("project_id", "")
         integration_id = config.get("integration_id")
+        env_scope = compute_environment_scope(
+            platform, config.get("connection_config", {}),
+        )
         hint = self._case
         now = datetime.utcnow()
 
@@ -267,6 +271,7 @@ class LiveWarehouseAdapter(BaseLineageAdapter):
                 platform_domain=PlatformDomain.WAREHOUSE,
                 asset_kind=asset_kind,
                 namespace=namespace,
+                environment_scope=env_scope or None,
                 description=old_node.description,
                 owner=old_node.owner,
                 tags=old_node.tags,

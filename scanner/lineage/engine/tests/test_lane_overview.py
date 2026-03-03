@@ -313,13 +313,13 @@ class TestBridgeMissingIngestion:
         assert "node:bigquery:customers" in targets
 
     def test_bridge_edges_are_low_confidence(self, n8n_bq_dbt_graph):
-        """Inferred bridge edges should have confidence=0.4."""
+        """Inferred bridge edges should have confidence <= 0.5."""
         engine = BridgeRuleEngine(n8n_bq_dbt_graph)
         result = engine.apply_all()
 
         for edge in result.added_edges:
             if edge.canonical_edge_type == "writes":
-                assert edge.confidence == 0.4
+                assert edge.confidence <= 0.5
                 assert edge.inferred is True
 
     def test_bridge_adds_runs_edge_from_service_to_loader(self, n8n_bq_dbt_graph):

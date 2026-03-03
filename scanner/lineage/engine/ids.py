@@ -6,7 +6,7 @@ All IDs are deterministic: identical inputs always produce identical outputs.
 
 import hashlib
 import re
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 def generate_asset_id(
@@ -88,3 +88,39 @@ def normalize_fqn(
         if p
     ]
     return separator.join(parts)
+
+
+def compute_environment_scope(
+    platform: str,
+    config: Dict[str, Any],
+) -> str:
+    """Compute a deterministic environment scope for a platform.
+
+    The scope disambiguates the same (namespace, container, name) across
+    different environments or warehouse instances.
+
+    Returns empty string when scope cannot be determined (backward-compat).
+    """
+    p = platform.lower()
+
+    if p == "bigquery":
+        return (config.get("project_id") or "").lower()
+
+    elif p == "snowflake":
+        parts = [
+            config.get("account", ""),
+            config.get("region", ""),
+            config.get("database", ""),
+        ]
+        return ".".join(part for part in parts if part).lower()
+
+    elif p in ("postgres", "redshift"):
+        host = config.get("host", "")
+        port = str(config.get("port", "")) if config.get("port") else ""
+        database = config.get("database", "")
+        if host:
+            scope = f"{host}:{port}.{database}" if port else f"{host}.{database}"
+            return scope.lower()
+        return ""
+
+    return ""
