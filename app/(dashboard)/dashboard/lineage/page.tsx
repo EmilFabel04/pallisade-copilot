@@ -14,8 +14,8 @@ import ReactFlow, {
   BackgroundVariant,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import dagre from 'dagre';
 import { usePipeline } from '@/contexts/PipelineContext';
+import { layoutGraph, layoutRenderedViewOrphans, ORPHAN_GROUP_ID } from '@/components/lineage/layoutGraph';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { unifiedNodeTypes } from '@/components/lineage/UnifiedNodes';
 import { DataAssetDetailPanel } from '@/components/lineage/DataAssetDetailPanel';
@@ -80,55 +80,6 @@ function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
     default: return 'table';
   }
 }
-
-// Dagre layout with layer-aware sizing
-const getLayoutedElements = (
-  nodes: Node[],
-  edges: Edge[],
-  direction: 'LR' | 'TB' = 'LR'
-): { nodes: Node[]; edges: Edge[] } => {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  dagreGraph.setGraph({
-    rankdir: direction,
-    nodesep: 80,
-    ranksep: direction === 'TB' ? 140 : 200,
-    align: 'UL',
-  });
-
-  // Different dimensions for tool nodes vs data asset nodes
-  nodes.forEach((node) => {
-    const isToolNode = node.type === 'toolNode';
-    const width = isToolNode ? 240 : 200;
-    const height = isToolNode ? 110 : 100;
-    dagreGraph.setNode(node.id, { width, height });
-  });
-
-  edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
-  });
-
-  dagre.layout(dagreGraph);
-
-  const isHorizontal = direction === 'LR';
-  const layoutedNodes = nodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id);
-    const isToolNode = node.type === 'toolNode';
-    const width = isToolNode ? 240 : 200;
-    const height = isToolNode ? 110 : 100;
-    return {
-      ...node,
-      targetPosition: isHorizontal ? Position.Left : Position.Top,
-      sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
-      position: {
-        x: nodeWithPosition.x - width / 2,
-        y: nodeWithPosition.y - height / 2,
-      },
-    };
-  });
-
-  return { nodes: layoutedNodes, edges };
-};
 
 // Get edge style based on type and plane
 function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode) {
@@ -815,7 +766,8 @@ export default function LineagePage() {
           };
         });
 
-      return { flowNodes: nodes, flowEdges: edges };
+      const withOrphans = layoutRenderedViewOrphans(nodes, edges, renderedView.unmappedNodes);
+      return { flowNodes: withOrphans.nodes, flowEdges: withOrphans.edges };
     }
 
     // Fallback: use unified data + Dagre layout
@@ -896,7 +848,7 @@ export default function LineagePage() {
 
     if (nodes.length === 0) return { flowNodes: [], flowEdges: [] };
 
-    const layouted = getLayoutedElements(nodes, edges, 'LR');
+    const layouted = layoutGraph(nodes, edges, { direction: 'LR' });
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
   }, [filteredNodes, lineageData?.edges, filters, renderedView]);
 
@@ -968,7 +920,7 @@ export default function LineagePage() {
       });
 
       if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
-      const layouted = getLayoutedElements(cpNodes, cpEdges, 'LR');
+      const layouted = layoutGraph(cpNodes, cpEdges, { direction: 'LR' });
       return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
     }
 
@@ -1055,7 +1007,7 @@ export default function LineagePage() {
     }));
 
     if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
-    const layouted = getLayoutedElements(cpNodes, cpEdges, 'LR');
+    const layouted = layoutGraph(cpNodes, cpEdges, { direction: 'LR' });
     return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
   }, [controlPlaneData, renderedOverview, laneOverview]);
 
@@ -1073,6 +1025,7 @@ export default function LineagePage() {
 
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
+      if (node.id === ORPHAN_GROUP_ID) return; // Ignore clicks on orphan group background
       if (activeTab === 'control-plane') {
         // Use InspectorPanel for control-plane nodes
         const viewNode = laneOverview?.nodes.find(n => n.id === node.id)
@@ -1383,6 +1336,7 @@ export default function LineagePage() {
               <Controls className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg [&>button]:!bg-[var(--subtle-bg)] [&>button]:!border-[var(--border-medium)] [&>button]:!text-[var(--text-tertiary)]" />
               <MiniMap
                 nodeColor={(n) => {
+                  if (n.id === ORPHAN_GROUP_ID) return 'rgba(148, 163, 184, 0.2)';
                   const category = n.data.category as string;
                   if (CATEGORY_VISUALS[category as keyof typeof CATEGORY_VISUALS]) {
                     return CATEGORY_VISUALS[category as keyof typeof CATEGORY_VISUALS].color;

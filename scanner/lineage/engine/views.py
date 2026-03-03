@@ -707,6 +707,97 @@ class ViewBuilder:
                 },
             ))
 
+        # ── Step 4a: Infer edges for zero-edge tools ──────────────────
+        # Tools from the pipeline stack or with only control-plane edges
+        # get no data-flow edges above.  Infer lane-adjacency connections
+        # so they appear connected in the overview.
+        connected_tool_ids: Set[str] = set()
+        for pair in tool_edge_counts:
+            src_id, tgt_id = pair.split("→")
+            connected_tool_ids.add(src_id)
+            connected_tool_ids.add(tgt_id)
+
+        # Group existing view nodes by lane for neighbour lookup
+        lane_to_tools: Dict[str, List[ViewNode]] = defaultdict(list)
+        for vn in view_nodes:
+            lane_to_tools[vn.layer].append(vn)
+
+        ordered_lanes = [l.value for l in PipelineLane]
+
+        for vn in view_nodes:
+            if vn.id in connected_tool_ids:
+                continue  # already has edges
+
+            my_lane_idx = LANE_ORDER.get(vn.layer, -1)
+            if my_lane_idx < 0:
+                continue
+
+            # Find nearest upstream lane (lower index) that has tools
+            for idx in range(my_lane_idx - 1, -1, -1):
+                lane_name = ordered_lanes[idx]
+                neighbors = lane_to_tools.get(lane_name, [])
+                if neighbors:
+                    for neighbor in neighbors:
+                        pair_key = f"{neighbor.id}→{vn.id}"
+                        if pair_key not in tool_edge_counts:
+                            tool_edge_counts[pair_key] = 0
+                            src_lane = view_node_lane.get(neighbor.id, "")
+                            tgt_lane = view_node_lane.get(vn.id, "")
+                            sem_type, sem_label = _derive_semantic_type(src_lane, tgt_lane)
+                            view_edges.append(ViewEdge(
+                                id=f"inferred-{pair_key}",
+                                source_id=neighbor.id,
+                                target_id=vn.id,
+                                canonical_type="derives",
+                                original_type="inferred_adjacency",
+                                confidence=0.3,
+                                inferred=True,
+                                evidence_count=0,
+                                metadata={
+                                    "semanticType": sem_type,
+                                    "label": sem_label,
+                                    "dataFlowCount": 0,
+                                    "srcLane": src_lane,
+                                    "tgtLane": tgt_lane,
+                                    "inferredReason": "lane_adjacency",
+                                },
+                            ))
+                            connected_tool_ids.add(vn.id)
+                    break  # only connect to nearest upstream lane
+
+            # Find nearest downstream lane (higher index) that has tools
+            for idx in range(my_lane_idx + 1, len(ordered_lanes)):
+                lane_name = ordered_lanes[idx]
+                neighbors = lane_to_tools.get(lane_name, [])
+                if neighbors:
+                    for neighbor in neighbors:
+                        pair_key = f"{vn.id}→{neighbor.id}"
+                        if pair_key not in tool_edge_counts:
+                            tool_edge_counts[pair_key] = 0
+                            src_lane = view_node_lane.get(vn.id, "")
+                            tgt_lane = view_node_lane.get(neighbor.id, "")
+                            sem_type, sem_label = _derive_semantic_type(src_lane, tgt_lane)
+                            view_edges.append(ViewEdge(
+                                id=f"inferred-{pair_key}",
+                                source_id=vn.id,
+                                target_id=neighbor.id,
+                                canonical_type="derives",
+                                original_type="inferred_adjacency",
+                                confidence=0.3,
+                                inferred=True,
+                                evidence_count=0,
+                                metadata={
+                                    "semanticType": sem_type,
+                                    "label": sem_label,
+                                    "dataFlowCount": 0,
+                                    "srcLane": src_lane,
+                                    "tgtLane": tgt_lane,
+                                    "inferredReason": "lane_adjacency",
+                                },
+                            ))
+                            connected_tool_ids.add(neighbor.id)
+                    break  # only connect to nearest downstream lane
+
         # ── Step 4b: Compute topological order per tool ─────────────────
         # Tools receiving data from earlier lanes appear first within their lane
         tool_topo_order: Dict[str, float] = {}

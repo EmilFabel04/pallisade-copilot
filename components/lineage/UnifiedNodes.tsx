@@ -609,8 +609,31 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   );
 }
 
+// Orphan group node — renders the label for the "Unconnected" container
+function OrphanGroupNode({ data }: { data: { label?: string } }) {
+  return (
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div
+        style={{
+          position: 'absolute',
+          top: 12,
+          left: 16,
+          fontSize: 11,
+          fontWeight: 500,
+          color: 'var(--muted)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}
+      >
+        {data.label || 'Unconnected / Not Yet Mapped'}
+      </div>
+    </div>
+  );
+}
+
 // Export unified node types for ReactFlow
 export const unifiedNodeTypes = {
   toolNode: ToolNode,
   dataAssetNode: DataAssetNode,
+  orphanGroup: OrphanGroupNode,
 };

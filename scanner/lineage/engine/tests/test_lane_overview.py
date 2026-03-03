@@ -844,7 +844,8 @@ class TestSemanticEdgeTypes:
             assert "semanticType" in edge.metadata
             assert "label" in edge.metadata
             assert "dataFlowCount" in edge.metadata
-            assert edge.metadata["dataFlowCount"] > 0
+            if not edge.inferred:
+                assert edge.metadata["dataFlowCount"] > 0
 
     def test_edge_metadata_serializes(self, n8n_bq_dbt_graph):
         """ViewEdge metadata should appear in to_dict() output."""
@@ -888,3 +889,140 @@ class TestOpsSummaryStats:
             assert key in hd
             assert isinstance(hd[key], int)
             assert hd[key] >= 0
+
+
+# ---- Inferred lane-adjacency edge tests ----
+
+class TestInferredLaneEdges:
+    """Test Step 4a: zero-edge tools get inferred lane-adjacency edges."""
+
+    def test_pipeline_stack_dbt_gets_inferred_edge(self):
+        """dbt from pipeline stack (no graph nodes) should get inferred edges to warehouse lane."""
+        graph = LineageGraph()
+        # Add a BigQuery service node so warehouse_raw lane is occupied
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE,
+            database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        dbt_nodes = [n for n in view.nodes if n.platform == "dbt_core"]
+        assert len(dbt_nodes) >= 1, "dbt tool node should exist"
+
+        dbt_id = dbt_nodes[0].id
+        dbt_edges = [
+            e for e in view.edges
+            if e.source_id == dbt_id or e.target_id == dbt_id
+        ]
+        assert len(dbt_edges) > 0, "dbt should have at least one inferred edge"
+        assert all(e.inferred for e in dbt_edges), "all dbt edges should be inferred"
+        assert any(
+            e.metadata.get("inferredReason") == "lane_adjacency"
+            for e in dbt_edges
+        )
+
+    def test_pipeline_stack_airflow_gets_inferred_edge(self):
+        """Airflow from pipeline stack should connect to neighbouring lanes."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE,
+            database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        af_nodes = [n for n in view.nodes if n.platform == "airflow"]
+        assert len(af_nodes) >= 1, "Airflow tool node should exist"
+
+        af_id = af_nodes[0].id
+        af_edges = [
+            e for e in view.edges
+            if e.source_id == af_id or e.target_id == af_id
+        ]
+        assert len(af_edges) > 0, "Airflow should have at least one inferred edge"
+
+    def test_pipeline_stack_linux_gets_inferred_edge(self):
+        """Linux Server from pipeline stack (ingestion lane) should connect to warehouse_raw."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE,
+            database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "linux", "integrationId": "linux_001", "name": "Linux Server"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        linux_nodes = [n for n in view.nodes if n.platform == "linux"]
+        assert len(linux_nodes) >= 1, "Linux tool node should exist"
+
+        linux_id = linux_nodes[0].id
+        linux_edges = [
+            e for e in view.edges
+            if e.source_id == linux_id or e.target_id == linux_id
+        ]
+        assert len(linux_edges) > 0, "Linux should have at least one inferred edge to warehouse"
+        # Linux is in ingestion → downstream neighbor is warehouse_raw
+        downstream_edges = [
+            e for e in linux_edges if e.source_id == linux_id
+        ]
+        assert len(downstream_edges) > 0, "Linux should have downstream edge"
+
+    def test_no_inferred_edges_when_data_flow_exists(self, n8n_bq_dbt_graph):
+        """Tools with real data-flow edges should NOT get additional inferred edges."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for edge in view.edges:
+            if edge.evidence_count > 0:
+                # This is a real edge — no inferred companion should duplicate it
+                assert not edge.inferred
+
+    def test_inferred_edges_have_correct_metadata(self):
+        """Inferred edges should carry lane_adjacency reason and low confidence."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE,
+            database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        inferred = [e for e in view.edges if e.inferred]
+        for edge in inferred:
+            assert edge.confidence <= 0.5, "Inferred edges should have low confidence"
+            assert edge.evidence_count == 0
+            assert edge.metadata.get("inferredReason") == "lane_adjacency"
+            assert "semanticType" in edge.metadata
+            assert "label" in edge.metadata
