@@ -126,6 +126,7 @@ class ViewEdge:
     inferred: bool
     evidence_count: int
     evidence_refs: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         d = {
@@ -140,6 +141,8 @@ class ViewEdge:
         }
         if self.evidence_refs:
             d["evidenceRefs"] = self.evidence_refs
+        if self.metadata:
+            d["metadata"] = self.metadata
         return d
 
 
@@ -238,6 +241,30 @@ class RenderedView:
         if self.orchestrators:
             result["orchestrators"] = [o.to_dict() for o in self.orchestrators]
         return result
+
+
+# ---------------------------------------------------------------------------
+# Semantic edge type helpers (for Pipeline Overview)
+# ---------------------------------------------------------------------------
+
+def _derive_semantic_type(src_lane: str, tgt_lane: str) -> Tuple[str, str]:
+    """Derive a semantic edge type and display label from source/target lanes."""
+    _LANE_PAIR_MAP = {
+        ("ingestion", "warehouse_raw"): ("ingests", "Ingests"),
+        ("ingestion", "warehouse_analytics"): ("ingests", "Ingests"),
+        ("warehouse_raw", "transformation"): ("feeds", "Feeds"),
+        ("transformation", "warehouse_analytics"): ("transforms", "Builds"),
+        ("transformation", "warehouse_raw"): ("transforms", "Builds"),
+        ("warehouse_analytics", "reporting"): ("serves", "Serves"),
+        ("warehouse_raw", "reporting"): ("serves", "Serves"),
+    }
+    result = _LANE_PAIR_MAP.get((src_lane, tgt_lane))
+    if result:
+        return result
+    # Fallback heuristics
+    if src_lane == "transformation" or tgt_lane == "transformation":
+        return ("orchestrates", "Orchestrates") if tgt_lane == "transformation" else ("builds", "Builds")
+    return ("data_flow", "Data Flow")
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +469,9 @@ class ViewBuilder:
         # Track which node.id maps to which tool_key (for edge aggregation)
         node_to_tool: Dict[str, Tuple[str, str]] = {}
 
+        # Also collect graph nodes per tool key for enrichment
+        tool_key_to_graph_nodes: Dict[Tuple[str, str], List[LineageNode]] = defaultdict(list)
+
         for node in self.graph.nodes.values():
             ct = node.canonical_type or map_node_type(node).value
             dataset_zone = classify_dataset_zone(node) if ct == "dataset" else None
@@ -462,6 +492,7 @@ class ViewBuilder:
             tk: Tuple[str, str] = (lane, tool_id)
 
             node_to_tool[node.id] = tk
+            tool_key_to_graph_nodes[tk].append(node)
 
             if tk not in tool_info:
                 # Determine display name
@@ -554,6 +585,55 @@ class ViewBuilder:
             platform = info["platform"]
             node_view_id = f"tool:{lane}:{tool_id}"
 
+            # Enrich: aggregate health, jobs, sub-nodes from graph nodes
+            graph_nodes = tool_key_to_graph_nodes.get((lane, tool_id), [])
+            health_summary = {"healthy": 0, "degraded": 0, "failing": 0, "unknown": 0, "stale": 0}
+            job_count = 0
+            last_run_ts: Optional[str] = None
+            last_run_dt = None
+            sub_nodes: List[Dict[str, Any]] = []
+
+            for gn in graph_nodes:
+                # Health aggregation
+                status = gn.health_status.value if hasattr(gn, "health_status") else "unknown"
+                if status in health_summary:
+                    health_summary[status] += 1
+                else:
+                    health_summary["unknown"] += 1
+                # Job count
+                gn_ct = gn.canonical_type or ""
+                if gn_ct == "job":
+                    job_count += 1
+                # Last run timestamp (most recent observed_at)
+                if hasattr(gn, "observed_at") and gn.observed_at:
+                    if last_run_dt is None or gn.observed_at > last_run_dt:
+                        last_run_dt = gn.observed_at
+                        last_run_ts = gn.observed_at.isoformat()
+                # Sub-nodes (cap at 20)
+                if len(sub_nodes) < 20:
+                    sub_nodes.append({
+                        "id": gn.id,
+                        "name": gn.name,
+                        "type": gn_ct or "unknown",
+                        "fqn": gn.fqn or gn.name,
+                    })
+
+            # Coverage gaps
+            coverage_gaps: List[str] = []
+            if info["asset_count"] == 0 and info.get("from_pipeline_stack"):
+                coverage_gaps.append("no_data_extracted")
+            # Check for sparse lineage: tool has assets but very few edges
+            tool_edge_count = 0
+            for edge in self.graph.edges.values():
+                if edge.plane == LinePlane.CONTROL:
+                    continue
+                src_tk = node_to_tool.get(edge.source_id)
+                tgt_tk = node_to_tool.get(edge.target_id)
+                if src_tk == (lane, tool_id) or tgt_tk == (lane, tool_id):
+                    tool_edge_count += 1
+            if info["asset_count"] > 5 and tool_edge_count < 2:
+                coverage_gaps.append("sparse_lineage")
+
             view_nodes.append(ViewNode(
                 id=node_view_id,
                 name=info["display_name"],
@@ -575,6 +655,12 @@ class ViewBuilder:
                     "isOrchestrator": info.get("is_orchestrator", False),
                     "isInfra": info.get("is_infra", False),
                     "fromPipelineStack": info.get("from_pipeline_stack", False),
+                    "healthSummary": health_summary,
+                    "jobCount": job_count,
+                    "lastRunTs": last_run_ts,
+                    "coverageGaps": coverage_gaps,
+                    "subNodes": sub_nodes,
+                    "totalSubNodeCount": len(graph_nodes),
                 },
             ))
 
@@ -592,9 +678,17 @@ class ViewBuilder:
             pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
             tool_edge_counts[pair_key] += 1
 
+        # Build a node-id-to-lane lookup for semantic type derivation
+        view_node_lane: Dict[str, str] = {}
+        for vn in view_nodes:
+            view_node_lane[vn.id] = vn.layer
+
         view_edges: List[ViewEdge] = []
         for pair, count in tool_edge_counts.items():
             src_id, tgt_id = pair.split("→")
+            src_lane = view_node_lane.get(src_id, "")
+            tgt_lane = view_node_lane.get(tgt_id, "")
+            semantic_type, semantic_label = _derive_semantic_type(src_lane, tgt_lane)
             view_edges.append(ViewEdge(
                 id=f"flow-{pair}",
                 source_id=src_id,
@@ -604,6 +698,13 @@ class ViewBuilder:
                 confidence=1.0,
                 inferred=False,
                 evidence_count=count,
+                metadata={
+                    "semanticType": semantic_type,
+                    "label": semantic_label,
+                    "dataFlowCount": count,
+                    "srcLane": src_lane,
+                    "tgtLane": tgt_lane,
+                },
             ))
 
         # ── Step 4b: Compute topological order per tool ─────────────────
@@ -674,6 +775,17 @@ class ViewBuilder:
             ))
 
         # Stats
+        agg_health = {"healthy": 0, "degraded": 0, "failing": 0, "unknown": 0, "stale": 0}
+        total_assets = 0
+        coverage_gap_count = 0
+        for n in view_nodes:
+            hs = n.metadata.get("healthSummary", {})
+            for k in agg_health:
+                agg_health[k] += hs.get(k, 0)
+            total_assets += n.metadata.get("assetCount", 0)
+            if n.metadata.get("coverageGaps"):
+                coverage_gap_count += 1
+
         stats = {
             "totalNodes": len(view_nodes),
             "totalEdges": len(view_edges),
@@ -683,6 +795,12 @@ class ViewBuilder:
             "laneDistribution": {
                 lane_name: len(by_lane.get(lane_name, []))
                 for lane_name in active_lanes
+            },
+            "opsSummary": {
+                "totalTools": len(view_nodes),
+                "totalAssets": total_assets,
+                "healthDistribution": agg_health,
+                "coverageGapCount": coverage_gap_count,
             },
         }
 

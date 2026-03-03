@@ -29,7 +29,7 @@ from scanner.lineage.graph import (
     PlatformDomain,
 )
 from scanner.lineage.engine.canonical import canonicalize_graph_in_place
-from scanner.lineage.engine.views import ViewBuilder
+from scanner.lineage.engine.views import ViewBuilder, _derive_semantic_type
 from scanner.lineage.engine.zones import (
     DatasetZone,
     ActorCapability,
@@ -733,3 +733,158 @@ class TestActorCapabilityClassification:
     def test_looker_is_reporting(self):
         node = _make_node("looker", NodeType.DASHBOARD, "looker", PlatformDomain.BI)
         assert classify_actor_capability(node) == ActorCapability.REPORTING
+
+
+# ---- Enriched ViewNode metadata tests ----
+
+class TestEnrichedViewNodeMetadata:
+    def test_health_summary_present(self, n8n_bq_dbt_graph):
+        """Every ViewNode should have a healthSummary in metadata."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for vn in view.nodes:
+            hs = vn.metadata.get("healthSummary")
+            assert hs is not None, f"Node {vn.name} missing healthSummary"
+            for key in ("healthy", "degraded", "failing", "unknown", "stale"):
+                assert key in hs, f"Node {vn.name} healthSummary missing '{key}'"
+
+    def test_job_count_present(self, n8n_bq_dbt_graph):
+        """Every ViewNode should have a jobCount in metadata."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for vn in view.nodes:
+            assert "jobCount" in vn.metadata, f"Node {vn.name} missing jobCount"
+            assert isinstance(vn.metadata["jobCount"], int)
+
+    def test_sub_nodes_present(self, n8n_bq_dbt_graph):
+        """Every ViewNode should have subNodes list and totalSubNodeCount."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for vn in view.nodes:
+            assert "subNodes" in vn.metadata, f"Node {vn.name} missing subNodes"
+            assert isinstance(vn.metadata["subNodes"], list)
+            assert "totalSubNodeCount" in vn.metadata
+            # Sub-nodes should have required fields
+            for sn in vn.metadata["subNodes"]:
+                assert "id" in sn
+                assert "name" in sn
+                assert "type" in sn
+
+    def test_coverage_gaps_present(self, n8n_bq_dbt_graph):
+        """Every ViewNode should have a coverageGaps list."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for vn in view.nodes:
+            assert "coverageGaps" in vn.metadata
+            assert isinstance(vn.metadata["coverageGaps"], list)
+
+    def test_pipeline_stack_tool_gets_no_data_gap(self):
+        """A tool from pipeline stack with 0 assets should get 'no_data_extracted' gap."""
+        graph = LineageGraph()
+        tool_nodes = [{"toolType": "fivetran", "integrationId": "ft_001", "name": "Fivetran"}]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        ft_nodes = [n for n in view.nodes if n.platform == "fivetran"]
+        assert len(ft_nodes) >= 1
+        assert "no_data_extracted" in ft_nodes[0].metadata["coverageGaps"]
+
+    def test_enriched_metadata_serializes(self, n8n_bq_dbt_graph):
+        """Enriched metadata should survive to_dict() serialization."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+        d = view.to_dict()
+
+        for node_dict in d["nodes"]:
+            meta = node_dict["metadata"]
+            assert "healthSummary" in meta
+            assert "jobCount" in meta
+            assert "subNodes" in meta
+            assert "coverageGaps" in meta
+
+
+# ---- Semantic edge type tests ----
+
+class TestSemanticEdgeTypes:
+    def test_ingestion_to_warehouse_raw(self):
+        sem, label = _derive_semantic_type("ingestion", "warehouse_raw")
+        assert sem == "ingests"
+        assert label == "Ingests"
+
+    def test_transformation_to_warehouse_analytics(self):
+        sem, label = _derive_semantic_type("transformation", "warehouse_analytics")
+        assert sem == "transforms"
+        assert label == "Builds"
+
+    def test_warehouse_analytics_to_reporting(self):
+        sem, label = _derive_semantic_type("warehouse_analytics", "reporting")
+        assert sem == "serves"
+        assert label == "Serves"
+
+    def test_warehouse_raw_to_transformation(self):
+        sem, label = _derive_semantic_type("warehouse_raw", "transformation")
+        assert sem == "feeds"
+        assert label == "Feeds"
+
+    def test_unknown_pair_falls_back(self):
+        sem, label = _derive_semantic_type("reporting", "ingestion")
+        assert sem == "data_flow"
+
+    def test_edges_have_semantic_metadata(self, n8n_bq_dbt_graph):
+        """ViewEdges in lane overview should have semantic metadata."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for edge in view.edges:
+            assert edge.metadata, f"Edge {edge.id} has no metadata"
+            assert "semanticType" in edge.metadata
+            assert "label" in edge.metadata
+            assert "dataFlowCount" in edge.metadata
+            assert edge.metadata["dataFlowCount"] > 0
+
+    def test_edge_metadata_serializes(self, n8n_bq_dbt_graph):
+        """ViewEdge metadata should appear in to_dict() output."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+        d = view.to_dict()
+
+        for edge_dict in d["edges"]:
+            assert "metadata" in edge_dict
+            assert "semanticType" in edge_dict["metadata"]
+
+
+# ---- OpsSummary stats tests ----
+
+class TestOpsSummaryStats:
+    def test_ops_summary_present(self, n8n_bq_dbt_graph):
+        """Stats should contain an opsSummary object."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        assert "opsSummary" in view.stats
+        ops = view.stats["opsSummary"]
+        assert "totalTools" in ops
+        assert "totalAssets" in ops
+        assert "healthDistribution" in ops
+        assert "coverageGapCount" in ops
+
+    def test_ops_summary_total_tools_matches_nodes(self, n8n_bq_dbt_graph):
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        assert view.stats["opsSummary"]["totalTools"] == len(view.nodes)
+
+    def test_ops_summary_health_distribution_sums(self, n8n_bq_dbt_graph):
+        """Health distribution values should be non-negative integers."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        hd = view.stats["opsSummary"]["healthDistribution"]
+        for key in ("healthy", "degraded", "failing", "unknown", "stale"):
+            assert key in hd
+            assert isinstance(hd[key], int)
+            assert hd[key] >= 0

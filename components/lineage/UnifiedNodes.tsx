@@ -65,6 +65,8 @@ interface ToolNodeData {
   domainColor?: string;
   assetCount?: number;
   healthSummary?: { healthy: number; degraded: number; failing: number; unknown: number };
+  jobCount?: number;
+  coverageGaps?: string[];
 }
 
 interface DataAssetIssues {
@@ -243,7 +245,12 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
             {toolInitial}
           </div>
           <div className="flex-1 min-w-0">
-            <span className="text-[var(--text)] font-semibold text-[14px] truncate block">{data.name}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[var(--text)] font-semibold text-[14px] truncate">{data.name}</span>
+              {(data.coverageGaps?.length ?? 0) > 0 && (
+                <div className="w-2 h-2 rounded-full bg-amber-400 shrink-0" title={`${data.coverageGaps!.length} coverage gap(s)`} />
+              )}
+            </div>
             <span className="text-[10px] uppercase tracking-wide" style={{ color: layerColor }}>
               {data.toolType || data.category}
             </span>
@@ -255,6 +262,14 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
           <div className="flex items-center justify-between text-[11px] mb-2">
             <span className="text-[var(--muted)]">Data Assets</span>
             <span className="text-[var(--text)] font-semibold">{data.assetCount}</span>
+          </div>
+        )}
+
+        {/* Job count */}
+        {(data.jobCount ?? 0) > 0 && (
+          <div className="flex items-center justify-between text-[11px] mb-2">
+            <span className="text-[var(--muted)]">Jobs</span>
+            <span className="text-[var(--text)] font-semibold">{data.jobCount}</span>
           </div>
         )}
 

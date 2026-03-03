@@ -46,6 +46,8 @@ import {
   getConfidenceColor,
   CATEGORY_VISUALS,
 } from '@/components/lineage/types';
+import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
+import type { InspectorTarget } from '@/components/lineage/pipeline-overview/types';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -183,376 +185,8 @@ function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode)
 }
 
 // ---------------------------------------------------------------------------
-// Lane Overview Canvas — renders the lane-based pipeline overview
-// Uses pre-positioned nodes from backend (no Dagre needed)
+// Lane Overview Canvas — extracted to components/lineage/pipeline-overview/
 // ---------------------------------------------------------------------------
-
-// Tool category icon based on tool name
-function _laneToolIcon(name: string, color: string) {
-  const n = name.toLowerCase();
-  const cls = "w-4 h-4";
-  const props = { className: cls, fill: "none", stroke: color, viewBox: "0 0 24 24", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-
-  // Ingestion tools
-  if (n.includes('fivetran') || n.includes('airbyte') || n.includes('stitch'))
-    return <svg {...props}><path d="M12 3v18M3 12l4-4 4 4M13 8l4-4 4 4" /><path d="M7 16h10" strokeDasharray="2 2" /></svg>;
-  // Warehouse / database
-  if (n.includes('bigquery') || n.includes('snowflake') || n.includes('postgres') || n.includes('redshift') || n.includes('databricks'))
-    return <svg {...props}><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6" /><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" /></svg>;
-  // Transformation
-  if (n.includes('dbt'))
-    return <svg {...props}><path d="M16 3l5 5-5 5" /><path d="M21 8H9" /><path d="M8 21l-5-5 5-5" /><path d="M3 16h12" /></svg>;
-  // Orchestration
-  if (n.includes('airflow') || n.includes('n8n') || n.includes('dagster') || n.includes('prefect'))
-    return <svg {...props}><circle cx="12" cy="12" r="3" /><path d="M12 2v4m0 12v4m-7.07-2.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-2.93 7.07l-2.83-2.83M6.76 6.76L3.93 3.93" /></svg>;
-  // BI / Reporting
-  if (n.includes('looker') || n.includes('tableau') || n.includes('metabase') || n.includes('powerbi'))
-    return <svg {...props}><rect x="3" y="12" width="4" height="9" rx="1" /><rect x="10" y="7" width="4" height="14" rx="1" /><rect x="17" y="3" width="4" height="18" rx="1" /></svg>;
-  // Default: generic tool
-  return <svg {...props}><rect x="3" y="3" width="18" height="18" rx="4" /><path d="M9 9h6m-6 3h4m-4 3h6" /></svg>;
-}
-
-// Lane stage descriptions
-const LANE_DESCRIPTIONS: Record<string, string> = {
-  ingestion: 'Extract & Load',
-  warehouse_raw: 'Raw Storage',
-  transformation: 'Transform & Model',
-  warehouse_analytics: 'Curated Data',
-  reporting: 'Dashboards & BI',
-};
-
-function LaneOverviewCanvas({
-  data,
-  loading,
-  onExtract,
-  extracting,
-  stackId,
-}: {
-  data: RenderedViewResponse | null;
-  loading: boolean;
-  onExtract: () => void;
-  extracting: boolean;
-  stackId: string | null;
-}) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 red-spinner" />
-          <p className="text-sm text-[var(--muted)]">Loading pipeline overview...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!data || !data.nodes || data.nodes.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-1">
-        <div className="w-16 h-16 rounded-2xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)] flex items-center justify-center mb-3">
-          <svg className="w-8 h-8 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zm0 9.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 13.5h.75m0 0v3.75m0-3.75h3.75" />
-          </svg>
-        </div>
-        <p className="text-[var(--text-secondary)] text-[15px] font-medium">No pipeline overview yet</p>
-        <p className="text-[var(--text-faint)] text-[13px] mb-5">
-          Build lineage to see your data pipeline
-        </p>
-        <button
-          onClick={onExtract}
-          disabled={extracting || !stackId}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-2)] disabled:opacity-50 text-white text-[13px] font-medium transition-all shadow-lg shadow-[var(--accent)]/20"
-        >
-          {extracting ? (
-            <>
-              <div className="w-3.5 h-3.5 red-spinner" />
-              Building...
-            </>
-          ) : (
-            <>
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-              </svg>
-              Build Lineage
-            </>
-          )}
-        </button>
-      </div>
-    );
-  }
-
-  const lanes = data.lanes || [];
-  const nodes = data.nodes;
-  const edges = data.edges;
-
-  // Layout dimensions
-  const BOX_W = 224;
-  const BOX_H = 76;
-  const LANE_PAD = 48;
-  const HEADER_H = 72;
-  const PAD = 32;
-
-  // Compute coordinate space
-  const allX = nodes.map(n => n.x);
-  const allY = nodes.map(n => n.y);
-  const minX = Math.min(...allX, 0) - LANE_PAD - PAD;
-  const maxX = Math.max(...allX, 0) + BOX_W + LANE_PAD + PAD;
-  const minY = Math.min(...allY, 0) - HEADER_H - PAD;
-  const maxY = Math.max(...allY, 0) + BOX_H + PAD + 24;
-
-  const totalW = maxX - minX;
-  const totalH = maxY - minY;
-  const offX = -minX;
-  const offY = -minY;
-
-  // Build a node map for edge drawing
-  const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-  return (
-    <div className="w-full h-full overflow-auto relative bg-[var(--surface-sunken)]">
-      <div className="relative" style={{ width: totalW, height: totalH, minWidth: '100%', minHeight: '100%' }}>
-
-        {/* Subtle dot grid background */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: 'radial-gradient(circle, var(--text-faint) 0.5px, transparent 0.5px)',
-            backgroundSize: '20px 20px',
-            opacity: 0.12,
-          }}
-        />
-
-        {/* Lane columns */}
-        {lanes.map((lane) => {
-          const color = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
-          const lx = lane.x + offX - LANE_PAD;
-          const lw = BOX_W + LANE_PAD * 2;
-          const desc = LANE_DESCRIPTIONS[lane.name] || '';
-
-          return (
-            <div
-              key={lane.name}
-              className="absolute top-0 pointer-events-none"
-              style={{ left: lx, width: lw, height: '100%' }}
-            >
-              {/* Lane gradient background */}
-              <div
-                className="absolute inset-x-2 inset-y-0 rounded-2xl"
-                style={{ background: `linear-gradient(180deg, ${color}0C 0%, ${color}04 30%, transparent 70%)` }}
-              />
-              {/* Top glow line */}
-              <div
-                className="absolute top-0 inset-x-6 h-px"
-                style={{ background: `linear-gradient(90deg, transparent, ${color}30, transparent)` }}
-              />
-              {/* Lane header */}
-              <div className="flex flex-col items-center pt-5 gap-1">
-                <div
-                  className="px-3.5 py-1 rounded-full text-[11px] font-semibold tracking-wider uppercase"
-                  style={{ color, background: `${color}14`, border: `1px solid ${color}20` }}
-                >
-                  {lane.label}
-                </div>
-                {desc && (
-                  <span className="text-[9px] tracking-wide uppercase text-[var(--text-faint)]">{desc}</span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {/* SVG layer for connections */}
-        <svg
-          className="absolute inset-0 pointer-events-none"
-          width={totalW}
-          height={totalH}
-          style={{ zIndex: 1 }}
-        >
-          <defs>
-            {/* Edge gradients — one per edge with source→target lane colors */}
-            {edges.map((edge) => {
-              const src = nodeMap.get(edge.sourceId);
-              const tgt = nodeMap.get(edge.targetId);
-              if (!src || !tgt) return null;
-              const srcLane = src.metadata?.lane as PipelineLaneName | undefined;
-              const tgtLane = tgt.metadata?.lane as PipelineLaneName | undefined;
-              const c1 = srcLane ? LANE_COLORS[srcLane] || '#6366F1' : '#6366F1';
-              const c2 = tgtLane ? LANE_COLORS[tgtLane] || '#6366F1' : '#6366F1';
-              return (
-                <linearGradient key={`g-${edge.id}`} id={`eg-${edge.id}`} x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor={c1} stopOpacity={0.6} />
-                  <stop offset="100%" stopColor={c2} stopOpacity={0.6} />
-                </linearGradient>
-              );
-            })}
-          </defs>
-
-          {edges.map((edge) => {
-            const src = nodeMap.get(edge.sourceId);
-            const tgt = nodeMap.get(edge.targetId);
-            if (!src || !tgt) return null;
-
-            const x1 = src.x + offX + BOX_W;
-            const y1 = src.y + offY + BOX_H / 2;
-            const x2 = tgt.x + offX;
-            const y2 = tgt.y + offY + BOX_H / 2;
-            const dx = Math.abs(x2 - x1) * 0.45;
-            const path = `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`;
-
-            return (
-              <g key={edge.id}>
-                {/* Glow layer */}
-                <path d={path} fill="none" stroke={`url(#eg-${edge.id})`} strokeWidth={6} opacity={0.08} />
-                {/* Main stroke */}
-                <path d={path} fill="none" stroke={`url(#eg-${edge.id})`} strokeWidth={1.5} strokeLinecap="round" />
-                {/* Animated flow particle */}
-                <circle r="2.5" opacity={0.7}>
-                  <animate attributeName="opacity" values="0;0.7;0.7;0" dur="3.5s" repeatCount="indefinite" />
-                  <animateMotion dur="3.5s" repeatCount="indefinite" path={path} />
-                </circle>
-                {/* Arrowhead dot at target */}
-                <circle cx={x2 - 1} cy={y2} r="3" fill={`url(#eg-${edge.id})`} opacity={0.5} />
-              </g>
-            );
-          })}
-        </svg>
-
-        {/* Tool cards */}
-        {nodes.map((node) => {
-          const lane = node.metadata?.lane as PipelineLaneName | undefined;
-          const color = lane ? LANE_COLORS[lane] || '#6366F1' : '#6366F1';
-          const isOrch = node.metadata?.isOrchestrator;
-          const isInfra = node.metadata?.isInfra;
-          const assetCount = node.metadata?.assetCount as number | undefined;
-          const accent = isOrch ? '#FB923C' : color;
-
-          return (
-            <div
-              key={node.id}
-              className="absolute"
-              style={{
-                left: node.x + offX,
-                top: node.y + offY,
-                width: BOX_W,
-                height: BOX_H,
-                zIndex: 2,
-              }}
-            >
-              <div
-                className={`
-                  group relative w-full h-full rounded-xl overflow-hidden
-                  transition-all duration-200 cursor-default
-                  bg-[var(--surface)] backdrop-blur-sm
-                  hover:translate-y-[-1px]
-                  ${isOrch ? 'border border-dashed' : 'border'}
-                `}
-                style={{
-                  borderColor: `${accent}22`,
-                  boxShadow: `0 1px 3px rgba(0,0,0,0.2), 0 0 0 0 ${accent}00`,
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = `${accent}50`;
-                  e.currentTarget.style.boxShadow = `0 8px 24px rgba(0,0,0,0.3), 0 0 20px ${accent}15`;
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = `${accent}22`;
-                  e.currentTarget.style.boxShadow = `0 1px 3px rgba(0,0,0,0.2), 0 0 0 0 ${accent}00`;
-                }}
-              >
-                {/* Left accent bar */}
-                <div
-                  className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full"
-                  style={{ background: accent }}
-                />
-
-                {/* Top inner glow */}
-                <div
-                  className="absolute inset-x-0 top-0 h-px"
-                  style={{ background: `linear-gradient(90deg, transparent 10%, ${accent}20, transparent 90%)` }}
-                />
-
-                {/* Card content */}
-                <div className="flex items-center gap-3 pl-5 pr-3 h-full">
-                  {/* Icon container */}
-                  <div
-                    className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors"
-                    style={{ background: `${accent}10`, border: `1px solid ${accent}15` }}
-                  >
-                    {_laneToolIcon(node.name, accent)}
-                  </div>
-
-                  {/* Text content */}
-                  <div className="flex-1 min-w-0">
-                    <div
-                      className="text-[13px] font-semibold text-[var(--text)] truncate leading-tight"
-                      title={node.name}
-                    >
-                      {node.name}
-                    </div>
-                    <div className="text-[10px] text-[var(--muted)] mt-1 flex items-center gap-1.5">
-                      {isOrch ? (
-                        <span className="flex items-center gap-1">
-                          <span className="w-1 h-1 rounded-full bg-orange-400/60" />
-                          Orchestrator
-                        </span>
-                      ) : isInfra ? (
-                        <span className="flex items-center gap-1">
-                          <span className="w-1 h-1 rounded-full bg-purple-400/60" />
-                          Infrastructure
-                        </span>
-                      ) : assetCount ? (
-                        <span>{assetCount} asset{assetCount !== 1 ? 's' : ''}</span>
-                      ) : (
-                        <span>Tool</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Asset count badge */}
-                  {assetCount != null && assetCount > 0 && !isOrch && !isInfra && (
-                    <div
-                      className="px-2 py-0.5 rounded-md text-[10px] font-bold tabular-nums shrink-0"
-                      style={{ color: accent, background: `${accent}12` }}
-                    >
-                      {assetCount}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Bottom legend bar */}
-        <div
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 px-5 py-2.5 rounded-xl border border-[var(--subtle-border)] text-[11px] z-10"
-          style={{ background: 'var(--surface)', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}
-        >
-          {lanes.map((lane) => {
-            const c = LANE_COLORS[lane.name as PipelineLaneName] || '#6366F1';
-            return (
-              <div key={lane.name} className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c, boxShadow: `0 0 6px ${c}40` }} />
-                <span className="text-[var(--text-secondary)] font-medium">{lane.label}</span>
-              </div>
-            );
-          })}
-          {data.stats && (
-            <>
-              <div className="w-px h-3.5 bg-[var(--border-medium)]" />
-              <span className="text-[var(--muted)]">
-                <span className="text-[var(--text)] font-semibold">{data.stats.totalNodes}</span> tools
-                <span className="mx-1 text-[var(--text-faint)]">/</span>
-                <span className="text-[var(--text)] font-semibold">{data.stats.totalEdges}</span> flows
-              </span>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 export default function LineagePage() {
   const { selectedPipelineId: stackId, loading: pipelineLoading } = usePipeline();
@@ -573,6 +207,9 @@ export default function LineagePage() {
   const [laneOverview, setLaneOverview] = useState<RenderedViewResponse | null>(null);
   // laneOverview is now populated by fetchControlPlane (lane view is the primary Pipeline Overview)
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+
+  // Pipeline Overview inspector state
+  const [pipelineInspectorTarget, setPipelineInspectorTarget] = useState<InspectorTarget>(null);
 
   // LLM extraction state
   const [llmExtracting, setLlmExtracting] = useState(false);
@@ -1280,7 +917,62 @@ export default function LineagePage() {
       other: '#6B7280',
     };
 
-    // Rendered overview path: use backend positions
+    // Lane overview path (primary): use dagre layout + enriched metadata
+    if (laneOverview && laneOverview.nodes.length > 0) {
+      const cpNodes: Node[] = laneOverview.nodes.map((vn) => {
+        const laneColor = LANE_COLORS[vn.metadata?.lane as PipelineLaneName]
+          || DOMAIN_COLORS[vn.platformDomain]
+          || DOMAIN_COLORS.other;
+        return {
+          id: vn.id,
+          type: 'toolNode',
+          position: { x: 0, y: 0 },
+          data: {
+            name: vn.name,
+            category: vn.platformDomain as UnifiedNodeCategory || 'warehouse',
+            layer: vn.layer as PipelineLayer,
+            toolType: vn.platform || vn.originalType,
+            assetCount: vn.metadata?.assetCount,
+            healthSummary: vn.metadata?.healthSummary,
+            jobCount: vn.metadata?.jobCount,
+            coverageGaps: vn.metadata?.coverageGaps,
+            isControlPlane: true,
+            domainColor: laneColor,
+          },
+        };
+      });
+
+      const cpEdges: Edge[] = laneOverview.edges.map((ve) => {
+        const edgeColor = ve.evidenceCount > 0 ? '#6366F1' : '#6B7280';
+        return {
+          id: ve.id,
+          source: ve.sourceId,
+          target: ve.targetId,
+          type: 'smoothstep',
+          animated: ve.evidenceCount > 0,
+          label: ve.metadata?.label
+            ? `${ve.metadata.label} · ${ve.evidenceCount}`
+            : ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : 'connected',
+          style: {
+            stroke: `${edgeColor}80`,
+            strokeWidth: ve.evidenceCount > 0
+              ? Math.min(2 + Math.log2(ve.evidenceCount + 1), 6)
+              : 2,
+            strokeDasharray: ve.evidenceCount > 0 ? undefined : '6,4',
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: edgeColor,
+          },
+        };
+      });
+
+      if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
+      const layouted = getLayoutedElements(cpNodes, cpEdges, 'LR');
+      return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
+    }
+
+    // Rendered overview path (fallback): use backend positions
     if (renderedOverview && renderedOverview.nodes.length > 0) {
       const cpNodes: Node[] = renderedOverview.nodes.map((vn) => ({
         id: vn.id,
@@ -1365,7 +1057,7 @@ export default function LineagePage() {
     if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
     const layouted = getLayoutedElements(cpNodes, cpEdges, 'LR');
     return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
-  }, [controlPlaneData, renderedOverview]);
+  }, [controlPlaneData, renderedOverview, laneOverview]);
 
   // Pick the right flow data based on active tab
   const activeFlowNodes = activeTab === 'control-plane' ? cpFlowNodes : flowNodes;
@@ -1382,7 +1074,16 @@ export default function LineagePage() {
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       if (activeTab === 'control-plane') {
-        // For control plane, create a synthetic UnifiedLineageNode so the side panel works
+        // Use InspectorPanel for control-plane nodes
+        const viewNode = laneOverview?.nodes.find(n => n.id === node.id)
+          || renderedOverview?.nodes.find(n => n.id === node.id);
+        if (viewNode) {
+          setPipelineInspectorTarget({ kind: 'node', node: viewNode });
+          setSelectedNode(null);
+          setSelectedEdge(null);
+          return;
+        }
+        // Fallback for legacy controlPlaneData
         const cpNode = controlPlaneData?.nodes?.find((n: CPNode) => n.id === node.id);
         if (cpNode) {
           setSelectedNode({
@@ -1395,6 +1096,7 @@ export default function LineagePage() {
           });
         }
       } else {
+        setPipelineInspectorTarget(null);
         // Rendered view uses raw engine IDs, unified data uses `lineage-` prefix
         const unifiedNode = lineageData?.nodes.find((n) => n.id === node.id)
           || lineageData?.nodes.find((n) => n.id === `lineage-${node.id}`);
@@ -1402,16 +1104,27 @@ export default function LineagePage() {
       }
       setSelectedEdge(null);
     },
-    [lineageData?.nodes, activeTab, controlPlaneData?.nodes]
+    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview]
   );
 
   const handleEdgeClick = useCallback(
     (event: React.MouseEvent, edge: Edge) => {
+      if (activeTab === 'control-plane') {
+        const viewEdge = laneOverview?.edges.find(e => e.id === edge.id)
+          || renderedOverview?.edges.find(e => e.id === edge.id);
+        if (viewEdge) {
+          setPipelineInspectorTarget({ kind: 'edge', edge: viewEdge });
+          setSelectedNode(null);
+          setSelectedEdge(null);
+          return;
+        }
+      }
+      setPipelineInspectorTarget(null);
       const unifiedEdge = lineageData?.edges.find((e) => e.id === edge.id);
       setSelectedEdge(unifiedEdge || null);
       setSelectedNode(null);
     },
-    [lineageData?.edges]
+    [lineageData?.edges, activeTab, laneOverview, renderedOverview]
   );
 
   // Navigate to a node from the detail panel (e.g. clicking an upstream/downstream node)
@@ -1597,15 +1310,7 @@ export default function LineagePage() {
       <div className="flex-1 flex min-h-0">
         {/* Canvas */}
         <div className="flex-1 relative">
-          {activeTab === 'control-plane' && laneOverview ? (
-            <LaneOverviewCanvas
-              data={laneOverview}
-              loading={controlPlaneLoading}
-              onExtract={extractWithLLM}
-              extracting={extracting}
-              stackId={stackId}
-            />
-          ) : controlPlaneLoading && activeTab === 'control-plane' ? (
+          {controlPlaneLoading && activeTab === 'control-plane' ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex flex-col items-center gap-4">
                 <div className="w-10 h-10 red-spinner" />
@@ -1798,104 +1503,15 @@ export default function LineagePage() {
           />
         )}
 
-        {/* Side panel - Control Plane tool details */}
-        {activeTab === 'control-plane' && selectedNode && !selectedEdge && (() => {
-          const cpNode = controlPlaneData?.nodes?.find((n: CPNode) => n.id === selectedNode.id);
-          if (!cpNode) return null;
-          const health = cpNode.healthSummary;
-          const totalHealth = health.healthy + health.degraded + health.failing + health.unknown;
-          return (
-            <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-sunken)] p-4 overflow-y-auto">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-[15px] font-medium text-[var(--text)]">Tool Details</h3>
-                <button onClick={() => setSelectedNode(null)} className="p-1 hover:bg-[var(--subtle-bg)] rounded">
-                  <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Name</label>
-                  <p className="text-[13px] text-[var(--text)] font-mono mt-1">{cpNode.name}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Type</label>
-                    <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{cpNode.toolType}</p>
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Domain</label>
-                    <p className="text-[13px] text-[var(--text)] mt-1 capitalize">{cpNode.platformDomain}</p>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data Assets</label>
-                  <p className="text-2xl font-semibold text-[var(--text)] mt-1">{cpNode.assetCount}</p>
-                </div>
-                {totalHealth > 0 && (
-                  <div>
-                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Health Summary</label>
-                    <div className="mt-2 space-y-2">
-                      {health.healthy > 0 && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-emerald-400">Healthy</span>
-                          <span className="text-[12px] text-[var(--text)]">{health.healthy}</span>
-                        </div>
-                      )}
-                      {health.degraded > 0 && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-amber-400">Degraded</span>
-                          <span className="text-[12px] text-[var(--text)]">{health.degraded}</span>
-                        </div>
-                      )}
-                      {health.failing > 0 && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-red-400">Failing</span>
-                          <span className="text-[12px] text-[var(--text)]">{health.failing}</span>
-                        </div>
-                      )}
-                      {health.unknown > 0 && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-[12px] text-[var(--muted)]">Unknown</span>
-                          <span className="text-[12px] text-[var(--text)]">{health.unknown}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {/* Connected edges in control plane */}
-                {(() => {
-                  const connEdges = controlPlaneData?.edges?.filter(
-                    (e: CPEdge) => e.source === cpNode.id || e.target === cpNode.id
-                  ) || [];
-                  if (connEdges.length === 0) return null;
-                  const cpNodeMap = new Map((controlPlaneData?.nodes || []).map((n: CPNode) => [n.id, n]));
-                  return (
-                    <div>
-                      <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data Flows ({connEdges.length})</label>
-                      <div className="mt-2 space-y-1.5">
-                        {connEdges.map((e: CPEdge) => {
-                          const otherId = e.source === cpNode.id ? e.target : e.source;
-                          const other = cpNodeMap.get(otherId);
-                          const direction = e.source === cpNode.id ? '\u2192' : '\u2190';
-                          return (
-                            <div key={e.id} className="flex items-center justify-between px-2 py-1.5 rounded bg-[var(--overlay-bg)]">
-                              <span className="text-[12px] text-[var(--text)] font-mono truncate">
-                                {direction} {other?.name || otherId}
-                              </span>
-                              <span className="text-[10px] text-[var(--muted)] shrink-0 ml-2">{e.dataFlowCount} flows</span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          );
-        })()}
+        {/* Side panel - Pipeline Overview inspector */}
+        {activeTab === 'control-plane' && pipelineInspectorTarget && (
+          <InspectorPanel
+            target={pipelineInspectorTarget}
+            laneOverview={laneOverview}
+            stackId={stackId}
+            onClose={() => setPipelineInspectorTarget(null)}
+          />
+        )}
 
         {/* Side panel - Node details */}
         {activeTab !== 'control-plane' && selectedNode && !selectedEdge && (

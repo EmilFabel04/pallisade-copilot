@@ -565,6 +565,7 @@ export interface ViewEdge {
   confidence: number;
   inferred: boolean;
   evidenceCount: number;
+  metadata?: Record<string, any>;
 }
 
 // A visual cluster grouping related nodes
