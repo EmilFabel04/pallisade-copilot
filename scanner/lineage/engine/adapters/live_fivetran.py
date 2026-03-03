@@ -341,7 +341,7 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                     if dest_platform:
                         dest_edge = self._make_destination_edge(
                             connector_job_id, connector_id_attr, connector_name,
-                            tname, dest_cfg, dest_schema, now,
+                            tname, dest_cfg, now,
                         )
                         if dest_edge:
                             edges.append(dest_edge)
@@ -398,10 +398,19 @@ class LiveFivetranAdapter(BaseLineageAdapter):
             dest_cfg.get("project_id") or dest_cfg.get("database") or "",
             hint,
         )
-        dest_schema_name = normalize_identifier(
-            dest_cfg.get("dataset") or dest_cfg.get("schema") or dest_schema_fallback,
-            hint,
-        )
+        explicit_dataset = dest_cfg.get("dataset") or dest_cfg.get("schema") or ""
+        if not explicit_dataset:
+            # Don't fall back to Fivetran's dest_schema — it's the connector
+            # name (e.g., "postgres") which doesn't reliably map to the actual
+            # warehouse dataset (e.g., "raw"). Let CrossToolEdgeSynthesizer
+            # handle the matching by table name instead.
+            logger.debug(
+                "[LiveFivetran] No explicit dataset in destination_config, "
+                "skipping destination node emission (dest_schema_fallback=%s)",
+                dest_schema_fallback,
+            )
+            return []
+        dest_schema_name = normalize_identifier(explicit_dataset, hint)
         dest_scope = compute_environment_scope(dest_platform, dest_cfg)
 
         nodes: List[LineageNode] = []
@@ -453,20 +462,19 @@ class LiveFivetranAdapter(BaseLineageAdapter):
         connector_name: str,
         tname: str,
         dest_cfg: Dict[str, Any],
-        dest_schema_fallback: str,
         now: datetime,
     ) -> Optional[LineageEdge]:
         """Create a WRITES_TO edge from connector job to warehouse destination table."""
+        explicit_dataset = dest_cfg.get("dataset") or dest_cfg.get("schema") or ""
+        if not explicit_dataset:
+            return None
         dest_platform = dest_cfg.get("platform", "")
         hint = _DEST_CASE_HINTS.get(dest_platform, "lower")
         dest_database = normalize_identifier(
             dest_cfg.get("project_id") or dest_cfg.get("database") or "",
             hint,
         )
-        dest_schema_name_norm = normalize_identifier(
-            dest_cfg.get("dataset") or dest_cfg.get("schema") or dest_schema_fallback,
-            hint,
-        )
+        dest_schema_name_norm = normalize_identifier(explicit_dataset, hint)
         norm_name = normalize_identifier(tname, hint)
         container = f"{dest_database}.{dest_schema_name_norm}"
 
