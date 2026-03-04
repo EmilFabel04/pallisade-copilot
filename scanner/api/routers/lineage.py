@@ -1836,6 +1836,84 @@ async def view_data_plane(stack_id: Optional[str] = Query(None)):
 
 
 # ==========================================
+# DATA-PLANE NEIGHBOR LOOKUP
+# ==========================================
+
+
+@router.get("/lineage/engine/data-plane/neighbors/{node_id}")
+async def data_plane_neighbors(
+    node_id: str,
+    direction: str = Query("upstream", pattern="^(upstream|downstream)$"),
+    depth: int = Query(3, ge=1, le=5),
+    limit: int = Query(50, ge=1, le=200),
+    stack_id: Optional[str] = Query(None),
+):
+    """
+    Get neighbors of a node in the pre-computed data_plane view.
+
+    Uses the current run's data_plane view edges for adjacency,
+    ensuring the detail panel shows the same topology as the
+    rendered visualization.
+
+    Falls back to on-demand view build if no pre-computed view exists.
+    """
+    try:
+        from scanner.lineage.engine.views import compute_neighbors_from_view
+    except ImportError:
+        from lineage.engine.views import compute_neighbors_from_view
+
+    # 1) Try pre-computed data_plane view from current run
+    registry = _get_run_registry(stack_id)
+    if registry.current_run_id:
+        record = registry.get_run(registry.current_run_id)
+        if record and "data_plane" in record.artifacts.views:
+            view_dict = record.artifacts.views["data_plane"]
+            return compute_neighbors_from_view(
+                view_dict, node_id, direction, depth, limit,
+            )
+
+    # 2) Fallback: compute data_plane view on-demand from engine graph
+    store = _get_engine_store(stack_id)
+    if not store.graph or not store.graph.nodes:
+        return {
+            "nodeId": node_id,
+            "direction": direction,
+            "depth": depth,
+            "neighbors": [],
+            "totalCount": 0,
+            "source": "none",
+        }
+
+    try:
+        try:
+            from lineage.engine.views import ViewBuilder
+        except ImportError:
+            from scanner.lineage.engine.views import ViewBuilder
+
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        view = builder.build_data_plane()
+        view_dict = view.to_dict()
+        result = compute_neighbors_from_view(
+            view_dict, node_id, direction, depth, limit,
+        )
+        result["source"] = "engine_fallback"
+        return result
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(
+            f"[Engine] Data-plane neighbors fallback failed: {e}"
+        )
+        return {
+            "nodeId": node_id,
+            "direction": direction,
+            "depth": depth,
+            "neighbors": [],
+            "totalCount": 0,
+            "source": "error",
+        }
+
+
+# ==========================================
 # RUN VERSIONING
 # ==========================================
 

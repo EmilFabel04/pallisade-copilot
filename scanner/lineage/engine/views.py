@@ -1681,3 +1681,99 @@ def _build_clusters_from_nodes(nodes: List[ViewNode]) -> List[ViewCluster]:
         ))
 
     return clusters
+
+
+# ---------------------------------------------------------------------------
+# Data-plane neighbor lookup (operates on serialized view dict)
+# ---------------------------------------------------------------------------
+
+def compute_neighbors_from_view(
+    view_dict: Dict[str, Any],
+    node_id: str,
+    direction: str = "upstream",
+    depth: int = 3,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """BFS neighbors from a pre-computed RenderedView dict.
+
+    This function operates on the *serialized* data_plane view (the same dict
+    that the frontend renders), guaranteeing that the detail panel shows the
+    exact same topology the user sees in the Data Plane graph.
+
+    Args:
+        view_dict: Serialized RenderedView (from ``to_dict()``).
+        node_id: The starting node.
+        direction: ``"upstream"`` or ``"downstream"``.
+        depth: Maximum BFS hops (1-5).
+        limit: Maximum total neighbor nodes returned.
+
+    Returns:
+        Dict with ``nodeId``, ``direction``, ``depth``, ``neighbors``
+        (list of hop groups), ``totalCount``, and ``source`` indicator.
+    """
+    nodes_list = view_dict.get("nodes") or []
+    edges_list = view_dict.get("edges") or []
+
+    node_lookup: Dict[str, Dict[str, Any]] = {n["id"]: n for n in nodes_list}
+
+    if node_id not in node_lookup:
+        return {
+            "nodeId": node_id,
+            "direction": direction,
+            "depth": depth,
+            "neighbors": [],
+            "totalCount": 0,
+            "source": "data_plane",
+        }
+
+    # Build adjacency: for upstream we walk edges backwards (target → source),
+    # for downstream we walk forwards (source → target).
+    adj: Dict[str, List[tuple]] = {}  # neighbour_key → [(peer_id, edge_dict)]
+    for e in edges_list:
+        src = e.get("sourceId") or e.get("source_id", "")
+        tgt = e.get("targetId") or e.get("target_id", "")
+        if direction == "upstream":
+            adj.setdefault(tgt, []).append((src, e))
+        else:
+            adj.setdefault(src, []).append((tgt, e))
+
+    # BFS
+    visited: set = {node_id}
+    frontier = [node_id]
+    neighbors_by_hop: List[Dict[str, Any]] = []
+    total = 0
+
+    for hop in range(1, depth + 1):
+        if not frontier or total >= limit:
+            break
+        next_frontier: List[str] = []
+        hop_items: List[Dict[str, Any]] = []
+
+        for current_id in frontier:
+            for peer_id, edge_dict in adj.get(current_id, []):
+                if peer_id in visited:
+                    continue
+                visited.add(peer_id)
+                peer_node = node_lookup.get(peer_id)
+                if peer_node is None:
+                    continue
+                hop_items.append({"node": peer_node, "edge": edge_dict})
+                next_frontier.append(peer_id)
+                total += 1
+                if total >= limit:
+                    break
+            if total >= limit:
+                break
+
+        if hop_items:
+            neighbors_by_hop.append({"hop": hop, "items": hop_items})
+        frontier = next_frontier
+
+    return {
+        "nodeId": node_id,
+        "direction": direction,
+        "depth": depth,
+        "neighbors": neighbors_by_hop,
+        "totalCount": total,
+        "source": "data_plane",
+    }

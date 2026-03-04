@@ -42,7 +42,7 @@ export async function GET(
     // Build query params to forward (always include stack_id for pipeline isolation)
     const forwardParams = new URLSearchParams();
     forwardParams.set('stack_id', stackId);
-    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane']) {
+    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane', 'direction', 'limit']) {
       const val = searchParams.get(key);
       if (val) forwardParams.set(key, val);
     }
@@ -96,6 +96,10 @@ export async function GET(
         break;
       case 'view-data-plane':
         endpoint = `/api/v1/lineage/engine/views/data-plane${qs}`;
+        break;
+      case 'data-plane-neighbors':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
+        endpoint = `/api/v1/lineage/engine/data-plane/neighbors/${encodeURIComponent(assetId)}?${forwardParams.toString()}`;
         break;
       case 'reconcile-diagnostics':
         endpoint = `/api/v1/lineage/engine/reconcile/diagnostics`;

@@ -23,7 +23,6 @@ import {
   type UnifiedNodeCategory,
   CATEGORY_VISUALS,
   getConfidenceColor,
-  formatColumnMapping,
   getCrossLinkedOrchestration,
 } from './types';
 
@@ -166,6 +165,59 @@ function RelationshipItem({
   );
 }
 
+// ─── Convert backend ViewNode/ViewEdge dicts to Unified types ─────
+function _viewNodeToCategory(vn: any): UnifiedNodeCategory {
+  if (vn.platformDomain === 'ingestion' &&
+      (vn.originalType === 'table' || vn.originalType === 'source')) {
+    return 'source';
+  }
+  const ot = vn.originalType as UnifiedNodeCategory;
+  const known: UnifiedNodeCategory[] = [
+    'table', 'view', 'source', 'model', 'dag', 'task', 'workflow',
+    'connector', 'workbook', 'dataset', 'question', 'notebook',
+    'file', 'test', 'dashboard', 'report',
+  ];
+  if (known.includes(ot)) return ot;
+  switch (vn.canonicalType) {
+    case 'dataset': return 'table';
+    case 'semantic': return 'dashboard';
+    case 'job': return 'workflow';
+    case 'service': return vn.platformDomain === 'warehouse' ? 'table'
+      : vn.platformDomain === 'transform' ? 'model'
+      : vn.platformDomain === 'bi' ? 'dashboard'
+      : 'table';
+    default: return 'table';
+  }
+}
+
+function viewNodeToUnified(vn: any): UnifiedLineageNode {
+  return {
+    id: `lineage-${vn.id}`,
+    name: vn.name,
+    fullName: vn.metadata?.fqn || vn.name,
+    category: _viewNodeToCategory(vn),
+    layer: (vn.layer || 'WAREHOUSE') as any,
+    toolType: vn.platform || undefined,
+    database: vn.metadata?.database || undefined,
+    schema: vn.metadata?.schema || undefined,
+    tableName: vn.name,
+    platforms: vn.platform ? [vn.platform] : undefined,
+  };
+}
+
+function viewEdgeToUnified(ve: any): UnifiedLineageEdge {
+  return {
+    id: ve.id,
+    source: `lineage-${ve.sourceId || ve.source_id}`,
+    target: `lineage-${ve.targetId || ve.target_id}`,
+    edgeType: ve.canonicalType || ve.originalType || 'derives',
+    confidence: ve.confidence,
+    evidence: ve.evidenceRefs?.map((ref: string) => ({ adapterId: ref, sourceRef: ref })),
+  };
+}
+
+type HopMap = Map<number, Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }>>;
+
 // ─── Main Panel ────────────────────────────────────────────────────
 export function DataAssetDetailPanel({
   node,
@@ -180,97 +232,101 @@ export function DataAssetDetailPanel({
   const [showAllUpstream, setShowAllUpstream] = useState(false);
   const [showAllDownstream, setShowAllDownstream] = useState(false);
 
-  // Reset expand/blast state when navigating to a different node
+  // Neighbors state — fetched from data_plane view endpoint
+  const [neighborsLoading, setNeighborsLoading] = useState(true);
+  const [upstreamByHop, setUpstreamByHop] = useState<HopMap>(new Map());
+  const [downstreamByHop, setDownstreamByHop] = useState<HopMap>(new Map());
+  const [totalUpstream, setTotalUpstream] = useState(0);
+  const [totalDownstream, setTotalDownstream] = useState(0);
+  const [allColumnMappings, setAllColumnMappings] = useState<Array<{ sourceName: string; from: string; to: string }>>([]);
+  const [neighborSource, setNeighborSource] = useState<string>('');
+
+  // Reset state when navigating to a different node
   useEffect(() => {
     setShowAllUpstream(false);
     setShowAllDownstream(false);
     setBlastRadius(null);
   }, [node.id]);
 
-  // BFS traversal to find upstream/downstream grouped by hop depth
-  const { upstreamByHop, downstreamByHop, totalUpstream, totalDownstream, allColumnMappings } = useMemo(() => {
-    const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
-    const MAX_DEPTH = 3;
+  // Fetch neighbors from the data-plane adjacency endpoint
+  useEffect(() => {
+    if (!stackId) return;
 
-    // Only traverse data-level edges (exclude synthetic tool edges)
-    const dataEdges = allEdges.filter(
-      (e) =>
-        e.edgeType !== 'pipeline_flow' &&
-        e.edgeType !== 'contains' &&
-        e.edgeType !== 'produces' &&
-        e.edgeType !== 'reads_from'
-    );
+    let cancelled = false;
+    setNeighborsLoading(true);
 
-    function bfs(
-      startId: string,
-      direction: 'upstream' | 'downstream',
-    ): Map<number, Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }>> {
-      const result = new Map<number, Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }>>();
-      const visited = new Set<string>([startId]);
-      let frontier = [startId];
-      let depth = 0;
+    const engineId = node.id.replace(/^lineage-/, '');
 
-      while (frontier.length > 0 && depth < MAX_DEPTH) {
-        depth++;
-        const nextFrontier: string[] = [];
-        const hopItems: Array<{ node: UnifiedLineageNode; edge: UnifiedLineageEdge }> = [];
+    const fetchNeighbors = async () => {
+      try {
+        const [upRes, downRes] = await Promise.all([
+          fetch(`/api/pipeline/${stackId}/lineage/engine?action=data-plane-neighbors&id=${encodeURIComponent(engineId)}&direction=upstream&depth=3`),
+          fetch(`/api/pipeline/${stackId}/lineage/engine?action=data-plane-neighbors&id=${encodeURIComponent(engineId)}&direction=downstream&depth=3`),
+        ]);
 
-        for (const currentId of frontier) {
-          const edges =
-            direction === 'upstream'
-              ? dataEdges.filter((e) => e.target === currentId)
-              : dataEdges.filter((e) => e.source === currentId);
+        if (cancelled) return;
 
-          for (const edge of edges) {
-            const neighborId = direction === 'upstream' ? edge.source : edge.target;
-            if (visited.has(neighborId)) continue;
-            visited.add(neighborId);
+        const upData = upRes.ok ? await upRes.json() : { neighbors: [], totalCount: 0, source: 'error' };
+        const downData = downRes.ok ? await downRes.json() : { neighbors: [], totalCount: 0, source: 'error' };
 
-            const neighborNode = nodeMap.get(neighborId);
-            if (!neighborNode) continue;
+        if (cancelled) return;
 
-            hopItems.push({ node: neighborNode, edge });
-            nextFrontier.push(neighborId);
+        const convertToHopMap = (data: any): HopMap => {
+          const hopMap: HopMap = new Map();
+          for (const hopGroup of data.neighbors || []) {
+            const items = (hopGroup.items || []).map((item: any) => ({
+              node: viewNodeToUnified(item.node),
+              edge: viewEdgeToUnified(item.edge),
+            }));
+            if (items.length > 0) {
+              hopMap.set(hopGroup.hop, items);
+            }
+          }
+          return hopMap;
+        };
+
+        setUpstreamByHop(convertToHopMap(upData));
+        setDownstreamByHop(convertToHopMap(downData));
+        setTotalUpstream(upData.totalCount || 0);
+        setTotalDownstream(downData.totalCount || 0);
+        setNeighborSource(upData.source || downData.source || '');
+
+        // Extract column mappings from hop-1 upstream edges (from allEdges as ViewEdge metadata doesn't carry columns yet)
+        const colMappings: Array<{ sourceName: string; from: string; to: string }> = [];
+        const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
+        const dataEdges = allEdges.filter(
+          (e) =>
+            e.edgeType !== 'pipeline_flow' &&
+            e.edgeType !== 'contains' &&
+            e.edgeType !== 'produces' &&
+            e.edgeType !== 'reads_from'
+        );
+        const directUpEdges = dataEdges.filter((e) => e.target === node.id);
+        for (const edge of directUpEdges) {
+          if (edge.columns) {
+            const srcNode = nodeMap.get(edge.source);
+            for (const col of edge.columns) {
+              if (typeof col === 'object' && col.from && col.to) {
+                colMappings.push({
+                  sourceName: srcNode?.tableName || srcNode?.name?.split('.').pop() || srcNode?.name || '',
+                  from: col.from,
+                  to: col.to,
+                });
+              }
+            }
           }
         }
-
-        if (hopItems.length > 0) result.set(depth, hopItems);
-        frontier = nextFrontier;
+        setAllColumnMappings(colMappings);
+      } catch (err) {
+        console.error('[DataAssetDetailPanel] Failed to fetch neighbors:', err);
+      } finally {
+        if (!cancelled) setNeighborsLoading(false);
       }
-      return result;
-    }
-
-    const upByHop = bfs(node.id, 'upstream');
-    const downByHop = bfs(node.id, 'downstream');
-
-    const upTotal = Array.from(upByHop.values()).reduce((sum, items) => sum + items.length, 0);
-    const downTotal = Array.from(downByHop.values()).reduce((sum, items) => sum + items.length, 0);
-
-    // Aggregate column mappings from direct upstream (hop 1) edges
-    const colMappings: Array<{ sourceName: string; from: string; to: string }> = [];
-    const hop1Up = upByHop.get(1) || [];
-    for (const item of hop1Up) {
-      if (item.edge.columns) {
-        for (const col of item.edge.columns) {
-          if (typeof col === 'object' && col.from && col.to) {
-            colMappings.push({
-              sourceName: item.node.tableName || item.node.name?.split('.').pop() || item.node.name,
-              from: col.from,
-              to: col.to,
-            });
-          }
-        }
-      }
-    }
-
-    return {
-      upstreamByHop: upByHop,
-      downstreamByHop: downByHop,
-      totalUpstream: upTotal,
-      totalDownstream: downTotal,
-      allColumnMappings: colMappings,
     };
-  }, [node.id, allNodes, allEdges]);
+
+    fetchNeighbors();
+    return () => { cancelled = true; };
+  }, [node.id, stackId, allNodes, allEdges]);
 
   // Blast radius — lazy loaded on button click
   const fetchBlastRadius = useCallback(async () => {
@@ -441,9 +497,21 @@ export function DataAssetDetailPanel({
           </div>
         )}
 
+        {/* Fallback warning */}
+        {neighborSource === 'engine_fallback' && (
+          <div className="px-2 py-1.5 rounded bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-300">
+            Showing fallback data — run a build for accurate results
+          </div>
+        )}
+
         {/* ─── Upstream ──────────────────────────────────────── */}
-        <Section title="Upstream" count={totalUpstream} defaultOpen={true}>
-          {totalUpstream === 0 ? (
+        <Section title="Upstream" count={neighborsLoading ? undefined : totalUpstream} defaultOpen={true}>
+          {neighborsLoading ? (
+            <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
+              <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
+              Loading...
+            </div>
+          ) : totalUpstream === 0 ? (
             <div className="py-2 text-[12px] text-emerald-400/70 flex items-center gap-1.5">
               <ArrowDownToLine className="w-3.5 h-3.5" />
               Root source — no upstream dependencies
@@ -486,8 +554,13 @@ export function DataAssetDetailPanel({
         </Section>
 
         {/* ─── Downstream ────────────────────────────────────── */}
-        <Section title="Downstream" count={totalDownstream} defaultOpen={true}>
-          {totalDownstream === 0 ? (
+        <Section title="Downstream" count={neighborsLoading ? undefined : totalDownstream} defaultOpen={true}>
+          {neighborsLoading ? (
+            <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
+              <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
+              Loading...
+            </div>
+          ) : totalDownstream === 0 ? (
             <div className="py-2 text-[12px] text-amber-400/70 flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5" />
               Leaf node — no downstream consumers
