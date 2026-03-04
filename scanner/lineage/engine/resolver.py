@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..graph import (
     Evidence,
+    HealthStatus,
     LineageEdge,
     LineageGraph,
     LineageLevel,
@@ -612,3 +613,21 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
 
     # Merge node-level evidence lists
     primary.evidence.extend(secondary.evidence)
+
+    # Keep most recent observed_at
+    if secondary.observed_at:
+        if not primary.observed_at or secondary.observed_at > primary.observed_at:
+            primary.observed_at = secondary.observed_at
+
+    # Keep most recent last_updated
+    if secondary.last_updated:
+        if not primary.last_updated or secondary.last_updated > primary.last_updated:
+            primary.last_updated = secondary.last_updated
+
+    # Merge health_status: prefer non-UNKNOWN, prefer worse status
+    if primary.health_status == HealthStatus.UNKNOWN and secondary.health_status != HealthStatus.UNKNOWN:
+        primary.health_status = secondary.health_status
+    elif secondary.health_status != HealthStatus.UNKNOWN:
+        _HEALTH_SEVERITY = {HealthStatus.HEALTHY: 0, HealthStatus.DEGRADED: 1, HealthStatus.FAILING: 2}
+        if _HEALTH_SEVERITY.get(secondary.health_status, -1) > _HEALTH_SEVERITY.get(primary.health_status, -1):
+            primary.health_status = secondary.health_status

@@ -244,6 +244,44 @@ class RenderedView:
 
 
 # ---------------------------------------------------------------------------
+# Platform → layer / domain helpers (for Pipeline Overview dedup)
+# ---------------------------------------------------------------------------
+
+from .platforms import get_platform, ToolCategory
+
+_CATEGORY_TO_LAYER: Dict[str, str] = {
+    "warehouse": "WAREHOUSE",
+    "ingestion": "INGESTION",
+    "transformation": "TRANSFORMATION",
+    "orchestration": "ORCHESTRATION",
+    "reporting": "REPORTING",
+    "infrastructure": "INFRASTRUCTURE",
+    "version_control": "VERSION_CONTROL",
+    "quality": "WAREHOUSE",
+}
+
+
+def _platform_to_layer(platform: str) -> str:
+    """Map a platform name to its LAYER_COLORS-compatible layer string."""
+    info = get_platform(platform)
+    if info:
+        return _CATEGORY_TO_LAYER.get(info.category.value, "WAREHOUSE")
+    return "WAREHOUSE"
+
+
+def _get_display_domain(platform: str) -> str:
+    """Map a platform name to its display domain for frontend DOMAIN_COLORS."""
+    info = get_platform(platform)
+    if info:
+        if info.category == ToolCategory.INFRASTRUCTURE:
+            return "infrastructure"
+        if info.category == ToolCategory.VERSION_CONTROL:
+            return "version_control"
+        return info.domain.value
+    return "other"
+
+
+# ---------------------------------------------------------------------------
 # Semantic edge type helpers (for Pipeline Overview)
 # ---------------------------------------------------------------------------
 
@@ -604,6 +642,12 @@ class ViewBuilder:
                 gn_ct = gn.canonical_type or ""
                 if gn_ct == "job":
                     job_count += 1
+                elif gn.raw_metadata.get("dbt_resource_type") in ("model", "seed", "snapshot"):
+                    job_count += 1
+                elif gn.raw_metadata.get("is_task") or gn.raw_metadata.get("dag_id"):
+                    job_count += 1
+                elif gn.raw_metadata.get("connector_id") or gn.raw_metadata.get("sync_id"):
+                    job_count += 1
                 # Last run timestamp (most recent observed_at)
                 if hasattr(gn, "observed_at") and gn.observed_at:
                     if last_run_dt is None or gn.observed_at > last_run_dt:
@@ -640,9 +684,7 @@ class ViewBuilder:
                 canonical_type="service",
                 original_type="service",
                 platform=platform,
-                platform_domain="orchestration" if info.get("is_orchestrator") else (
-                    "infrastructure" if info.get("is_infra") else "other"
-                ),
+                platform_domain=_get_display_domain(platform),
                 layer=lane,
                 cluster_id=lane,
                 x=0, y=0,  # computed below
@@ -798,71 +840,201 @@ class ViewBuilder:
                             connected_tool_ids.add(neighbor.id)
                     break  # only connect to nearest downstream lane
 
-        # ── Step 4b: Compute topological order per tool ─────────────────
-        # Tools receiving data from earlier lanes appear first within their lane
-        tool_topo_order: Dict[str, float] = {}
-        for (lane, tool_id) in tool_info:
-            node_view_id = f"tool:{lane}:{tool_id}"
-            upstream_lane_orders: List[float] = []
-            for pair_key in tool_edge_counts:
-                src_id, tgt_id = pair_key.split("→")
-                if tgt_id == node_view_id:
-                    # Extract source lane order from the source tool's lane
-                    src_lane = src_id.split(":")[1] if src_id.count(":") >= 2 else ""
-                    upstream_lane_orders.append(LANE_ORDER.get(src_lane, 99))
-            if upstream_lane_orders:
-                tool_topo_order[node_view_id] = sum(upstream_lane_orders) / len(upstream_lane_orders)
-            else:
-                tool_topo_order[node_view_id] = -1  # source tools first
-
-        # ── Step 5: Skip empty lanes, compact positions ───────────────
-        by_lane: Dict[str, List[ViewNode]] = defaultdict(list)
+        # ── Step 4b: Deduplicate ViewNodes by tool_id ─────────────────
+        # Merge nodes for the same tool across different lanes into one
+        # canonical node per tool.  Remap edge IDs accordingly.
+        tool_id_groups: Dict[str, List[ViewNode]] = defaultdict(list)
         for vn in view_nodes:
-            by_lane[vn.layer].append(vn)
+            parts = vn.id.split(":", 2)  # ["tool", lane, tool_id]
+            canonical_tool_id = parts[2] if len(parts) >= 3 else vn.id
+            tool_id_groups[canonical_tool_id].append(vn)
 
-        # Sort within each lane: orchestrators/infra last, then by pipeline flow order, then alphabetical
-        for lane_name in by_lane:
-            by_lane[lane_name].sort(key=lambda n: (
+        old_id_to_new_id: Dict[str, str] = {}
+        merged_view_nodes: List[ViewNode] = []
+
+        for canonical_tool_id, group in sorted(tool_id_groups.items()):
+            new_id = f"tool:{canonical_tool_id}"
+            platform = group[0].platform
+
+            for vn in group:
+                old_id_to_new_id[vn.id] = new_id
+
+            if len(group) == 1:
+                vn = group[0]
+                original_lane = vn.metadata.get("lane")
+                vn.id = new_id
+                vn.layer = _platform_to_layer(platform)
+                vn.cluster_id = vn.layer
+                vn.metadata["lanes"] = [original_lane] if original_lane else []
+                merged_view_nodes.append(vn)
+            else:
+                # Merge multiple lane-specific nodes into one
+                merged_health = {"healthy": 0, "degraded": 0, "failing": 0, "unknown": 0, "stale": 0}
+                total_assets = 0
+                total_jobs = 0
+                total_sub_count = 0
+                all_sub_nodes: List[Dict[str, Any]] = []
+                all_gaps: Set[str] = set()
+                all_lanes: List[str] = []
+                last_run_ts: Optional[str] = None
+                is_orchestrator = False
+                is_infra = False
+                from_pipeline_stack = False
+
+                for vn in group:
+                    meta = vn.metadata
+                    total_assets += meta.get("assetCount", 0)
+                    total_jobs += meta.get("jobCount", 0)
+                    total_sub_count += meta.get("totalSubNodeCount", 0)
+
+                    hs = meta.get("healthSummary", {})
+                    for k in merged_health:
+                        merged_health[k] += hs.get(k, 0)
+
+                    sub = meta.get("subNodes", [])
+                    if len(all_sub_nodes) < 20:
+                        all_sub_nodes.extend(sub[:20 - len(all_sub_nodes)])
+
+                    for gap in meta.get("coverageGaps", []):
+                        all_gaps.add(gap)
+
+                    lane_name = meta.get("lane")
+                    if lane_name:
+                        all_lanes.append(lane_name)
+
+                    if meta.get("lastRunTs"):
+                        if last_run_ts is None or meta["lastRunTs"] > last_run_ts:
+                            last_run_ts = meta["lastRunTs"]
+
+                    is_orchestrator = is_orchestrator or meta.get("isOrchestrator", False)
+                    is_infra = is_infra or meta.get("isInfra", False)
+                    from_pipeline_stack = from_pipeline_stack or meta.get("fromPipelineStack", False)
+
+                merged_view_nodes.append(ViewNode(
+                    id=new_id,
+                    name=group[0].name,
+                    canonical_type="service",
+                    original_type="service",
+                    platform=platform,
+                    platform_domain=group[0].platform_domain,
+                    layer=_platform_to_layer(platform),
+                    cluster_id=_platform_to_layer(platform),
+                    x=0, y=0,
+                    inferred=False,
+                    needs_mapping=False,
+                    metadata={
+                        "lanes": sorted(all_lanes, key=lambda l: LANE_ORDER.get(l, 99)),
+                        "assetCount": total_assets,
+                        "integrationId": group[0].metadata.get("integrationId"),
+                        "isOrchestrator": is_orchestrator,
+                        "isInfra": is_infra,
+                        "fromPipelineStack": from_pipeline_stack,
+                        "healthSummary": merged_health,
+                        "jobCount": total_jobs,
+                        "lastRunTs": last_run_ts,
+                        "coverageGaps": sorted(all_gaps),
+                        "subNodes": all_sub_nodes,
+                        "totalSubNodeCount": total_sub_count,
+                    },
+                ))
+
+        view_nodes = merged_view_nodes
+
+        # Remap edge source/target IDs to canonical tool IDs
+        for edge in view_edges:
+            edge.source_id = old_id_to_new_id.get(edge.source_id, edge.source_id)
+            edge.target_id = old_id_to_new_id.get(edge.target_id, edge.target_id)
+
+        # Merge duplicate edges (same source+target after remap) and drop self-loops
+        edge_map: Dict[Tuple[str, str], ViewEdge] = {}
+        for edge in view_edges:
+            if edge.source_id == edge.target_id:
+                continue  # drop self-loops created by merge
+            key = (edge.source_id, edge.target_id)
+            if key in edge_map:
+                existing = edge_map[key]
+                existing.evidence_count += edge.evidence_count
+                existing.confidence = max(existing.confidence, edge.confidence)
+                existing.metadata["dataFlowCount"] = (
+                    existing.metadata.get("dataFlowCount", 0)
+                    + edge.metadata.get("dataFlowCount", 0)
+                )
+                if not edge.inferred:
+                    existing.inferred = False  # real edge overrides inferred
+            else:
+                edge_map[key] = edge
+        view_edges = list(edge_map.values())
+
+        # ── Step 4c: Compute topological order per tool ─────────────────
+        LAYER_LAYOUT_ORDER: Dict[str, int] = {
+            "INGESTION": 0, "WAREHOUSE": 1, "TRANSFORMATION": 2,
+            "ORCHESTRATION": 3, "REPORTING": 4, "INFRASTRUCTURE": 5,
+            "VERSION_CONTROL": 6, "STORAGE": 7,
+        }
+
+        tool_topo_order: Dict[str, float] = {}
+        for vn in view_nodes:
+            upstream_orders: List[float] = []
+            for edge in view_edges:
+                if edge.target_id == vn.id:
+                    src_node = next((n for n in view_nodes if n.id == edge.source_id), None)
+                    if src_node:
+                        upstream_orders.append(LAYER_LAYOUT_ORDER.get(src_node.layer, 99))
+            tool_topo_order[vn.id] = (
+                sum(upstream_orders) / len(upstream_orders) if upstream_orders else -1
+            )
+
+        # ── Step 5: Skip empty layers, compact positions ──────────────
+        by_layer: Dict[str, List[ViewNode]] = defaultdict(list)
+        for vn in view_nodes:
+            by_layer[vn.layer].append(vn)
+
+        # Sort within each layer: orchestrators/infra last, then by pipeline flow order, then alphabetical
+        for layer_name in by_layer:
+            by_layer[layer_name].sort(key=lambda n: (
                 1 if n.metadata.get("isOrchestrator") else 0,
                 1 if n.metadata.get("isInfra") else 0,
                 tool_topo_order.get(n.id, 0),
                 n.name,
             ))
 
-        # Only include lanes that have tools
-        active_lanes = [
-            l.value for l in PipelineLane
-            if by_lane.get(l.value)
-        ]
+        # Only include layers that have tools, ordered by LAYER_LAYOUT_ORDER
+        active_layers = sorted(
+            [l for l in by_layer if by_layer[l]],
+            key=lambda l: LAYER_LAYOUT_ORDER.get(l, 99),
+        )
 
-        # Assign compact positions (skip empty lanes)
-        lane_x_map: Dict[str, float] = {}
-        for idx, lane_name in enumerate(active_lanes):
-            lane_x_map[lane_name] = idx * LANE_X_SPACING
+        # Assign compact positions (skip empty layers)
+        layer_x_map: Dict[str, float] = {}
+        for idx, layer_name in enumerate(active_layers):
+            layer_x_map[layer_name] = idx * LANE_X_SPACING
 
-        for lane_name, lane_nodes in by_lane.items():
-            x = lane_x_map.get(lane_name, 0)
-            for idx, vn in enumerate(lane_nodes):
+        for layer_name, layer_nodes in by_layer.items():
+            x = layer_x_map.get(layer_name, 0)
+            for idx, vn in enumerate(layer_nodes):
                 vn.x = x
                 vn.y = idx * TOOL_Y_SPACING
 
-        # ── Step 6: Build lane metadata (active lanes only) ───────────
-        lane_labels = {
-            PipelineLane.INGESTION.value: "Ingestion",
-            PipelineLane.WAREHOUSE_RAW.value: "Warehouse (Raw)",
-            PipelineLane.TRANSFORMATION.value: "Transformation",
-            PipelineLane.WAREHOUSE_ANALYTICS.value: "Warehouse (Analytics)",
-            PipelineLane.REPORTING.value: "Reporting",
+        # ── Step 6: Build layer metadata (active layers only) ─────────
+        LAYER_LABELS: Dict[str, str] = {
+            "INGESTION": "Ingestion",
+            "WAREHOUSE": "Warehouse",
+            "TRANSFORMATION": "Transformation",
+            "ORCHESTRATION": "Orchestration",
+            "REPORTING": "Reporting",
+            "INFRASTRUCTURE": "Infrastructure",
+            "VERSION_CONTROL": "Version Control",
+            "STORAGE": "Storage",
         }
 
         lanes: List[LaneMeta] = []
-        for lane_name in active_lanes:
+        for layer_name in active_layers:
             lanes.append(LaneMeta(
-                name=lane_name,
-                label=lane_labels.get(lane_name, lane_name),
-                order=LANE_ORDER.get(lane_name, 99),
-                x=lane_x_map.get(lane_name, 0),
-                node_count=len(by_lane.get(lane_name, [])),
+                name=layer_name,
+                label=LAYER_LABELS.get(layer_name, layer_name),
+                order=LAYER_LAYOUT_ORDER.get(layer_name, 99),
+                x=layer_x_map.get(layer_name, 0),
+                node_count=len(by_layer.get(layer_name, [])),
             ))
 
         # Stats
@@ -884,8 +1056,8 @@ class ViewBuilder:
                 1 for n in view_nodes if n.metadata.get("isOrchestrator")
             ),
             "laneDistribution": {
-                lane_name: len(by_lane.get(lane_name, []))
-                for lane_name in active_lanes
+                layer_name: len(by_layer.get(layer_name, []))
+                for layer_name in active_layers
             },
             "opsSummary": {
                 "totalTools": len(view_nodes),

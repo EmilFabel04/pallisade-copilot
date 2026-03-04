@@ -35,9 +35,6 @@ import {
   type ViewEdge,
   type LaneMeta,
   type OrchestratorOverlay,
-  type PipelineLaneName,
-  LANE_COLORS,
-  LANE_LABELS,
   getDefaultFilterState,
   isToolCategory,
   isDataAssetCategory,
@@ -855,26 +852,10 @@ export default function LineagePage() {
   // Build control plane flow nodes/edges
   // Uses rendered overview positions when available, falls back to Dagre
   const { cpFlowNodes, cpFlowEdges } = useMemo(() => {
-    const DOMAIN_COLORS: Record<string, string> = {
-      ingestion: '#10B981',
-      warehouse: '#6366F1',
-      transform: '#F59E0B',
-      orchestration: '#F97316',
-      bi: '#06B6D4',
-      version_control: '#8B5CF6',
-      infrastructure: '#94A3B8',
-      storage: '#A855F7',
-      catalog: '#8B5CF6',
-      app: '#EC4899',
-      other: '#6B7280',
-    };
-
     // Lane overview path (primary): use dagre layout + enriched metadata
     if (laneOverview && laneOverview.nodes.length > 0) {
       const cpNodes: Node[] = laneOverview.nodes.map((vn) => {
-        const laneColor = LANE_COLORS[vn.metadata?.lane as PipelineLaneName]
-          || DOMAIN_COLORS[vn.platformDomain]
-          || DOMAIN_COLORS.other;
+        const layerColor = LAYER_COLORS[vn.layer as PipelineLayer] || '#6366F1';
         return {
           id: vn.id,
           type: 'toolNode',
@@ -889,7 +870,7 @@ export default function LineagePage() {
             jobCount: vn.metadata?.jobCount,
             coverageGaps: vn.metadata?.coverageGaps,
             isControlPlane: true,
-            domainColor: laneColor,
+            domainColor: layerColor,
           },
         };
       });
@@ -940,7 +921,7 @@ export default function LineagePage() {
           assetCount: vn.metadata?.assetCount,
           healthSummary: vn.metadata?.healthSummary,
           isControlPlane: true,
-          domainColor: DOMAIN_COLORS[vn.platformDomain] || DOMAIN_COLORS.other,
+          domainColor: LAYER_COLORS[vn.layer as PipelineLayer] || '#6366F1',
         },
       }));
 
@@ -982,7 +963,7 @@ export default function LineagePage() {
         assetCount: n.assetCount,
         healthSummary: n.healthSummary,
         isControlPlane: true,
-        domainColor: DOMAIN_COLORS[n.platformDomain] || DOMAIN_COLORS.other,
+        domainColor: LAYER_COLORS['WAREHOUSE'] || '#6366F1',
       },
     }));
 

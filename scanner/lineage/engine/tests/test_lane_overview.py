@@ -259,16 +259,15 @@ class TestRawDatasetLaneAssignment:
                 f"{node.name} should be in warehouse_raw, got {lane}"
             )
 
-    def test_lane_overview_has_bigquery_tool_in_warehouse_raw(self, n8n_bq_dbt_graph):
-        """ViewBuilder.build_lane_pipeline_overview places BigQuery tool in warehouse_raw lane."""
+    def test_lane_overview_has_bigquery_tool_in_warehouse_layer(self, n8n_bq_dbt_graph):
+        """After dedup, BigQuery should appear once with layer=WAREHOUSE and warehouse_raw in lanes."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        bq_raw_nodes = [
-            n for n in view.nodes
-            if n.platform == "bigquery" and n.layer == PipelineLane.WAREHOUSE_RAW.value
-        ]
-        assert len(bq_raw_nodes) >= 1, "BigQuery should appear in warehouse_raw lane"
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        assert len(bq_nodes) == 1, f"BigQuery should appear exactly once, got {len(bq_nodes)}"
+        assert bq_nodes[0].layer == "WAREHOUSE"
+        assert "warehouse_raw" in bq_nodes[0].metadata.get("lanes", [])
 
 
 # ---- 2) Ingestion actor exists upstream (bridge if needed) ----
@@ -400,15 +399,15 @@ class TestDbtLaneAssignment:
         assert zone == DatasetZone.MART
 
     def test_lane_overview_dbt_tool_in_transformation(self, n8n_bq_dbt_graph):
-        """ViewBuilder places dbt tool in transformation lane."""
+        """ViewBuilder places dbt tool with layer=TRANSFORMATION."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         dbt_nodes = [
             n for n in view.nodes
-            if n.platform == "dbt" and n.layer == PipelineLane.TRANSFORMATION.value
+            if n.platform == "dbt" and n.layer == "TRANSFORMATION"
         ]
-        assert len(dbt_nodes) >= 1, "dbt should appear in transformation lane"
+        assert len(dbt_nodes) >= 1, "dbt should appear with TRANSFORMATION layer"
 
 
 # ---- 4) Analytics outputs render in lane=warehouse_analytics ----
@@ -429,16 +428,16 @@ class TestAnalyticsLaneAssignment:
         lane = assign_lane(node, node.canonical_type, zone)
         assert lane == PipelineLane.WAREHOUSE_ANALYTICS.value
 
-    def test_lane_overview_bigquery_in_warehouse_analytics(self, n8n_bq_dbt_graph):
-        """ViewBuilder places BigQuery analytics tool in warehouse_analytics lane."""
+    def test_lane_overview_bigquery_has_warehouse_analytics_lane(self, n8n_bq_dbt_graph):
+        """After dedup, the single BigQuery node should list warehouse_analytics in its lanes."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        bq_analytics_nodes = [
-            n for n in view.nodes
-            if n.platform == "bigquery" and n.layer == PipelineLane.WAREHOUSE_ANALYTICS.value
-        ]
-        assert len(bq_analytics_nodes) >= 1, "BigQuery should appear in warehouse_analytics lane"
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        assert len(bq_nodes) == 1, "BigQuery should appear exactly once after dedup"
+        assert "warehouse_analytics" in bq_nodes[0].metadata.get("lanes", []), (
+            "BigQuery should list warehouse_analytics in its lanes metadata"
+        )
 
 
 # ---- 5) No dataset labeled as 'source' because indegree=0 ----
@@ -604,9 +603,9 @@ class TestLaneOverviewView:
         assert len(view.lanes) >= 1
 
         lane_names = {l.name for l in view.lanes}
-        # At minimum: warehouse_raw and transformation should be populated
-        assert PipelineLane.WAREHOUSE_RAW.value in lane_names
-        assert PipelineLane.TRANSFORMATION.value in lane_names
+        # After dedup, lanes use PipelineLayer names (WAREHOUSE, TRANSFORMATION, etc.)
+        assert "WAREHOUSE" in lane_names
+        assert "TRANSFORMATION" in lane_names
 
     def test_lane_x_positions_increase_left_to_right(self, n8n_bq_dbt_graph):
         builder = ViewBuilder(n8n_bq_dbt_graph)
@@ -654,27 +653,27 @@ class TestLaneOverviewView:
         assert "lanes" in d
         assert isinstance(d["lanes"], list)
 
-    def test_n8n_tool_in_ingestion_lane(self, n8n_bq_dbt_graph):
-        """n8n tool should appear in the ingestion lane."""
+    def test_n8n_tool_in_ingestion_layer(self, n8n_bq_dbt_graph):
+        """n8n tool should have layer=INGESTION after dedup."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         n8n_nodes = [n for n in view.nodes if n.platform == "n8n"]
         assert len(n8n_nodes) >= 1, "n8n should appear in overview"
         for vn in n8n_nodes:
-            assert vn.layer == PipelineLane.INGESTION.value, (
-                f"n8n tool {vn.name} should be in ingestion lane, got {vn.layer}"
+            assert vn.layer == "INGESTION", (
+                f"n8n tool {vn.name} should have INGESTION layer, got {vn.layer}"
             )
 
-    def test_looker_in_reporting_lane(self, n8n_bq_dbt_graph):
-        """Looker dashboard should be in reporting lane."""
+    def test_looker_in_reporting_layer(self, n8n_bq_dbt_graph):
+        """Looker dashboard should have layer=REPORTING after dedup."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         looker_nodes = [n for n in view.nodes if n.platform == "looker"]
         assert len(looker_nodes) >= 1
         for vn in looker_nodes:
-            assert vn.layer == PipelineLane.REPORTING.value
+            assert vn.layer == "REPORTING"
 
 
 # ---- Zone classification unit tests ----
@@ -1026,3 +1025,103 @@ class TestInferredLaneEdges:
             assert edge.metadata.get("inferredReason") == "lane_adjacency"
             assert "semanticType" in edge.metadata
             assert "label" in edge.metadata
+
+
+# ---- Deduplicated tool nodes tests ----
+
+class TestDeduplicatedToolNodes:
+    """Test Step 4b: tools spanning multiple lanes are deduplicated into one node."""
+
+    def test_bigquery_appears_once(self, n8n_bq_dbt_graph):
+        """BigQuery should appear exactly once even if it has raw + analytics datasets."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        assert len(bq_nodes) == 1, (
+            f"Expected 1 BigQuery node, got {len(bq_nodes)}: "
+            f"{[n.id for n in bq_nodes]}"
+        )
+
+    def test_deduplicated_node_has_canonical_id(self, n8n_bq_dbt_graph):
+        """Deduplicated node ID should be tool:{tool_id} (no lane prefix)."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        assert len(bq_nodes) == 1
+        # ID should NOT contain lane names
+        for lane_name in ("warehouse_raw", "warehouse_analytics", "ingestion", "transformation", "reporting"):
+            # The ID pattern is tool:{tool_id}, not tool:{lane}:{tool_id}
+            # After the first "tool:" prefix, the next segment should be the platform, not a lane
+            parts = bq_nodes[0].id.split(":", 2)
+            if len(parts) >= 3:
+                assert parts[1] != lane_name, (
+                    f"Node ID {bq_nodes[0].id} still has lane prefix '{lane_name}'"
+                )
+
+    def test_deduplicated_node_merges_asset_counts(self, n8n_bq_dbt_graph):
+        """Merged BigQuery node should have combined asset count from both lanes."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_node = [n for n in view.nodes if n.platform == "bigquery"][0]
+        # Should include raw.charges, raw.customers, analytics.fct_revenue = 3
+        assert bq_node.metadata["assetCount"] >= 3
+
+    def test_deduplicated_node_has_lanes_metadata(self, n8n_bq_dbt_graph):
+        """Merged node should list its original lanes in metadata."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_node = [n for n in view.nodes if n.platform == "bigquery"][0]
+        lanes = bq_node.metadata.get("lanes", [])
+        assert "warehouse_raw" in lanes
+        assert "warehouse_analytics" in lanes
+
+    def test_deduplicated_node_layer_is_pipeline_layer(self, n8n_bq_dbt_graph):
+        """Merged BigQuery node should have layer='WAREHOUSE'."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_node = [n for n in view.nodes if n.platform == "bigquery"][0]
+        assert bq_node.layer == "WAREHOUSE"
+
+    def test_edges_reference_canonical_ids(self, n8n_bq_dbt_graph):
+        """All edge source/target should reference existing canonical node IDs."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        node_ids = {n.id for n in view.nodes}
+        for edge in view.edges:
+            assert edge.source_id in node_ids, (
+                f"Edge source {edge.source_id} not in node set {node_ids}"
+            )
+            assert edge.target_id in node_ids, (
+                f"Edge target {edge.target_id} not in node set {node_ids}"
+            )
+
+    def test_no_self_loop_edges_after_dedup(self, n8n_bq_dbt_graph):
+        """No edge should have source == target after dedup merging."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for edge in view.edges:
+            assert edge.source_id != edge.target_id, (
+                f"Self-loop edge found: {edge.id} ({edge.source_id} → {edge.target_id})"
+            )
+
+    def test_all_layers_are_valid_pipeline_layers(self, n8n_bq_dbt_graph):
+        """Every ViewNode.layer should be a valid PipelineLayer key for LAYER_COLORS."""
+        VALID_LAYERS = {
+            "INGESTION", "TRANSFORMATION", "WAREHOUSE", "REPORTING",
+            "ORCHESTRATION", "INFRASTRUCTURE", "VERSION_CONTROL", "STORAGE",
+        }
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        for vn in view.nodes:
+            assert vn.layer in VALID_LAYERS, (
+                f"Node {vn.name} has layer='{vn.layer}' which is not "
+                f"a valid PipelineLayer for LAYER_COLORS"
+            )

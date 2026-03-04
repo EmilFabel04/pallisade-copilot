@@ -6,6 +6,7 @@ Steps:
 1. (optional) LLM planner → adapter execution order
 2. Investigator executes adapters → raw nodes/edges; resolver → graph
 2.5. Cross-tool edge synthesis (ingestion→warehouse, dbt↔warehouse, BI↔warehouse)
+2.6. Health enrichment (Elementary test results → node health_status)
 3. Canonicalize types (first pass)
 4. Deterministic bridge rules (uses canonical types to identify orphans)
 5. Re-canonicalize (bridge-added nodes)
@@ -81,6 +82,9 @@ async def run_extraction_pipeline(
         # Must run AFTER resolver dedup but BEFORE canonicalize and bridge.
         synthesis_dict = _run_cross_tool_synthesis(graph, run_id)
 
+        # Step 2.6: Health enrichment (Elementary test results → node health)
+        health_dict = _run_health_enrichment(graph, tool_configs, run_id)
+
         # Step 3: Canonicalize (first pass)
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
@@ -139,6 +143,7 @@ async def run_extraction_pipeline(
             stats={
                 **result.stats,
                 "cross_tool_synthesis": synthesis_dict,
+                "health_enrichment": health_dict,
                 "bridge": bridge_dict,
                 "views_built": list(views.keys()),
                 "run_id": run_id,
@@ -231,6 +236,97 @@ def _run_cross_tool_synthesis(
             "[Pipeline:%s] Cross-tool synthesis failed (non-fatal): %s",
             run_id,
             e,
+        )
+        return None
+
+
+def _run_health_enrichment(
+    graph: Any,
+    tool_configs: List[ToolConfig],
+    run_id: str,
+) -> Optional[Dict[str, int]]:
+    """Enrich graph nodes with health data from Elementary (non-fatal).
+
+    Finds a warehouse ToolConfig, creates a warehouse adapter client,
+    queries Elementary test-result tables, and sets health_status on
+    matching graph nodes.
+    """
+    try:
+        from .adapters.live_elementary import LiveElementaryAdapter
+        from scanner.adapters.factory import get_adapter
+
+        # Find a warehouse tool config
+        _WAREHOUSE_TOOLS = {"bigquery", "snowflake", "postgres", "redshift"}
+        warehouse_tc = None
+        for tc in tool_configs:
+            if tc.tool_type.lower() in _WAREHOUSE_TOOLS:
+                warehouse_tc = tc
+                break
+        if not warehouse_tc:
+            return None
+
+        # Create old-style warehouse adapter (has execute_query())
+        wh_adapter = get_adapter(
+            warehouse_tc.tool_type.lower(),
+            warehouse_tc.config,
+            auto_connect=True,
+        )
+
+        elem_adapter = LiveElementaryAdapter()
+        elem_config = {
+            "elementary_config": {
+                "warehouse_adapter": wh_adapter,
+                "schema": "elementary",
+            }
+        }
+
+        health_data = elem_adapter.get_health_enrichment(elem_config)
+
+        # Disconnect warehouse client
+        try:
+            wh_adapter.disconnect()
+        except Exception:
+            pass
+
+        if not health_data:
+            return {"tables_enriched": 0}
+
+        # Build case-insensitive + short-FQN lookup for flexible matching
+        health_lookup: Dict[str, Dict[str, Any]] = {}
+        for fqn, data in health_data.items():
+            health_lookup[fqn.lower()] = data
+            parts = fqn.split(".")
+            if len(parts) >= 2:
+                health_lookup[".".join(parts[-2:]).lower()] = data
+
+        # Apply health data to matching graph nodes
+        enriched = 0
+        for node in graph.nodes.values():
+            if not node.fqn:
+                continue
+            fqn_lower = node.fqn.lower()
+            match = health_lookup.get(fqn_lower)
+            if not match:
+                parts = fqn_lower.split(".")
+                if len(parts) >= 2:
+                    match = health_lookup.get(".".join(parts[-2:]))
+            if match:
+                node.health_status = match["health_status"]
+                node.raw_metadata["health_total_tests"] = match.get("total_tests", 0)
+                node.raw_metadata["health_failed_tests"] = match.get("failed_tests", 0)
+                node.raw_metadata["health_warn_tests"] = match.get("warn_tests", 0)
+                enriched += 1
+
+        logger.info(
+            "[Pipeline:%s] Health enrichment: %d/%d tables enriched",
+            run_id, enriched, len(health_data),
+        )
+        return {"tables_enriched": enriched, "tables_with_tests": len(health_data)}
+
+    except Exception as e:
+        logger.warning(
+            "[Pipeline:%s] Health enrichment failed (non-fatal): %s",
+            run_id, e,
         )
         return None
 
