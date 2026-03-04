@@ -881,8 +881,10 @@ class LineageInvestigator:
                     }
                 break  # use first warehouse found
 
-        # Categories that don't contribute to data lineage — skip entirely
-        _SKIP_CATEGORIES = {ToolCategory.INFRASTRUCTURE, ToolCategory.VERSION_CONTROL}
+        # Categories that don't contribute to data lineage
+        _SKIP_CATEGORIES = {ToolCategory.VERSION_CONTROL}
+        # Infrastructure tools get discovery-only (no lineage extraction or correlation)
+        _DISCOVERY_ONLY_CATEGORIES = {ToolCategory.INFRASTRUCTURE}
 
         # Phase 2 — sequential extraction with correlation
         for tc in sorted_configs:
@@ -891,6 +893,28 @@ class LineageInvestigator:
 
             if category in _SKIP_CATEGORIES:
                 context.log_step(tool_type, f"Skipping {tool_type} ({category.value}) — not part of data lineage")
+                continue
+
+            # Infrastructure: discovery only (creates nodes for services/hosts, no lineage)
+            if category in _DISCOVERY_ONLY_CATEGORIES:
+                try:
+                    adapter_type = tc.adapter_type or TOOL_TO_ADAPTER.get(tool_type)
+                    if adapter_type:
+                        adapter_id = f"{adapter_type}_{tc.integration_id or 'default'}"
+                        adapter = self.registry.create(adapter_type, adapter_id)
+                        adapter_config = _build_adapter_config(tc)
+                        nodes = adapter.discover_assets(adapter_config)
+                        context.all_nodes.extend(nodes)
+                        context.log_step(tool_type, f"Discovery-only: {len(nodes)} nodes (infrastructure)")
+                        context.tool_profiles[tool_type] = ToolProfile(
+                            tool_type=tool_type, category=category,
+                            integration_id=tc.integration_id,
+                            node_count=len(nodes), extraction_success=True,
+                        )
+                    else:
+                        context.log_step(tool_type, f"No adapter for {tool_type}, skipping")
+                except Exception as exc:
+                    context.log_step(tool_type, f"Discovery failed: {exc}", "warning")
                 continue
 
             context.log_step(tool_type, f"Beginning investigation ({category.value})")

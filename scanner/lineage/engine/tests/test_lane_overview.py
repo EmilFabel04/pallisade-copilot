@@ -1125,3 +1125,487 @@ class TestDeduplicatedToolNodes:
                 f"Node {vn.name} has layer='{vn.layer}' which is not "
                 f"a valid PipelineLayer for LAYER_COLORS"
             )
+
+
+# ---- Job node enrichment tests (isJob + jobSupport) ----
+
+class TestJobNodeEnrichment:
+    """Verify that isJob and jobSupport metadata are correctly set for
+    Airflow, Fivetran, dbt, and BigQuery tools in the lane overview."""
+
+    @pytest.fixture
+    def multi_tool_graph(self) -> LineageGraph:
+        """Graph with Airflow DAG+TASK, Fivetran CONNECTOR, dbt MODEL, BQ TABLE, Linux Server."""
+        graph = LineageGraph()
+
+        # Airflow DAG
+        af_dag = _make_node(
+            "etl_pipeline", NodeType.DAG, "airflow",
+            PlatformDomain.ORCHESTRATION, integration_id="af_001",
+        )
+        # Airflow TASK
+        af_task = _make_node(
+            "load_data", NodeType.TASK, "airflow",
+            PlatformDomain.ORCHESTRATION, integration_id="af_001",
+        )
+        # Fivetran service
+        ft_svc = _make_node(
+            "Fivetran", NodeType.CONNECTOR, "fivetran",
+            PlatformDomain.INGESTION, integration_id="ft_001",
+        )
+        ft_svc.canonical_type = "service"
+        # Fivetran connector job
+        ft_conn = _make_node(
+            "stripe_connector", NodeType.CONNECTOR, "fivetran",
+            PlatformDomain.INGESTION, integration_id="ft_001",
+        )
+        ft_conn.canonical_type = "job"
+        # dbt model
+        dbt_model = _make_node(
+            "stg_orders", NodeType.MODEL, "dbt",
+            PlatformDomain.TRANSFORM, database="analytics", schema="staging",
+            fqn="analytics.staging.stg_orders", integration_id="dbt_001",
+            raw_metadata={"dbt_resource_type": "model"},
+        )
+        # BigQuery table (plain warehouse — no jobs)
+        bq_table = _make_node(
+            "raw_orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="raw", schema="stripe",
+            fqn="raw.stripe.raw_orders", integration_id="bq_001",
+        )
+        # Linux Server (infrastructure — no jobs)
+        linux_svc = _make_node(
+            "Linux Server", NodeType.SOURCE, "linux_server",
+            PlatformDomain.OTHER, integration_id="linux_001",
+        )
+        linux_svc.canonical_type = "system"
+
+        for node in [af_dag, af_task, ft_svc, ft_conn, dbt_model, bq_table, linux_svc]:
+            graph.add_node(node)
+
+        # Airflow: DAG → TASK
+        graph.add_edge(_make_edge(
+            af_dag.id, af_task.id, EdgeType.DEPENDS_ON,
+        ))
+        # Fivetran: service runs connector
+        graph.add_edge(_make_edge(
+            ft_svc.id, ft_conn.id, EdgeType.TRIGGERS,
+        ))
+
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+        return graph
+
+    def _find_tool(self, view, platform: str):
+        """Find first ViewNode matching platform."""
+        return next((vn for vn in view.nodes if vn.platform == platform), None)
+
+    def test_airflow_job_count(self, multi_tool_graph):
+        """Airflow tool should count DAG + TASK as jobs."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        af = self._find_tool(view, "airflow")
+        assert af is not None, "Airflow tool not found in view"
+        assert af.metadata["jobCount"] >= 2
+
+    def test_airflow_sub_nodes_have_is_job(self, multi_tool_graph):
+        """Airflow subNodes with canonical_type=job should have isJob=True."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        af = self._find_tool(view, "airflow")
+        job_subs = [sn for sn in af.metadata["subNodes"] if sn.get("isJob")]
+        assert len(job_subs) >= 2
+
+    def test_fivetran_job_count(self, multi_tool_graph):
+        """Fivetran connector should count as 1 job."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        ft = self._find_tool(view, "fivetran")
+        assert ft is not None, "Fivetran tool not found in view"
+        # Connector job node has canonical_type="job"
+        assert ft.metadata["jobCount"] >= 1
+
+    def test_fivetran_sub_node_is_job(self, multi_tool_graph):
+        """Fivetran connector subNode should have isJob=True."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        ft = self._find_tool(view, "fivetran")
+        job_subs = [sn for sn in ft.metadata["subNodes"] if sn.get("isJob")]
+        assert len(job_subs) >= 1
+
+    def test_dbt_model_is_job(self, multi_tool_graph):
+        """dbt model should be counted as a job via dbt_resource_type."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        dbt = self._find_tool(view, "dbt")
+        assert dbt is not None, "dbt tool not found in view"
+        assert dbt.metadata["jobCount"] >= 1
+        # Model has canonical_type="dataset" but isJob=True
+        model_subs = [sn for sn in dbt.metadata["subNodes"]
+                      if sn["name"] == "stg_orders"]
+        assert len(model_subs) == 1
+        assert model_subs[0]["isJob"] is True
+        assert model_subs[0]["type"] == "dataset"
+
+    def test_bigquery_job_count_zero(self, multi_tool_graph):
+        """BigQuery warehouse tool should have jobCount=0."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        bq = self._find_tool(view, "bigquery")
+        assert bq is not None, "BigQuery tool not found in view"
+        assert bq.metadata["jobCount"] == 0
+
+    def test_bigquery_job_support_not_applicable(self, multi_tool_graph):
+        """BigQuery warehouse tool should have jobSupport='not_applicable'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        bq = self._find_tool(view, "bigquery")
+        assert bq.metadata["jobSupport"] == "not_applicable"
+
+    def test_bigquery_sub_nodes_not_jobs(self, multi_tool_graph):
+        """Plain table subNodes should have isJob=False."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        bq = self._find_tool(view, "bigquery")
+        for sn in bq.metadata["subNodes"]:
+            assert sn.get("isJob") is False, (
+                f"BigQuery subNode {sn['name']} should not be marked as job"
+            )
+
+    def test_orchestrator_job_support_full(self, multi_tool_graph):
+        """Airflow (orchestrator) should have jobSupport='full'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        af = self._find_tool(view, "airflow")
+        assert af.metadata["jobSupport"] == "full"
+
+    def test_pipeline_stack_tool_job_support_no_data(self):
+        """A pipeline-stack-only tool with 0 assets should have jobSupport='no_data'."""
+        graph = LineageGraph()
+        tool_nodes = [{"toolType": "fivetran", "integrationId": "ft_new", "name": "Fivetran"}]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        ft_nodes = [n for n in view.nodes if n.platform == "fivetran"]
+        assert len(ft_nodes) >= 1
+        assert ft_nodes[0].metadata["jobSupport"] == "no_data"
+
+    def test_airflow_layer_is_orchestration(self, multi_tool_graph):
+        """Airflow tool should have layer='ORCHESTRATION', not 'transformation'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        af = self._find_tool(view, "airflow")
+        assert af is not None, "Airflow tool not found in view"
+        assert af.layer == "ORCHESTRATION", f"Airflow layer should be ORCHESTRATION, got {af.layer}"
+
+    def test_linux_server_layer_is_infrastructure(self, multi_tool_graph):
+        """Linux Server should have layer='INFRASTRUCTURE', not 'ingestion'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        linux = self._find_tool(view, "linux_server")
+        assert linux is not None, "Linux Server tool not found in view"
+        assert linux.layer == "INFRASTRUCTURE", f"Linux Server layer should be INFRASTRUCTURE, got {linux.layer}"
+
+    def test_bigquery_layer_is_warehouse(self, multi_tool_graph):
+        """BigQuery should have layer='WAREHOUSE'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        bq = self._find_tool(view, "bigquery")
+        assert bq is not None, "BigQuery tool not found in view"
+        assert bq.layer == "WAREHOUSE", f"BigQuery layer should be WAREHOUSE, got {bq.layer}"
+
+    def test_fivetran_layer_is_ingestion(self, multi_tool_graph):
+        """Fivetran should have layer='INGESTION'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        ft = self._find_tool(view, "fivetran")
+        assert ft is not None, "Fivetran tool not found in view"
+        assert ft.layer == "INGESTION", f"Fivetran layer should be INGESTION, got {ft.layer}"
+
+    def test_dbt_layer_is_transformation(self, multi_tool_graph):
+        """dbt should have layer='TRANSFORMATION'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        dbt = self._find_tool(view, "dbt")
+        assert dbt is not None, "dbt tool not found in view"
+        assert dbt.layer == "TRANSFORMATION", f"dbt layer should be TRANSFORMATION, got {dbt.layer}"
+
+    def test_linux_server_job_support_not_applicable(self, multi_tool_graph):
+        """Linux Server (infrastructure) should have jobSupport='not_applicable'."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        linux = self._find_tool(view, "linux_server")
+        assert linux is not None, "Linux Server tool not found in view"
+        assert linux.metadata["jobSupport"] == "not_applicable"
+
+    def test_linux_server_job_count_zero(self, multi_tool_graph):
+        """Linux Server (infrastructure) should have jobCount=0."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        linux = self._find_tool(view, "linux_server")
+        assert linux is not None, "Linux Server tool not found in view"
+        assert linux.metadata["jobCount"] == 0
+
+    def test_is_job_field_present_on_all_sub_nodes(self, multi_tool_graph):
+        """Every subNode should have an isJob boolean field."""
+        builder = ViewBuilder(multi_tool_graph)
+        view = builder.build_lane_pipeline_overview()
+        for vn in view.nodes:
+            for sn in vn.metadata.get("subNodes", []):
+                assert "isJob" in sn, (
+                    f"subNode {sn['name']} in {vn.name} missing isJob field"
+                )
+                assert isinstance(sn["isJob"], bool)
+
+
+# ---- Tool Details Tests ----
+
+class TestToolDetails:
+    """Tests for ViewBuilder.build_tool_details()."""
+
+    @pytest.fixture
+    def tool_details_graph(self) -> LineageGraph:
+        """Graph with multiple tool types for detail testing."""
+        graph = LineageGraph()
+
+        # Fivetran connector
+        ft_conn = _make_node(
+            "stripe_connector", NodeType.CONNECTOR, "fivetran",
+            PlatformDomain.INGESTION, integration_id="ft_001",
+            raw_metadata={"connector_id": "conn_abc", "dest_schema": "raw_stripe",
+                          "synced_tables": ["charges", "customers"], "node_role": "connector_job"},
+        )
+        ft_conn.canonical_type = "job"
+        graph.add_node(ft_conn)
+
+        # Fivetran destination table
+        ft_dest = _make_node(
+            "charges", NodeType.TABLE, "fivetran",
+            PlatformDomain.INGESTION, database="raw", schema="raw_stripe",
+            fqn="raw.raw_stripe.charges", integration_id="ft_001",
+        )
+        ft_dest.canonical_type = "dataset"
+        graph.add_node(ft_dest)
+
+        # dbt models
+        dbt_stg = _make_node(
+            "stg_charges", NodeType.MODEL, "dbt",
+            PlatformDomain.TRANSFORM, database="analytics", schema="staging",
+            fqn="analytics.staging.stg_charges",
+            raw_metadata={"dbt_resource_type": "model", "materialized": "view", "zone": "staging"},
+        )
+        dbt_stg.canonical_type = "dataset"
+        graph.add_node(dbt_stg)
+
+        dbt_mart = _make_node(
+            "fct_revenue", NodeType.MODEL, "dbt",
+            PlatformDomain.TRANSFORM, database="analytics", schema="marts",
+            fqn="analytics.marts.fct_revenue",
+            raw_metadata={"dbt_resource_type": "model", "materialized": "table", "zone": "mart"},
+        )
+        dbt_mart.canonical_type = "dataset"
+        graph.add_node(dbt_mart)
+
+        dbt_test = _make_node(
+            "not_null_orders_id", NodeType.MONITOR, "dbt",
+            PlatformDomain.TRANSFORM,
+            raw_metadata={"dbt_resource_type": "test"},
+        )
+        dbt_test.canonical_type = "test"
+        graph.add_node(dbt_test)
+
+        # BigQuery tables
+        bq_raw = _make_node(
+            "raw_orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            fqn="project.raw.raw_orders", integration_id="bq_001",
+        )
+        bq_raw.canonical_type = "dataset"
+        graph.add_node(bq_raw)
+
+        bq_analytics = _make_node(
+            "dim_customers", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="analytics",
+            fqn="project.analytics.dim_customers", integration_id="bq_001",
+        )
+        bq_analytics.canonical_type = "dataset"
+        graph.add_node(bq_analytics)
+
+        # Linux server
+        linux = _make_node(
+            "prod-server-01", NodeType.SOURCE, "linux_server",
+            PlatformDomain.OTHER,
+            raw_metadata={"running_services": ["nginx", "postgres"], "hosted_tools": ["n8n"]},
+        )
+        linux.canonical_type = "system"
+        graph.add_node(linux)
+
+        # Edges: fivetran → bigquery
+        graph.add_edge(_make_edge(ft_dest.id, bq_raw.id, EdgeType.DERIVED_FROM))
+        # dbt reads bigquery
+        graph.add_edge(_make_edge(bq_raw.id, dbt_stg.id, EdgeType.DERIVED_FROM))
+
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+        return graph
+
+    def test_tool_details_warehouse(self, tool_details_graph):
+        """BigQuery returns datasets + tables tabs."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:bigquery")
+
+        assert result["platform"] == "bigquery"
+        assert result["category"] == "warehouse"
+        assert "error" not in result
+
+        tab_keys = [t["key"] for t in result["tabs"]]
+        assert "datasets" in tab_keys
+        assert "tables" in tab_keys
+
+        # Should have 2 tables (raw_orders + dim_customers)
+        tables = result["groups"].get("tables", [])
+        assert len(tables) == 2
+
+        # Should have 2 schemas (raw + analytics)
+        datasets = result["groups"].get("datasets", [])
+        assert len(datasets) == 2
+
+    def test_tool_details_transform(self, tool_details_graph):
+        """dbt returns models + tests tabs."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:dbt")
+
+        assert result["platform"] == "dbt"
+        assert result["category"] == "transformation"
+
+        tab_keys = [t["key"] for t in result["tabs"]]
+        assert "models" in tab_keys
+        assert "tests" in tab_keys
+
+        models = result["groups"].get("models", [])
+        assert len(models) == 2  # stg_charges + fct_revenue
+
+        tests = result["groups"].get("tests", [])
+        assert len(tests) == 1  # not_null_orders_id
+
+        # Models should have zone info
+        zones = {m["zone"] for m in models}
+        assert "staging" in zones
+        assert "mart" in zones
+
+    def test_tool_details_ingestion(self, tool_details_graph):
+        """Fivetran returns connectors + destinations tabs."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:fivetran:ft_001")
+
+        assert result["platform"] == "fivetran"
+        assert result["category"] == "ingestion"
+        assert result["integrationId"] == "ft_001"
+
+        tab_keys = [t["key"] for t in result["tabs"]]
+        assert "connectors" in tab_keys
+        assert "destinations" in tab_keys
+
+        connectors = result["groups"].get("connectors", [])
+        assert len(connectors) >= 1
+
+        destinations = result["groups"].get("destinations", [])
+        assert len(destinations) >= 1
+
+    def test_tool_details_infra(self, tool_details_graph):
+        """Linux server returns services + hosts tabs."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:linux_server")
+
+        assert result["category"] == "infrastructure"
+
+        tab_keys = [t["key"] for t in result["tabs"]]
+        assert "services" in tab_keys
+        assert "hosts" in tab_keys
+
+        services = result["groups"].get("services", [])
+        # Should have running_services (nginx, postgres) + hosted_tools (n8n) = 3
+        assert len(services) == 3
+
+    def test_tool_details_missing_tool(self, tool_details_graph):
+        """Unknown tool_view_id returns empty with coverage gap."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:nonexistent_platform")
+
+        assert result["summary"]["totalAssets"] == 0
+        assert "no_data_extracted" in result["summary"]["coverageGaps"]
+
+    def test_tool_details_connections(self, tool_details_graph):
+        """BigQuery should show upstream (fivetran) and downstream (dbt) connections."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:bigquery")
+
+        upstream = result["connections"]["upstream"]
+        downstream = result["connections"]["downstream"]
+
+        upstream_platforms = {c["platform"] for c in upstream}
+        downstream_platforms = {c["platform"] for c in downstream}
+
+        assert "fivetran" in upstream_platforms
+        assert "dbt" in downstream_platforms
+
+    def test_tool_details_response_shape(self, tool_details_graph):
+        """Verify the response has all required top-level keys."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:bigquery")
+
+        required_keys = {"toolId", "platform", "platformDomain", "category",
+                         "displayName", "integrationId", "summary", "tabs",
+                         "groups", "connections"}
+        assert required_keys.issubset(set(result.keys()))
+
+        summary_keys = {"totalAssets", "healthSummary", "jobCount", "lastRunTs", "coverageGaps"}
+        assert summary_keys.issubset(set(result["summary"].keys()))
+
+        conn_keys = {"upstream", "downstream"}
+        assert conn_keys.issubset(set(result["connections"].keys()))
+
+    def test_tool_details_alias_resolution(self, tool_details_graph):
+        """Requesting tool:dbt_core should still find nodes with platform='dbt' (alias)."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:dbt_core")
+
+        # dbt_core is the primary name, "dbt" is an alias — nodes have platform="dbt"
+        assert result["category"] == "transformation"
+        models = result["groups"].get("models", [])
+        assert len(models) == 2  # stg_charges + fct_revenue
+
+    def test_tool_details_original_type_on_items(self, tool_details_graph):
+        """Items should have meaningful originalType from node_type.value, not empty."""
+        builder = ViewBuilder(tool_details_graph)
+        result = builder.build_tool_details("tool:dbt")
+
+        models = result["groups"].get("models", [])
+        for m in models:
+            assert m["originalType"] != "", f"originalType should not be empty for {m['name']}"
+            # dbt models have NodeType.MODEL → "model"
+            assert m["originalType"] in ("model", "dataset")
+
+    def test_tool_details_discovered_platforms(self, tool_details_graph):
+        """After resolver merge, dbt models become bigquery nodes but retain discovered_platforms."""
+        graph = tool_details_graph
+
+        # Simulate resolver merge: node has platform=bigquery but discovered_platforms includes dbt
+        merged = _make_node(
+            "stg_merged", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="analytics", schema="staging",
+            fqn="analytics.staging.stg_merged",
+            raw_metadata={
+                "dbt_resource_type": "model",
+                "materialized": "view",
+                "discovered_platforms": ["bigquery", "dbt_core"],
+            },
+        )
+        merged.canonical_type = "dataset"
+        graph.add_node(merged)
+
+        builder = ViewBuilder(graph)
+        result = builder.build_tool_details("tool:dbt")
+
+        # The merged node should appear in dbt's models tab via discovered_platforms
+        models = result["groups"].get("models", [])
+        model_names = {m["name"] for m in models}
+        assert "stg_merged" in model_names

@@ -1791,6 +1791,37 @@ async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
         ).dict()
 
 
+@router.get("/lineage/engine/views/tool-details/{tool_view_id:path}")
+async def view_tool_details(
+    tool_view_id: str,
+    stack_id: Optional[str] = Query(None),
+):
+    """
+    Return detailed inspection data for a single tool in the Pipeline Overview.
+
+    The tool_view_id is the ViewNode.id from the lane-pipeline-overview response
+    (e.g. "tool:bigquery" or "tool:fivetran:abc123").
+    """
+    store = _get_engine_store(stack_id)
+    if not store.graph or not store.graph.nodes:
+        return {"error": "No graph loaded", "toolId": tool_view_id}
+
+    try:
+        try:
+            from lineage.engine.views import ViewBuilder
+        except ImportError:
+            from scanner.lineage.engine.views import ViewBuilder
+
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        return builder.build_tool_details(tool_view_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"[Engine] Tool details failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e), "toolId": tool_view_id}
+
+
 @router.get("/lineage/engine/views/data-plane")
 async def view_data_plane(stack_id: Optional[str] = Query(None)):
     """

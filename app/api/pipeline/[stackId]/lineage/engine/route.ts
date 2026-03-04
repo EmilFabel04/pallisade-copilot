@@ -97,6 +97,10 @@ export async function GET(
       case 'view-data-plane':
         endpoint = `/api/v1/lineage/engine/views/data-plane${qs}`;
         break;
+      case 'view-tool-details':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
+        endpoint = `/api/v1/lineage/engine/views/tool-details/${encodeURIComponent(assetId)}${qs}`;
+        break;
       case 'data-plane-neighbors':
         if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
         endpoint = `/api/v1/lineage/engine/data-plane/neighbors/${encodeURIComponent(assetId)}?${forwardParams.toString()}`;
@@ -132,8 +136,11 @@ export async function GET(
 
     // For view actions: if engine returned empty (no graph in memory after restart),
     // try restoring from the DB snapshot and retry once.
+    // Only check responses that actually return a `nodes` field (pipeline-overview, data-plane, etc.).
+    // Tool-details responses use tabs/groups instead, so skip them.
     const isViewAction = action.startsWith('view-') || action === 'stats';
-    const isEmpty = !data.nodes || (Array.isArray(data.nodes) && data.nodes.length === 0);
+    const hasNodeField = data && 'nodes' in data;
+    const isEmpty = hasNodeField && (!data.nodes || (Array.isArray(data.nodes) && data.nodes.length === 0));
     if (isViewAction && isEmpty) {
       const organizationId = (session.user as any).organizationId;
       if (organizationId) {

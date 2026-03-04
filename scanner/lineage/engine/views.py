@@ -480,6 +480,21 @@ class ViewBuilder:
             },
         )
 
+    @staticmethod
+    def _is_job_like(node: LineageNode) -> bool:
+        """Return True if this graph node should count/display as a job."""
+        ct = node.canonical_type or ""
+        if ct == "job":
+            return True
+        rm = node.raw_metadata
+        if rm.get("dbt_resource_type") in ("model", "seed", "snapshot"):
+            return True
+        if rm.get("is_task") or rm.get("dag_id"):
+            return True
+        if rm.get("connector_id") or rm.get("sync_id"):
+            return True
+        return False
+
     def build_lane_pipeline_overview(self) -> RenderedView:
         """
         Build a tool-level lane-based Pipeline Overview.
@@ -640,13 +655,8 @@ class ViewBuilder:
                     health_summary["unknown"] += 1
                 # Job count
                 gn_ct = gn.canonical_type or ""
-                if gn_ct == "job":
-                    job_count += 1
-                elif gn.raw_metadata.get("dbt_resource_type") in ("model", "seed", "snapshot"):
-                    job_count += 1
-                elif gn.raw_metadata.get("is_task") or gn.raw_metadata.get("dag_id"):
-                    job_count += 1
-                elif gn.raw_metadata.get("connector_id") or gn.raw_metadata.get("sync_id"):
+                is_job = self._is_job_like(gn)
+                if is_job:
                     job_count += 1
                 # Last run timestamp (most recent observed_at)
                 if hasattr(gn, "observed_at") and gn.observed_at:
@@ -660,6 +670,7 @@ class ViewBuilder:
                         "name": gn.name,
                         "type": gn_ct or "unknown",
                         "fqn": gn.fqn or gn.name,
+                        "isJob": is_job,
                     })
 
             # Coverage gaps
@@ -685,7 +696,7 @@ class ViewBuilder:
                 original_type="service",
                 platform=platform,
                 platform_domain=_get_display_domain(platform),
-                layer=lane,
+                layer=_platform_to_layer(platform),
                 cluster_id=lane,
                 x=0, y=0,  # computed below
                 inferred=False,
@@ -703,6 +714,11 @@ class ViewBuilder:
                     "coverageGaps": coverage_gaps,
                     "subNodes": sub_nodes,
                     "totalSubNodeCount": len(graph_nodes),
+                    "jobSupport": (
+                        "not_applicable" if platform in WAREHOUSE_PLATFORMS or platform in INFRA_PLATFORMS
+                        else "no_data" if info.get("from_pipeline_stack") and info["asset_count"] == 0
+                        else "full"
+                    ),
                 },
             ))
 
@@ -721,9 +737,10 @@ class ViewBuilder:
             tool_edge_counts[pair_key] += 1
 
         # Build a node-id-to-lane lookup for semantic type derivation
+        # Use cluster_id (positional lane) not layer (display category)
         view_node_lane: Dict[str, str] = {}
         for vn in view_nodes:
-            view_node_lane[vn.id] = vn.layer
+            view_node_lane[vn.id] = vn.cluster_id
 
         view_edges: List[ViewEdge] = []
         for pair, count in tool_edge_counts.items():
@@ -760,9 +777,10 @@ class ViewBuilder:
             connected_tool_ids.add(tgt_id)
 
         # Group existing view nodes by lane for neighbour lookup
+        # Use cluster_id (positional lane) not layer (display category)
         lane_to_tools: Dict[str, List[ViewNode]] = defaultdict(list)
         for vn in view_nodes:
-            lane_to_tools[vn.layer].append(vn)
+            lane_to_tools[vn.cluster_id].append(vn)
 
         ordered_lanes = [l.value for l in PipelineLane]
 
@@ -770,7 +788,7 @@ class ViewBuilder:
             if vn.id in connected_tool_ids:
                 continue  # already has edges
 
-            my_lane_idx = LANE_ORDER.get(vn.layer, -1)
+            my_lane_idx = LANE_ORDER.get(vn.cluster_id, -1)
             if my_lane_idx < 0:
                 continue
 
@@ -1077,6 +1095,544 @@ class ViewBuilder:
             lanes=lanes,
             orchestrators=[],  # no separate overlays — orchestrators are in the lanes
         )
+
+    # ───────────────────────────────────────────────────────────────────────
+    # Tool Details — on-demand detail view for a single tool node
+    # ───────────────────────────────────────────────────────────────────────
+
+    def build_tool_details(self, tool_view_id: str) -> Dict[str, Any]:
+        """
+        Build detailed inspection data for a single tool node.
+
+        The tool_view_id comes from the lane-pipeline-overview response
+        (e.g. "tool:bigquery" or "tool:fivetran:abc123").
+
+        Returns a dict with:
+          - summary: health, counts, coverage gaps
+          - tabs: domain-specific tab definitions
+          - groups: items grouped by tab key
+          - connections: upstream/downstream tool connections
+        """
+        # Parse tool_view_id → extract the tool identity portion
+        # Format is "tool:{tool_id}" where tool_id is "{platform}" or "{platform}:{integration_id}"
+        prefix = "tool:"
+        if tool_view_id.startswith(prefix):
+            tool_id = tool_view_id[len(prefix):]
+        else:
+            tool_id = tool_view_id
+
+        # Extract platform and integration_id from tool_id
+        parts = tool_id.split(":", 1)
+        platform = parts[0].lower()
+        integration_id = parts[1] if len(parts) > 1 else None
+
+        # Look up platform info — resolve aliases (e.g. "dbt" → "dbt_core")
+        platform_info = get_platform(platform)
+        category = platform_info.category.value if platform_info else "warehouse"
+        platform_domain = _get_display_domain(platform)
+        display_name = platform.title()
+
+        # Build a set of platform names to match against (handle aliases)
+        # e.g. "dbt_core" should also match nodes with platform="dbt" and vice versa
+        platform_matches: Set[str] = {platform}
+        if platform_info:
+            platform_matches.add(platform_info.name)
+            for alias in platform_info.aliases:
+                platform_matches.add(alias)
+
+        # Collect ALL graph nodes belonging to this tool (no cap)
+        # Match by: (1) node.platform, (2) raw_metadata.discovered_platforms
+        # The latter handles resolver-merged nodes (e.g. dbt models merged into
+        # BigQuery nodes still have "dbt_core" in discovered_platforms).
+        tool_nodes_list: List[LineageNode] = []
+        tool_node_ids: Set[str] = set()
+        for node in self.graph.nodes.values():
+            node_platform = (node.platform or "").lower()
+            node_int_id = node.integration_id or ""
+
+            # Check primary platform match
+            matched = node_platform in platform_matches
+
+            # Also check discovered_platforms (set by resolver after cross-tool merge)
+            if not matched:
+                discovered = node.raw_metadata.get("discovered_platforms", [])
+                if any(dp.lower() in platform_matches for dp in discovered):
+                    matched = True
+
+            if matched:
+                if integration_id:
+                    if node_int_id == integration_id:
+                        tool_nodes_list.append(node)
+                        tool_node_ids.add(node.id)
+                else:
+                    tool_nodes_list.append(node)
+                    tool_node_ids.add(node.id)
+
+        # Update display name from pipeline tool_nodes if available
+        for tn in self.tool_nodes:
+            tn_type = (tn.get("toolType") or tn.get("tool_type") or "").lower()
+            tn_int = tn.get("integrationId") or tn.get("integration_id") or ""
+            if tn_type in platform_matches and (not integration_id or tn_int == integration_id):
+                display_name = tn.get("name") or display_name
+                break
+
+        # Build shared summary
+        health_summary = {"healthy": 0, "degraded": 0, "failing": 0, "unknown": 0, "stale": 0}
+        job_count = 0
+        last_run_ts: Optional[str] = None
+        last_run_dt = None
+
+        for gn in tool_nodes_list:
+            status = gn.health_status.value if hasattr(gn, "health_status") and gn.health_status else "unknown"
+            if status in health_summary:
+                health_summary[status] += 1
+            else:
+                health_summary["unknown"] += 1
+            if self._is_job_like(gn):
+                job_count += 1
+            if hasattr(gn, "observed_at") and gn.observed_at:
+                if last_run_dt is None or gn.observed_at > last_run_dt:
+                    last_run_dt = gn.observed_at
+                    last_run_ts = gn.observed_at.isoformat()
+
+        # Coverage gaps
+        coverage_gaps: List[str] = []
+        if not tool_nodes_list:
+            coverage_gaps.append("no_data_extracted")
+        else:
+            # Check sparse lineage
+            tool_edge_count = 0
+            for edge in self.graph.edges.values():
+                if edge.plane == LinePlane.CONTROL:
+                    continue
+                if edge.source_id in tool_node_ids or edge.target_id in tool_node_ids:
+                    tool_edge_count += 1
+            if len(tool_nodes_list) > 5 and tool_edge_count < 2:
+                coverage_gaps.append("sparse_lineage")
+
+        # Domain-specific tabs and groups
+        tabs, groups = self._build_domain_tabs(category, tool_nodes_list, tool_node_ids)
+
+        # Build connections (upstream/downstream tools from graph edges)
+        connections = self._build_tool_connections(tool_node_ids)
+
+        return {
+            "toolId": tool_view_id,
+            "platform": platform,
+            "platformDomain": platform_domain,
+            "category": category,
+            "displayName": display_name,
+            "integrationId": integration_id,
+            "summary": {
+                "totalAssets": len(tool_nodes_list),
+                "healthSummary": health_summary,
+                "jobCount": job_count,
+                "lastRunTs": last_run_ts,
+                "coverageGaps": coverage_gaps,
+            },
+            "tabs": tabs,
+            "groups": groups,
+            "connections": connections,
+        }
+
+    def _build_domain_tabs(
+        self,
+        category: str,
+        nodes: List[LineageNode],
+        tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Route to the correct domain-specific tab builder."""
+        builders = {
+            "ingestion": self._tabs_ingestion,
+            "transformation": self._tabs_transform,
+            "orchestration": self._tabs_orchestration,
+            "warehouse": self._tabs_warehouse,
+            "reporting": self._tabs_reporting,
+            "infrastructure": self._tabs_infra,
+            "quality": self._tabs_quality,
+        }
+        builder = builders.get(category, self._tabs_generic)
+        return builder(nodes, tool_node_ids)
+
+    @staticmethod
+    def _node_to_item(node: LineageNode) -> Dict[str, Any]:
+        """Convert a graph node to a ToolDetailItem dict."""
+        ct = node.canonical_type or ""
+        return {
+            "id": node.id,
+            "name": node.name,
+            "fqn": node.fqn or node.name,
+            "canonicalType": ct,
+            "originalType": getattr(node, "original_type", "") or (node.node_type.value if hasattr(node, "node_type") and node.node_type else "") or ct,
+            "healthStatus": node.health_status.value if hasattr(node, "health_status") and node.health_status else "unknown",
+            "observedAt": node.observed_at.isoformat() if hasattr(node, "observed_at") and node.observed_at else None,
+            "container": node.schema or "",
+            "zone": node.raw_metadata.get("zone", ""),
+            "metadata": {
+                k: v for k, v in node.raw_metadata.items()
+                if isinstance(v, (str, int, float, bool, list))
+            } if node.raw_metadata else {},
+        }
+
+    def _tabs_ingestion(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Ingestion tools: Connectors + Destinations."""
+        connectors = []
+        destinations = []
+        for n in nodes:
+            rm = n.raw_metadata or {}
+            ct = n.canonical_type or ""
+            if self._is_job_like(n) or rm.get("node_role") == "connector_job" or ct == "job":
+                item = self._node_to_item(n)
+                item["metadata"]["synced_tables"] = rm.get("synced_tables", [])
+                item["metadata"]["dest_schema"] = rm.get("dest_schema", "")
+                item["metadata"]["connector_id"] = rm.get("connector_id", "")
+                connectors.append(item)
+            elif ct == "dataset" or ct == "table" or ct == "view":
+                item = self._node_to_item(n)
+                item["container"] = rm.get("dest_schema") or n.schema or ""
+                destinations.append(item)
+
+        tabs = [
+            {"key": "connectors", "label": "Connectors", "count": len(connectors)},
+            {"key": "destinations", "label": "Destinations", "count": len(destinations)},
+        ]
+        groups = {"connectors": connectors, "destinations": destinations}
+        return tabs, groups
+
+    def _tabs_transform(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Transform tools: Models (by zone), Tests, Exposures."""
+        models = []
+        tests = []
+        exposures = []
+        for n in nodes:
+            rm = n.raw_metadata or {}
+            dbt_type = rm.get("dbt_resource_type", "")
+            ct = n.canonical_type or ""
+
+            if dbt_type in ("model", "seed", "snapshot") or (ct == "dataset" and not dbt_type):
+                item = self._node_to_item(n)
+                # Classify zone
+                zone = rm.get("zone", "")
+                if not zone:
+                    zone_enum = classify_dataset_zone(n)
+                    zone = zone_enum.value if zone_enum else "unknown"
+                item["zone"] = zone
+                item["metadata"]["materialized"] = rm.get("materialized", "")
+                item["metadata"]["dbt_resource_type"] = dbt_type
+                models.append(item)
+            elif dbt_type == "test" or ct == "test":
+                item = self._node_to_item(n)
+                tests.append(item)
+            elif dbt_type == "exposure" or ct == "semantic":
+                item = self._node_to_item(n)
+                exposures.append(item)
+
+        tabs = [
+            {"key": "models", "label": "Models", "count": len(models)},
+            {"key": "tests", "label": "Tests", "count": len(tests)},
+            {"key": "exposures", "label": "Exposures", "count": len(exposures)},
+        ]
+        groups = {"models": models, "tests": tests, "exposures": exposures}
+        return tabs, groups
+
+    def _tabs_orchestration(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Orchestration tools: DAGs/Flows, Tasks."""
+        dags = []
+        tasks = []
+        seen_dags: Set[str] = set()
+
+        for n in nodes:
+            rm = n.raw_metadata or {}
+            ct = n.canonical_type or ""
+            dag_id = rm.get("dag_id", "")
+            ot = getattr(n, "original_type", "") or (n.node_type.value if hasattr(n, "node_type") and n.node_type else "") or ""
+
+            if ot in ("dag", "workflow", "pipeline", "flow") or (ct == "job" and not dag_id):
+                item = self._node_to_item(n)
+                dags.append(item)
+                if dag_id:
+                    seen_dags.add(dag_id)
+            elif dag_id and ct in ("job", "task", ""):
+                # This is a task within a DAG
+                item = self._node_to_item(n)
+                item["container"] = dag_id
+                item["metadata"]["operator"] = rm.get("operator", "")
+                tasks.append(item)
+                # Also track the DAG if we haven't seen it yet
+                if dag_id not in seen_dags:
+                    seen_dags.add(dag_id)
+                    dags.append({
+                        "id": f"dag:{dag_id}",
+                        "name": dag_id,
+                        "fqn": dag_id,
+                        "canonicalType": "job",
+                        "originalType": "dag",
+                        "healthStatus": "unknown",
+                        "observedAt": None,
+                        "container": "",
+                        "zone": "",
+                        "metadata": {},
+                    })
+            elif self._is_job_like(n):
+                item = self._node_to_item(n)
+                dags.append(item)
+
+        # Count tasks per DAG for DAG items
+        dag_task_counts: Dict[str, int] = defaultdict(int)
+        for t in tasks:
+            dag_task_counts[t.get("container", "")] += 1
+        for d in dags:
+            d_name = d.get("name", "")
+            d["itemCount"] = dag_task_counts.get(d_name, 0)
+
+        tabs = [
+            {"key": "dags", "label": "DAGs / Flows", "count": len(dags)},
+            {"key": "tasks", "label": "Tasks", "count": len(tasks)},
+        ]
+        groups = {"dags": dags, "tasks": tasks}
+        return tabs, groups
+
+    def _tabs_warehouse(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Warehouse tools: Datasets/Schemas, Tables & Views."""
+        tables = []
+        schema_counts: Dict[str, int] = defaultdict(int)
+        schema_health: Dict[str, Dict[str, int]] = defaultdict(
+            lambda: {"healthy": 0, "degraded": 0, "failing": 0, "unknown": 0, "stale": 0}
+        )
+
+        for n in nodes:
+            ct = n.canonical_type or ""
+            if ct in ("service", "system"):
+                continue
+            item = self._node_to_item(n)
+            schema_name = n.schema or "default"
+            item["container"] = schema_name
+            tables.append(item)
+            schema_counts[schema_name] += 1
+            status = item.get("healthStatus", "unknown")
+            if status in schema_health[schema_name]:
+                schema_health[schema_name][status] += 1
+
+        # Build dataset (schema-level) summaries
+        datasets = []
+        for schema_name in sorted(schema_counts.keys()):
+            datasets.append({
+                "id": f"schema:{schema_name}",
+                "name": schema_name,
+                "fqn": schema_name,
+                "canonicalType": "dataset",
+                "originalType": "schema",
+                "healthStatus": "healthy" if schema_health[schema_name]["failing"] == 0 and schema_health[schema_name]["degraded"] == 0 else "degraded" if schema_health[schema_name]["failing"] == 0 else "failing",
+                "observedAt": None,
+                "container": "",
+                "itemCount": schema_counts[schema_name],
+                "zone": "",
+                "metadata": {"healthBreakdown": dict(schema_health[schema_name])},
+            })
+
+        tabs = [
+            {"key": "datasets", "label": "Datasets / Schemas", "count": len(datasets)},
+            {"key": "tables", "label": "Tables & Views", "count": len(tables)},
+        ]
+        groups = {"datasets": datasets, "tables": tables}
+        return tabs, groups
+
+    def _tabs_reporting(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Reporting/BI tools: Dashboards, Explores/Datasources."""
+        dashboards = []
+        explores = []
+        for n in nodes:
+            ct = n.canonical_type or ""
+            ot = getattr(n, "original_type", "") or (n.node_type.value if hasattr(n, "node_type") and n.node_type else "") or ""
+            rm = n.raw_metadata or {}
+            if ct in ("service", "system"):
+                continue
+            item = self._node_to_item(n)
+
+            if ot in ("dashboard", "report", "workbook") or ct == "semantic":
+                item["metadata"]["view_count"] = rm.get("view_count", 0)
+                item["metadata"]["project_name"] = rm.get("project_name", "")
+                dashboards.append(item)
+            elif ot in ("explore", "datasource", "model", "look", "data_source"):
+                item["metadata"]["connection_type"] = rm.get("connection_type", "")
+                explores.append(item)
+            else:
+                # Default: put in dashboards if semantic-like, else explores
+                if ct in ("dataset", "table", "view"):
+                    explores.append(item)
+                else:
+                    dashboards.append(item)
+
+        tabs = [
+            {"key": "dashboards", "label": "Dashboards", "count": len(dashboards)},
+            {"key": "explores", "label": "Explores / Sources", "count": len(explores)},
+        ]
+        groups = {"dashboards": dashboards, "explores": explores}
+        return tabs, groups
+
+    def _tabs_infra(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Infrastructure tools: Services, Host info."""
+        services = []
+        host_items = []
+        for n in nodes:
+            rm = n.raw_metadata or {}
+            item = self._node_to_item(n)
+
+            # Extract running services
+            running_services = rm.get("running_services", [])
+            hosted_tools = rm.get("hosted_tools", [])
+            if running_services or hosted_tools:
+                for svc in running_services:
+                    svc_name = svc if isinstance(svc, str) else svc.get("name", str(svc))
+                    services.append({
+                        "id": f"svc:{svc_name}",
+                        "name": svc_name,
+                        "fqn": svc_name,
+                        "canonicalType": "service",
+                        "originalType": "running_service",
+                        "healthStatus": "unknown",
+                        "observedAt": item.get("observedAt"),
+                        "container": n.name,
+                        "zone": "",
+                        "metadata": {},
+                    })
+                for tool in hosted_tools:
+                    tool_name = tool if isinstance(tool, str) else tool.get("name", str(tool))
+                    services.append({
+                        "id": f"hosted:{tool_name}",
+                        "name": tool_name,
+                        "fqn": tool_name,
+                        "canonicalType": "service",
+                        "originalType": "hosted_tool",
+                        "healthStatus": "unknown",
+                        "observedAt": item.get("observedAt"),
+                        "container": n.name,
+                        "zone": "",
+                        "metadata": {},
+                    })
+
+            host_items.append(item)
+
+        tabs = [
+            {"key": "services", "label": "Services", "count": len(services)},
+            {"key": "hosts", "label": "Hosts", "count": len(host_items)},
+        ]
+        groups = {"services": services, "hosts": host_items}
+        return tabs, groups
+
+    def _tabs_quality(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Quality tools: Monitors/Tests, Status."""
+        monitors = []
+        for n in nodes:
+            item = self._node_to_item(n)
+            rm = n.raw_metadata or {}
+            item["metadata"]["total_tests"] = rm.get("health_total_tests", 0)
+            item["metadata"]["failed_tests"] = rm.get("health_failed_tests", 0)
+            monitors.append(item)
+
+        # Aggregate status
+        total_pass = sum(
+            m["metadata"].get("total_tests", 0) - m["metadata"].get("failed_tests", 0)
+            for m in monitors
+        )
+        total_fail = sum(m["metadata"].get("failed_tests", 0) for m in monitors)
+
+        status_items = [{
+            "id": "quality:summary",
+            "name": "Test Summary",
+            "fqn": "quality:summary",
+            "canonicalType": "summary",
+            "originalType": "summary",
+            "healthStatus": "failing" if total_fail > 0 else "healthy",
+            "observedAt": None,
+            "container": "",
+            "zone": "",
+            "metadata": {"passing": total_pass, "failing": total_fail, "total": total_pass + total_fail},
+        }]
+
+        tabs = [
+            {"key": "monitors", "label": "Monitors", "count": len(monitors)},
+            {"key": "status", "label": "Status", "count": total_fail},
+        ]
+        groups = {"monitors": monitors, "status": status_items}
+        return tabs, groups
+
+    def _tabs_generic(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Fallback for unknown tool categories."""
+        jobs = []
+        assets = []
+        for n in nodes:
+            item = self._node_to_item(n)
+            if self._is_job_like(n):
+                jobs.append(item)
+            else:
+                assets.append(item)
+
+        tabs = [
+            {"key": "jobs", "label": "Jobs", "count": len(jobs)},
+            {"key": "assets", "label": "Assets", "count": len(assets)},
+        ]
+        groups = {"jobs": jobs, "assets": assets}
+        return tabs, groups
+
+    def _build_tool_connections(
+        self, tool_node_ids: Set[str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Find upstream and downstream tool connections from graph edges."""
+        upstream: Dict[str, int] = defaultdict(int)   # remote_tool_key → edge_count
+        downstream: Dict[str, int] = defaultdict(int)
+
+        for edge in self.graph.edges.values():
+            if edge.plane == LinePlane.CONTROL:
+                continue
+            src_in = edge.source_id in tool_node_ids
+            tgt_in = edge.target_id in tool_node_ids
+
+            if src_in and not tgt_in:
+                # This tool produces → target is downstream consumer
+                tgt_node = self.graph.nodes.get(edge.target_id)
+                if tgt_node:
+                    key = (tgt_node.platform or "unknown").lower()
+                    downstream[key] += 1
+            elif tgt_in and not src_in:
+                # This tool consumes ← source is upstream producer
+                src_node = self.graph.nodes.get(edge.source_id)
+                if src_node:
+                    key = (src_node.platform or "unknown").lower()
+                    upstream[key] += 1
+
+        def _to_list(counts: Dict[str, int]) -> List[Dict[str, Any]]:
+            result = []
+            for plat, count in sorted(counts.items(), key=lambda x: -x[1]):
+                info = get_platform(plat)
+                result.append({
+                    "toolId": f"tool:{plat}",
+                    "name": plat.title(),
+                    "platform": plat,
+                    "edgeCount": count,
+                })
+            return result
+
+        return {
+            "upstream": _to_list(upstream),
+            "downstream": _to_list(downstream),
+        }
 
     def build_data_plane(self) -> RenderedView:
         """

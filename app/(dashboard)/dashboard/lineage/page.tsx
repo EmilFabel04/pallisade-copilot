@@ -561,6 +561,7 @@ export default function LineagePage() {
         console.warn('[LINEAGE] Failed to save snapshot (non-fatal)');
       }
       await fetchLineage();
+      await fetchControlPlane();
 
       setLlmExtracting(false);
     } catch (err) {
@@ -586,6 +587,7 @@ export default function LineagePage() {
           setActiveRunId(null);
           // Atomic swap: fetch new views, then update state
           await fetchLineage();
+          await fetchControlPlane();
           setExtracting(false);
         } else if (status.status === 'failed') {
           clearInterval(interval);

@@ -103,7 +103,22 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         dag_files = config.get("dag_files", {})
         if not dag_files:
             logger.warning("[LiveAirflow] No dag_files in config for static mode")
-            return []
+            # Create a placeholder service node so the tool appears in the graph
+            placeholder = LineageNode(
+                id=generate_asset_id("orchestration", "airflow", namespace, "", "airflow"),
+                name=config.get("name", "Airflow"),
+                fqn=f"airflow.{namespace}",
+                node_type=NodeType.PIPELINE,
+                platform="airflow",
+                platform_domain=PlatformDomain.ORCHESTRATION,
+                asset_kind=AssetKind.UNKNOWN,
+                namespace=namespace,
+                observed_at=now,
+                sources=[self._id],
+                integration_id=integration_id,
+                raw_metadata={"note": "No dag_files configured — add DAG files to discover pipelines"},
+            )
+            return [placeholder]
 
         parsed_dags = parse_dag_files(dag_files)
         nodes: List[LineageNode] = []

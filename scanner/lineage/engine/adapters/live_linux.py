@@ -46,7 +46,7 @@ class LiveLinuxAdapter(BaseLineageAdapter):
             id=asset_id,
             name=hostname,
             fqn=f"linux.{namespace}.{hostname}",
-            node_type=NodeType.DATASET,
+            node_type=NodeType.SOURCE,
             platform="linux",
             platform_domain=PlatformDomain.OTHER,
             asset_kind=AssetKind.UNKNOWN,
@@ -54,6 +54,7 @@ class LiveLinuxAdapter(BaseLineageAdapter):
             observed_at=datetime.utcnow(),
             sources=[self._id],
             integration_id=integration_id,
+            canonical_type="system",  # Exclude from data plane (only dataset/semantic shown)
             raw_metadata={
                 "running_services": config.get("running_services", []),
                 "hosted_tools": config.get("hosted_tools", []),

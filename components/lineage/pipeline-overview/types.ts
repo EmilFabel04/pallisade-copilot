@@ -22,6 +22,7 @@ export interface SubNodeInfo {
   name: string;
   type: string;
   fqn: string;
+  isJob?: boolean;
 }
 
 export interface ToolNodeMetadata {
@@ -37,6 +38,7 @@ export interface ToolNodeMetadata {
   coverageGaps: string[];
   subNodes: SubNodeInfo[];
   totalSubNodeCount: number;
+  jobSupport: 'full' | 'not_applicable' | 'no_data';
 }
 
 // ── Edge metadata ────────────────────────────────────────────────────────
@@ -71,7 +73,7 @@ export type InspectorTarget =
   | { kind: 'edge'; edge: ViewEdge }
   | null;
 
-export type InspectorTab = 'overview' | 'jobs' | 'assets' | 'coverage';
+export type InspectorTab = string;  // Dynamic: 'overview' + domain-specific tab keys
 
 // ── Semantic edge styling ────────────────────────────────────────────────
 
@@ -109,6 +111,7 @@ export function getToolMeta(node: ViewNode): ToolNodeMetadata {
     coverageGaps: m.coverageGaps ?? [],
     subNodes: m.subNodes ?? [],
     totalSubNodeCount: m.totalSubNodeCount ?? 0,
+    jobSupport: m.jobSupport ?? 'full',
   };
 }
 
@@ -147,3 +150,59 @@ export const COVERAGE_GAP_LABELS: Record<string, string> = {
   limited_perms: 'Limited perms',
   no_column_lineage: 'No column lineage',
 };
+
+// ── Tool Details (on-demand detail view per tool) ─────────────────────
+
+/** A single item in a tool detail group */
+export interface ToolDetailItem {
+  id: string;
+  name: string;
+  fqn: string;
+  canonicalType: string;
+  originalType: string;
+  healthStatus?: string;
+  observedAt?: string | null;
+  container?: string;           // schema/dataset grouping key
+  itemCount?: number;           // child count (e.g., tables in a dataset)
+  zone?: string;                // dataset zone (raw, staging, mart)
+  metadata?: Record<string, any>;
+}
+
+/** A tab definition in the tool details response */
+export interface ToolDetailTab {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/** A connected tool reference */
+export interface ToolConnection {
+  toolId: string;
+  name: string;
+  platform: string;
+  edgeCount: number;
+}
+
+/** Full response from the tool-details endpoint */
+export interface ToolDetailsResponse {
+  toolId: string;
+  platform: string;
+  platformDomain: string;
+  category: string;
+  displayName: string;
+  integrationId: string | null;
+  error?: string;
+  summary: {
+    totalAssets: number;
+    healthSummary: HealthSummary;
+    jobCount: number;
+    lastRunTs: string | null;
+    coverageGaps: string[];
+  };
+  tabs: ToolDetailTab[];
+  groups: Record<string, ToolDetailItem[]>;
+  connections: {
+    upstream: ToolConnection[];
+    downstream: ToolConnection[];
+  };
+}
