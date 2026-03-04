@@ -597,6 +597,14 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
         if dbt_resource and dbt_resource in ("model", "seed", "snapshot"):
             primary.raw_metadata["dbt_resource_type"] = dbt_resource
 
+    # Also preserve dbt_unique_id for traceability and tool-details matching.
+    # Skip dbt sources — they're metadata pointers, not models (same logic
+    # as the dbt_resource_type filter and the discovered_platforms filter).
+    if not primary.raw_metadata.get("dbt_unique_id") and not _secondary_is_dbt_source:
+        dbt_uid = secondary.raw_metadata.get("dbt_unique_id")
+        if dbt_uid:
+            primary.raw_metadata["dbt_unique_id"] = dbt_uid
+
     # Preserve ingestion provenance when merging ingestion dest → warehouse.
     # When a warehouse node wins the merge over an ingestion destination node,
     # keep the ingestion metadata so cross-tool edge synthesis can still link them.

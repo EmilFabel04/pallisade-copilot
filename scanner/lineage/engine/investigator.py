@@ -1331,8 +1331,12 @@ def _build_adapter_config(tc: ToolConfig) -> Dict[str, Any]:
     elif tool_lower == "metabase":
         config.setdefault("metabase_config", tc.config)
     elif tool_lower == "airflow":
+        # source_mode takes priority: user may have BOTH host and github_repo
+        # in config but chose a specific mode in the UI.
+        source_mode = (tc.config.get("source_mode") or "").lower()
         base_url = tc.config.get("base_url") or tc.config.get("host") or tc.config.get("url")
-        if base_url:
+
+        if source_mode == "api" or (base_url and source_mode not in ("github", "static")):
             config["mode"] = "api"
             config["base_url"] = base_url
             config.setdefault("username", tc.config.get("username") or tc.config.get("user"))

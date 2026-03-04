@@ -2503,6 +2503,90 @@ async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
                     _log.warning(f"[dbt-preprocess] GitHub fetch failed: {gh_err}")
 
 
+async def _preprocess_airflow_configs(tool_configs, logger_instance=None) -> None:
+    """Fetch DAG files from GitHub for Airflow configs in-place.
+
+    When Airflow is connected via GitHub (static mode), the config contains
+    github.repo / github.token but NOT the actual dag_files.  This function
+    fetches the .py DAG files from the repo and injects them into the config
+    so LiveAirflowAdapter receives them.
+    """
+    import logging
+    _log = logger_instance or logging.getLogger(__name__)
+
+    for tc in tool_configs:
+        tool_type = (tc.tool_type if hasattr(tc, "tool_type") else "").lower()
+        if tool_type != "airflow":
+            continue
+
+        cfg = tc.config if hasattr(tc, "config") else {}
+        _log.info("[airflow-preprocess] Airflow config keys: %s", list(cfg.keys()))
+
+        # Skip if dag_files already populated
+        if cfg.get("dag_files"):
+            _log.info("[airflow-preprocess] dag_files already present, skipping")
+            continue
+
+        # Determine mode: source_mode takes priority over host detection.
+        # Config may have BOTH host (API) and github_repo (GitHub) keys —
+        # source_mode tells us which the user actually chose.
+        source_mode = (cfg.get("source_mode") or "").lower()
+        base_url = cfg.get("base_url") or cfg.get("host") or cfg.get("url")
+
+        if source_mode == "api" or (base_url and source_mode not in ("github", "static")):
+            _log.info("[airflow-preprocess] API mode (source_mode=%s, base_url=%s), skipping", source_mode, base_url)
+            continue  # API mode — no preprocessing needed
+
+        # Fetch from GitHub — check multiple config shapes
+        github_config = cfg.get("github") or {}
+        github_repo = (
+            github_config.get("repo")
+            or cfg.get("github_repo")
+            or cfg.get("repo")
+        )
+        github_token = (
+            github_config.get("token")
+            or cfg.get("github_token")
+            or cfg.get("token")
+        )
+
+        if not github_repo or not github_token:
+            _log.warning(
+                "[airflow-preprocess] No GitHub credentials found. "
+                "Config has github=%s, github_repo=%s, repo=%s. "
+                "Airflow needs either github.repo+token, github_repo+github_token, or API mode.",
+                bool(github_config), bool(cfg.get("github_repo")), bool(cfg.get("repo")),
+            )
+            continue
+
+        if github_repo and github_token:
+            dag_directory = (
+                cfg.get("dag_directory")
+                or github_config.get("dag_directory", "dags")
+            )
+            branch = github_config.get("branch") or cfg.get("github_branch", "main")
+            try:
+                dag_files = await _fetch_dag_files_from_github(
+                    repo=github_repo,
+                    token=github_token,
+                    branch=branch,
+                    dag_directory=dag_directory,
+                )
+                if dag_files:
+                    cfg["dag_files"] = dag_files
+                    _log.info(
+                        "[airflow-preprocess] Fetched %d DAG files from GitHub %s/%s",
+                        len(dag_files), github_repo, dag_directory,
+                    )
+                else:
+                    _log.warning(
+                        "[airflow-preprocess] No .py files found in %s/%s",
+                        github_repo, dag_directory,
+                    )
+            except Exception as gh_err:
+                _log.warning("[airflow-preprocess] GitHub DAG fetch failed: %s", gh_err)
+
+
 @router.post("/lineage/investigate", response_model=InvestigateResponse)
 async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[str] = Query(None)):
     """
@@ -2524,8 +2608,9 @@ async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[st
         except ImportError:
             from scanner.lineage.engine.investigator import ToolConfig
 
-        # Pre-process dbt_core configs (parse project files or fetch from GitHub)
+        # Pre-process tool configs that need GitHub/remote file fetching
         await _preprocess_dbt_configs(request.tool_configs, _logger)
+        await _preprocess_airflow_configs(request.tool_configs, _logger)
 
         tool_configs = [
             ToolConfig(
@@ -2639,8 +2724,9 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         except ImportError:
             from scanner.lineage.engine.investigator import ToolConfig
 
-        # Pre-process dbt_core configs (parse project files or fetch from GitHub)
+        # Pre-process tool configs that need GitHub/remote file fetching
         await _preprocess_dbt_configs(request.tool_configs, _logger)
+        await _preprocess_airflow_configs(request.tool_configs, _logger)
 
         tool_configs = [
             ToolConfig(
@@ -2768,8 +2854,9 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
                 from scanner.lineage.engine.investigator import ToolConfig
                 from scanner.lineage.engine.llm_extractor import LLMExtractorConfig, LLMLineageExtractor
 
-            # Pre-process dbt_core configs (shared helper with fallback)
+            # Pre-process tool configs that need GitHub/remote file fetching
             await _preprocess_dbt_configs(request.tool_configs, _logger)
+            await _preprocess_airflow_configs(request.tool_configs, _logger)
 
             # Build ToolConfig list
             tool_configs = [

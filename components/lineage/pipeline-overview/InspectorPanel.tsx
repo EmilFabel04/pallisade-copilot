@@ -46,6 +46,12 @@ function NodeInspector({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const cacheRef = useRef<Map<string, ToolDetailsResponse>>(new Map());
 
+  // Clear cache when pipeline data changes (new extraction)
+  const overviewStamp = laneOverview?.stats?.opsSummary?.totalAssets ?? laneOverview?.nodes?.length ?? 0;
+  useEffect(() => {
+    cacheRef.current.clear();
+  }, [overviewStamp]);
+
   useEffect(() => {
     if (!stackId || !node.id) return;
 

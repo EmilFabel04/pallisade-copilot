@@ -388,6 +388,7 @@ class LiveAirflowAdapter(BaseLineageAdapter):
             sources=[self._id],
             integration_id=integration_id,
             raw_metadata={
+                "dag_id": dag_id,
                 "schedule": schedule or (dag.schedule if dag else None),
                 "file_path": dag.file_path if dag else None,
                 "task_count": len(dag.tasks) if dag else 0,

@@ -98,7 +98,7 @@ class LiveDbtAdapter(BaseLineageAdapter):
 
         # Process sources
         for key, source in manifest.get("sources", {}).items():
-            node = self._source_to_node(source, namespace, hint, now, integration_id)
+            node = self._source_to_node(source, namespace, hint, now, integration_id, manifest_key=key)
             if node:
                 node.environment_scope = env_scope or None
                 nodes.append(node)
@@ -107,7 +107,7 @@ class LiveDbtAdapter(BaseLineageAdapter):
         for key, model in manifest.get("nodes", {}).items():
             resource_type = model.get("resource_type", "")
             if resource_type in ("model", "seed", "snapshot"):
-                node = self._model_to_node(model, namespace, hint, now, integration_id)
+                node = self._model_to_node(model, namespace, hint, now, integration_id, manifest_key=key)
                 if node:
                     node.environment_scope = env_scope or None
                     nodes.append(node)
@@ -231,6 +231,7 @@ class LiveDbtAdapter(BaseLineageAdapter):
     def _source_to_node(
         self, source: Dict, namespace: str, hint: str, now: datetime,
         integration_id: Optional[str] = None,
+        manifest_key: Optional[str] = None,
     ) -> Optional[LineageNode]:
         """Convert a dbt source definition to a canonical node."""
         db = normalize_identifier(source.get("database", ""), hint)
@@ -262,12 +263,13 @@ class LiveDbtAdapter(BaseLineageAdapter):
             observed_at=now,
             sources=[self._id],
             integration_id=integration_id,
-            raw_metadata={"case_hint": hint, "dbt_resource_type": "source", "warehouse_type": self._warehouse_type},
+            raw_metadata={"case_hint": hint, "dbt_resource_type": "source", "dbt_unique_id": manifest_key or "", "warehouse_type": self._warehouse_type},
         )
 
     def _model_to_node(
         self, model: Dict, namespace: str, hint: str, now: datetime,
         integration_id: Optional[str] = None,
+        manifest_key: Optional[str] = None,
     ) -> Optional[LineageNode]:
         """Convert a dbt model/seed/snapshot to a canonical node."""
         resource_type = model.get("resource_type", "model")
@@ -311,6 +313,7 @@ class LiveDbtAdapter(BaseLineageAdapter):
             raw_metadata={
                 "case_hint": hint,
                 "dbt_resource_type": resource_type,
+                "dbt_unique_id": manifest_key or "",
                 "materialized": model.get("config", {}).get("materialized", "view"),
                 "warehouse_type": self._warehouse_type,
             },

@@ -374,6 +374,39 @@ class ViewBuilder:
                 }
                 tool_key_to_nodes[tool_key] = []  # no engine nodes
 
+        # Step 2.5: Cross-tool counting for merged nodes
+        _pk_to_keys: Dict[str, List[str]] = defaultdict(list)
+        for tk, info in tool_key_to_info.items():
+            plat = info["platform"].lower()
+            _pk_to_keys[plat].append(tk)
+            pi = get_platform(plat)
+            if pi:
+                for alias in pi.aliases:
+                    _pk_to_keys[alias].append(tk)
+                if pi.name != plat:
+                    _pk_to_keys[pi.name].append(tk)
+
+        for node in self.graph.nodes.values():
+            primary_platform = (node.platform or "unknown").lower()
+            rm = node.raw_metadata or {}
+            discovered = rm.get("discovered_platforms", [])
+            secondary_platforms: Set[str] = set()
+            for dp in discovered:
+                dp_lower = dp.lower()
+                if dp_lower != primary_platform:
+                    secondary_platforms.add(dp_lower)
+            if not secondary_platforms and primary_platform != "dbt":
+                if rm.get("dbt_resource_type") in ("model", "seed", "snapshot"):
+                    secondary_platforms.add("dbt")
+            for sp in secondary_platforms:
+                target_keys = _pk_to_keys.get(sp, [])
+                if not target_keys:
+                    sp_info = get_platform(sp)
+                    if sp_info:
+                        target_keys = _pk_to_keys.get(sp_info.name, [])
+                for tk in target_keys:
+                    tool_key_to_nodes[tk].append(node)
+
         # Step 3: Build service-level ViewNodes
         view_nodes: List[ViewNode] = []
         for tool_key, info in sorted(tool_key_to_info.items()):
@@ -630,6 +663,54 @@ class ViewBuilder:
         # keep both.  If it only appears in raw (all nodes classified raw),
         # check if there are analytics-zone datasets and split.
         # (No change needed — assign_lane already handles this.)
+
+        # ── Step 2.5: Cross-tool asset counting for merged nodes ──────
+        # After resolver merges (e.g., dbt model → BigQuery table), nodes
+        # have platform=bigquery but discovered_platforms=["bigquery","dbt"].
+        # Count these nodes under their secondary platform tool entries so
+        # the dbt card shows the correct model count.
+        #
+        # Build reverse index: platform_name → list of tool_info keys
+        _platform_to_tks: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+        for tk, info in tool_info.items():
+            plat = info["platform"]
+            _platform_to_tks[plat].append(tk)
+            # Also register aliases (e.g., "dbt" → dbt_core entries)
+            plat_info = get_platform(plat)
+            if plat_info:
+                for alias in plat_info.aliases:
+                    _platform_to_tks[alias].append(tk)
+                if plat_info.name != plat:
+                    _platform_to_tks[plat_info.name].append(tk)
+
+        for node in self.graph.nodes.values():
+            primary_platform = (node.platform or "unknown").lower()
+            rm = node.raw_metadata or {}
+            discovered = rm.get("discovered_platforms", [])
+
+            # Also check dbt metadata fallback
+            secondary_platforms: Set[str] = set()
+            for dp in discovered:
+                dp_lower = dp.lower()
+                if dp_lower != primary_platform:
+                    secondary_platforms.add(dp_lower)
+
+            # Fallback: dbt metadata without discovered_platforms
+            if not secondary_platforms and primary_platform != "dbt":
+                if rm.get("dbt_resource_type") in ("model", "seed", "snapshot"):
+                    secondary_platforms.add("dbt")
+
+            for sp in secondary_platforms:
+                target_tks = _platform_to_tks.get(sp, [])
+                # Also check canonical name resolution
+                if not target_tks:
+                    sp_info = get_platform(sp)
+                    if sp_info:
+                        target_tks = _platform_to_tks.get(sp_info.name, [])
+
+                for tk in target_tks:
+                    tool_info[tk]["asset_count"] = tool_info[tk].get("asset_count", 0) + 1
+                    tool_key_to_graph_nodes[tk].append(node)
 
         # ── Step 3: Build one ViewNode per tool per lane ──────────────
         view_nodes: List[ViewNode] = []
@@ -1105,7 +1186,7 @@ class ViewBuilder:
         Build detailed inspection data for a single tool node.
 
         The tool_view_id comes from the lane-pipeline-overview response
-        (e.g. "tool:bigquery" or "tool:fivetran:abc123").
+        (e.g. "tool:transformation:dbt_core:abc123" or "tool:warehouse_raw:bigquery").
 
         Returns a dict with:
           - summary: health, counts, coverage gaps
@@ -1113,16 +1194,30 @@ class ViewBuilder:
           - groups: items grouped by tab key
           - connections: upstream/downstream tool connections
         """
-        # Parse tool_view_id → extract the tool identity portion
-        # Format is "tool:{tool_id}" where tool_id is "{platform}" or "{platform}:{integration_id}"
+        # Parse tool_view_id → extract platform and optional integration_id.
+        #
+        # Lane overview format:  "tool:{lane}:{platform}:{integration_id}"
+        #                    or  "tool:{lane}:{platform}"
+        # Legacy/non-lane:       "tool:{platform}:{integration_id}"
+        #                    or  "tool:{platform}"
+        #                    or  "{platform}:{integration_id}"
+        #                    or  "{platform}"
+        _LANE_VALUES = {"ingestion", "warehouse_raw", "transformation",
+                        "warehouse_analytics", "reporting"}
+
         prefix = "tool:"
         if tool_view_id.startswith(prefix):
-            tool_id = tool_view_id[len(prefix):]
+            remainder = tool_view_id[len(prefix):]
         else:
-            tool_id = tool_view_id
+            remainder = tool_view_id
 
-        # Extract platform and integration_id from tool_id
-        parts = tool_id.split(":", 1)
+        # If the first segment is a lane value, strip it
+        parts = remainder.split(":", 1)
+        if parts[0].lower() in _LANE_VALUES and len(parts) > 1:
+            remainder = parts[1]  # skip the lane segment
+
+        # Now remainder is "{platform}" or "{platform}:{integration_id}"
+        parts = remainder.split(":", 1)
         platform = parts[0].lower()
         integration_id = parts[1] if len(parts) > 1 else None
 
@@ -1150,23 +1245,41 @@ class ViewBuilder:
             node_platform = (node.platform or "").lower()
             node_int_id = node.integration_id or ""
 
-            # Check primary platform match
-            matched = node_platform in platform_matches
+            # Check primary platform match (node.platform directly matches)
+            primary_match = node_platform in platform_matches
 
             # Also check discovered_platforms (set by resolver after cross-tool merge)
-            if not matched:
+            cross_tool_match = False
+            if not primary_match:
                 discovered = node.raw_metadata.get("discovered_platforms", [])
                 if any(dp.lower() in platform_matches for dp in discovered):
-                    matched = True
+                    cross_tool_match = True
+
+            # Fallback: check dbt-specific metadata keys for cases where
+            # discovered_platforms was lost during serialization.
+            if not primary_match and not cross_tool_match and ("dbt" in platform_matches or "dbt_core" in platform_matches):
+                if node.raw_metadata.get("dbt_resource_type") or node.raw_metadata.get("dbt_unique_id"):
+                    cross_tool_match = True
+
+            matched = primary_match or cross_tool_match
 
             if matched:
-                if integration_id:
-                    if node_int_id == integration_id:
-                        tool_nodes_list.append(node)
-                        tool_node_ids.add(node.id)
-                else:
-                    tool_nodes_list.append(node)
-                    tool_node_ids.add(node.id)
+                # For cross-tool matches (discovered_platforms / metadata
+                # fallback), skip integration_id filter — merged nodes carry
+                # the winning tool's integration_id, not the secondary's.
+                # Only enforce integration_id for primary platform matches.
+                if integration_id and primary_match and not cross_tool_match:
+                    if node_int_id != integration_id:
+                        continue
+                tool_nodes_list.append(node)
+                tool_node_ids.add(node.id)
+
+        logger.info(
+            "[ToolDetails] %s → platform=%s, integration_id=%s, "
+            "platform_matches=%s, matched_nodes=%d (graph_total=%d)",
+            tool_view_id, platform, integration_id,
+            platform_matches, len(tool_nodes_list), len(self.graph.nodes),
+        )
 
         # Update display name from pipeline tool_nodes if available
         for tn in self.tool_nodes:
@@ -1313,7 +1426,10 @@ class ViewBuilder:
             dbt_type = rm.get("dbt_resource_type", "")
             ct = n.canonical_type or ""
 
-            if dbt_type in ("model", "seed", "snapshot") or (ct == "dataset" and not dbt_type):
+            if dbt_type in ("model", "seed", "snapshot") or (
+                ct == "dataset" and not dbt_type
+                and any(dp.lower() in ("dbt", "dbt_core") for dp in rm.get("discovered_platforms", []))
+            ):
                 item = self._node_to_item(n)
                 # Classify zone
                 zone = rm.get("zone", "")
@@ -1355,9 +1471,13 @@ class ViewBuilder:
 
             if ot in ("dag", "workflow", "pipeline", "flow") or (ct == "job" and not dag_id):
                 item = self._node_to_item(n)
+                item["metadata"]["schedule"] = rm.get("schedule", "")
+                item["metadata"]["task_count"] = rm.get("task_count", 0)
                 dags.append(item)
-                if dag_id:
-                    seen_dags.add(dag_id)
+                # Register by dag_id OR node.name to prevent synthetic duplicates
+                effective_dag_id = dag_id or n.name
+                if effective_dag_id:
+                    seen_dags.add(effective_dag_id)
             elif dag_id and ct in ("job", "task", ""):
                 # This is a task within a DAG
                 item = self._node_to_item(n)
@@ -1377,7 +1497,7 @@ class ViewBuilder:
                         "observedAt": None,
                         "container": "",
                         "zone": "",
-                        "metadata": {},
+                        "metadata": {"synthetic": True},
                     })
             elif self._is_job_like(n):
                 item = self._node_to_item(n)
