@@ -129,13 +129,11 @@ export async function GET(
     if (responseData.connected !== false && responseData.source !== 'error') {
       const lastSync = new Date().toISOString();
       try {
-        // Store cached data in node config
-        const currentConfig = node.config as Record<string, any> || {};
+        // Store only _cached data in PipelineNode.config — credentials live in Integration.credentials
         await prisma.pipelineNode.update({
           where: { id: nodeId },
           data: {
             config: {
-              ...currentConfig,
               _cached: {
                 data: responseData,
                 lastSync,

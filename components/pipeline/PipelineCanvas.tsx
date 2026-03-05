@@ -37,6 +37,7 @@ interface PipelineCanvasProps {
   onNodesChange: (nodes: PipelineNode[]) => void;
   onEdgesChange: (edges: PipelineEdge[]) => void;
   onSave?: () => void;
+  onSaveConfig?: (nodeId: string, config: Record<string, any>) => void;
   readOnly?: boolean;
 }
 
@@ -258,6 +259,7 @@ function PipelineCanvasInner({
   onNodesChange,
   onEdgesChange,
   onSave,
+  onSaveConfig,
   stackId,
   readOnly = false,
 }: PipelineCanvasProps) {
@@ -412,7 +414,7 @@ function PipelineCanvasInner({
     [edges, onEdgesChange, readOnly]
   );
 
-  // Handle config save
+  // Handle config save — persist to server via parent callback
   const handleConfigSave = useCallback(
     (config: Record<string, any>) => {
       if (configNode) {
@@ -423,10 +425,12 @@ function PipelineCanvasInner({
               : node
           )
         );
+        // Trigger server-side save so credentials persist across navigation
+        onSaveConfig?.(configNode.id, config);
       }
       setConfigNode(null);
     },
-    [configNode, nodes, onNodesChange]
+    [configNode, nodes, onNodesChange, onSaveConfig]
   );
 
   return (

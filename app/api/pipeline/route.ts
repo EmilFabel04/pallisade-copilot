@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { encrypt, decrypt } from '@/lib/crypto';
 
 // Helper to encrypt node config for secure storage (legacy — kept for _cached data)
@@ -342,7 +343,7 @@ export async function POST(request: NextRequest) {
             name: node.name,
             layer: node.layer,
             toolType: node.toolType,
-            config: cachedData ? { _cached: cachedData } : undefined,
+            config: cachedData ? { _cached: cachedData } : Prisma.JsonNull,
             positionX: node.positionX,
             positionY: node.positionY,
             status: node.status,
@@ -432,7 +433,9 @@ export async function POST(request: NextRequest) {
               name: node.name,
               layer: node.layer,
               toolType: node.toolType,
-              config: cachedData ? { _cached: cachedData } : undefined,
+              // Explicitly clear old config — credentials now live in Integration table.
+              // Prisma.JsonNull = set to null; undefined = "don't change" (which would keep stale data).
+              config: cachedData ? { _cached: cachedData } : Prisma.JsonNull,
               positionX: node.positionX,
               positionY: node.positionY,
               status: node.status,
@@ -452,7 +455,7 @@ export async function POST(request: NextRequest) {
               name: node.name,
               layer: node.layer,
               toolType: node.toolType,
-              config: cachedData ? { _cached: cachedData } : undefined,
+              config: cachedData ? { _cached: cachedData } : Prisma.JsonNull,
               positionX: node.positionX,
               positionY: node.positionY,
               status: node.status,

@@ -106,11 +106,14 @@ export async function GET(request: NextRequest) {
       findingsCount: node.findingsCount,
     }));
 
-    // Combine both sources, with Pipeline nodes first
-    const allIntegrations = [...pipelineAsIntegrations, ...legacyIntegrations.map(i => ({
-      ...i,
-      source: 'legacy' as const,
-    }))];
+    // Combine both sources, with Pipeline nodes first.
+    // Deduplicate: if a PipelineNode exists for a type, skip the legacy Integration
+    // to prevent duplicate connector cards and duplicate auto-discovery records.
+    const pipelineTypes = new Set(pipelineAsIntegrations.map(p => p.type));
+    const dedupedLegacy = legacyIntegrations
+      .filter(i => !pipelineTypes.has(i.type))
+      .map(i => ({ ...i, source: 'legacy' as const }));
+    const allIntegrations = [...pipelineAsIntegrations, ...dedupedLegacy];
 
     return NextResponse.json({ 
       integrations: allIntegrations,

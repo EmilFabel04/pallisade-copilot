@@ -219,8 +219,8 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
     // Ensure Airflow defaults
     if (node.toolType === 'airflow') {
       if (!initial.source_mode) {
-        // Default to API mode if host is set, otherwise github
-        initial.source_mode = initial.host ? 'api' : 'api';
+        // Detect mode from config fields: github_repo → github mode, otherwise api
+        initial.source_mode = initial.github_repo ? 'github' : 'api';
       }
       if (!initial.dag_directory) {
         initial.dag_directory = 'dags';
@@ -747,7 +747,18 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
               Cancel
             </button>
             <button
-              onClick={() => onSave(config)}
+              onClick={() => {
+                // Strip fields hidden by showWhen before saving — prevents stale
+                // mode-specific values (e.g. old GitHub fields when switching to API mode)
+                // from being persisted alongside the new mode's fields.
+                const cleanConfig = { ...config };
+                configFields.forEach(field => {
+                  if (field.showWhen && cleanConfig[field.showWhen.field] !== field.showWhen.value) {
+                    delete cleanConfig[field.name];
+                  }
+                });
+                onSave(cleanConfig);
+              }}
               disabled={!isValid && !(isOAuthTool && githubInfo?.connected)}
               className="px-5 py-2.5 text-sm font-medium rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >

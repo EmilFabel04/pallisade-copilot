@@ -251,7 +251,7 @@ export default function PipelinePage() {
       const data = await res.json();
       setStack((prev) => ({ ...nextStack, id: data.stack?.id || data.id || prev.id }));
       if (!silent) toast.success('Pipeline saved');
-    } catch { if (!silent) toast.error('Failed to save pipeline'); }
+    } catch { toast.error('Failed to save pipeline'); }
     finally { setSaving(false); }
   }, []);
 
@@ -318,6 +318,7 @@ export default function PipelinePage() {
 
     const load = async () => {
       setLoading(true);
+      initialLoadRef.current = false;
       // Reset state for new pipeline
       setStack({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
       setIntegrationRecords([]);
@@ -327,9 +328,49 @@ export default function PipelinePage() {
           fetch(`/api/pipeline?stackId=${selectedPipelineId}`),
           fetchIntegrations(),
         ]);
-        if (pipelineRes.ok) { const data = await pipelineRes.json(); if (data.stack) setStack(data.stack); }
+        if (pipelineRes.ok) {
+          const data = await pipelineRes.json();
+          if (data.stack) {
+            // Deduplicate nodes by toolType — auto-discovery race may have created duplicates.
+            // Keep the node with real config (not _autoDiscovered) when duplicates exist.
+            const seen = new Map<string, any>();
+            const dedupedNodes: any[] = [];
+            for (const node of data.stack.nodes) {
+              const existing = seen.get(node.toolType);
+              if (!existing) {
+                seen.set(node.toolType, node);
+                dedupedNodes.push(node);
+              } else {
+                const hasRealConfig = node.config && !node.config._autoDiscovered;
+                const existingHasReal = existing.config && !existing.config._autoDiscovered;
+                if (hasRealConfig && !existingHasReal) {
+                  const idx = dedupedNodes.indexOf(existing);
+                  dedupedNodes[idx] = node;
+                  seen.set(node.toolType, node);
+                }
+              }
+            }
+
+            // Filter edges to only reference surviving node IDs
+            const survivingIds = new Set(dedupedNodes.map((n: any) => n.id));
+            const dedupedEdges = (data.stack.edges || []).filter(
+              (e: any) => survivingIds.has(e.sourceId) && survivingIds.has(e.targetId)
+            );
+
+            const deduped = { ...data.stack, nodes: dedupedNodes, edges: dedupedEdges };
+            setStack(deduped);
+
+            // Pre-populate autoDiscoveredRef so auto-discovery won't re-create these
+            deduped.nodes.forEach((n: any) => autoDiscoveredRef.current.add(n.toolType));
+
+            // If duplicates were removed, persist the clean stack
+            if (dedupedNodes.length < data.stack.nodes.length) {
+              void savePipeline(deduped, true);
+            }
+          }
+        }
       } catch (e) { console.error('Failed to load pipeline map', e); }
-      finally { setLoading(false); }
+      finally { setLoading(false); initialLoadRef.current = true; }
     };
     load();
   }, [selectedPipelineId, pipelineLoading, fetchIntegrations]);
@@ -342,14 +383,30 @@ export default function PipelinePage() {
     else if (error) { toast.error(`Authentication error: ${error}`); window.history.replaceState({}, '', '/dashboard/pipeline'); }
   }, [fetchIntegrations, searchParams]);
 
+  // Track which tool types have already been auto-discovered to avoid re-running on every refetch
+  const autoDiscoveredRef = useRef<Set<string>>(new Set());
+  // Gate auto-discovery: don't run until the initial pipeline load is complete
+  const initialLoadRef = useRef(false);
+
+  // Reset when pipeline changes
+  useEffect(() => { autoDiscoveredRef.current = new Set(); initialLoadRef.current = false; }, [selectedPipelineId]);
+
   useEffect(() => {
+    // Don't run until the initial pipeline load is complete — prevents creating
+    // duplicate nodes if the integrations API responds before the pipeline API.
+    if (!initialLoadRef.current) return;
     const discoveredIds = new Set(
       integrationRecords.filter((r) => r.status === 'ACTIVE' && !!getToolById(r.connectorId)).map((r) => r.connectorId)
     );
     if (discoveredIds.size === 0) return;
+    // Only process tool types we haven't already auto-discovered
+    const newIds = [...discoveredIds].filter((id) => !autoDiscoveredRef.current.has(id));
+    if (newIds.length === 0) return;
     setStack((prev) => {
       const existing = new Set(prev.nodes.map((n) => n.toolType));
-      const missing = [...discoveredIds].filter((id) => !existing.has(id));
+      const missing = newIds.filter((id) => !existing.has(id));
+      // Mark all as discovered regardless (they exist either via prior load or just now)
+      newIds.forEach((id) => autoDiscoveredRef.current.add(id));
       if (missing.length === 0) return prev;
       const appended = [...prev.nodes];
       missing.forEach((toolId) => { const tool = getToolById(toolId); if (!tool) return; appended.push({ ...createNodeForTool(toolId, tool.layer, appended), status: 'CONNECTED', config: { _autoDiscovered: true } }); });
@@ -383,12 +440,23 @@ export default function PipelinePage() {
       return nextStack;
     });
     setNodeModal(null);
-    fetchIntegrations();
     toast.success('Connector configured');
-  }, [nodeModal, savePipeline, fetchIntegrations]);
+  }, [nodeModal, savePipeline]);
 
   const onNodesChange = useCallback((nodes: PipelineNode[]) => setStack((prev) => ({ ...prev, nodes })), []);
   const onEdgesChange = useCallback((edges: PipelineEdge[]) => setStack((prev) => ({ ...prev, edges })), []);
+
+  // Canvas config save — triggered when user edits a node via the canvas modal (double-click)
+  const handleCanvasSaveConfig = useCallback((nodeId: string, config: Record<string, any>) => {
+    setStack((prev) => {
+      const nextNodes = prev.nodes.map((n) =>
+        n.id === nodeId ? { ...n, config, status: 'CONNECTED' as const } : n
+      );
+      const nextStack = { ...prev, nodes: nextNodes };
+      void savePipeline(nextStack, true);
+      return nextStack;
+    });
+  }, [savePipeline]);
 
   if (loading) {
     return (
@@ -762,6 +830,7 @@ export default function PipelinePage() {
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onSave={() => savePipeline(stack, true)}
+              onSaveConfig={handleCanvasSaveConfig}
               readOnly={false}
             />
           </div>
@@ -780,7 +849,7 @@ export default function PipelinePage() {
       <IntegrationConfigModal
         integration={integrationModal}
         isOpen={integrationModal !== null}
-        onClose={() => { setIntegrationModal(null); fetchIntegrations(); }}
+        onClose={() => setIntegrationModal(null)}
         onSuccess={fetchIntegrations}
       />
     </div>
