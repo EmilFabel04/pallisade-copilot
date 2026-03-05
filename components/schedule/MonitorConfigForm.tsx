@@ -2,12 +2,23 @@
 
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import { MONITOR_TYPES } from '@/types/schedule';
+import {
+  type MonitorDefinition,
+  type MonitorCategory,
+  getMonitorDefinition,
+  MONITOR_CATEGORY_LABELS,
+} from '@/types/monitor-catalog';
 
 interface DiscoveredLog {
   path: string;
   size_bytes: number;
   size_human: string;
+}
+
+interface MonitorGroup {
+  category: MonitorCategory;
+  label: string;
+  monitors: MonitorDefinition[];
 }
 
 interface MonitorConfigFormProps {
@@ -18,16 +29,12 @@ interface MonitorConfigFormProps {
   config: Record<string, any>;
   onConfigChange: (config: Record<string, any>) => void;
   integrationId?: string;
+  /** Catalog-grouped monitors (from monitor-catalog endpoint) */
+  groupedMonitors?: MonitorGroup[];
 }
 
-// Monitor types that need no config — fully auto-configured
-const AUTO_ONLY_TYPES = ['NULL_RATE', 'UNIQUENESS', 'DISTRIBUTION', 'SCHEMA_CHANGE', 'SERVER_HEALTH'];
-
-// Monitor types where advanced settings are available
-const HAS_ADVANCED = ['FRESHNESS', 'VOLUME', 'ANOMALY', 'CUSTOM_SQL', 'CERTIFICATE', 'LOG_ANALYSIS'];
-
-// Infrastructure monitor types — don't need a target table (use server integration)
-const INFRA_TYPES = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'];
+// Legacy constants for warehouse monitor special cases
+const LEGACY_ADVANCED_MONITORS = ['FRESHNESS', 'VOLUME', 'ANOMALY', 'CUSTOM_SQL', 'CERTIFICATE', 'LOG_ANALYSIS'];
 
 export function MonitorConfigForm({
   monitorType,
@@ -37,11 +44,26 @@ export function MonitorConfigForm({
   config,
   onConfigChange,
   integrationId,
+  groupedMonitors,
 }: MonitorConfigFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [discoveredLogs, setDiscoveredLogs] = useState<DiscoveredLog[]>([]);
   const [discoverError, setDiscoverError] = useState('');
+
+  const selectedDef = getMonitorDefinition(monitorType);
+  const isAutoConfigurable = selectedDef?.auto_configurable && (selectedDef?.config_schema || []).length === 0;
+  const hasAdvancedFields = selectedDef?.config_schema?.some((f) => f.advanced) ?? false;
+  const hasNonAdvancedFields = selectedDef?.config_schema?.some((f) => !f.advanced && f.type !== 'checkbox') ?? false;
+  const isToolApi = selectedDef?.executor_type === 'tool_api';
+
+  // Whether this monitor uses a legacy hardcoded advanced settings panel
+  const usesLegacyAdvanced = LEGACY_ADVANCED_MONITORS.includes(monitorType);
+
+  // Determine if the monitor needs a target or uses non-FQN target
+  const targetType = selectedDef?.target_selector_type || 'fqn';
+  const needsFqn = targetType === 'fqn';
+  const needsServerTarget = targetType === 'server';
 
   const handleDiscoverLogs = async () => {
     setDiscovering(true);
@@ -74,76 +96,73 @@ export function MonitorConfigForm({
     onConfigChange({ ...config, log_paths: updated });
   };
 
-  const hasAdvanced = HAS_ADVANCED.includes(monitorType);
-  const isAutoOnly = AUTO_ONLY_TYPES.includes(monitorType);
+  // Handle monitor type selection with appropriate defaults
+  const handleSelectMonitor = (key: string) => {
+    const def = getMonitorDefinition(key);
+    onMonitorTypeChange(key);
+    setShowAdvanced(false);
+
+    // Set up default config from config_schema defaults
+    const defaults: Record<string, any> = { llm_validate: true };
+    if (def) {
+      for (const field of def.config_schema) {
+        if (field.default_value !== undefined) {
+          defaults[field.key] = field.default_value;
+        }
+      }
+    }
+    // Special: ANOMALY defaults
+    if (key === 'ANOMALY') {
+      defaults.metric = 'row_count';
+    }
+    onConfigChange(defaults);
+  };
 
   return (
     <div className="space-y-4">
-      {/* Monitor type */}
+      {/* Monitor type selector — grouped by category from catalog */}
       <div>
         <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
           Monitor Type
         </label>
 
-        {/* Data Quality monitors */}
-        <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Data Quality</p>
-        <div className="flex flex-wrap gap-2 mb-4">
-          {MONITOR_TYPES.filter((mt) => !INFRA_TYPES.includes(mt.value)).map((mt) => (
-            <button
-              key={mt.value}
-              type="button"
-              onClick={() => {
-                onMonitorTypeChange(mt.value);
-                if (mt.value === 'ANOMALY') {
-                  onConfigChange({ metric: 'row_count', llm_validate: true });
-                } else if (['NULL_RATE', 'UNIQUENESS', 'DISTRIBUTION'].includes(mt.value)) {
-                  onConfigChange({ llm_validate: true });
-                } else {
-                  onConfigChange({});
-                }
-                setShowAdvanced(false);
-              }}
-              className={cn(
-                'flex flex-col items-start p-3 rounded-lg text-left transition-colors w-[calc(25%-6px)] min-h-[88px]',
-                monitorType === mt.value
-                  ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
-                  : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-              )}
-            >
-              <span className="text-[13px] font-medium text-[var(--text)]">{mt.label}</span>
-              <span className="text-[11px] text-[var(--muted)] mt-0.5">{mt.description}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Infrastructure monitors */}
-        <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">Infrastructure</p>
-        <div className="flex flex-wrap gap-2">
-          {MONITOR_TYPES.filter((mt) => INFRA_TYPES.includes(mt.value)).map((mt) => (
-            <button
-              key={mt.value}
-              type="button"
-              onClick={() => {
-                onMonitorTypeChange(mt.value);
-                onConfigChange({});
-                setShowAdvanced(false);
-              }}
-              className={cn(
-                'flex flex-col items-start p-3 rounded-lg text-left transition-colors w-[calc(25%-6px)] min-h-[88px]',
-                monitorType === mt.value
-                  ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
-                  : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-              )}
-            >
-              <span className="text-[13px] font-medium text-[var(--text)]">{mt.label}</span>
-              <span className="text-[11px] text-[var(--muted)] mt-0.5">{mt.description}</span>
-            </button>
-          ))}
-        </div>
+        {groupedMonitors && groupedMonitors.length > 0 ? (
+          // Catalog-driven grouped rendering
+          groupedMonitors.map((group) => (
+            <div key={group.category} className="mb-4 last:mb-0">
+              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-2">
+                {group.label}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {group.monitors.map((mt) => (
+                  <button
+                    key={mt.key}
+                    type="button"
+                    onClick={() => handleSelectMonitor(mt.key)}
+                    className={cn(
+                      'flex flex-col items-start p-3 rounded-lg text-left transition-colors w-[calc(25%-6px)] min-h-[88px]',
+                      monitorType === mt.key
+                        ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
+                        : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
+                    )}
+                  >
+                    <span className="text-[13px] font-medium text-[var(--text)]">{mt.label}</span>
+                    <span className="text-[11px] text-[var(--muted)] mt-0.5">{mt.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))
+        ) : (
+          // Fallback: no catalog loaded yet
+          <div className="text-[12px] text-[var(--text-faint)] py-4 text-center">
+            Loading monitor types...
+          </div>
+        )}
       </div>
 
-      {/* Target table (not for infrastructure monitors) */}
-      {!INFRA_TYPES.includes(monitorType) && (
+      {/* Target selector — varies by monitor type */}
+      {needsFqn && monitorType && (
         <div>
           <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
             Target Table
@@ -161,8 +180,46 @@ export function MonitorConfigForm({
         </div>
       )}
 
+      {/* Tool-specific target hints */}
+      {targetType === 'connector' && monitorType && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-blue-500/[0.06] border border-blue-500/[0.12] rounded-lg">
+          <svg className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+          <p className="text-[12px] text-blue-300/80">
+            This monitor checks your ingestion connector via the Fivetran/Airbyte API.
+            Configure the connector ID below.
+          </p>
+        </div>
+      )}
+
+      {targetType === 'dag' && monitorType && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-orange-500/[0.06] border border-orange-500/[0.12] rounded-lg">
+          <svg className="w-4 h-4 text-orange-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          <p className="text-[12px] text-orange-300/80">
+            This monitor checks your Airflow DAG via the Airflow REST API.
+            Requires a live Airflow instance connection (not GitHub DAG-file mode).
+            Configure the DAG ID below.
+          </p>
+        </div>
+      )}
+
+      {targetType === 'dbt_job' && monitorType && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-green-500/[0.06] border border-green-500/[0.12] rounded-lg">
+          <svg className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-[12px] text-green-300/80">
+            This monitor checks your dbt Cloud job runs and test results via the dbt Cloud API.
+            Requires a live dbt Cloud connection (not project upload or GitHub mode).
+          </p>
+        </div>
+      )}
+
       {/* Infrastructure hint */}
-      {INFRA_TYPES.includes(monitorType) && monitorType && (
+      {needsServerTarget && monitorType && (
         <div className="flex items-start gap-2 px-3 py-2.5 bg-slate-500/[0.06] border border-slate-500/[0.12] rounded-lg">
           <svg className="w-4 h-4 text-slate-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
@@ -176,8 +233,8 @@ export function MonitorConfigForm({
         </div>
       )}
 
-      {/* Auto-config hint for types that don't need manual config */}
-      {isAutoOnly && monitorType && !INFRA_TYPES.includes(monitorType) && (
+      {/* Auto-config hint for auto-only warehouse monitors */}
+      {isAutoConfigurable && monitorType && !needsServerTarget && (
         <div className="flex items-start gap-2 px-3 py-2.5 bg-emerald-500/[0.06] border border-emerald-500/[0.12] rounded-lg">
           <svg className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -186,6 +243,22 @@ export function MonitorConfigForm({
             This monitor is fully auto-configured. Just provide the target table and it will
             auto-discover columns and compute baselines from your warehouse.
           </p>
+        </div>
+      )}
+
+      {/* Dynamic config fields for tool monitors (non-legacy) */}
+      {isToolApi && selectedDef && hasNonAdvancedFields && (
+        <div className="space-y-3">
+          {selectedDef.config_schema
+            .filter((f) => !f.advanced)
+            .map((field) => (
+              <DynamicField
+                key={field.key}
+                field={field}
+                value={config[field.key]}
+                onChange={(val) => onConfigChange({ ...config, [field.key]: val })}
+              />
+            ))}
         </div>
       )}
 
@@ -208,7 +281,7 @@ export function MonitorConfigForm({
       )}
 
       {/* Advanced settings toggle */}
-      {hasAdvanced && (
+      {monitorType && (usesLegacyAdvanced || (isToolApi && hasAdvancedFields)) && (
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
@@ -223,7 +296,7 @@ export function MonitorConfigForm({
           Advanced Settings
           {!showAdvanced && (
             <span className="text-[11px] text-[var(--text-faint)] ml-1">
-              — auto-detected from warehouse if left blank
+              — auto-detected if left blank
             </span>
           )}
         </button>
@@ -232,6 +305,22 @@ export function MonitorConfigForm({
       {/* Advanced settings content */}
       {showAdvanced && (
         <div className="pl-3 border-l border-[var(--subtle-border)] space-y-3">
+          {/* Tool monitor advanced fields (dynamic from catalog) */}
+          {isToolApi && selectedDef && selectedDef.config_schema
+            .filter((f) => f.advanced)
+            .map((field) => (
+              <DynamicField
+                key={field.key}
+                field={field}
+                value={config[field.key]}
+                onChange={(val) => onConfigChange({ ...config, [field.key]: val })}
+              />
+            ))}
+
+          {/* ================================================================ */}
+          {/* Legacy hardcoded advanced settings for warehouse/infra monitors  */}
+          {/* ================================================================ */}
+
           {/* FRESHNESS */}
           {(monitorType === 'FRESHNESS' || monitorType === 'freshness') && (
             <div className="space-y-3">
@@ -279,7 +368,7 @@ export function MonitorConfigForm({
                   onChange={(e) =>
                     onConfigChange({ ...config, min_rows: parseInt(e.target.value) || 0 })
                   }
-                  placeholder="Auto-compute (mean - 3σ)"
+                  placeholder="Auto-compute (baseline - 3\u03C3)"
                   className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
@@ -293,7 +382,7 @@ export function MonitorConfigForm({
                   onChange={(e) =>
                     onConfigChange({ ...config, max_rows: parseInt(e.target.value) || 0 })
                   }
-                  placeholder="Auto-compute (mean + 3σ)"
+                  placeholder="Auto-compute (baseline + 3\u03C3)"
                   className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
@@ -515,7 +604,7 @@ export function MonitorConfigForm({
                   </button>
                 </div>
 
-                {/* Discovered log files — click to toggle selection */}
+                {/* Discovered log files */}
                 {discoveredLogs.length > 0 && (
                   <div className="mb-2 max-h-[180px] overflow-y-auto rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
                     {discoveredLogs.map((log) => {
@@ -627,6 +716,92 @@ export function MonitorConfigForm({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic field renderer for catalog-driven config fields
+// ---------------------------------------------------------------------------
+
+function DynamicField({
+  field,
+  value,
+  onChange,
+}: {
+  field: { key: string; label: string; type: string; placeholder?: string; required?: boolean; options?: Array<{ value: string; label: string }>; help_text?: string };
+  value: any;
+  onChange: (val: any) => void;
+}) {
+  const inputClass = 'w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]';
+
+  return (
+    <div>
+      <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+        {field.label}
+        {field.required && <span className="text-red-400 ml-0.5">*</span>}
+      </label>
+
+      {field.type === 'text' && (
+        <input
+          type="text"
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value || undefined)}
+          placeholder={field.placeholder}
+          className={inputClass}
+        />
+      )}
+
+      {field.type === 'number' && (
+        <input
+          type="number"
+          value={value ?? ''}
+          onChange={(e) => {
+            const val = e.target.value;
+            onChange(val === '' ? undefined : Number(val));
+          }}
+          placeholder={field.placeholder}
+          className={inputClass}
+        />
+      )}
+
+      {field.type === 'select' && field.options && (
+        <select
+          value={value || field.options[0]?.value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          className={inputClass}
+        >
+          {field.options.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
+        </select>
+      )}
+
+      {field.type === 'textarea' && (
+        <textarea
+          value={value || ''}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+          rows={3}
+          className={cn(inputClass, 'font-mono')}
+        />
+      )}
+
+      {field.type === 'checkbox' && (
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={!!value}
+            onChange={(e) => onChange(e.target.checked)}
+            className="w-4 h-4 rounded border-[var(--overlay-strong)] bg-[var(--overlay-bg)] text-violet-500 focus:ring-violet-500/30 focus:ring-offset-0"
+          />
+          <span className="text-[12px] text-[var(--text-tertiary)]">{field.placeholder || ''}</span>
+        </label>
+      )}
+
+      {field.help_text && (
+        <p className="text-[11px] text-[var(--text-faint)] mt-1">{field.help_text}</p>
       )}
     </div>
   );

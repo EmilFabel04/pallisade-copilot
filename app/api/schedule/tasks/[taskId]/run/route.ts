@@ -74,71 +74,87 @@ export async function POST(
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Resolve warehouse config — prefer task's specific integration, fallback to auto-discover
+    // Classify the monitor type to decide which integration resolution path to use
     let integrationConfig: Record<string, any> | null = null;
     const taskConfig = (task.config as Record<string, any>) || {};
 
-    // 1. Try task's explicit integrationId (FK to Integration → find its PipelineNode)
-    if (task.integrationId) {
-      const linkedNode = await prisma.pipelineNode.findFirst({
-        where: {
-          integrationId: task.integrationId,
-          toolType: { in: WAREHOUSE_TOOL_TYPES },
-          status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
-        },
-        select: { id: true, name: true, toolType: true, config: true },
-      });
-      if (linkedNode) {
-        integrationConfig = resolveNodeConfig(linkedNode);
-        console.log(`[Schedule] Resolved warehouse from integrationId: ${linkedNode.name} (${linkedNode.toolType})`);
-      }
-    }
+    const INFRA_MONITOR_TYPES = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'];
+    const TOOL_MONITOR_TYPES_LIST = [
+      'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
+      'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
+      'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
+    ];
+    const isInfra = INFRA_MONITOR_TYPES.includes(task.monitorType || '');
+    const isTool = TOOL_MONITOR_TYPES_LIST.includes(task.monitorType || '');
 
-    // 2. Try config.nodeId (PipelineNode ID stored when integrationId wasn't a valid FK)
-    if (!integrationConfig && taskConfig.nodeId) {
-      const specificNode = await prisma.pipelineNode.findFirst({
-        where: {
-          id: taskConfig.nodeId,
-          toolType: { in: WAREHOUSE_TOOL_TYPES },
-          status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
-        },
-        select: { id: true, name: true, toolType: true, config: true },
-      });
-      if (specificNode) {
-        integrationConfig = resolveNodeConfig(specificNode);
-        console.log(`[Schedule] Resolved warehouse from config.nodeId: ${specificNode.name} (${specificNode.toolType})`);
-      }
-    }
+    // Resolve warehouse config — only for warehouse SQL monitors (not infra/tool)
+    // Helper to pick the best config source: Integration.credentials (where pipeline save stores them)
+    // or PipelineNode.config (legacy nodes that haven't been re-saved)
+    const pickConfig = (node: { config: any; integration?: { credentials: any } | null }) =>
+      node.integration?.credentials || node.config;
+    const nodeSelect = { id: true, name: true, toolType: true, config: true, integration: { select: { credentials: true } } } as const;
 
-    // 3. Fallback: auto-discover first warehouse node in the org's pipeline stack
-    if (!integrationConfig) {
-      const pipelineStack = await prisma.pipelineStack.findFirst({
-        where: { organizationId },
-        include: {
-          nodes: {
-            where: {
-              toolType: { in: WAREHOUSE_TOOL_TYPES },
-              status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
-            },
-            select: { id: true, name: true, toolType: true, config: true },
-            take: 1,
+    if (!isInfra && !isTool) {
+      // 1. Try task's explicit integrationId (FK to Integration → find its PipelineNode)
+      if (task.integrationId) {
+        const linkedNode = await prisma.pipelineNode.findFirst({
+          where: {
+            integrationId: task.integrationId,
+            toolType: { in: WAREHOUSE_TOOL_TYPES },
+            status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
           },
-        },
-      });
+          select: nodeSelect,
+        });
+        if (linkedNode) {
+          integrationConfig = resolveNodeConfig({ ...linkedNode, config: pickConfig(linkedNode) });
+          console.log(`[Schedule] Resolved warehouse from integrationId: ${linkedNode.name} (${linkedNode.toolType})`);
+        }
+      }
 
-      const warehouseNode = pipelineStack?.nodes[0];
-      if (warehouseNode) {
-        integrationConfig = resolveNodeConfig(warehouseNode);
-        console.log(`[Schedule] Auto-discovered warehouse: ${warehouseNode.name} (${warehouseNode.toolType})`);
-      } else {
-        console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
+      // 2. Try config.nodeId (PipelineNode ID stored when integrationId wasn't a valid FK)
+      if (!integrationConfig && taskConfig.nodeId) {
+        const specificNode = await prisma.pipelineNode.findFirst({
+          where: {
+            id: taskConfig.nodeId,
+            toolType: { in: WAREHOUSE_TOOL_TYPES },
+            status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+          },
+          select: nodeSelect,
+        });
+        if (specificNode) {
+          integrationConfig = resolveNodeConfig({ ...specificNode, config: pickConfig(specificNode) });
+          console.log(`[Schedule] Resolved warehouse from config.nodeId: ${specificNode.name} (${specificNode.toolType})`);
+        }
+      }
+
+      // 3. Fallback: auto-discover first warehouse node in the org's pipeline stack
+      if (!integrationConfig) {
+        const pipelineStack = await prisma.pipelineStack.findFirst({
+          where: { organizationId },
+          include: {
+            nodes: {
+              where: {
+                toolType: { in: WAREHOUSE_TOOL_TYPES },
+                status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+              },
+              select: nodeSelect,
+              take: 1,
+            },
+          },
+        });
+
+        const warehouseNode = pipelineStack?.nodes[0];
+        if (warehouseNode) {
+          integrationConfig = resolveNodeConfig({ ...warehouseNode, config: pickConfig(warehouseNode) });
+          console.log(`[Schedule] Auto-discovered warehouse: ${warehouseNode.name} (${warehouseNode.toolType})`);
+        } else {
+          console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
+        }
       }
     }
 
     // For infrastructure monitors, resolve server connection config
-    const INFRA_MONITOR_TYPES = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'];
-    if (INFRA_MONITOR_TYPES.includes(task.monitorType || '')) {
-      const taskConfig = (task.config as Record<string, any>) || {};
+    if (isInfra) {
       const serverNodeId = taskConfig.serverNodeId;
 
       const serverStack = await prisma.pipelineStack.findFirst({
@@ -161,6 +177,103 @@ export async function POST(
         console.log(`[Schedule] Resolved server: ${serverNode.name}`);
       } else {
         console.warn('[Schedule] No linux_server node found for infra monitor');
+      }
+    }
+
+    // For tool monitors (Fivetran/Airflow/dbt), resolve integration config
+    const TOOL_NODE_TYPE_MAP: Record<string, string[]> = {
+      SYNC_LAG: ['fivetran', 'airbyte'],
+      FAILED_SYNCS: ['fivetran', 'airbyte'],
+      CONNECTOR_SCHEMA_DRIFT: ['fivetran', 'airbyte'],
+      DAG_LAST_RUN: ['airflow', 'dagster'],
+      DAG_SCHEDULE_LAG: ['airflow', 'dagster'],
+      TASK_FAILURE_RATE: ['airflow', 'dagster'],
+      DBT_TEST_FAILURES: ['dbt_cloud', 'dbt_core'],
+      DBT_MODEL_FRESHNESS: ['dbt_cloud', 'dbt_core'],
+      DBT_SOURCE_FRESHNESS: ['dbt_cloud', 'dbt_core'],
+    };
+
+    if (isTool) {
+      const toolNodeId = taskConfig.toolNodeId;
+      const requiredTypes = TOOL_NODE_TYPE_MAP[task.monitorType!] || [];
+
+      // Find the raw tool node first (we need it for both config resolution and mode checks)
+      // Include Integration.credentials since that's where the real config lives after pipeline save
+      let rawToolNode: { id: string; name: string; toolType: string; config: any; integration?: { credentials: any } | null } | null = null;
+
+      if (toolNodeId) {
+        rawToolNode = await prisma.pipelineNode.findFirst({
+          where: {
+            id: toolNodeId,
+            toolType: { in: requiredTypes },
+            status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+          },
+          select: { id: true, name: true, toolType: true, config: true, integration: { select: { credentials: true } } },
+        });
+      }
+
+      // Auto-discover if no explicit node
+      if (!rawToolNode) {
+        const toolStack = await prisma.pipelineStack.findFirst({
+          where: { organizationId },
+          include: {
+            nodes: {
+              where: {
+                toolType: { in: requiredTypes },
+                status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
+              },
+              select: { id: true, name: true, toolType: true, config: true, integration: { select: { credentials: true } } },
+              take: 1,
+            },
+          },
+        });
+        rawToolNode = toolStack?.nodes[0] ?? null;
+      }
+
+      if (rawToolNode) {
+        // Prefer Integration credentials (where pipeline save stores them),
+        // fall back to PipelineNode.config for legacy nodes
+        const configSource = rawToolNode.integration?.credentials || rawToolNode.config;
+        integrationConfig = resolveNodeConfig({ ...rawToolNode, config: configSource });
+        console.log(`[Schedule] Resolved tool: ${rawToolNode.name} (${rawToolNode.toolType})`);
+      } else {
+        console.warn(`[Schedule] No ${requiredTypes.join('/')} node found for ${task.monitorType}`);
+      }
+
+      // Airflow/Dagster monitors require a live API — check after decryption
+      const AIRFLOW_MONITORS = ['DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE'];
+      if (integrationConfig && AIRFLOW_MONITORS.includes(task.monitorType!)) {
+        const sourceMode = integrationConfig.source_mode;
+        const hasHost = !!(integrationConfig.host || integrationConfig.base_url);
+        if (sourceMode === 'github' || (!hasHost && integrationConfig.github_repo)) {
+          return NextResponse.json({
+            run: null,
+            result: {
+              status: 'ERROR',
+              message: `Airflow integration "${rawToolNode?.name || 'unknown'}" is connected in GitHub DAG-file mode (static project files only). `
+                + 'Airflow monitors require a live Airflow instance connection to check DAG run status. '
+                + 'Go to the Pipeline page and switch the Airflow integration to API mode with a host URL (e.g. https://your-airflow.example.com).',
+            },
+          });
+        }
+      }
+
+      // dbt monitors require dbt Cloud — check if integration is in static mode
+      const DBT_MONITORS = ['DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS'];
+      if (integrationConfig && DBT_MONITORS.includes(task.monitorType!)) {
+        const sourceMode = integrationConfig.source_mode;
+        const hasApiKey = !!(integrationConfig.api_key || integrationConfig.token);
+        if (!hasApiKey && ['upload', 'project', 'github'].includes(sourceMode)) {
+          return NextResponse.json({
+            run: null,
+            result: {
+              status: 'ERROR',
+              message: `dbt integration "${rawToolNode?.name || 'unknown'}" is connected in ${sourceMode} mode (static project files only). `
+                + 'dbt monitors require a live dbt Cloud API connection to check job runs and test results. '
+                + 'Go to the Pipeline page and switch to a dbt Cloud integration with an API key.',
+            },
+          });
+        }
       }
     }
 

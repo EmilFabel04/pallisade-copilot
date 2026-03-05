@@ -269,25 +269,111 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ success: false, message: 'Failed to connect to dbt Cloud Admin API' });
         }
 
-      case 'dbt_core':
-        // Validate dbt manifest
-        if (config.manifest) {
+      case 'dbt_core': {
+        const sourceMode = config.source_mode || 'upload';
+
+        // Mode 1: Upload manifest.json directly
+        if (sourceMode === 'upload') {
+          if (config.manifest) {
+            try {
+              const manifest = JSON.parse(config.manifest);
+              if (manifest.nodes && manifest.metadata) {
+                const modelCount = Object.keys(manifest.nodes).filter(k => k.startsWith('model.')).length;
+                return NextResponse.json({
+                  success: true,
+                  message: `Manifest loaded! Found ${modelCount} models.`
+                });
+              } else {
+                return NextResponse.json({ success: false, message: 'Invalid manifest format — missing nodes or metadata' });
+              }
+            } catch (e) {
+              return NextResponse.json({ success: false, message: 'Invalid JSON in manifest' });
+            }
+          }
+          return NextResponse.json({ success: false, message: 'No manifest file uploaded. Upload your manifest.json from the target/ folder.' });
+        }
+
+        // Mode 2: Upload dbt project folder (SQL + YAML files)
+        if (sourceMode === 'project') {
+          const projectFiles = config.project_files;
+          if (!projectFiles || typeof projectFiles !== 'object' || Object.keys(projectFiles).length === 0) {
+            return NextResponse.json({ success: false, message: 'No project files uploaded. Select your dbt project folder.' });
+          }
+          const fileCount = Object.keys(projectFiles).length;
+          const hasDbtProject = Object.keys(projectFiles).some(f => f.endsWith('dbt_project.yml'));
+          const sqlFiles = Object.keys(projectFiles).filter(f => f.endsWith('.sql'));
+          const ymlFiles = Object.keys(projectFiles).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
+
+          if (!hasDbtProject) {
+            return NextResponse.json({
+              success: false,
+              message: `Found ${fileCount} files but no dbt_project.yml. Make sure you selected the correct dbt project folder.`
+            });
+          }
+
+          return NextResponse.json({
+            success: true,
+            message: `Project loaded! Found ${sqlFiles.length} SQL models and ${ymlFiles.length} YAML configs.`
+          });
+        }
+
+        // Mode 3: GitHub repository
+        if (sourceMode === 'github') {
+          const repo = config.github_repo;
+          if (!repo) {
+            return NextResponse.json({ success: false, message: 'No GitHub repository specified.' });
+          }
+
+          // Validate repo format
+          if (!repo.includes('/')) {
+            return NextResponse.json({ success: false, message: 'Repository should be in "owner/repo" format.' });
+          }
+
+          // Try to fetch the repo to validate access
+          const branch = config.github_branch || 'main';
+          const token = config.github_token || '';
+          const headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
+          if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+          }
+
           try {
-            const manifest = JSON.parse(config.manifest);
-            if (manifest.nodes && manifest.metadata) {
-              const modelCount = Object.keys(manifest.nodes).filter(k => k.startsWith('model.')).length;
-              return NextResponse.json({ 
-                success: true, 
-                message: `Manifest loaded! Found ${modelCount} models.` 
+            // Check repo exists and is accessible
+            const repoRes = await fetch(`https://api.github.com/repos/${repo}`, { headers });
+
+            if (repoRes.status === 404) {
+              return NextResponse.json({ success: false, message: `Repository "${repo}" not found. Check the name or add a GitHub token for private repos.` });
+            }
+            if (repoRes.status === 401 || repoRes.status === 403) {
+              return NextResponse.json({ success: false, message: 'GitHub authentication failed. Check your token.' });
+            }
+            if (!repoRes.ok) {
+              return NextResponse.json({ success: false, message: `GitHub API error: ${repoRes.status}` });
+            }
+
+            // Check for dbt_project.yml in the repo
+            const dbtPath = config.dbt_project_path ? `${config.dbt_project_path}/dbt_project.yml` : 'dbt_project.yml';
+            const fileRes = await fetch(`https://api.github.com/repos/${repo}/contents/${dbtPath}?ref=${branch}`, { headers });
+
+            if (fileRes.ok) {
+              const repoData = await repoRes.json();
+              return NextResponse.json({
+                success: true,
+                message: `Connected to ${repo} (${branch}). Found dbt_project.yml.`
               });
             } else {
-              return NextResponse.json({ success: false, message: 'Invalid manifest format' });
+              return NextResponse.json({
+                success: false,
+                message: `Connected to repo but dbt_project.yml not found at "${dbtPath}" on branch "${branch}".`
+              });
             }
           } catch (e) {
-            return NextResponse.json({ success: false, message: 'Invalid JSON in manifest' });
+            return NextResponse.json({ success: false, message: 'Failed to connect to GitHub. Check your network and try again.' });
           }
         }
-        return NextResponse.json({ success: false, message: 'No manifest provided' });
+
+        return NextResponse.json({ success: false, message: 'Unknown source mode. Select Upload, Project, or GitHub.' });
+      }
 
       // Reporting tools
       case 'tableau':

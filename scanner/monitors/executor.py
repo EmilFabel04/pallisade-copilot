@@ -187,7 +187,7 @@ class MonitorExecutor:
                 config = self._auto_config_freshness(
                     database, schema, table, config
                 )
-            elif resolved_type == "volume" and not config.get("min_rows") and not config.get("max_rows"):
+            elif resolved_type == "volume" and not config.get("min_rows") and not config.get("max_rows") and not config.get("historical_mean"):
                 config = self._auto_config_volume(
                     database, schema, table, config
                 )
@@ -336,21 +336,25 @@ class MonitorExecutor:
         variance = sum((x - mean) ** 2 for x in counts) / len(counts)
         stddev = math.sqrt(variance) if variance > 0 else 0
 
-        # min = mean - 3σ (floored at 0), max = mean + 3σ
-        min_rows = max(0, int(mean - 3 * stddev))
-        max_rows = int(mean + 3 * stddev)
-
-        config["min_rows"] = min_rows
-        config["max_rows"] = max_rows
+        # Prefer z-score baseline over min/max thresholds.
+        # VolumeMonitor._evaluate_simple() checks historical_mean/historical_stddev
+        # first, making this the default anomaly detection mode.
+        config["historical_mean"] = mean
+        config["historical_stddev"] = stddev
         config["time_bucket_column"] = ts_col
         config["_auto_configured"] = True
+
+        # Only set min/max as fallback if stddev is zero (constant volume)
+        if stddev == 0:
+            config["min_rows"] = max(0, int(mean * 0.5))
+            config["max_rows"] = int(mean * 2)
+
         logger.info(
-            "[AutoConfig] Volume auto-configured",
-            min_rows=min_rows,
-            max_rows=max_rows,
+            "[AutoConfig] Volume auto-configured (baseline mode)",
             mean=round(mean, 0),
             stddev=round(stddev, 0),
             data_points=len(counts),
+            has_min_max=stddev == 0,
         )
         return config
 

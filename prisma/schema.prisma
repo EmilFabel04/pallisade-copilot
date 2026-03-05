@@ -2927,6 +2927,18 @@ enum MonitorKind {
   CERTIFICATE      // Infrastructure: TLS/SSL cert expiry
   SERVER_HEALTH    // Infrastructure: CPU, memory, disk
   LOG_ANALYSIS     // Infrastructure: log file error scanning
+  // Ingestion monitors (Fivetran, Airbyte)
+  SYNC_LAG
+  FAILED_SYNCS
+  CONNECTOR_SCHEMA_DRIFT
+  // Orchestration monitors (Airflow, Dagster)
+  DAG_LAST_RUN
+  DAG_SCHEDULE_LAG
+  TASK_FAILURE_RATE
+  // Transformation monitors (dbt Cloud, dbt Core)
+  DBT_TEST_FAILURES
+  DBT_MODEL_FRESHNESS
+  DBT_SOURCE_FRESHNESS
 }
 
 enum MonitorRunStatus {

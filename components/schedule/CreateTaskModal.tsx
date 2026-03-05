@@ -7,6 +7,28 @@ import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
 import { MonitorConfigForm } from './MonitorConfigForm';
 import type { ScheduledTask } from '@/types/schedule';
+import {
+  type MonitorDefinition,
+  type MonitorCategory,
+  getMonitorDefinition,
+  TOOL_MONITOR_TYPES,
+} from '@/types/monitor-catalog';
+
+interface MonitorGroup {
+  category: MonitorCategory;
+  label: string;
+  monitors: MonitorDefinition[];
+}
+
+interface IntegrationNode {
+  id: string;
+  name: string;
+  toolType: string;
+  layer: string;
+  integrationId: string | null;
+  sourceMode: string | null;
+  hasLiveConnection: boolean;
+}
 
 interface CreateTaskModalProps {
   open: boolean;
@@ -15,9 +37,10 @@ interface CreateTaskModalProps {
   onUpdate?: (taskId: string, task: any) => void;
   editTask?: ScheduledTask | null;
   integrations?: Array<{ id: string; name: string; type: string }>;
+  stackId?: string;
 }
 
-export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, integrations = [] }: CreateTaskModalProps) {
+export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, integrations = [], stackId }: CreateTaskModalProps) {
   const [step, setStep] = useState(1);
   const isEditing = !!editTask;
 
@@ -38,6 +61,28 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'WARN', 'ERROR']);
   const [integrationId, setIntegrationId] = useState('');
   const [connectedChannels, setConnectedChannels] = useState<string[]>(['email']);
+
+  // Catalog data
+  const [groupedMonitors, setGroupedMonitors] = useState<MonitorGroup[]>([]);
+  const [integrationNodes, setIntegrationNodes] = useState<IntegrationNode[]>([]);
+
+  // Fetch monitor catalog when modal opens
+  useEffect(() => {
+    if (!open) return;
+    const url = stackId
+      ? `/api/schedule/monitor-catalog?stackId=${stackId}`
+      : '/api/schedule/monitor-catalog';
+    fetch(url)
+      .then((res) => res.json())
+      .then((data) => {
+        setGroupedMonitors(data.grouped || []);
+        setIntegrationNodes(data.integrationNodes || []);
+      })
+      .catch(() => {
+        setGroupedMonitors([]);
+        setIntegrationNodes([]);
+      });
+  }, [open, stackId]);
 
   // Pre-fill form when editing an existing task
   useEffect(() => {
@@ -85,10 +130,18 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
 
   if (!open) return null;
 
+  // Get the selected monitor definition from catalog
+  const selectedDef = getMonitorDefinition(monitorType);
+  const targetType = selectedDef?.target_selector_type || 'fqn';
+  const isToolMonitor = TOOL_MONITOR_TYPES.includes(monitorType);
+  const isInfraMonitor = targetType === 'server';
+  const needsFqnTarget = targetType === 'fqn';
+
+  // Filter integrations based on selected monitor's target type
   const warehouseIntegrations = integrations.filter((i, idx, arr) => {
     const t = i.type.toLowerCase();
     return ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(t) &&
-      arr.findIndex((x) => x.id === i.id) === idx; // deduplicate by id
+      arr.findIndex((x) => x.id === i.id) === idx;
   });
   const serverIntegrations = integrations.filter((i, idx, arr) => {
     const t = i.type.toLowerCase();
@@ -96,41 +149,197 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
       arr.findIndex((x) => x.id === i.id) === idx;
   });
 
-  // Only require monitor type + target table. Advanced config is auto-detected.
-  // Exception: CUSTOM_SQL needs SQL, single-column anomaly metrics need a column name.
-  // Infrastructure monitors (CERTIFICATE, SERVER_HEALTH, LOG_ANALYSIS) don't need a target table.
-  const isInfraMonitor = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'].includes(monitorType);
+  // For tool monitors, find matching integration nodes
+  const toolIntegrations = isToolMonitor && selectedDef
+    ? integrationNodes.filter((n) =>
+        selectedDef.required_integrations.includes(n.toolType.toLowerCase())
+      )
+    : [];
+
+  // Check if any matching tool integration lacks a live API connection
+  const selectedToolNode = toolIntegrations.find((n) => n.id === integrationId) || toolIntegrations[0];
+  const toolNeedsLiveConnection = isToolMonitor && selectedToolNode && !selectedToolNode.hasLiveConnection;
+  const toolConnectionModeLabel = (() => {
+    if (!selectedToolNode) return '';
+    const mode = selectedToolNode.sourceMode;
+    const tool = selectedToolNode.toolType.toLowerCase();
+    if (tool === 'airflow' && mode === 'github') return 'GitHub DAG Files';
+    if (tool === 'dbt_core') {
+      if (mode === 'upload') return 'Manifest Upload';
+      if (mode === 'project') return 'Project Upload';
+      if (mode === 'github') return 'GitHub Repository';
+      return 'Static Files';
+    }
+    return mode || 'static';
+  })();
+
+  // Validation for step 1
   const needsColumn = ['ANOMALY', 'anomaly'].includes(monitorType)
     && config.metric && config.metric !== 'row_count' && config.column !== '*'
     && !config.column?.trim();
   const needsSql = monitorType === 'CUSTOM_SQL' && !config.sql?.trim();
   const needsLogPaths = monitorType === 'LOG_ANALYSIS' && !(config.log_paths?.length > 0);
+
+  // Tool monitor required fields check
+  const hasRequiredToolFields = (() => {
+    if (!isToolMonitor || !selectedDef) return true;
+    return selectedDef.config_schema
+      .filter((f) => f.required)
+      .every((f) => {
+        const val = config[f.key];
+        return val !== undefined && val !== null && val !== '';
+      });
+  })();
+
   const canProceedStep1 = name.trim() && (
     taskMode === 'prompt'
       ? prompt.trim()
-      : (monitorType && (isInfraMonitor || targetFqn.trim()) && !needsColumn && !needsSql && !needsLogPaths)
+      : (monitorType && (
+          isInfraMonitor || isToolMonitor
+            ? hasRequiredToolFields && !needsLogPaths
+            : (targetFqn.trim() && !needsColumn && !needsSql)
+        ))
   );
   const canProceedStep2 = schedule.trim();
 
   const handleSubmit = () => {
+    // For tool monitors, store the integration node ID in config.toolNodeId
+    const finalConfig = { ...(config || {}) };
+    if (isToolMonitor && integrationId) {
+      finalConfig.toolNodeId = integrationId;
+    }
+
     const taskData = {
       name,
       taskMode,
       prompt: taskMode === 'prompt' ? prompt : undefined,
       monitorType: taskMode === 'structured' ? monitorType : undefined,
-      targetFqn: taskMode === 'structured' ? (targetFqn || (isInfraMonitor ? 'server' : undefined)) : undefined,
-      config: taskMode === 'structured' ? config : undefined,
+      targetFqn: taskMode === 'structured' ? (targetFqn || (isInfraMonitor ? 'server' : (isToolMonitor ? (config.connector_id || config.dag_id || config.job_id || monitorType) : undefined))) : undefined,
+      config: taskMode === 'structured' ? finalConfig : undefined,
       schedule,
       timezone,
       alertChannels,
       alertOnStatus,
-      integrationId: integrationId || undefined,
+      integrationId: (isToolMonitor ? undefined : integrationId) || undefined,
     };
     if (isEditing && onUpdate) {
       onUpdate(editTask!.id, taskData);
     } else {
       onSubmit(taskData);
     }
+  };
+
+  // Determine which integration selector to show
+  const renderIntegrationSelector = () => {
+    if (taskMode === 'prompt') {
+      // Prompt mode: show warehouse selector
+      if (warehouseIntegrations.length === 0) return null;
+      return (
+        <div>
+          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+            Run against warehouse
+          </label>
+          <select
+            value={integrationId}
+            onChange={(e) => setIntegrationId(e.target.value)}
+            className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
+          >
+            <option value="">Auto-detect</option>
+            {warehouseIntegrations.map((i) => (
+              <option key={i.id} value={i.id}>{i.name} ({i.type})</option>
+            ))}
+          </select>
+        </div>
+      );
+    }
+
+    if (!monitorType) return null;
+
+    // Tool monitors: show matching tool integration
+    if (isToolMonitor && toolIntegrations.length > 0) {
+      return (
+        <div className="space-y-2">
+          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+            Run against integration
+          </label>
+          <select
+            value={integrationId}
+            onChange={(e) => setIntegrationId(e.target.value)}
+            className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
+          >
+            <option value="">Auto-detect</option>
+            {toolIntegrations.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.name} ({n.toolType}){!n.hasLiveConnection ? ' — static mode' : ''}
+              </option>
+            ))}
+          </select>
+          {toolNeedsLiveConnection && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-500/[0.08] border border-amber-500/[0.2] rounded-lg">
+              <svg className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <div className="text-[12px] text-amber-300/90">
+                <p className="font-medium mb-0.5">Live API connection required</p>
+                <p className="text-amber-300/70">
+                  {selectedToolNode?.toolType.toLowerCase() === 'airflow' ? (
+                    <>Your Airflow integration &quot;{selectedToolNode.name}&quot; is connected in <strong>{toolConnectionModeLabel}</strong> mode (read-only static files). Monitors need a live Airflow API connection to check DAG run status. Switch the integration to <strong>Airflow API</strong> mode with a host URL to enable monitors.</>
+                  ) : selectedToolNode?.toolType.toLowerCase() === 'dbt_core' ? (
+                    <>Your dbt integration &quot;{selectedToolNode.name}&quot; is connected in <strong>{toolConnectionModeLabel}</strong> mode. Monitors need a live dbt Cloud API to check job runs and test results. Switch to a <strong>dbt Cloud</strong> integration with an API key to enable monitors.</>
+                  ) : (
+                    <>This integration is not connected to a live instance. Monitors require a live API connection to work. Update the integration settings to use API mode.</>
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Infra monitors: show server selector
+    if (isInfraMonitor && serverIntegrations.length > 0) {
+      return (
+        <div>
+          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+            Run against server
+          </label>
+          <select
+            value={integrationId}
+            onChange={(e) => setIntegrationId(e.target.value)}
+            className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
+          >
+            <option value="">Auto-detect</option>
+            {serverIntegrations.map((i) => (
+              <option key={i.id} value={i.id}>{i.name} ({i.type})</option>
+            ))}
+          </select>
+        </div>
+      );
+    }
+
+    // Warehouse monitors: show warehouse selector
+    if (needsFqnTarget && warehouseIntegrations.length > 0) {
+      return (
+        <div>
+          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+            Run against warehouse
+          </label>
+          <select
+            value={integrationId}
+            onChange={(e) => setIntegrationId(e.target.value)}
+            className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
+          >
+            <option value="">Auto-detect</option>
+            {warehouseIntegrations.map((i) => (
+              <option key={i.id} value={i.id}>{i.name} ({i.type})</option>
+            ))}
+          </select>
+        </div>
+      );
+    }
+
+    return null;
   };
 
   return (
@@ -159,7 +368,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
                   ? 'bg-emerald-500/20 text-emerald-400'
                   : 'bg-[var(--overlay-bg)] text-[var(--text-faint)]'
               )}>
-                {step > s ? '✓' : s}
+                {step > s ? '\u2713' : s}
               </div>
               <span className={cn(
                 'text-[12px]',
@@ -172,7 +381,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
           ))}
         </div>
 
-        {/* Content — scrolls vertically when needed, header/footer stay fixed */}
+        {/* Content */}
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5">
           {step === 1 && (
             <>
@@ -259,51 +468,12 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
                   config={config}
                   onConfigChange={setConfig}
                   integrationId={integrationId}
+                  groupedMonitors={groupedMonitors}
                 />
               )}
 
-              {/* Integration selection — warehouse for data monitors, server for infra monitors */}
-              {isInfraMonitor ? (
-                serverIntegrations.length > 0 && (
-                  <div>
-                    <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                      Run against server
-                    </label>
-                    <select
-                      value={integrationId}
-                      onChange={(e) => setIntegrationId(e.target.value)}
-                      className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
-                    >
-                      <option value="">Auto-detect</option>
-                      {serverIntegrations.map((i) => (
-                        <option key={i.id} value={i.id}>
-                          {i.name} ({i.type})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )
-              ) : (
-                warehouseIntegrations.length > 0 && (
-                  <div>
-                    <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                      Run against warehouse
-                    </label>
-                    <select
-                      value={integrationId}
-                      onChange={(e) => setIntegrationId(e.target.value)}
-                      className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
-                    >
-                      <option value="">Auto-detect</option>
-                      {warehouseIntegrations.map((i) => (
-                        <option key={i.id} value={i.id}>
-                          {i.name} ({i.type})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )
-              )}
+              {/* Integration selection — dynamic based on monitor type */}
+              {renderIntegrationSelector()}
             </>
           )}
 

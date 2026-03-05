@@ -609,8 +609,29 @@ export default function LineagePage() {
     return lineageData.nodes.filter((node) => nodePassesFilter(node, filters));
   }, [lineageData?.nodes, filters]);
 
-  // Build filtered stats
+  // Build filtered stats from what's actually visible on the graph
   const filteredStats = useMemo(() => {
+    // When engine rendered view is available, count from its visible nodes
+    // (excluding job/service/system which are filtered out of the data plane)
+    if (renderedView && renderedView.nodes.length > 0) {
+      const visible = renderedView.nodes.filter(
+        (n) =>
+          (filters.showInferred || !n.inferred) &&
+          n.canonicalType !== 'job' &&
+          n.canonicalType !== 'service' &&
+          n.canonicalType !== 'system'
+      );
+      const cats = visible.map((vn) => _viewNodeToCategory(vn));
+      return {
+        toolNodes: cats.filter((c) => isToolCategory(c)).length,
+        tableNodes: cats.filter((c) => c === 'table').length,
+        viewNodes: cats.filter((c) => c === 'view').length,
+        modelNodes: cats.filter((c) => c === 'model' || c === 'source').length,
+        dagNodes: cats.filter((c) => c === 'dag').length,
+        taskNodes: cats.filter((c) => c === 'task').length,
+      };
+    }
+    // Fallback: count from unified lineage nodes
     return {
       toolNodes: filteredNodes.filter((n) => isToolCategory(n.category)).length,
       tableNodes: filteredNodes.filter((n) => n.category === 'table').length,
@@ -620,7 +641,7 @@ export default function LineagePage() {
       dagNodes: filteredNodes.filter((n) => n.category === 'dag').length,
       taskNodes: filteredNodes.filter((n) => n.category === 'task').length,
     };
-  }, [filteredNodes]);
+  }, [filteredNodes, renderedView, filters.showInferred]);
 
   // Build edges for the detail panel with transitive reduction applied.
   // Removes shortcut edges (e.g., raw table → intermediate model) so BFS
@@ -1197,20 +1218,16 @@ export default function LineagePage() {
           {activeTab === 'control-plane' ? (
             <>
               <div className="text-center">
-                <div className="text-xl font-semibold text-emerald-400">{laneOverview?.stats?.totalNodes ?? controlPlaneData?.stats?.tool_count ?? 0}</div>
+                <div className="text-xl font-semibold text-emerald-400">{cpFlowNodes.length}</div>
                 <div className="text-[11px] text-[var(--muted)]">Tools</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-[var(--text)]">{laneOverview?.stats?.totalEdges ?? controlPlaneData?.stats?.flow_count ?? 0}</div>
+                <div className="text-xl font-semibold text-[var(--text)]">{cpFlowEdges.length}</div>
                 <div className="text-[11px] text-[var(--muted)]">Data Flows</div>
               </div>
             </>
           ) : (
             <>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.toolNodes}</div>
-                <div className="text-[11px] text-[var(--muted)]">Tools</div>
-              </div>
               <div className="text-center">
                 <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.tableNodes}</div>
                 <div className="text-[11px] text-[var(--muted)]">Tables</div>
@@ -1223,15 +1240,14 @@ export default function LineagePage() {
                 <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.modelNodes}</div>
                 <div className="text-[11px] text-[var(--muted)]">Models</div>
               </div>
+              <div className="text-center">
+                <div className="text-xl font-semibold text-[var(--text)]">
+                  {flowEdges.length}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">Dependencies</div>
+              </div>
             </>
           )}
-          <div className="text-center">
-            <div className="text-xl font-semibold text-[var(--text)]">
-              {renderedView?.stats?.edgeCount || lineageData?.stats?.totalEdges || 0}
-            </div>
-            <div className="text-[11px] text-[var(--muted)]">Dependencies</div>
-          </div>
-
         </div>
       </div>
 

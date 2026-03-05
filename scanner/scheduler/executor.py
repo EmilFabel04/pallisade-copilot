@@ -16,6 +16,7 @@ import structlog
 from scanner.monitors.executor import MonitorExecutor, MONITOR_REGISTRY
 from scanner.monitors.base import MonitorResult, MonitorStatus
 from scanner.monitors.infrastructure import INFRA_MONITOR_TYPES
+from scanner.monitors.tools import TOOL_MONITOR_TYPES, TOOL_MONITOR_REGISTRY
 
 logger = structlog.get_logger()
 
@@ -188,8 +189,14 @@ class TaskExecutor:
 
         if task_mode == "prompt":
             return await self._execute_prompt(task)
-        else:
-            return await self._execute_structured(task)
+
+        # Check if this is a tool monitor (Fivetran/Airflow/dbt) before
+        # falling through to the warehouse-SQL structured path.
+        monitor_type = (task.get("monitorType") or "").lower()
+        if monitor_type in TOOL_MONITOR_TYPES:
+            return await self._execute_tool_monitor(task, monitor_type)
+
+        return await self._execute_structured(task)
 
     async def _execute_structured(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """Run a structured monitor check."""
@@ -422,8 +429,8 @@ class TaskExecutor:
             )
 
             response = client.chat.completions.create(
-                model="gpt-5.2-mini",
-                max_tokens=512,
+                model="gpt-5-mini",
+                max_completion_tokens=512,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt},
@@ -622,6 +629,257 @@ class TaskExecutor:
         finally:
             adapter.disconnect()
 
+    async def _execute_tool_monitor(
+        self, task: Dict[str, Any], monitor_type: str
+    ) -> Dict[str, Any]:
+        """Run a tool API monitor (Fivetran, Airflow, dbt Cloud).
+
+        Tool monitors query external integration APIs instead of running SQL
+        or SSH commands.  Follows the same pattern as _execute_infrastructure.
+        """
+        config = task.get("config") or {}
+
+        monitor_cls = TOOL_MONITOR_REGISTRY.get(monitor_type)
+        if not monitor_cls:
+            return {
+                "status": "ERROR",
+                "message": f"Unknown tool monitor type: {monitor_type}",
+            }
+
+        # Resolve integration config (pre-fetched from Next.js or looked up)
+        integration_config = task.get("integrationConfig") or await self._get_tool_config(
+            task.get("integrationId"),
+            task.get("organizationId"),
+            monitor_type,
+        )
+
+        if not integration_config:
+            # Map monitor type to human-readable tool name
+            tool_names = {
+                "sync_lag": "Fivetran/Airbyte", "failed_syncs": "Fivetran/Airbyte",
+                "connector_schema_drift": "Fivetran/Airbyte",
+                "dag_last_run": "Airflow", "dag_schedule_lag": "Airflow",
+                "task_failure_rate": "Airflow",
+                "dbt_test_failures": "dbt Cloud", "dbt_model_freshness": "dbt Cloud",
+                "dbt_source_freshness": "dbt Cloud",
+            }
+            tool_name = tool_names.get(monitor_type, monitor_type)
+            return {
+                "status": "ERROR",
+                "message": (
+                    f"No live {tool_name} integration found. "
+                    f"This monitor requires {tool_name} to be connected with a live instance "
+                    f"(API connection). Go to the Pipeline page and either add a new {tool_name} "
+                    f"integration or switch your existing one to API/instance mode."
+                ),
+            }
+
+        try:
+            client = self._create_tool_client(monitor_type, integration_config)
+        except ValueError as e:
+            # ValueError = configuration issue (e.g. GitHub mode, missing API key)
+            logger.error(f"[Executor] Tool client config error: {e}")
+            return {
+                "status": "ERROR",
+                "message": str(e),
+            }
+        except Exception as e:
+            logger.error(f"[Executor] Failed to create tool client: {e}")
+            return {
+                "status": "ERROR",
+                "message": f"Failed to connect to integration: {e}",
+            }
+
+        monitor = monitor_cls(config)
+        try:
+            result: MonitorResult = monitor.execute(client)
+            result_dict = result.to_dict()
+
+            # LLM validation for FAIL/WARN results
+            llm_validate = config.get("llm_validate", True)
+            target = task.get("targetFqn") or f"{monitor_type}:unknown"
+            if llm_validate and result.status in (MonitorStatus.FAIL, MonitorStatus.WARN):
+                result_dict["raw_status"] = result_dict["status"]
+                result_dict = await self._llm_validate_result(
+                    result_dict, monitor_type, target
+                )
+                result_dict["final_status"] = result_dict["status"]
+
+            return result_dict
+        except Exception as e:
+            logger.error(f"[Executor] Tool monitor failed: {e}")
+            return {
+                "status": "ERROR",
+                "message": f"Tool monitor execution failed: {str(e)}",
+            }
+
+    def _create_tool_client(
+        self, monitor_type: str, integration_config: Dict[str, Any]
+    ) -> Any:
+        """Instantiate the appropriate integration client for a tool monitor."""
+        tool_type = (integration_config.get("type") or "").lower()
+
+        if monitor_type in ("sync_lag", "failed_syncs", "connector_schema_drift"):
+            from scanner.integrations.fivetran import FivetranIntegration
+
+            return FivetranIntegration(integration_config)
+
+        if monitor_type in ("dag_last_run", "dag_schedule_lag", "task_failure_rate"):
+            # Airflow monitors require a live API connection — GitHub DAG-file mode
+            # only provides static project files and cannot query run status.
+            source_mode = integration_config.get("source_mode", "")
+            has_host = bool(integration_config.get("host") or integration_config.get("base_url"))
+            if source_mode == "github" or (not has_host and integration_config.get("github_repo")):
+                raise ValueError(
+                    "Airflow is connected in GitHub DAG-file mode (static project files only). "
+                    "Airflow monitors require a live API connection. "
+                    "Update the Airflow integration to use API mode with a host URL "
+                    "(e.g. https://your-airflow.example.com)."
+                )
+
+            from scanner.integrations.airflow import AirflowIntegration
+
+            return AirflowIntegration(integration_config)
+
+        if monitor_type in ("dbt_test_failures", "dbt_model_freshness", "dbt_source_freshness"):
+            # dbt_core (upload/project/github) doesn't have a live API — monitors require dbt Cloud
+            source_mode = integration_config.get("source_mode", "")
+            tool_t = (integration_config.get("type") or "").lower()
+            if tool_t == "dbt_core" or source_mode in ("upload", "project", "github"):
+                api_key = integration_config.get("api_key") or integration_config.get("token", "")
+                if not api_key:
+                    raise ValueError(
+                        f'dbt integration is connected in {source_mode or "local"} mode '
+                        "(static project files only). dbt monitors require a live dbt Cloud API "
+                        "connection to check job runs and test results. Switch to a dbt Cloud "
+                        "integration with an API key and account ID to enable monitors."
+                    )
+
+            from scanner.integrations.dbt import DbtCloudClient
+
+            api_key = integration_config.get("api_key") or integration_config.get("token", "")
+            account_id = integration_config.get("account_id")
+            return DbtCloudClient(api_key=api_key, account_id=account_id)
+
+        raise ValueError(f"No client mapping for monitor type: {monitor_type}")
+
+    # Mapping from tool monitor types to the PipelineNode toolType(s) that provide them.
+    _TOOL_MONITOR_NODE_TYPES: Dict[str, list] = {
+        "sync_lag": ["fivetran", "airbyte"],
+        "failed_syncs": ["fivetran", "airbyte"],
+        "connector_schema_drift": ["fivetran", "airbyte"],
+        "dag_last_run": ["airflow", "dagster"],
+        "dag_schedule_lag": ["airflow", "dagster"],
+        "task_failure_rate": ["airflow", "dagster"],
+        "dbt_test_failures": ["dbt_cloud", "dbt_core"],
+        "dbt_model_freshness": ["dbt_cloud", "dbt_core"],
+        "dbt_source_freshness": ["dbt_cloud", "dbt_core"],
+    }
+
+    async def _get_tool_config(
+        self,
+        integration_id: Optional[str],
+        organization_id: Optional[str],
+        monitor_type: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch tool integration config from PipelineNode.
+
+        Same pattern as _get_server_config, but dynamically filters by
+        the toolType(s) required for the given monitor_type.
+        """
+        if not integration_id and not organization_id:
+            return None
+
+        required_types = self._TOOL_MONITOR_NODE_TYPES.get(monitor_type)
+        if not required_types:
+            return None
+
+        try:
+            from scanner.scheduler.service import _get_connection
+
+            conn = _get_connection()
+            try:
+                with conn.cursor() as cur:
+                    # Query Integration.credentials (where the real config lives)
+                    # and fall back to PipelineNode.config for legacy nodes
+                    if integration_id:
+                        cur.execute(
+                            """
+                            SELECT pn.id, pn.name, pn."toolType",
+                                   i.credentials AS int_creds, pn.config
+                            FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE pn."integrationId" = %s
+                              AND pn."toolType" = ANY(%s)
+                              AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                            LIMIT 1
+                            """,
+                            (integration_id, required_types),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT pn.id, pn.name, pn."toolType",
+                                   i.credentials AS int_creds, pn.config
+                            FROM "PipelineNode" pn
+                            JOIN "PipelineStack" ps ON pn."stackId" = ps.id
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE ps."organizationId" = %s
+                              AND pn."toolType" = ANY(%s)
+                              AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                            ORDER BY pn."createdAt" ASC
+                            LIMIT 1
+                            """,
+                            (organization_id, required_types),
+                        )
+
+                    row = cur.fetchone()
+                    if not row:
+                        logger.warning(
+                            f"[Executor] No {required_types} pipeline node found for {monitor_type}"
+                        )
+                        return None
+
+                    node_id, node_name, tool_type, int_creds, raw_config = row
+
+                    # Prefer Integration credentials (where pipeline save stores them),
+                    # fall back to PipelineNode.config for legacy/unsaved nodes
+                    config_source = int_creds or raw_config or {}
+                    if isinstance(config_source, str):
+                        config_source = json.loads(config_source)
+
+                    # Decrypt credentials
+                    credentials: Dict[str, Any] = {}
+                    if isinstance(config_source, dict) and "encrypted" in config_source:
+                        try:
+                            decrypted = _decrypt(config_source["encrypted"])
+                            credentials = json.loads(decrypted)
+                        except Exception as e:
+                            logger.warning(
+                                f"[Executor] Failed to decrypt tool config for {node_name}: {e}"
+                            )
+                            return None
+                    elif isinstance(config_source, dict):
+                        credentials = {k: v for k, v in config_source.items() if k != "_cached"}
+
+                    logger.info(
+                        "[Executor] Resolved tool config",
+                        node=node_name,
+                        type=tool_type,
+                        monitor=monitor_type,
+                    )
+                    return {
+                        "id": node_id,
+                        "name": node_name,
+                        "type": tool_type,
+                        **credentials,
+                    }
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[Executor] Failed to fetch tool config: {e}")
+            return None
+
     async def _get_server_config(
         self, integration_id: Optional[str], organization_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
@@ -638,8 +896,10 @@ class TaskExecutor:
                     if integration_id:
                         cur.execute(
                             """
-                            SELECT pn.id, pn.name, pn."toolType", pn.config
+                            SELECT pn.id, pn.name, pn."toolType",
+                                   i.credentials AS int_creds, pn.config
                             FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
                             WHERE pn."integrationId" = %s
                               AND pn."toolType" = 'linux_server'
                               AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
@@ -650,9 +910,11 @@ class TaskExecutor:
                     else:
                         cur.execute(
                             """
-                            SELECT pn.id, pn.name, pn."toolType", pn.config
+                            SELECT pn.id, pn.name, pn."toolType",
+                                   i.credentials AS int_creds, pn.config
                             FROM "PipelineNode" pn
                             JOIN "PipelineStack" ps ON pn."stackId" = ps.id
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
                             WHERE ps."organizationId" = %s
                               AND pn."toolType" = 'linux_server'
                               AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
@@ -667,22 +929,22 @@ class TaskExecutor:
                         logger.warning("[Executor] No linux_server pipeline node found")
                         return None
 
-                    node_id, node_name, tool_type, raw_config = row
-                    config = raw_config or {}
-                    if isinstance(config, str):
-                        config = json.loads(config)
+                    node_id, node_name, tool_type, int_creds, raw_config = row
+                    config_source = int_creds or raw_config or {}
+                    if isinstance(config_source, str):
+                        config_source = json.loads(config_source)
 
                     # Decrypt credentials
                     credentials: Dict[str, Any] = {}
-                    if isinstance(config, dict) and "encrypted" in config:
+                    if isinstance(config_source, dict) and "encrypted" in config_source:
                         try:
-                            decrypted = _decrypt(config["encrypted"])
+                            decrypted = _decrypt(config_source["encrypted"])
                             credentials = json.loads(decrypted)
                         except Exception as e:
                             logger.warning(f"[Executor] Failed to decrypt server config for {node_name}: {e}")
                             return None
-                    elif isinstance(config, dict):
-                        credentials = {k: v for k, v in config.items() if k != "_cached"}
+                    elif isinstance(config_source, dict):
+                        credentials = {k: v for k, v in config_source.items() if k != "_cached"}
 
                     logger.info(
                         "[Executor] Resolved server config",
@@ -763,8 +1025,8 @@ class TaskExecutor:
             response_text = ""
             for _ in range(5):
                 api_kwargs = {
-                    "model": "gpt-5.2-mini",
-                    "max_tokens": 1024,
+                    "model": "gpt-5-mini",
+                    "max_completion_tokens": 1024,
                     "messages": messages,
                 }
                 if tools:

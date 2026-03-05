@@ -35,20 +35,15 @@ export interface TaskRun {
   durationMs?: number;
 }
 
-export const MONITOR_TYPES = [
-  { value: 'FRESHNESS', label: 'Freshness', description: 'Auto-detects timestamp column & alert threshold' },
-  { value: 'VOLUME', label: 'Volume', description: 'Auto-computes expected row count range from history' },
-  { value: 'SCHEMA_CHANGE', label: 'Schema Change', description: 'Detect column additions/removals' },
-  { value: 'NULL_RATE', label: 'Null Rate', description: 'Scans all columns for unexpected null spikes' },
-  { value: 'UNIQUENESS', label: 'Uniqueness', description: 'Detects drops in column uniqueness' },
-  { value: 'DISTRIBUTION', label: 'Distribution', description: 'Detects shifts in numeric column averages' },
-  { value: 'CUSTOM_SQL', label: 'Custom SQL', description: 'Run a custom SQL check' },
-  { value: 'ANOMALY', label: 'Anomaly', description: 'Z-score detection on row count or all columns' },
-  // Infrastructure monitors (require Linux Server integration)
-  { value: 'CERTIFICATE', label: 'Certificate', description: 'Detects expiring or missing TLS/SSL certificates' },
-  { value: 'SERVER_HEALTH', label: 'Server Health', description: 'Monitors CPU, memory, disk usage' },
-  { value: 'LOG_ANALYSIS', label: 'Log Analysis', description: 'Scans server logs for error patterns' },
-] as const;
+// Re-exported from the monitor catalog for backward compatibility.
+// New code should use MONITOR_CATALOG from './monitor-catalog' directly.
+import { MONITOR_CATALOG } from './monitor-catalog';
+
+export const MONITOR_TYPES = MONITOR_CATALOG.map((m) => ({
+  value: m.key as string,
+  label: m.label,
+  description: m.description,
+}));
 
 export const SCHEDULE_PRESETS = [
   { value: '0 * * * *', label: 'Every hour' },
