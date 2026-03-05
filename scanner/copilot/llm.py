@@ -304,13 +304,14 @@ If a query fails:
 2. **Wrong table name**: Check the schema section for the correct fully qualified table name. Re-run with the corrected name.
 3. **Syntax error**: Check the SQL syntax reminders for this warehouse type. Fix and re-run.
 4. **No results**: Try broadening the query (remove filters, check for NULL values).
-5. **Tool not connected / adapter error**: If a tool returns "not connected" or "not implemented", use `search_knowledge_base` to find expert guidance on the topic. Do NOT tell the user about "technical limitations" — instead provide helpful advice from the knowledge base.
-6. **Authentication / 401 errors from Airflow or other tools**: This is a CONFIGURATION issue you can help debug. Do NOT give up or ask the user to run CLI commands. Instead:
+5. **Tool results are ground truth**: When a tool executes and returns `"success": true`, that tool IS connected and working — NEVER claim otherwise. If data comes back from a tool, the adapter IS connected. Only report "not connected" if the tool result explicitly contains `"success": false` with a connection error message.
+6. **Tool not connected / adapter error**: If a tool returns `"success": false` with "not connected" or "not implemented", use `search_knowledge_base` to find expert guidance on the topic. Do NOT tell the user about "technical limitations" — instead provide helpful advice from the knowledge base.
+7. **Authentication / 401 errors from Airflow or other tools**: This is a CONFIGURATION issue you can help debug. Do NOT give up or ask the user to run CLI commands. Instead:
    a. Use `search_knowledge_base` with "airflow api auth" to find the fix
    b. Use `list_github_repos` → `get_github_tree` → `get_github_file` to inspect the user's infrastructure config files (docker-compose.yml, airflow.cfg, .env, etc.)
    c. Look for missing auth configuration (e.g. `AIRFLOW__API__AUTH_BACKENDS` for Airflow 2.x)
    d. Tell the user exactly what to change in their config, with the specific file path and setting
-7. **Lineage "not found" errors**: When `get_airflow_dag_lineage`, `get_upstream`, `get_downstream`, or `get_asset_orchestration_context` say a node is not found, DO NOT give up. Instead:
+8. **Lineage "not found" errors**: When `get_airflow_dag_lineage`, `get_upstream`, `get_downstream`, or `get_asset_orchestration_context` say a node is not found, DO NOT give up. Instead:
    a. Use `search_lineage` with wildcards (e.g., `*dag_name*`, `*table_name*`) to find what nodes actually exist
    b. Use `get_lineage_stats` to check if any lineage was extracted at all
    c. Try the node's full FQN instead of just its name (check the lineage catalog in the prompt for FQNs)
@@ -359,6 +360,9 @@ NEVER use placeholders like `your_project`, `<your_dataset>`, `your_table`. Use 
                 prompt += kb_hint
         except Exception:
             pass  # Knowledge base is optional, don't fail if unavailable
+
+        # Add complementary integration hints
+        prompt += self._build_complementary_integration_hints(context)
 
         # Add available tools info
         available_tools = context.available_tools
@@ -481,6 +485,27 @@ You have multiple data warehouses connected. When calling `query_warehouse`, you
         lines.append("\n**Use this context - do NOT ask clarifying questions about topics covered above.**\n")
 
         return "\n".join(lines)
+
+    def _build_complementary_integration_hints(self, context: CopilotContext) -> str:
+        """Add hints when complementary integrations are both connected."""
+        hints = ""
+        orchestration_types = {"AIRFLOW", "DAGSTER", "PREFECT", "N8N"}
+        transformation_types = {"DBT_CLOUD", "DBT_CORE"}
+        has_orchestration = bool(context.integration_types & orchestration_types)
+        has_transformation = bool(context.integration_types & transformation_types)
+        has_github = "GITHUB" in context.integration_types
+
+        if (has_orchestration or has_transformation) and has_github:
+            hints += """
+## PR Creation Available
+
+You have both pipeline tools AND GitHub connected. When fixing pipeline issues:
+1. Diagnose with orchestration/transformation tools (DAG status, task logs, dbt run history)
+2. Create a fix with `create_change_plan`
+3. Push directly via `apply_change_plan` — this creates a GitHub PR
+Don't just describe fixes — create the change plan and offer to push it.
+"""
+        return hints
 
     def _build_few_shot_examples(self, context: CopilotContext) -> str:
         """Build few-shot examples relevant to the user's connected integrations."""
@@ -964,7 +989,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
-                            "content": json.dumps(result.data if result.success else {"error": result.error}),
+                            "content": json.dumps(result.to_dict()),
                         })
 
                     # Append to conversation and continue loop

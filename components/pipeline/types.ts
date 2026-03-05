@@ -89,6 +89,9 @@ export interface ToolDefinition {
   description: string;
   layer: PipelineLayer;
   configFields: ConfigField[];
+  // Complementary integrations — IDs of tools that unlock extra capabilities when paired
+  recommendedWith?: string[];
+  recommendedReason?: string;
 }
 
 // All available tools organized by layer with their config fields
@@ -128,11 +131,13 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
     },
   ],
   TRANSFORMATION: [
-    { 
-      id: 'dbt_cloud', 
-      name: 'dbt Cloud', 
-      description: 'dbt Cloud (hosted)', 
+    {
+      id: 'dbt_cloud',
+      name: 'dbt Cloud',
+      description: 'dbt Cloud (hosted)',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for dbt model fixes',
       configFields: [
         { name: 'api_mode', label: 'API Mode', type: 'select', required: true, options: [
           { value: 'admin', label: 'Admin API (Full Access) - Requires "Job Viewer" token' },
@@ -149,6 +154,8 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       name: 'dbt Core',
       description: 'dbt Core (upload, project, or GitHub)',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for dbt model fixes',
       configFields: [
         { name: 'source_mode', label: 'Source', type: 'select', required: true, options: [
           { value: 'upload', label: 'Upload manifest.json' },
@@ -179,6 +186,8 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       name: 'Airflow',
       description: 'Apache Airflow orchestration',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for DAG fixes and code suggestions',
       configFields: [
         { name: 'source_mode', label: 'Connection Mode', type: 'select', required: false, options: [
           { value: 'api', label: 'Airflow API' },
@@ -195,21 +204,25 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'dag_directory', label: 'DAG Directory', type: 'text', required: false, placeholder: 'dags', helperText: 'Path to DAGs folder in the repo (default: dags)', showWhen: { field: 'source_mode', value: 'github' } },
       ],
     },
-    { 
-      id: 'dagster', 
-      name: 'Dagster', 
-      description: 'Dagster orchestration', 
+    {
+      id: 'dagster',
+      name: 'Dagster',
+      description: 'Dagster orchestration',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for pipeline fixes',
       configFields: [
         { name: 'host', label: 'Dagster Host', type: 'text', required: true, placeholder: 'https://your-dagster.com' },
         { name: 'api_token', label: 'API Token', type: 'password', required: false, placeholder: 'Dagster Cloud token' },
       ],
     },
-    { 
-      id: 'prefect', 
-      name: 'Prefect', 
-      description: 'Prefect workflow orchestration', 
+    {
+      id: 'prefect',
+      name: 'Prefect',
+      description: 'Prefect workflow orchestration',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for flow fixes',
       configFields: [
         { name: 'api_url', label: 'Prefect API URL', type: 'text', required: true, placeholder: 'https://api.prefect.cloud/api' },
         { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your Prefect API key' },
@@ -433,6 +446,8 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       name: 'n8n',
       description: 'n8n workflow automation',
       layer: 'ORCHESTRATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for workflow fixes',
       configFields: [
         { name: 'host', label: 'n8n Instance URL', type: 'text', required: true, placeholder: 'https://your-n8n.example.com', helperText: 'Base URL of your n8n instance (self-hosted or cloud)' },
         { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your n8n API key', helperText: 'Generate from Settings > API in your n8n instance' },
@@ -466,9 +481,9 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       description: 'GitHub repositories & PRs',
       layer: 'VERSION_CONTROL',
       configFields: [
-        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx', helperText: 'Token needs repo access scope' },
+        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx', helperText: 'Token needs repo access scope. For PR creation, also needs write access.' },
         { name: 'owner', label: 'Repository Owner', type: 'text', required: true, placeholder: 'organization or username' },
-        { name: 'repo', label: 'Repository Name', type: 'text', required: false, placeholder: 'Leave empty for all repos' },
+        { name: 'repo', label: 'Repository Name', type: 'text', required: false, placeholder: 'my-dbt-project', helperText: 'Required for PR creation. Leave empty to browse all repos.' },
       ],
     },
     {

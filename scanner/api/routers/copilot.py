@@ -490,9 +490,20 @@ async def apply_plan(
 
             # Auto-detect repo if not explicitly provided
             if not repo_owner or not repo_name:
-                # 1. Check config.repo (format: "owner/repo")
-                if config.get("repo"):
-                    parts = config["repo"].split("/")
+                # 1. Check separate owner + repo fields (from pipeline config UI)
+                cfg_owner = config.get("owner")
+                cfg_repo = config.get("repo")
+                if cfg_owner and cfg_repo:
+                    if "/" in cfg_repo:
+                        parts = cfg_repo.split("/")
+                        if len(parts) == 2:
+                            repo_owner = repo_owner or parts[0]
+                            repo_name = repo_name or parts[1]
+                    else:
+                        repo_owner = repo_owner or cfg_owner
+                        repo_name = repo_name or cfg_repo
+                elif cfg_repo and "/" in cfg_repo:
+                    parts = cfg_repo.split("/")
                     if len(parts) == 2:
                         repo_owner = repo_owner or parts[0]
                         repo_name = repo_name or parts[1]

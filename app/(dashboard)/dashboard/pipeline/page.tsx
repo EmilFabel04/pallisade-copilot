@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, ChevronDown, CircleAlert, CircleDashed, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, Zap } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, CircleDashed, GitBranch, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, X, Zap } from 'lucide-react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
 import PipelineCanvas from '@/components/pipeline/PipelineCanvas';
@@ -16,12 +16,13 @@ import {
   PipelineLayer,
   PipelineNode,
   PipelineStack,
+  ToolDefinition,
   TOOLS,
   getToolById,
 } from '@/components/pipeline/types';
 
 type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
-type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'INFRASTRUCTURE' | 'ALERTS';
+type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
 type PlaneFilter = 'all' | 'data' | 'control';
 
 interface ConnectorCard {
@@ -42,7 +43,7 @@ interface IntegrationRecord {
   lastError?: string | null;
 }
 
-const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
+const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
 const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
 const ENVIRONMENTS = ['Dev', 'Staging', 'Prod'] as const;
 
@@ -82,6 +83,7 @@ const GROUP_COLORS: Record<ConnectorGroup, string> = {
   BI: LAYER_COLORS.REPORTING,
   INGESTION: LAYER_COLORS.INGESTION,
   STORAGE: LAYER_COLORS.STORAGE,
+  VERSION_CONTROL: LAYER_COLORS.VERSION_CONTROL,
   INFRASTRUCTURE: LAYER_COLORS.INFRASTRUCTURE,
   ALERTS: '#EF4444',
 };
@@ -99,6 +101,7 @@ function mapIntegrationTypeToConnectorId(type: string): string {
     AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect', N8N: 'n8n',
     LOOKER: 'looker', TABLEAU: 'tableau', POWERBI: 'powerbi', METABASE: 'metabase',
     AMAZON_S3: 'amazon_s3', GCS: 'gcs', ADLS: 'adls',
+    GITHUB: 'github', GITLAB: 'gitlab', BITBUCKET: 'bitbucket',
     LINUX_SERVER: 'linux_server',
     SLACK: 'slack', TEAMS: 'teams', PAGERDUTY: 'pagerduty', OPSGENIE: 'opsgenie',
     JIRA: 'jira', LINEAR: 'linear', ASANA: 'asana', GITHUB_ISSUES: 'github_issues',
@@ -116,7 +119,7 @@ function categoryToGroup(category: string): ConnectorGroup {
 
 function groupLabel(group: ConnectorGroup): string {
   const labels: Record<ConnectorGroup, string> = {
-    WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration',
+    WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration', VERSION_CONTROL: 'Version Control',
     BI: 'BI / Reporting', INGESTION: 'Ingestion', STORAGE: 'Storage', INFRASTRUCTURE: 'Infrastructure', ALERTS: 'Alerts & Integrations',
   };
   return labels[group];
@@ -176,6 +179,7 @@ export default function PipelinePage() {
   const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
+  const [dismissedRecommendations, setDismissedRecommendations] = useState<Set<string>>(new Set());
 
   // ─── Derived data ─────────────────────────────────────────
   const connectorCatalog = useMemo<ConnectorCard[]>(() => {
@@ -188,6 +192,7 @@ export default function PipelinePage() {
       ...TOOLS.INGESTION.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INGESTION' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.STORAGE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'STORAGE' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.INFRASTRUCTURE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INFRASTRUCTURE' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.VERSION_CONTROL.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'VERSION_CONTROL' as const, mode: 'pipeline' as const, layer: t.layer })),
     ];
     const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS).flat().map((i) => ({
       id: i.id, name: i.name, description: i.description, group: categoryToGroup(i.category), mode: 'integration' as const, integration: i,
@@ -415,6 +420,25 @@ export default function PipelinePage() {
   }, [integrationRecords]);
 
   const nextSuggestedStep = useMemo(() => CHECKLIST_STEPS.find((s) => !s.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED')) || null, [connectorStatusById]);
+
+  // Recommendations: check connected tools that recommend pairing with another tool
+  const recommendations = useMemo(() => {
+    const allTools: ToolDefinition[] = Object.values(TOOLS).flat();
+    const results: Array<{ tool: ToolDefinition; missingId: string; missingName: string }> = [];
+    const seen = new Set<string>();
+    for (const tool of allTools) {
+      if (!tool.recommendedWith || !connectedFromStack.has(tool.id)) continue;
+      for (const recId of tool.recommendedWith) {
+        if (connectedFromStack.has(recId) || seen.has(recId) || dismissedRecommendations.has(recId)) continue;
+        seen.add(recId);
+        const recTool = getToolById(recId);
+        if (recTool) {
+          results.push({ tool, missingId: recId, missingName: recTool.name });
+        }
+      }
+    }
+    return results;
+  }, [connectedFromStack, dismissedRecommendations]);
 
   // ─── Handlers ─────────────────────────────────────────────
   const handleConnect = useCallback((connector: ConnectorCard) => {
@@ -736,6 +760,38 @@ export default function PipelinePage() {
             </div>
           );
         })}
+
+        {/* Complementary Integration Recommendations */}
+        {recommendations.length > 0 && recommendations.map(({ tool, missingId, missingName }) => (
+          <div
+            key={missingId}
+            className="flex items-center gap-3 rounded-xl border border-purple-500/25 bg-purple-500/[0.06] p-4"
+          >
+            <GitBranch className="w-5 h-5 text-purple-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm">
+                <span className="font-medium">{tool.name}</span> works best with <span className="font-medium">{missingName}</span>.{' '}
+                <span className="text-[var(--muted)]">{tool.recommendedReason}</span>
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                const connector = connectorCatalog.find((c) => c.id === missingId);
+                if (connector) handleConnect(connector);
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-500/30 text-purple-300 hover:bg-purple-500/25 transition-all flex-shrink-0"
+            >
+              <Zap className="w-3 h-3" />
+              Connect {missingName}
+            </button>
+            <button
+              onClick={() => setDismissedRecommendations((prev) => new Set([...prev, missingId]))}
+              className="p-1 rounded-md hover:bg-[var(--hover-bg)] text-[var(--muted)] transition-all flex-shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
       </section>
 
       {/* ── Pipeline Map Section ───────────────────────────── */}

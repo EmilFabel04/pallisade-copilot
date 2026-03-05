@@ -4207,15 +4207,22 @@ class ToolExecutor:
 
     def _get_github_repo(self) -> Optional[Dict[str, str]]:
         """Get the primary GitHub repo from context (e.g., from VERSION_CONTROL node or first repo)."""
+        # Priority 1: Dedicated GITHUB integration with explicit repo
         for integration in self.context.integrations:
             if integration.type.upper() == "GITHUB":
-                # Check if there's a specific repo configured
                 config = integration.config or {}
-                if config.get("repo"):
-                    # Format: "owner/repo"
-                    parts = config["repo"].split("/")
-                    if len(parts) == 2:
-                        return {"owner": parts[0], "name": parts[1]}
+
+                # Check for separate owner + repo fields (from pipeline config UI)
+                owner = config.get("owner")
+                repo_name = config.get("repo")
+                if owner and repo_name:
+                    # repo might be "owner/repo" or just "repo"
+                    if "/" in repo_name:
+                        parts = repo_name.split("/")
+                        if len(parts) == 2:
+                            return {"owner": parts[0], "name": parts[1]}
+                    else:
+                        return {"owner": owner, "name": repo_name}
 
                 # Check metadata for repos list
                 metadata = getattr(integration, 'metadata', {}) or config.get('metadata', {})
@@ -4226,6 +4233,18 @@ class ToolExecutor:
                     parts = full_name.split("/")
                     if len(parts) == 2:
                         return {"owner": parts[0], "name": parts[1]}
+
+        # Priority 2: Cross-reference from orchestration/transformation configs
+        # (dbt Core, Airflow, etc. often have a github_repo field)
+        for integration in self.context.integrations:
+            config = integration.config or {}
+            repo = config.get("github_repo") or config.get("repo")
+            if repo and isinstance(repo, str) and "/" in repo:
+                parts = repo.split("/")
+                if len(parts) == 2:
+                    logger.info(f"[GitHub] Auto-detected repo {repo} from {integration.type} config")
+                    return {"owner": parts[0], "name": parts[1]}
+
         return None
 
     def _get_github_repos_list(self) -> List[str]:

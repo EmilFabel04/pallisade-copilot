@@ -1123,6 +1123,7 @@ class ToolRegistry:
             ),
             category=ToolCategory.CHANGE_PLAN,
             requires_confirmation=True,
+            alternative_integrations={"GITHUB"},
             parameters=[
                 ToolParameter(
                     "plan_id", "string",
