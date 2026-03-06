@@ -604,7 +604,12 @@ class ToolExecutor:
                     from scanner.integrations.dbt import DbtIntegration
                 return DbtIntegration(integration.config)
             
-            # AIRFLOW: handled exclusively by MCP server (mcp_airflow__* tools)
+            elif integration_type == "AIRFLOW":
+                try:
+                    from integrations.airflow import AirflowIntegration
+                except ImportError:
+                    from scanner.integrations.airflow import AirflowIntegration
+                return AirflowIntegration(config=integration.config)
 
             elif integration_type == "DAGSTER":
                 try:

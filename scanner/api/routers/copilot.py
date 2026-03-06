@@ -15,7 +15,8 @@ from copilot.context_builder import CopilotContextBuilder, CopilotContext
 from copilot.tools import get_tool_registry
 from copilot.llm import CopilotLLM, Message, CopilotResponse, StreamEvent
 from copilot.openlineage_consumer import OpenLineageConsumer
-from copilot.modes import get_mode_config, detect_mode, parse_slash_command, get_available_modes
+from copilot.modes import get_mode_config, parse_slash_command, get_available_modes, mode_from_intent
+from copilot.intent import classify_intent
 
 logger = logging.getLogger(__name__)
 
@@ -127,22 +128,33 @@ async def chat(
         # Parse slash command from message (e.g., "/debug why did this fail")
         message = request.message
         mode = request.mode
+        intent_result = None
 
         slash_mode, remaining_message = parse_slash_command(message)
         if slash_mode:
             mode = slash_mode.value
             message = remaining_message
             logger.info(f"Parsed slash command: mode={mode}")
+            mode_config = get_mode_config(mode)
+        elif mode != "ask":
+            # Frontend explicitly set a mode
+            mode_config = get_mode_config(mode)
+        else:
+            # Multi-intent classification
+            history = [
+                {"role": m.role, "content": m.content}
+                for m in (request.messages or [])
+            ]
+            intent_result = classify_intent(message, history)
+            mode_config = mode_from_intent(intent_result)
+            mode = mode_config.mode.value
+            logger.info(
+                f"Intent: primary={intent_result.primary.intent.value}"
+                f"({intent_result.primary.score:.2f})"
+                f"{f', secondary={intent_result.secondary.intent.value}({intent_result.secondary.score:.2f})' if intent_result.secondary else ''}"
+                f"{f', target={intent_result.target_hint}' if intent_result.target_hint else ''}"
+            )
 
-        # Auto-detect mode if still using default 'ask'
-        if mode == "ask":
-            detected = detect_mode(message)
-            if detected:
-                mode = detected.value
-                logger.info(f"Auto-detected mode: {mode}")
-
-        # Get mode configuration
-        mode_config = get_mode_config(mode)
         logger.info(f"Using mode: {mode} ({mode_config.display_name})")
 
         # Convert integrations from request to IntegrationInfo objects
@@ -176,7 +188,7 @@ async def chat(
         except Exception as e:
             logger.debug(f"[Copilot] Engine store not available: {e}")
 
-        # Build context with mode
+        # Build context with mode and intent
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
             org_id=x_organization_id,
@@ -189,6 +201,7 @@ async def chat(
             mode_config=mode_config,
             lineage_data=request.lineage.model_dump() if request.lineage else None,
             engine_graph=engine_graph,
+            intent_result=intent_result,
         )
         
         # Log the context
@@ -245,18 +258,30 @@ async def chat_stream(
         # --- Same context-building as /chat ---
         message = request.message
         mode = request.mode
+        intent_result = None
 
         slash_mode, remaining_message = parse_slash_command(message)
         if slash_mode:
             mode = slash_mode.value
             message = remaining_message
+            mode_config = get_mode_config(mode)
+        elif mode != "ask":
+            mode_config = get_mode_config(mode)
+        else:
+            history = [
+                {"role": m.role, "content": m.content}
+                for m in (request.messages or [])
+            ]
+            intent_result = classify_intent(message, history)
+            mode_config = mode_from_intent(intent_result)
+            mode = mode_config.mode.value
+            logger.info(
+                f"[Stream] Intent: primary={intent_result.primary.intent.value}"
+                f"({intent_result.primary.score:.2f})"
+                f"{f', secondary={intent_result.secondary.intent.value}({intent_result.secondary.score:.2f})' if intent_result.secondary else ''}"
+                f"{f', target={intent_result.target_hint}' if intent_result.target_hint else ''}"
+            )
 
-        if mode == "ask":
-            detected = detect_mode(message)
-            if detected:
-                mode = detected.value
-
-        mode_config = get_mode_config(mode)
         logger.info(f"[Stream] Using mode: {mode} ({mode_config.display_name})")
 
         integration_data = None
@@ -294,6 +319,7 @@ async def chat_stream(
             mode_config=mode_config,
             lineage_data=request.lineage.model_dump() if request.lineage else None,
             engine_graph=engine_graph,
+            intent_result=intent_result,
         )
 
         llm = CopilotLLM(model=request.model)

@@ -687,6 +687,22 @@ def parse_slash_command(message: str) -> tuple[Optional[InteractionMode], str]:
     return None, message
 
 
+def mode_from_intent(intent_result) -> ModeConfig:
+    """
+    Bridge from IntentResult to existing ModeConfig.
+
+    Maps the new intent classification system to the existing mode
+    system so all mode-specific prompts and tools continue to work.
+    """
+    from .intent import intent_to_mode
+    mode_str = intent_to_mode(intent_result)
+    try:
+        mode_enum = InteractionMode(mode_str)
+        return MODES[mode_enum]
+    except (ValueError, KeyError):
+        return MODES[InteractionMode.ASK]
+
+
 def get_available_modes() -> List[Dict]:
     """Get list of modes for API/frontend consumption."""
     return [

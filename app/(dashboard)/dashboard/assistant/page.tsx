@@ -777,36 +777,42 @@ function AssistantPageInner() {
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         console.log('Request aborted by user');
+        clearStreamingMessage();
+        setIsLoading(false);
         return;
       }
       console.error('Chat error:', error);
-    } finally {
-      setIsLoading(false);
+      // Error content is appended by the hook (isStreaming→false),
+      // so the finalization useEffect will handle cleanup.
     }
+    // NOTE: isLoading is cleared by the finalization useEffect (not here)
+    // to avoid a flash of no-spinner between promise resolution and useEffect.
   };
 
   // Finalize streaming message into the messages array
   useEffect(() => {
-    if (streamingMessage && !streamingMessage.isStreaming && (streamingMessage.content || streamingMessage.toolCalls.length > 0)) {
-      // Don't finalize if waiting for confirmation
-      if (streamingMessage.pendingConfirmation) return;
+    if (!streamingMessage || streamingMessage.isStreaming) return;
+    // Don't finalize if waiting for confirmation
+    if (streamingMessage.pendingConfirmation) return;
 
-      // Map streaming tool calls to frontend format
-      const mappedToolCalls: ToolCall[] = streamingMessage.toolCalls.map(tc => {
-        const result = (tc.result || {}) as Record<string, any>;
-        const flattenedResult = {
-          success: result.success,
-          error: result.error,
-          ...(result.data || {}),
-        };
-        return {
-          id: tc.id,
-          name: tc.name,
-          arguments: tc.arguments,
-          result: flattenedResult,
-        };
-      });
+    // Map streaming tool calls to frontend format
+    const mappedToolCalls: ToolCall[] = streamingMessage.toolCalls.map(tc => {
+      const result = (tc.result || {}) as Record<string, any>;
+      const flattenedResult = {
+        success: result.success,
+        error: result.error,
+        ...(result.data || {}),
+      };
+      return {
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+        result: flattenedResult,
+      };
+    });
 
+    // Only add to messages if there's actual content or tool calls
+    if (streamingMessage.content || mappedToolCalls.length > 0) {
       const aiMessage: Message = {
         id: streamingMessage.id,
         role: 'assistant',
@@ -816,7 +822,6 @@ function AssistantPageInner() {
       };
 
       setMessages(prev => [...prev, aiMessage]);
-      clearStreamingMessage();
 
       // Handle onboarding tool calls
       if (selectedPipelineId && mappedToolCalls.length > 0) {
@@ -853,6 +858,10 @@ function AssistantPageInner() {
         }
       }
     }
+
+    // Always clean up streaming state when done (even for empty responses)
+    clearStreamingMessage();
+    setIsLoading(false);
   }, [streamingMessage, selectedPipelineId, onboardingStatus, clearStreamingMessage]);
 
   const handleConfirmTool = async () => {
@@ -1480,7 +1489,7 @@ function AssistantPageInner() {
                               <span className="inline-block w-1.5 h-4 bg-violet-400 animate-pulse ml-0.5 align-text-bottom" />
                             )}
                           </div>
-                        ) : streamingMessage.isStreaming ? (
+                        ) : (streamingMessage.isStreaming || streamingMessage.toolCalls.length === 0) ? (
                           <div className="flex items-center gap-2">
                             <span className="text-violet-400 text-sm font-mono">
                               {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}

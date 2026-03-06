@@ -78,6 +78,22 @@ class ChangePlanApplier:
             await self._session.close()
             self._session = None
 
+    async def _get_default_branch(self, owner: str, repo: str) -> Optional[str]:
+        """Detect the repository's default branch via the GitHub API."""
+        session = await self._get_session()
+        url = f"{self.github_api_base}/repos/{owner}/{repo}"
+
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                branch = data.get("default_branch")
+                if branch:
+                    logger.info(f"Detected default branch for {owner}/{repo}: {branch}")
+                    return branch
+            else:
+                logger.warning(f"Could not fetch repo info for {owner}/{repo}: {response.status}")
+            return None
+
     async def apply(
         self,
         plan: ChangePlan,
@@ -111,6 +127,13 @@ class ChangePlanApplier:
 
         try:
             plan.status = ChangePlanStatus.APPLYING
+
+            # Step 0: Auto-detect the repo's default branch if the caller used the default
+            if base_branch == "main":
+                detected = await self._get_default_branch(repo_owner, repo_name)
+                if detected and detected != base_branch:
+                    logger.info(f"Overriding base_branch '{base_branch}' → '{detected}' (repo default)")
+                    base_branch = detected
 
             # Step 1: Get the base branch SHA
             base_sha = await self._get_branch_sha(repo_owner, repo_name, base_branch)

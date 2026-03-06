@@ -69,6 +69,10 @@ class LiveAirflowAdapter(BaseLineageAdapter):
     # Core methods
     # ------------------------------------------------------------------
 
+    def _effective_mode(self, config: Dict[str, Any]) -> str:
+        """Resolve mode: config overrides constructor default."""
+        return config.get("mode") or self._mode
+
     def discover_assets(self, config: Dict[str, Any]) -> List[LineageNode]:
         """Discover DAGs, tasks, and referenced tables."""
         namespace = config.get("namespace", "airflow")
@@ -76,7 +80,7 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         now = datetime.utcnow()
         hint = self.case_hint
 
-        if self._mode == "api":
+        if self._effective_mode(config) == "api":
             return self._discover_from_api(config, namespace, integration_id, hint, now)
         return self._discover_from_static(config, namespace, integration_id, hint, now)
 
@@ -86,7 +90,7 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         now = datetime.utcnow()
         hint = self.case_hint
 
-        if self._mode == "api":
+        if self._effective_mode(config) == "api":
             return self._extract_from_api(config, namespace, hint, now)
         return self._extract_from_static(config, namespace, hint, now)
 

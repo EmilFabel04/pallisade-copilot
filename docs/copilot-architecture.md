@@ -828,3 +828,64 @@ Max iterations: 15. If reached, all accumulated text is returned.
 9. **Pipeline isolation**: All data is scoped per organization and pipeline profile. Schema cache uses `key_prefix + pipelineId`.
 
 10. **Depth matching**: System prompt explicitly tells the LLM to scale investigation depth to question complexity — 1 query for "how many rows?" vs 5-8 queries for "why did this fail?"
+
+---
+
+## 12. Intent Classification & Answer Contract
+
+### Intent Router (`scanner/copilot/intent.py`)
+
+Replaces regex-based mode detection with multi-intent scoring:
+
+| Intent | Trigger Examples | Maps to Mode |
+|--------|-----------------|-------------|
+| INFO | "how many orders?", "show me X", "list tables" | ASK |
+| DEBUG | "why did X fail?", "broken", "anomaly", "stale" | DEBUG |
+| FIX | "fix the model", "apply a fix", "patch" | FIX |
+| PR | "create a PR", "open pull request", "go ahead" | FIX |
+| PLAN | "how should I migrate?", "refactor", "strategy" | PLAN |
+| EXPLAIN | "explain X", "teach me", "how does X work?" | EXPLAIN |
+
+**Scoring**: Weighted combination of keyword signals (0.4), question form (0.2), conversation history (0.2), and explicit commands (0.2).
+
+**Multi-intent**: If top-2 scores both > 0.5 and within 0.3, both are returned. Common: DEBUG+FIX ("broken, fix it").
+
+**Target extraction**: Scans for integration names → `target_hint`. Extracts entity patterns → `target_entities`.
+
+### Answer Contract (`scanner/copilot/response_builder.py`)
+
+Injected into the system prompt per intent:
+
+- **INFO**: Direct answer + source + query. Lead with the number.
+- **DEBUG**: Problem → Cause (with evidence) → Fix. Under 150 words.
+- **FIX/PR**: Root Cause → Owner System → Change Plan → Validation.
+- **PLAN**: Impact Analysis (mandatory first) → Proposed Changes → Implementation Steps.
+- **EXPLAIN**: High-level summary → Detailed breakdown with user's data.
+- **DEBUG+FIX**: Phase 1 (diagnose with evidence) → Phase 2 (create fix in correct system).
+
+### Root Cause Ownership Resolver (`scanner/copilot/root_cause.py`)
+
+Deterministic resolver called mid-loop after first evidence-gathering round:
+
+| Evidence Pattern | Owner | Confidence |
+|-----------------|-------|------------|
+| DAG parse/import/syntax error | Airflow | 0.9 |
+| dbt Compilation/Database/Runtime Error | dbt | 0.9 |
+| `dbt run` failing inside Airflow task | dbt | 0.85 |
+| Connector broken/failed (Fivetran/Airbyte) | Ingestion | 0.9 |
+| Schema change/drift | Ingestion | 0.7 |
+| Permission denied / quota exceeded | Warehouse | 0.85 |
+| 401/403 / connection refused | Infra | 0.7 |
+
+**PR Pivot**: If user says "fix my Airflow DAG" but evidence shows dbt failing, the resolver triggers a pivot: "Root cause is dbt; creating fix in dbt, not Airflow."
+
+**Low Confidence** (< 60%): Suggests additional evidence tools and instructs LLM to ask ONE clarifying question.
+
+### Tool-Calling Policy
+
+Injected per intent to enforce minimum evidence:
+
+- **INFO**: Min 1, max 3 tool calls
+- **DEBUG**: Min 2 (diagnostic + evidence), aim 3-5
+- **FIX/PR**: Mandatory evidence (2+) → lineage check → change plan → validate
+- **PLAN**: Mandatory get_upstream + get_downstream before proposing

@@ -152,7 +152,8 @@ export function useStreamingChat() {
           let data: any;
           try {
             data = JSON.parse(dataLine.slice(6));
-          } catch {
+          } catch (parseErr) {
+            console.warn('[useStreamingChat] Failed to parse SSE data:', dataLine.slice(6, 100), parseErr);
             continue;
           }
 
@@ -243,6 +244,9 @@ export function useStreamingChat() {
     } catch (err: any) {
       if (err.name === 'AbortError') {
         stopReason = 'aborted';
+        setStreamingMessage(prev =>
+          prev ? { ...prev, isStreaming: false, stopReason: 'aborted' } : prev
+        );
       } else {
         console.error('[useStreamingChat] Error:', err);
         setStreamingMessage(prev =>

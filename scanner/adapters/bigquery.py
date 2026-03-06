@@ -278,19 +278,37 @@ class BigQueryAdapter(DatabaseAdapter):
             project, dataset, tbl = self.project, self.dataset, parts[0]
         
         query = f"""
-            SELECT 
-                column_name,
-                data_type,
-                is_nullable,
-                ordinal_position,
-                description
-            FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS`
-            WHERE table_name = '{tbl}'
-            ORDER BY ordinal_position
+            SELECT
+                c.column_name,
+                c.data_type,
+                c.is_nullable,
+                c.ordinal_position,
+                cfp.description
+            FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` c
+            LEFT JOIN `{project}.{dataset}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` cfp
+                ON c.table_name = cfp.table_name
+                AND c.column_name = cfp.column_name
+                AND cfp.field_path = cfp.column_name
+            WHERE c.table_name = '{tbl}'
+            ORDER BY c.ordinal_position
         """
-        
-        result = self.execute_query(query)
-        
+
+        try:
+            result = self.execute_query(query)
+        except Exception:
+            # Fallback: skip descriptions if COLUMN_FIELD_PATHS not available
+            query = f"""
+                SELECT
+                    column_name,
+                    data_type,
+                    is_nullable,
+                    ordinal_position
+                FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS`
+                WHERE table_name = '{tbl}'
+                ORDER BY ordinal_position
+            """
+            result = self.execute_query(query)
+
         return [
             ColumnMetadata(
                 name=row['column_name'],

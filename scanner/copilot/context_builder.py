@@ -184,6 +184,9 @@ class CopilotContext:
     # Pipeline context from onboarding (learned knowledge about user's setup)
     pipeline_context: Optional[Dict[str, Any]] = None
 
+    # Intent classification result (from copilot.intent)
+    intent_result: Optional[Any] = None
+
     # MCP (Model Context Protocol) — set to True when MCP servers are active
     mcp_enabled: bool = False
 
@@ -640,6 +643,7 @@ class CopilotContextBuilder:
         mode_config: Optional[Any] = None,
         lineage_data: Optional[Dict[str, Any]] = None,
         engine_graph: Optional[LineageGraph] = None,
+        intent_result: Optional[Any] = None,
     ) -> CopilotContext:
         """
         Build the AI context for a given organization.
@@ -689,6 +693,28 @@ class CopilotContextBuilder:
             # Fall back to integration-based lineage (currently TODO stubs)
             graph = await self._build_lineage_graph(org_id, integrations)
         
+        # 2b. Augment graph with Airflow DAG/task data from API if not already present.
+        #     Pre-fetched data and engine graphs may not include orchestration nodes.
+        if graph and "AIRFLOW" in integration_types:
+            from lineage.graph import NodeType as _NT
+            has_airflow_nodes = any(
+                getattr(n, 'node_type', None) in (_NT.DAG, _NT.TASK)
+                for n in graph.nodes.values()
+            )
+            if not has_airflow_nodes:
+                for integration in integrations:
+                    if integration.type == "AIRFLOW" and integration.is_active:
+                        try:
+                            airflow_graph = await self._get_airflow_lineage(integration)
+                            if airflow_graph:
+                                self._merge_graphs(graph, airflow_graph)
+                                logger.info(
+                                    f"[Lineage] Augmented with Airflow: "
+                                    f"+{len(airflow_graph.nodes)} nodes, +{len(airflow_graph.edges)} edges"
+                                )
+                        except Exception as e:
+                            logger.warning(f"[Lineage] Airflow augmentation failed: {e}")
+
         # 3. Wrap graph in engine GraphStore for filtering/evidence/explain
         engine_store = None
         if graph and graph.nodes:
@@ -723,6 +749,7 @@ class CopilotContextBuilder:
             referenced_entities=referenced_entities or [],
             mode=mode,
             mode_config=mode_config,
+            intent_result=intent_result,
         )
 
         return context
@@ -981,10 +1008,58 @@ class CopilotContextBuilder:
         return None
 
     async def _get_airflow_lineage(self, integration: IntegrationInfo) -> Optional[LineageGraph]:
-        """Get lineage from Airflow DAGs via OpenLineage events."""
-        # OpenLineage integration would be handled by the orchestrator
-        # This is a placeholder for direct Airflow API access if needed
-        return None
+        """Get lineage from Airflow DAGs via REST API or DAG file parsing."""
+        config = integration.config
+        base_url = config.get("base_url") or config.get("host")
+
+        if not base_url:
+            # No API URL — static mode needs DAG files (handled by orchestrator)
+            logger.debug(f"[Airflow Lineage] No base_url for {integration.name}, skipping")
+            return None
+
+        try:
+            from lineage.engine.adapters.live_airflow import LiveAirflowAdapter
+        except ImportError:
+            logger.warning("[Airflow Lineage] LiveAirflowAdapter not available")
+            return None
+
+        namespace = config.get("namespace") or config.get("instance_name") or "airflow"
+        adapter = LiveAirflowAdapter(adapter_id=f"airflow_{namespace}", mode="api")
+        adapter_config = {
+            "mode": "api",
+            "namespace": namespace,
+            "integration_id": integration.id,
+            "base_url": base_url,
+            "username": config.get("username") or config.get("user"),
+            "password": config.get("password"),
+        }
+
+        try:
+            nodes = adapter.discover_assets(adapter_config)
+            edges = adapter.extract_lineage(adapter_config)
+
+            if not nodes:
+                logger.info(f"[Airflow Lineage] No assets discovered from {integration.name}")
+                return None
+
+            from lineage.graph import LineageEdge, EdgeType
+
+            graph = LineageGraph()
+            for node in nodes:
+                graph.add_node(node)
+            for edge in edges:
+                if edge.source_id in graph.nodes and edge.target_id in graph.nodes:
+                    graph.add_edge(edge)
+
+            logger.info(
+                f"[Airflow Lineage] {integration.name}: {len(nodes)} nodes, "
+                f"{len(edges)} edges (namespace={namespace})"
+            )
+            return graph
+
+        except Exception as e:
+            logger.warning(f"[Airflow Lineage] Failed to extract from {integration.name}: {e}")
+            return None
 
     def _build_lineage_from_data(self, lineage_data: Dict[str, Any]) -> Optional[LineageGraph]:
         """
@@ -1007,6 +1082,8 @@ class CopilotContextBuilder:
             'seed': NodeType.SEED,
             'dashboard': NodeType.DASHBOARD,
             'materialized_view': NodeType.MATERIALIZED_VIEW,
+            'task': NodeType.TASK,
+            'dag': NodeType.DAG,
         }
 
         edge_type_map = {
@@ -1016,6 +1093,7 @@ class CopilotContextBuilder:
             'references': EdgeType.REFERENCES,
             'triggers': EdgeType.TRIGGERS,
             'populates': EdgeType.POPULATES,
+            'produced_by': EdgeType.PRODUCED_BY,
         }
 
         # Add nodes

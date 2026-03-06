@@ -227,6 +227,21 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
         if context.mode_config and context.mode != "ask":
             prompt += f"\n{context.mode_config.system_prompt_section}\n"
 
+        # Inject Answer Contract based on intent classification
+        if context.intent_result:
+            try:
+                from .response_builder import build_answer_contract
+                contract = build_answer_contract(context.intent_result)
+                prompt += f"\n{contract}\n"
+            except Exception:
+                pass  # Answer contract is optional, don't fail if unavailable
+
+        # Inject tool-calling policy based on intent
+        if context.intent_result:
+            policy = self._build_tool_policy(context.intent_result)
+            if policy:
+                prompt += f"\n{policy}\n"
+
         # Inject preferred tools for the active mode so the LLM knows
         # which tools to reach for first in this context
         if context.mode_config and context.mode_config.preferred_tools:
@@ -432,6 +447,52 @@ You have multiple data warehouses connected. When calling `query_warehouse`, you
         elif sections:
             return sections[0] + "\n"
 
+        return ""
+
+    def _build_tool_policy(self, intent_result) -> str:
+        """Build intent-specific tool-calling policy for injection into the system prompt."""
+        from .intent import Intent
+
+        primary = intent_result.primary.intent
+
+        if primary == Intent.INFO:
+            return """## Tool-Calling Policy (INFO)
+- Minimum: 1 tool call (query_warehouse, search_lineage, or get_table_stats).
+- Maximum: 3 tool calls unless the question is genuinely complex.
+- After getting the answer, STOP. Do not run follow-up queries unless asked.
+"""
+        elif primary == Intent.DEBUG:
+            return """## Tool-Calling Policy (DEBUG)
+- Minimum: 2 tool calls (diagnostic + confirming evidence).
+- Start with the most likely source: check logs, then data, then lineage.
+- If the first tool call reveals the issue, gather ONE confirming piece of evidence.
+- If unclear, escalate: check additional systems (orchestration, ingestion, warehouse).
+- Aim for 3-5 tool calls total. Go to 8+ only for genuinely complex cross-system issues.
+"""
+        elif primary in (Intent.FIX, Intent.PR):
+            has_debug = (
+                intent_result.secondary
+                and intent_result.secondary.intent == Intent.DEBUG
+            )
+            extra = ""
+            if has_debug:
+                extra = "- BEFORE proposing a fix: run diagnostic tools first (you are also debugging).\n"
+            return f"""## Tool-Calling Policy (FIX/PR)
+{extra}- CRITICAL SEQUENCE — you MUST follow this exact order WITHOUT stopping between steps:
+  1. Gather evidence (1-2 diagnostic tool calls)
+  2. Call create_change_plan to build the plan
+  3. Call validate_change_plan on the plan_id returned by step 2
+  4. Call apply_change_plan with that same plan_id — this pauses for user confirmation
+- DO NOT stop after create_change_plan or validate_change_plan to ask the user what to do next. Proceed through ALL 4 steps automatically. The user wants the PR, not a conversation about the plan.
+- NEVER call apply_change_plan without calling create_change_plan first. apply_change_plan looks up the plan by ID — if you skip create_change_plan, the plan won't exist and it will fail.
+- NEVER invent or guess a plan_id. Only use the plan_id returned by create_change_plan.
+"""
+        elif primary == Intent.PLAN:
+            return """## Tool-Calling Policy (PLAN)
+- MANDATORY: Call get_downstream and get_upstream on all objects being changed.
+- Include impact analysis before proposing any steps.
+- Use 3-6 tool calls to understand the current state before planning.
+"""
         return ""
 
     def _build_onboarded_context(self, context: CopilotContext) -> str:
@@ -944,7 +1005,28 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         # Check if this tool needs user confirmation
                         # confirmed_tool_ids may contain tool use IDs or tool names
                         tool_def = registry.get_tool(tool_name)
-                        if tool_def and tool_def.requires_confirmation and tool_use_id not in confirmed_tool_ids and tool_name not in confirmed_tool_ids:
+                        needs_confirmation = (
+                            tool_def
+                            and tool_def.requires_confirmation
+                            and tool_use_id not in confirmed_tool_ids
+                            and tool_name not in confirmed_tool_ids
+                        )
+
+                        # For apply_change_plan: verify the plan exists before pausing for confirmation.
+                        # If the LLM hallucinated a plan_id (skipped create_change_plan), execute normally
+                        # so the error propagates back and the LLM can self-correct.
+                        if needs_confirmation and tool_name == "apply_change_plan":
+                            plan_id = tool_input.get("plan_id")
+                            if plan_id:
+                                try:
+                                    from .change_plan import get_change_plan_store
+                                    if not get_change_plan_store().get(plan_id):
+                                        logger.warning(f"[Stream/Anthropic] apply_change_plan: plan '{plan_id}' not found, skipping confirmation")
+                                        needs_confirmation = False
+                                except Exception:
+                                    pass
+
+                        if needs_confirmation:
                             logger.info(f"[Stream/Anthropic] Tool '{tool_name}' requires confirmation")
                             yield StreamEvent("tool_confirmation_required", {
                                 "tool_use_id": tool_use_id,
@@ -1001,6 +1083,39 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "role": "user",
                         "content": tool_results,
                     })
+
+                    # --- Root cause injection (once, after first evidence round) ---
+                    if (
+                        context.intent_result
+                        and iteration >= 1
+                        and not getattr(context, '_root_cause_resolved', False)
+                    ):
+                        try:
+                            from .intent import Intent
+                            from .root_cause import resolve_fix_owner, format_owner_hint
+
+                            primary_intent = context.intent_result.primary.intent
+                            if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
+                                owner_decision = resolve_fix_owner(
+                                    all_tool_calls, context.intent_result
+                                )
+                                context._root_cause_resolved = True
+                                hint = format_owner_hint(
+                                    owner_decision,
+                                    target_hint=context.intent_result.target_hint,
+                                )
+                                logger.info(
+                                    f"[Stream/Anthropic] Root cause: {owner_decision.owner_system.value} "
+                                    f"(confidence={owner_decision.confidence:.0%})"
+                                )
+                                # Inject as a user message with system context
+                                anthropic_messages.append({
+                                    "role": "user",
+                                    "content": f"[System context — root cause analysis]: {hint}",
+                                })
+                        except Exception as e:
+                            logger.debug(f"[Stream/Anthropic] Root cause injection skipped: {e}")
+
                     continue
 
                 # Unexpected stop reason
@@ -1261,7 +1376,28 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         # Check confirmation
                         # confirmed_tool_ids may contain tool use IDs or tool names
                         tool_def = registry.get_tool(tool_name)
-                        if tool_def and tool_def.requires_confirmation and tool_use_id not in confirmed_tool_ids and tool_name not in confirmed_tool_ids:
+                        needs_confirmation = (
+                            tool_def
+                            and tool_def.requires_confirmation
+                            and tool_use_id not in confirmed_tool_ids
+                            and tool_name not in confirmed_tool_ids
+                        )
+
+                        # For apply_change_plan: verify the plan exists before pausing for confirmation.
+                        # If the LLM hallucinated a plan_id (skipped create_change_plan), execute normally
+                        # so the error propagates back and the LLM can self-correct.
+                        if needs_confirmation and tool_name == "apply_change_plan":
+                            plan_id = tool_input.get("plan_id")
+                            if plan_id:
+                                try:
+                                    from .change_plan import get_change_plan_store
+                                    if not get_change_plan_store().get(plan_id):
+                                        logger.warning(f"[Stream/OpenAI] apply_change_plan: plan '{plan_id}' not found, skipping confirmation")
+                                        needs_confirmation = False
+                                except Exception:
+                                    pass
+
+                        if needs_confirmation:
                             logger.info(f"[Stream/OpenAI] Tool '{tool_name}' requires confirmation")
                             yield StreamEvent("tool_confirmation_required", {
                                 "tool_use_id": tool_use_id,
@@ -1307,6 +1443,37 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             "tool_call_id": tool_use_id,
                             "content": json.dumps(result.data if result.success else {"error": result.error}),
                         })
+
+                    # --- Root cause injection (once, after first evidence round) ---
+                    if (
+                        context.intent_result
+                        and iteration >= 1
+                        and not getattr(context, '_root_cause_resolved', False)
+                    ):
+                        try:
+                            from .intent import Intent
+                            from .root_cause import resolve_fix_owner, format_owner_hint
+
+                            primary_intent = context.intent_result.primary.intent
+                            if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
+                                owner_decision = resolve_fix_owner(
+                                    all_tool_calls, context.intent_result
+                                )
+                                context._root_cause_resolved = True
+                                hint = format_owner_hint(
+                                    owner_decision,
+                                    target_hint=context.intent_result.target_hint,
+                                )
+                                logger.info(
+                                    f"[Stream/OpenAI] Root cause: {owner_decision.owner_system.value} "
+                                    f"(confidence={owner_decision.confidence:.0%})"
+                                )
+                                openai_messages.append({
+                                    "role": "system",
+                                    "content": f"[Root cause analysis]: {hint}",
+                                })
+                        except Exception as e:
+                            logger.debug(f"[Stream/OpenAI] Root cause injection skipped: {e}")
 
                     continue
 
@@ -1485,6 +1652,37 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             "role": "user",
                             "content": tool_results,
                         })
+
+                        # --- Root cause injection (once, after first evidence round) ---
+                        if (
+                            context.intent_result
+                            and iteration >= 1
+                            and not getattr(context, '_root_cause_resolved', False)
+                        ):
+                            try:
+                                from .intent import Intent
+                                from .root_cause import resolve_fix_owner, format_owner_hint
+
+                                primary_intent = context.intent_result.primary.intent
+                                if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
+                                    owner_decision = resolve_fix_owner(
+                                        all_tool_calls, context.intent_result
+                                    )
+                                    context._root_cause_resolved = True
+                                    hint = format_owner_hint(
+                                        owner_decision,
+                                        target_hint=context.intent_result.target_hint,
+                                    )
+                                    logger.info(
+                                        f"[Anthropic] Root cause: {owner_decision.owner_system.value} "
+                                        f"(confidence={owner_decision.confidence:.0%})"
+                                    )
+                                    anthropic_messages.append({
+                                        "role": "user",
+                                        "content": f"[System context — root cause analysis]: {hint}",
+                                    })
+                            except Exception as e:
+                                logger.debug(f"[Anthropic] Root cause injection skipped: {e}")
 
                         # Continue loop
                         continue
@@ -1682,6 +1880,37 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "tool_call_id": tool_call.id,
                                 "content": json.dumps(result.data if result.success else {"error": result.error}),
                             })
+
+                        # --- Root cause injection (once, after first evidence round) ---
+                        if (
+                            context.intent_result
+                            and iteration >= 1
+                            and not getattr(context, '_root_cause_resolved', False)
+                        ):
+                            try:
+                                from .intent import Intent
+                                from .root_cause import resolve_fix_owner, format_owner_hint
+
+                                primary_intent = context.intent_result.primary.intent
+                                if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
+                                    owner_decision = resolve_fix_owner(
+                                        all_tool_calls, context.intent_result
+                                    )
+                                    context._root_cause_resolved = True
+                                    hint = format_owner_hint(
+                                        owner_decision,
+                                        target_hint=context.intent_result.target_hint,
+                                    )
+                                    logger.info(
+                                        f"[OpenAI] Root cause: {owner_decision.owner_system.value} "
+                                        f"(confidence={owner_decision.confidence:.0%})"
+                                    )
+                                    openai_messages.append({
+                                        "role": "system",
+                                        "content": f"[Root cause analysis]: {hint}",
+                                    })
+                            except Exception as e:
+                                logger.debug(f"[OpenAI] Root cause injection skipped: {e}")
 
                         # Continue loop
                         continue
