@@ -5,8 +5,10 @@ Integrates with Anthropic Claude and OpenAI GPT for AI-powered assistance.
 Supports tool calling for executing actions against integrations.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import AsyncGenerator, Dict, List, Optional, Any, Set, Union
+from datetime import datetime, date
+from enum import Enum
 import logging
 import json
 import os
@@ -28,6 +30,19 @@ from .tools import get_tool_registry, ToolResult
 from .tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_json_default(obj: Any) -> Any:
+    """Fallback serializer for json.dumps — prevents stream crashes."""
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if hasattr(obj, 'to_dict'):
+        return obj.to_dict()
+    if hasattr(obj, '__dict__'):
+        return {k: v for k, v in obj.__dict__.items() if not k.startswith('_')}
+    return str(obj)
 
 
 @dataclass
@@ -68,7 +83,13 @@ class StreamEvent:
 
     def to_sse(self) -> str:
         """Format as Server-Sent Events wire format."""
-        return f"event: {self.event_type}\ndata: {json.dumps(self.data)}\n\n"
+        try:
+            return f"event: {self.event_type}\ndata: {json.dumps(self.data, default=_safe_json_default)}\n\n"
+        except Exception as e:
+            # Last resort: send error event instead of crashing the stream
+            logger.error(f"SSE serialization error for {self.event_type}: {e}")
+            safe_data = {"error": f"Serialization error: {str(e)}", "event_type": self.event_type}
+            return f"event: error\ndata: {json.dumps(safe_data)}\n\n"
 
 
 class CopilotLLM:
@@ -939,7 +960,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": ptc_id,
-                        "content": json.dumps(result.to_dict()),
+                        "content": json.dumps(result.to_dict(), default=_safe_json_default),
                     }],
                 })
 
@@ -1071,7 +1092,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tool_use_id,
-                            "content": json.dumps(result.to_dict()),
+                            "content": json.dumps(result.to_dict(), default=_safe_json_default),
                         })
 
                     # Append to conversation and continue loop
@@ -1248,14 +1269,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "type": "function",
                         "function": {
                             "name": ptc_name,
-                            "arguments": json.dumps(ptc_args),
+                            "arguments": json.dumps(ptc_args, default=_safe_json_default),
                         },
                     }],
                 })
                 openai_messages.append({
                     "role": "tool",
                     "tool_call_id": ptc_id,
-                    "content": json.dumps(result.to_dict()),
+                    "content": json.dumps(result.to_dict(), default=_safe_json_default),
                 })
 
             for iteration in range(max_tool_iterations):
@@ -1441,7 +1462,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         openai_messages.append({
                             "role": "tool",
                             "tool_call_id": tool_use_id,
-                            "content": json.dumps(result.data if result.success else {"error": result.error}),
+                            "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
                         })
 
                     # --- Root cause injection (once, after first evidence round) ---
@@ -1638,7 +1659,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 tool_results.append({
                                     "type": "tool_result",
                                     "tool_use_id": tool_use_id,
-                                    "content": json.dumps(result.data if result.success else {"error": result.error}),
+                                    "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
                                 })
 
                         # Add assistant message with tool use
@@ -1878,7 +1899,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             openai_messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.id,
-                                "content": json.dumps(result.data if result.success else {"error": result.error}),
+                                "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
                             })
 
                         # --- Root cause injection (once, after first evidence round) ---

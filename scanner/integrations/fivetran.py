@@ -89,7 +89,13 @@ class FivetranConnector:
     def hours_since_success(self) -> Optional[float]:
         if not self.succeeded_at:
             return None
-        return (datetime.now() - self.succeeded_at).total_seconds() / 3600
+        from datetime import timezone
+        now = datetime.now(timezone.utc)
+        # Ensure succeeded_at is timezone-aware
+        sa = self.succeeded_at
+        if sa.tzinfo is None:
+            sa = sa.replace(tzinfo=timezone.utc)
+        return (now - sa).total_seconds() / 3600
     
     @property
     def is_stale(self) -> bool:
@@ -286,38 +292,47 @@ class FivetranIntegration:
             logger.error(f"Failed to get schema for {connector_id}: {e}")
             return {}
     
-    def get_sync_logs(self, 
-                      connector_id: str, 
+    def get_sync_logs(self,
+                      connector_id: str,
                       limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Get recent sync logs for a connector.
-        
-        Args:
-            connector_id: The connector ID
-            limit: Max logs to return
-            
-        Returns:
-            List of sync log entries
+        Get recent sync status for a connector.
+
+        Note: Fivetran REST API v1 does not have a dedicated sync-history
+        endpoint. We extract timing information from the connector details
+        instead (succeeded_at, failed_at, sync_state, etc.).
         """
         try:
-            result = self._request(
-                'GET', 
-                f'/connectors/{connector_id}/sync',
-                params={'limit': limit}
-            )
-            
-            logs = []
-            for log in result.get('data', {}).get('logs', []):
-                logs.append({
-                    'timestamp': log.get('timestamp'),
-                    'message': log.get('message'),
-                    'sync_type': log.get('sync_type'),
+            result = self._request('GET', f'/connectors/{connector_id}')
+            data = result.get('data', {})
+            status = data.get('status', {})
+
+            entries = []
+
+            succeeded_at = data.get('succeeded_at')
+            if succeeded_at:
+                entries.append({
+                    'timestamp': succeeded_at,
+                    'message': 'Sync succeeded',
+                    'sync_type': 'incremental',
+                    'status': 'success',
                 })
-            
-            return logs
-            
+
+            failed_at = data.get('failed_at')
+            if failed_at:
+                entries.append({
+                    'timestamp': failed_at,
+                    'message': f"Sync failed — {status.get('update_state', 'unknown')}",
+                    'sync_type': 'incremental',
+                    'status': 'failure',
+                })
+
+            # Sort most recent first
+            entries.sort(key=lambda e: e['timestamp'] or '', reverse=True)
+            return entries[:limit]
+
         except Exception as e:
-            logger.warning(f"Failed to get sync logs: {e}")
+            logger.warning(f"Failed to get sync info for {connector_id}: {e}")
             return []
     
     def analyze_connector_health(self, connector_id: str) -> Dict[str, Any]:
@@ -507,19 +522,6 @@ class FivetranIntegration:
                 'paused': connector_data.get('paused', False),
             }
             
-            # Try to get more detailed sync metadata
-            try:
-                sync_result = self._request(
-                    'GET',
-                    f'/connectors/{connector_id}/sync',
-                    params={'limit': 5}
-                )
-                sync_data = sync_result.get('data', {})
-                sync_details['recent_syncs'] = sync_data.get('logs', [])
-                sync_details['sync_id'] = sync_data.get('sync_id')
-            except Exception:
-                pass
-            
             return sync_details
             
         except Exception as e:
@@ -706,27 +708,7 @@ class FivetranIntegration:
             failure_info['warnings'] = status.get('warnings', [])
             failure_info['pending_tasks'] = status.get('tasks', [])
             
-            # Try to get recent sync logs for error messages
-            try:
-                sync_result = self._request(
-                    'GET',
-                    f'/connectors/{connector_id}/sync',
-                    params={'limit': 10}
-                )
-                logs = sync_result.get('data', {}).get('logs', [])
-                
-                # Filter for error-related logs
-                error_logs = [
-                    log for log in logs
-                    if any(word in str(log.get('message', '')).lower() 
-                           for word in ['error', 'fail', 'exception', 'timeout', 'refused'])
-                ]
-                
-                failure_info['recent_errors'] = error_logs[:5]
-                failure_info['all_recent_logs'] = logs
-                
-            except Exception:
-                failure_info['recent_errors'] = []
+            failure_info['recent_errors'] = []
             
             # Calculate time since last failure
             if failure_info['last_failure']:

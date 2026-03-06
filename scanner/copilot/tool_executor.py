@@ -2198,10 +2198,46 @@ class ToolExecutor:
     # FIVETRAN TOOL IMPLEMENTATIONS
     # ==========================================
     
+    def _resolve_fivetran_connector_id(self, fivetran, connector_id_or_name: str) -> Optional[str]:
+        """Resolve a connector name/service to a real Fivetran connector ID."""
+        import re
+        # Heuristic: real Fivetran IDs are lowercase alphanumeric + underscore, no spaces
+        looks_like_id = bool(re.match(r'^[a-z0-9_]+$', connector_id_or_name))
+
+        if looks_like_id:
+            connector = fivetran.get_connector(connector_id_or_name)
+            if connector:
+                return connector.id
+
+        # List all connectors and match by name or service
+        try:
+            connectors = fivetran.get_connectors()
+        except Exception:
+            return None
+
+        query = connector_id_or_name.lower().strip()
+        # Exact name match
+        for c in connectors:
+            if c.name and c.name.lower() == query:
+                return c.id
+        # Exact service match
+        for c in connectors:
+            if c.service and c.service.lower() == query:
+                return c.id
+        # Partial match (e.g., "postgres connector" matches service "postgres")
+        for c in connectors:
+            if c.service and c.service.lower() in query:
+                return c.id
+        for c in connectors:
+            if c.name and (query in c.name.lower() or c.name.lower() in query):
+                return c.id
+
+        return None
+
     async def _execute_get_fivetran_connector_status(self, args: Dict[str, Any]) -> ToolResult:
         """Get Fivetran connector status."""
-        connector_id = args["connector_id"]
-        
+        connector_id_or_name = args["connector_id"]
+
         fivetran = self._adapters.get("FIVETRAN")
         if not fivetran:
             return ToolResult(
@@ -2210,20 +2246,30 @@ class ToolExecutor:
             )
 
         try:
-            connector = fivetran.get_connector(connector_id)
+            resolved_id = self._resolve_fivetran_connector_id(fivetran, connector_id_or_name)
+            if not resolved_id:
+                try:
+                    available = fivetran.get_connectors()
+                    names = [f"'{c.name}' (id: {c.id}, service: {c.service})" for c in available[:10]]
+                    hint = f" Available: {', '.join(names)}" if names else ""
+                except Exception:
+                    hint = ""
+                return ToolResult(success=False, error=f"Connector not found: '{connector_id_or_name}'.{hint}")
+
+            connector = fivetran.get_connector(resolved_id)
             if not connector:
-                return ToolResult(success=False, error=f"Connector not found: {connector_id}")
-            
+                return ToolResult(success=False, error=f"Connector not found: {resolved_id}")
+
             return ToolResult(
                 success=True,
                 data={
                     "connector_id": connector.id,
                     "name": connector.name,
                     "service": connector.service,
-                    "status": connector.status,
-                    "sync_state": connector.sync_state,
-                    "last_sync": connector.last_sync.isoformat() if connector.last_sync else None,
-                    "hours_since_sync": connector.hours_since_last_sync,
+                    "status": connector.status.value if hasattr(connector.status, 'value') else str(connector.status),
+                    "sync_state": connector.sync_state.value if hasattr(connector.sync_state, 'value') else str(connector.sync_state),
+                    "last_sync": connector.succeeded_at.isoformat() if connector.succeeded_at else None,
+                    "hours_since_sync": connector.hours_since_success,
                 }
             )
         except Exception as e:
@@ -2231,7 +2277,7 @@ class ToolExecutor:
     
     async def _execute_get_fivetran_sync_logs(self, args: Dict[str, Any]) -> ToolResult:
         """Get Fivetran sync logs."""
-        connector_id = args["connector_id"]
+        connector_id_or_name = args["connector_id"]
         limit = args.get("limit", 10)
 
         fivetran = self._adapters.get("FIVETRAN")
@@ -2242,11 +2288,15 @@ class ToolExecutor:
             )
 
         try:
-            logs = fivetran.get_sync_logs(connector_id, limit=limit)
+            resolved_id = self._resolve_fivetran_connector_id(fivetran, connector_id_or_name)
+            if not resolved_id:
+                return ToolResult(success=False, error=f"Connector not found: '{connector_id_or_name}'")
+
+            logs = fivetran.get_sync_logs(resolved_id, limit=limit)
             return ToolResult(
                 success=True,
                 data={
-                    "connector_id": connector_id,
+                    "connector_id": resolved_id,
                     "sync_count": len(logs),
                     "syncs": logs
                 }
@@ -2258,7 +2308,7 @@ class ToolExecutor:
         """Get Fivetran schema changes for a connector."""
         from datetime import datetime, timedelta, timezone
 
-        connector_id = args["connector_id"]
+        connector_id_or_name = args["connector_id"]
         days = args.get("days", 7)
 
         fivetran = self._adapters.get("FIVETRAN")
@@ -2269,12 +2319,16 @@ class ToolExecutor:
             )
 
         try:
+            resolved_id = self._resolve_fivetran_connector_id(fivetran, connector_id_or_name)
+            if not resolved_id:
+                return ToolResult(success=False, error=f"Connector not found: '{connector_id_or_name}'")
+
             since = datetime.now(timezone.utc) - timedelta(days=days)
-            changes = fivetran.get_schema_changes(connector_id, since=since)
+            changes = fivetran.get_schema_changes(resolved_id, since=since)
             return ToolResult(
                 success=True,
                 data={
-                    "connector_id": connector_id,
+                    "connector_id": resolved_id,
                     "days": days,
                     "changes": changes
                 }

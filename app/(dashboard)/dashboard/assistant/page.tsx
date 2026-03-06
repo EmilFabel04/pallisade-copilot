@@ -1422,46 +1422,55 @@ function AssistantPageInner() {
                           )}
                         </div>
                       )}
-                      {/* Render change plan tool results */}
-                      {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (
-                        <div className="space-y-2 mt-2">
-                          {message.toolCalls.filter(tc => isChangePlanTool(tc.name)).map((toolCall, idx) => {
-                            // Extract associated plan from other tool calls for context
-                            const associatedPlan = message.toolCalls?.find(
-                              tc => (tc.name === 'create_change_plan' || tc.name === 'get_change_plan') &&
-                                    (tc.result as any)?.plan
-                            )?.result as any;
+                      {/* Render change plan tool results + compact tool summary */}
+                      {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (() => {
+                        const changePlanTools = message.toolCalls.filter(tc => isChangePlanTool(tc.name));
+                        const regularTools = message.toolCalls.filter(tc => !isChangePlanTool(tc.name));
+                        const lastThreeNames = regularTools.slice(-3).map(tc => tc.name).join(', ');
 
-                            return (
-                              <ChangePlanToolResult
-                                key={toolCall.id || idx}
-                                toolName={toolCall.name}
-                                result={toolCall.result as any}
-                                onValidate={(planId, level) => {
-                                  handleSubmit(
-                                    { preventDefault: () => {} } as React.FormEvent,
-                                    `Validate change plan ${planId} at ${level} level`
-                                  );
-                                }}
-                                onApply={(planId) => handleApplyPlan(planId)}
-                                isApplying={!!applyingPlanId}
-                                onShare={(planId, targetType) => {
-                                  // Extract plan from tool result
-                                  const result = toolCall.result as any;
-                                  const plan = result?.plan || result;
-                                  if (plan && plan.id) {
-                                    setShareModal({ plan, targetType });
-                                  }
-                                }}
-                                onSaveToArtifacts={(content) => {
-                                  setSaveArtifactModal({ content, messageId: message.id });
-                                }}
-                                associatedPlan={associatedPlan?.plan}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
+                        return (
+                          <div className="space-y-2 mt-2">
+                            {changePlanTools.map((toolCall, idx) => {
+                              const associatedPlan = message.toolCalls?.find(
+                                tc => (tc.name === 'create_change_plan' || tc.name === 'get_change_plan') &&
+                                      (tc.result as any)?.plan
+                              )?.result as any;
+
+                              return (
+                                <ChangePlanToolResult
+                                  key={toolCall.id || idx}
+                                  toolName={toolCall.name}
+                                  result={toolCall.result as any}
+                                  onValidate={(planId, level) => {
+                                    handleSubmit(
+                                      { preventDefault: () => {} } as React.FormEvent,
+                                      `Validate change plan ${planId} at ${level} level`
+                                    );
+                                  }}
+                                  onApply={(planId) => handleApplyPlan(planId)}
+                                  isApplying={!!applyingPlanId}
+                                  onShare={(planId, targetType) => {
+                                    const result = toolCall.result as any;
+                                    const plan = result?.plan || result;
+                                    if (plan && plan.id) {
+                                      setShareModal({ plan, targetType });
+                                    }
+                                  }}
+                                  onSaveToArtifacts={(content) => {
+                                    setSaveArtifactModal({ content, messageId: message.id });
+                                  }}
+                                  associatedPlan={associatedPlan?.plan}
+                                />
+                              );
+                            })}
+                            {regularTools.length > 0 && (
+                              <div className="text-[10px] text-[var(--text-faint)]">
+                                Used {regularTools.length} tool{regularTools.length !== 1 ? 's' : ''} · {lastThreeNames}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                     {message.role === 'user' && (
                       <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
@@ -1489,7 +1498,22 @@ function AssistantPageInner() {
                               <span className="inline-block w-1.5 h-4 bg-violet-400 animate-pulse ml-0.5 align-text-bottom" />
                             )}
                           </div>
-                        ) : (streamingMessage.isStreaming || streamingMessage.toolCalls.length === 0) ? (
+                        ) : streamingMessage.isStreaming ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-violet-400 text-sm font-mono">
+                              {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
+                            </span>
+                            <span className="text-[12px] text-[var(--muted)]">
+                              {streamingMessage.toolCalls.length > 0
+                                ? 'Formulating response...'
+                                : THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
+                            </span>
+                          </div>
+                        ) : streamingMessage.toolCalls.length > 0 ? (
+                          <div className="text-[12px] text-[var(--muted)] italic">
+                            Analysis complete.
+                          </div>
+                        ) : (
                           <div className="flex items-center gap-2">
                             <span className="text-violet-400 text-sm font-mono">
                               {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
@@ -1498,61 +1522,82 @@ function AssistantPageInner() {
                               {THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
                             </span>
                           </div>
-                        ) : null}
+                        )}
                       </div>
 
                       {/* Tool calls in progress */}
-                      {streamingMessage.toolCalls.length > 0 && (
-                        <div className="mt-2 space-y-1.5">
-                          {streamingMessage.toolCalls.map((tc) => {
-                            // For completed change plan tools, show the full card
-                            if (isChangePlanTool(tc.name) && tc.result && !tc.isExecuting) {
-                              const flatResult = {
-                                success: tc.result.success,
-                                error: tc.result.error,
-                                ...(tc.result.data || {}),
-                              };
-                              return (
-                                <ChangePlanToolResult
-                                  key={tc.id}
-                                  toolName={tc.name}
-                                  result={flatResult as any}
-                                  onValidate={(planId, level) => {
-                                    handleSubmit(
-                                      { preventDefault: () => {} } as React.FormEvent,
-                                      `Validate change plan ${planId} at ${level} level`
-                                    );
-                                  }}
-                                  onApply={(planId) => handleApplyPlan(planId)}
-                                  isApplying={!!applyingPlanId}
-                                />
-                              );
-                            }
-                            return (
-                              <div
-                                key={tc.id}
-                                className="flex items-center gap-2 px-3 py-1.5 bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-lg text-[11px]"
-                              >
-                                {tc.isExecuting ? (
-                                  <div className="w-3 h-3 red-spinner flex-shrink-0" />
-                                ) : tc.result?.success ? (
-                                  <svg className="w-3 h-3 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                ) : tc.result?.error ? (
-                                  <svg className="w-3 h-3 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                ) : null}
-                                <span className="text-[var(--text-tertiary)] truncate">
-                                  {tc.name}
-                                  {tc.isExecuting && <span className="text-[var(--text-faint)] ml-1">running...</span>}
-                                </span>
+                      {streamingMessage.toolCalls.length > 0 && (() => {
+                        const changePlanCalls = streamingMessage.toolCalls.filter(tc => isChangePlanTool(tc.name));
+                        const regularCalls = streamingMessage.toolCalls.filter(tc => !isChangePlanTool(tc.name));
+                        const hiddenCount = Math.max(0, regularCalls.length - 5);
+                        const visibleCalls = regularCalls.slice(-5);
+
+                        return (
+                          <div className="mt-2 space-y-2">
+                            {/* Change plan tools render as full cards */}
+                            {changePlanCalls.map((tc) => {
+                              if (tc.result && !tc.isExecuting) {
+                                const flatResult = {
+                                  success: tc.result.success,
+                                  error: tc.result.error,
+                                  ...(tc.result.data || {}),
+                                };
+                                return (
+                                  <ChangePlanToolResult
+                                    key={tc.id}
+                                    toolName={tc.name}
+                                    result={flatResult as any}
+                                    onValidate={(planId, level) => {
+                                      handleSubmit(
+                                        { preventDefault: () => {} } as React.FormEvent,
+                                        `Validate change plan ${planId} at ${level} level`
+                                      );
+                                    }}
+                                    onApply={(planId) => handleApplyPlan(planId)}
+                                    isApplying={!!applyingPlanId}
+                                  />
+                                );
+                              }
+                              return null;
+                            })}
+
+                            {/* Regular tool calls as compact chips */}
+                            {regularCalls.length > 0 && (
+                              <div>
+                                {hiddenCount > 0 && (
+                                  <div className="text-[10px] text-[var(--text-faint)] mb-1">
+                                    +{hiddenCount} more tool{hiddenCount !== 1 ? 's' : ''} executed
+                                  </div>
+                                )}
+                                <div className="flex flex-wrap gap-1">
+                                  {visibleCalls.map((tc) => (
+                                    <div
+                                      key={tc.id}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-md text-[10px]"
+                                    >
+                                      {tc.isExecuting ? (
+                                        <div className="w-2.5 h-2.5 red-spinner flex-shrink-0" />
+                                      ) : tc.result?.success ? (
+                                        <svg className="w-2.5 h-2.5 text-emerald-400/60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                      ) : tc.result?.error ? (
+                                        <svg className="w-2.5 h-2.5 text-red-400/60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                      ) : null}
+                                      <span className="text-[var(--text-faint)] truncate max-w-[120px]">
+                                        {tc.name}
+                                        {tc.isExecuting && <span className="ml-0.5 opacity-60">...</span>}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Tool confirmation UI */}
                       {streamingMessage.pendingConfirmation && (

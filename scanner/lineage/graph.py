@@ -398,6 +398,7 @@ class LineageEdge:
             "transformation": self.transformation,
             "confidence": self.confidence,
             "discovered_from": self.discovered_from,
+            "discovered_at": self.discovered_at.isoformat() if self.discovered_at else None,
             "lineage_level": self.lineage_level.value,
             "evidence": [e.to_dict() for e in self.evidence],
             "column_mappings": [m.to_dict() for m in self.column_mappings],
