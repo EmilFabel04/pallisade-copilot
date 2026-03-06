@@ -42,6 +42,7 @@ async function upsertNodeIntegration(
   organizationId: string,
   node: { name: string; toolType: string; config: Record<string, any>; status?: string },
   existingIntegrationId?: string | null,
+  stackName?: string,
 ): Promise<string | null> {
   // Strip internal keys to get only real credentials
   const { _cached, _autoDiscovered, ...credentials } = node.config;
@@ -50,6 +51,8 @@ async function upsertNodeIntegration(
   const integrationType = node.toolType.toUpperCase();
   const encryptedCreds = { encrypted: encrypt(JSON.stringify(credentials)) };
   const isActive = ['CONNECTED', 'HEALTHY', 'WARNING'].includes(node.status || '');
+  // Disambiguate integration name per-pipeline to prevent cross-pipeline overwrites
+  const integrationName = stackName ? `${node.name} (${stackName})` : node.name;
 
   // If node already has an integrationId, update that record
   if (existingIntegrationId) {
@@ -59,7 +62,7 @@ async function upsertNodeIntegration(
         data: {
           credentials: encryptedCreds,
           status: isActive ? 'ACTIVE' : 'INACTIVE',
-          name: node.name,
+          name: integrationName,
         },
       });
       console.log(`[PIPELINE] Updated Integration ${existingIntegrationId} for ${integrationType}`);
@@ -76,7 +79,7 @@ async function upsertNodeIntegration(
         organizationId_type_name: {
           organizationId,
           type: integrationType as any,
-          name: node.name,
+          name: integrationName,
         },
       },
       update: {
@@ -84,7 +87,7 @@ async function upsertNodeIntegration(
         status: isActive ? 'ACTIVE' : 'INACTIVE',
       },
       create: {
-        name: node.name,
+        name: integrationName,
         type: integrationType as any,
         status: isActive ? 'ACTIVE' : 'INACTIVE',
         credentials: encryptedCreds,
@@ -93,9 +96,13 @@ async function upsertNodeIntegration(
     });
     console.log(`[PIPELINE] Upserted Integration ${integration.id} for ${integrationType}`);
     return integration.id;
-  } catch (e) {
+  } catch (e: any) {
+    if (e?.code === 'P2002') {
+      console.error(`[PIPELINE] Integration name conflict for ${integrationType}: ${integrationName}`);
+      throw new Error(`An integration named "${integrationName}" (${integrationType}) already exists. Please use a different name.`);
+    }
     console.error(`[PIPELINE] Failed to upsert Integration for ${integrationType}:`, e);
-    return null;
+    throw e;
   }
 }
 
@@ -335,7 +342,7 @@ export async function POST(request: NextRequest) {
         const cachedData = node.config?._cached || null;
 
         if (hasRealCredentials(node.config)) {
-          integrationId = await upsertNodeIntegration(organizationId, node);
+          integrationId = await upsertNodeIntegration(organizationId, node, null, name);
         }
 
         const created = await prisma.pipelineNode.create({
@@ -423,7 +430,7 @@ export async function POST(request: NextRequest) {
 
           if (hasRealCredentials(node.config)) {
             integrationId = await upsertNodeIntegration(
-              organizationId, node, integrationId,
+              organizationId, node, integrationId, name,
             );
           }
 
@@ -447,7 +454,7 @@ export async function POST(request: NextRequest) {
           // Create new node
           let integrationId: string | null = null;
           if (hasRealCredentials(node.config)) {
-            integrationId = await upsertNodeIntegration(organizationId, node);
+            integrationId = await upsertNodeIntegration(organizationId, node, null, name);
           }
 
           const created = await prisma.pipelineNode.create({
@@ -489,8 +496,11 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({ id, success: true });
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to save pipeline:', error);
-    return NextResponse.json({ error: 'Failed to save pipeline' }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || 'Failed to save pipeline' },
+      { status: 500 },
+    );
   }
 }

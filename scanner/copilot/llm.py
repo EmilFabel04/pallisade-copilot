@@ -977,7 +977,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         system=system,
                         messages=anthropic_messages,
                         tools=tools if tools else anthropic.NOT_GIVEN,
-                        max_tokens=4096,
+                        max_tokens=16384,
                     ) as stream:
                         for event in stream:
                             if event.type == "content_block_delta":
@@ -1302,9 +1302,9 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
                     is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
                     if is_new_model:
-                        api_params["max_completion_tokens"] = 4096
+                        api_params["max_completion_tokens"] = 16384
                     else:
-                        api_params["max_tokens"] = 4096
+                        api_params["max_tokens"] = 16384
 
                     if tools and not is_reasoning_model:
                         api_params["tools"] = tools
@@ -1364,6 +1364,21 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "output_tokens": total_output_tokens,
                         "model": self.model,
                         "stop_reason": "end_turn",
+                        "tool_calls": all_tool_calls,
+                    })
+                    return
+
+                # Token limit hit — send whatever text was accumulated
+                if finish_reason == "length":
+                    if not accumulated_text:
+                        # LLM spent all tokens on tool calls, never generated text
+                        fallback = "\n\n*[Response truncated — the analysis required too many steps. Please ask a follow-up question for the summary.]*"
+                        yield StreamEvent("text_delta", {"content": fallback})
+                    yield StreamEvent("done", {
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
+                        "model": self.model,
+                        "stop_reason": "length",
                         "tool_calls": all_tool_calls,
                     })
                     return
@@ -1611,7 +1626,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         system=system,
                         messages=anthropic_messages,
                         tools=tools if tools else None,
-                        max_tokens=4096,
+                        max_tokens=16384,
                     )
 
                     # Track tokens
@@ -1826,9 +1841,9 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     # GPT-5.x and reasoning models use max_completion_tokens
                     is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
                     if is_new_model:
-                        api_params["max_completion_tokens"] = 4096
+                        api_params["max_completion_tokens"] = 16384
                     else:
-                        api_params["max_tokens"] = 4096
+                        api_params["max_tokens"] = 16384
 
                     # Add tools (reasoning models don't support tools yet)
                     if tools and not is_reasoning_model:

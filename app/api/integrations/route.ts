@@ -53,6 +53,7 @@ export async function GET(request: NextRequest) {
         config: true,
         createdAt: true,
         updatedAt: true,
+        pipelineNodes: { select: { id: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -112,7 +113,11 @@ export async function GET(request: NextRequest) {
     const pipelineTypes = new Set(pipelineAsIntegrations.map(p => p.type));
     const dedupedLegacy = legacyIntegrations
       .filter(i => !pipelineTypes.has(i.type))
-      .map(i => ({ ...i, source: 'legacy' as const }));
+      .map(i => ({
+        ...i,
+        source: 'legacy' as const,
+        managedByPipeline: (i.pipelineNodes?.length || 0) > 0,
+      }));
     const allIntegrations = [...pipelineAsIntegrations, ...dedupedLegacy];
 
     return NextResponse.json({ 

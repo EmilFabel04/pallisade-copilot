@@ -80,7 +80,7 @@ export async function GET(
     }
 
     // Check if node has been configured
-    if (!node.config || Object.keys(credentials).length === 0) {
+    if (Object.keys(credentials).length === 0) {
       console.log(`[NODE DATA] Node ${nodeId} (${node.toolType}) has no configuration`);
       return NextResponse.json({
         tables: [],

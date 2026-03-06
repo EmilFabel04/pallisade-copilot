@@ -327,6 +327,11 @@ export default function SettingsPage() {
                           }`}>
                             {integration.status}
                           </span>
+                          {(integration as any).managedByPipeline && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/20 text-blue-400">
+                              Pipeline-managed
+                            </span>
+                          )}
                         </div>
                         {integration.metadata?.username && (
                           <p className="text-[12px] text-[var(--muted)]">@{integration.metadata.username}</p>
@@ -338,7 +343,11 @@ export default function SettingsPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {confirmDelete === integration.id ? (
+                      {(integration as any).managedByPipeline ? (
+                        <span className="px-3 py-1.5 text-[12px] text-[var(--text-faint)] italic">
+                          Manage in Pipeline
+                        </span>
+                      ) : confirmDelete === integration.id ? (
                         <>
                           <button
                             onClick={() => setConfirmDelete(null)}

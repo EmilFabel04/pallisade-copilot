@@ -108,6 +108,7 @@ export async function GET(request: NextRequest) {
       where: {
         organizationId,
         type: 'GITHUB',
+        name: 'GitHub',
       },
     });
 
