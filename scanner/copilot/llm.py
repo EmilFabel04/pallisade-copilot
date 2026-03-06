@@ -235,11 +235,14 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 1. **Gather evidence first**: Run discovery queries to understand the current state. List tables, check row counts, check freshness timestamps, look at recent data.
 2. **Use coverage monitors for anomaly detection**: When investigating anomalies, outliers, or unexpected data patterns, use `run_coverage_monitor` with `monitor_type: "anomaly"` instead of writing manual statistical SQL. The monitor has built-in Z-score analysis, lookback windows, and seasonality support.
 3. **Check every warehouse**: If multiple warehouses are connected, query ALL of them. Don't stop at one. Compare tables, schemas, row counts, and data across all connected warehouses.
-4. **Drill into specifics**: After an overview query, run follow-up queries to drill into anomalies. If counts don't match, check which rows differ. If a table is missing, check if it exists under a different name or schema.
-5. **Check metadata**: Query INFORMATION_SCHEMA for table lists, column details, and table creation/modification times when the pre-loaded schema doesn't answer the question.
-6. **Read logs**: Use orchestration tools (`get_airflow_task_logs`, `get_airflow_dag_status`) and ingestion tools (`get_fivetran_sync_logs`, `get_airbyte_sync_history`) to read actual failure logs.
-7. **Chain queries**: Use the results of one query to inform the next. If you find a suspicious table, query its contents. If you find a failed job, get its logs.
-8. **Synthesize findings**: After gathering all evidence, provide a comprehensive answer with: what happened, why it happened, the root cause, and what to do about it.
+4. **For pipeline failures**: Get the actual error message first (task logs, job history, sync logs). Classify the failure layer: Connection/Auth vs SQL Compilation vs Runtime/Data vs Orchestration. If the error contains SQL or a warehouse error code, it is NOT Connection/Auth. If BigQuery is involved, query `INFORMATION_SCHEMA.JOBS_BY_PROJECT` via `query_warehouse` for the server-side error.
+5. **Drill into specifics**: After an overview query, run follow-up queries to drill into anomalies. If counts don't match, check which rows differ. If a table is missing, check if it exists under a different name or schema.
+6. **Check metadata**: Query INFORMATION_SCHEMA for table lists, column details, and table creation/modification times when the pre-loaded schema doesn't answer the question.
+7. **Read logs**: Use orchestration tools (`get_dag_run_history` for run/task status, Airflow MCP tools like `mcp_airflow__get_task_logs` for full logs) and ingestion tools (`get_fivetran_sync_logs`, `get_airbyte_sync_history`) to read actual failure logs.
+8. **Verify schema compatibility**: Before proposing any fix that moves data between tables, compare column names AND data types between source and target. Type mismatches (STRING vs INT64, TIMESTAMP vs DATE) cause runtime failures. Use the pre-loaded schema or query INFORMATION_SCHEMA.COLUMNS.
+9. **Verify downstream impact**: After finding the root cause, check freshness and quality of downstream tables using `run_coverage_monitor(monitor_type="freshness")` and `get_downstream`.
+10. **Chain queries**: Use the results of one query to inform the next. If you find a suspicious table, query its contents. If you find a failed job, get its logs.
+11. **Synthesize findings**: After gathering all evidence, provide a comprehensive answer with: what happened, why it happened, the root cause, and what to do about it.
 
 **EFFICIENCY IS KEY: Combine multiple questions into single queries using UNION ALL, multiple aggregations, or JOINs. Aim for 1-3 well-designed queries max. The schema is pre-loaded below — use it to write precise queries without exploration.**
 
@@ -484,11 +487,14 @@ You have multiple data warehouses connected. When calling `query_warehouse`, you
 """
         elif primary == Intent.DEBUG:
             return """## Tool-Calling Policy (DEBUG)
-- Minimum: 2 tool calls (diagnostic + confirming evidence).
-- Start with the most likely source: check logs, then data, then lineage.
-- If the first tool call reveals the issue, gather ONE confirming piece of evidence.
-- If unclear, escalate: check additional systems (orchestration, ingestion, warehouse).
+- Minimum: 3 tool calls. Follow this sequence:
+  1. **Identify failure**: `get_dag_run_history` or `get_dbt_run_history` to find what failed
+  2. **Get error details**: MCP Airflow task logs, or `query_warehouse` against `INFORMATION_SCHEMA.JOBS_BY_PROJECT` for BigQuery errors
+  3. **Verify impact**: `get_downstream` + `run_coverage_monitor(monitor_type="freshness")` on affected tables
+- If the error is unclear after step 2, escalate: check additional systems (ingestion logs, warehouse metadata, lineage).
+- Before generating any fix code: compare column names AND data types between source and target tables using the schema provided or INFORMATION_SCHEMA.COLUMNS.
 - Aim for 3-5 tool calls total. Go to 8+ only for genuinely complex cross-system issues.
+- Do NOT stop after getting the error message. Always verify downstream impact before responding.
 """
         elif primary in (Intent.FIX, Intent.PR):
             has_debug = (
@@ -683,15 +689,16 @@ WRONG approach: Only querying one warehouse, or only listing schema names like "
 
         # Debugging example if orchestrator is connected
         if context.has_orchestrator():
-            examples += """### Example 4: Debugging a Pipeline Failure (read logs, check data, find root cause)
+            examples += """### Example 4: Debugging a Pipeline Failure (structured investigation)
 User: "Why did my pipeline fail last night?"
-This requires a full investigation. DO NOT give a surface-level answer.
-Step 1: `get_airflow_dag_status(dag_id="daily_etl")` — find which run failed and when
-Step 2: `get_airflow_task_logs(dag_id="daily_etl", task_id="<failing_task>")` — read the actual error message
-Step 3: If the error mentions data issues, run SQL queries to investigate (e.g., check for NULLs, duplicates, missing rows)
-Step 4: If the error mentions upstream issues, check ingestion status with `get_fivetran_connector_status` or `get_airbyte_connection_status`
-Step 5: Synthesize all findings into a root cause analysis.
-Response: "**Your daily_etl DAG failed at 2:15 AM on the `load_orders` task.** The error was: `Duplicate key violation on orders.order_id`. Investigation shows 847 duplicate order_ids were inserted by Fivetran sync at 1:30 AM (connector `orders_source` ran twice due to a retry). **Root cause**: Fivetran double-synced, and the load task doesn't handle duplicates. **Fix**: Add a MERGE/upsert strategy to the load task, or deduplicate in staging."
+This requires a structured investigation. DO NOT guess the failure type — investigate first.
+Step 1: `get_dag_run_history(dag_id="daily_etl")` — find the failed run, identify the failing task and timestamp.
+Step 2: Use MCP Airflow tools if available (`mcp_airflow__get_task_logs`) to get the full error. If MCP unavailable, proceed with what `get_dag_run_history` returned.
+Step 3: Classify the failure. Example: error says "Column order_date not found in table raw.orders" → this is **SQL Compilation**, NOT Connection/Auth (the task reached the warehouse).
+Step 4: If BigQuery is involved, run `query_warehouse(sql="SELECT job_id, error_result, query FROM \\`region-us.INFORMATION_SCHEMA.JOBS_BY_PROJECT\\` WHERE state = 'DONE' AND error_result IS NOT NULL AND creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR) ORDER BY creation_time DESC LIMIT 5", warehouse="bigquery")` — get server-side error details.
+Step 5: Before proposing a fix, compare source and target schemas: check the pre-loaded schema for column names AND data types. If source has `order_date (DATE)` but target expects `order_date (TIMESTAMP)`, the fix must include a CAST.
+Step 6: `get_downstream(node_id="raw.orders")` + `run_coverage_monitor(monitor_type="freshness", table_fqn="project.dataset.fct_orders")` — check downstream impact.
+Response: "**Problem:** The `load_orders` task in `daily_etl` failed at 2:15 AM — SQL Compilation error. **Cause:** Column `order_date` was renamed to `ordered_at` in the upstream Fivetran sync (schema change at 1:30 AM). The MERGE references the old name. **Fix:** Update the MERGE to use `ordered_at`. Also CAST to TIMESTAMP since source is DATE but target is TIMESTAMP. Enumerate all columns explicitly — do not use SELECT *. **Impact:** `fct_orders` and 3 downstream dashboards are stale (last refresh: 12h ago)."
 
 """
 

@@ -53,28 +53,50 @@ You are in ASK mode - provide clear, concise answers to general questions.
 DEBUG_PROMPT = """
 ## DEBUG MODE ACTIVE
 
-You are investigating a data pipeline issue. Identify the root cause and give actionable steps.
+You are investigating a data pipeline issue. Follow a structured process to find the root cause.
 
-**Investigation Process:**
-1. Gather context — check logs, run status, recent changes
-2. For anomaly/data quality issues: use `run_coverage_monitor` with `monitor_type="anomaly"` instead of manual SQL
-3. Determine root cause with evidence
-4. Provide concrete resolution steps
+**Step 1 — Identify the failing run:**
+- Use `get_dag_run_history` to find the failed run, which task failed, and when.
+- If Airflow MCP tools are available, use `mcp_airflow__get_task_logs` to get the full error message.
+- Do NOT proceed without the actual exception or error text. If logs are unavailable, say so explicitly.
+
+**Step 2 — Classify the failure layer:**
+Once you have the error, classify it into ONE category:
+- **Connection/Auth**: Credentials expired, permission denied, 401/403, connection refused. Task never reached execution.
+- **SQL Compilation**: Syntax error, column/table not found, type mismatch. Query was sent but rejected by the warehouse.
+- **Runtime/Data**: Query ran but hit bad data — duplicates, NULLs, constraint violations, MERGE conflicts, schema drift.
+- **Orchestration**: DAG parse error, import error, sensor timeout, pool exhaustion, scheduling lag.
+
+CRITICAL: If the task reached SQL execution (error contains a SQL statement, warehouse error code, or job ID), it is NOT Connection/Auth. Classify as SQL Compilation or Runtime/Data.
+
+**Step 3 — Collect server-side evidence:**
+- If BigQuery is involved, query `INFORMATION_SCHEMA.JOBS_BY_PROJECT` via `query_warehouse` to get the server-side error, bytes billed, and job duration. This is the authoritative error — prefer it over Airflow task logs.
+- For anomaly/data quality issues: use `run_coverage_monitor` with `monitor_type="anomaly"` instead of manual SQL.
+
+**Step 4 — Verify schema compatibility before proposing fixes:**
+- Before writing any SQL that moves data between tables (MERGE, INSERT...SELECT, CTAS), compare column names AND data types between source and target using the schema provided or `INFORMATION_SCHEMA.COLUMNS`.
+- Type mismatches (e.g. STRING vs INT64, TIMESTAMP vs DATE) will cause runtime failures. Always check.
+- When patching MERGE statements: always enumerate columns explicitly — never use `*` or `tgt = src`.
+
+**Step 5 — Verify downstream impact:**
+- Use `get_downstream` to identify all tables impacted by the failure.
+- Check freshness: use `run_coverage_monitor(monitor_type="freshness")` or `get_node_coverage` on affected tables.
 
 **Response format — keep it short and scannable:**
 
-**Problem:** One sentence stating what went wrong and how it was detected.
+**Problem:** One sentence stating what went wrong, which task/job failed, and the failure layer (Connection/Auth | SQL Compilation | Runtime/Data | Orchestration).
 
-**Cause:** One sentence explaining why it happened, backed by the data (include the key numbers).
+**Cause:** One sentence explaining why, backed by data (include the exact error message or key numbers).
 
-**Fix:** 2-4 bullet points with concrete actions to resolve it. Be specific — use real table/column names.
+**Fix:** 2-4 bullet points with concrete actions. Use real table/column names. Include column type casts if types differ between source and target.
+
+**Impact:** One line listing downstream tables affected and their current freshness status.
 
 **Rules:**
-- No bold section headers other than Problem / Cause / Fix
+- No bold section headers other than Problem / Cause / Fix / Impact
 - No hypothesis lists, confidence labels, or "to verify" sub-items — just state what you found
-- Keep the entire response under 150 words when possible
-- Use plain text, minimal formatting. No nested bullets, no italic emphasis blocks
-- If the baseline is too small or confidence is low, say so in one line under Cause
+- Keep the entire response under 200 words when possible
+- Don't propose Docker/infra changes unless the failure layer is Orchestration and the user asks
 - Run multiple queries to gather evidence. Don't guess — investigate thoroughly
 """
 
@@ -417,8 +439,8 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "get_coverage_report",
             "get_node_coverage",
             "get_coverage_gaps",
-            "get_airflow_task_logs",
-            "get_airflow_recent_failures",
+            "get_dag_run_history",
+            "get_asset_orchestration_context",
             "get_dbt_test_results",
             "get_dbt_run_history",
             "get_fivetran_sync_logs",
