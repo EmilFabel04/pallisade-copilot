@@ -85,11 +85,18 @@ async def run_extraction_pipeline(
         # Step 2.6: Health enrichment (Elementary test results → node health)
         health_dict = _run_health_enrichment(graph, tool_configs, run_id)
 
+        # Step 2.7: Infer ingestion landing zones (schema-agnostic)
+        # Must run AFTER cross-tool synthesis (which adds adapter edges)
+        # and BEFORE bridge rules (which need container awareness).
+        from .landing_zone import infer_landing_zones
+        landing_profile = infer_landing_zones(graph, tool_configs)
+        landing_zone_dict = landing_profile.to_dict() if landing_profile.zones else None
+
         # Step 3: Canonicalize (first pass)
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
-        # Step 4: Bridge rules
-        bridge_engine = BridgeRuleEngine(graph)
+        # Step 4: Bridge rules (with landing zone awareness)
+        bridge_engine = BridgeRuleEngine(graph, landing_zone_profile=landing_profile)
         bridge_result = bridge_engine.apply_all()
         bridge_dict = bridge_result.to_dict() if bridge_result.total_changes > 0 else None
         if bridge_result.total_changes > 0:
@@ -144,6 +151,7 @@ async def run_extraction_pipeline(
                 **result.stats,
                 "cross_tool_synthesis": synthesis_dict,
                 "health_enrichment": health_dict,
+                "landing_zones": landing_zone_dict,
                 "bridge": bridge_dict,
                 "views_built": list(views.keys()),
                 "run_id": run_id,

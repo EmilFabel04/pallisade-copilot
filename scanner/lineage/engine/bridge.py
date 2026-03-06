@@ -14,10 +14,12 @@ All inferred nodes/edges are marked inferred=True with low confidence
 and evidence reason "bridge_missing_ingestion".
 """
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from ..graph import (
     EdgeType,
@@ -38,6 +40,9 @@ from .zones import (
     TRANSFORM_PLATFORMS,
     classify_dataset_zone,
 )
+
+if TYPE_CHECKING:
+    from .landing_zone import LandingZoneProfile
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +133,13 @@ class BridgeRuleEngine:
         """
         cls._extra_scoring_strategies.append((name, scorer_fn))
 
-    def __init__(self, graph: LineageGraph):
+    def __init__(
+        self,
+        graph: LineageGraph,
+        landing_zone_profile: Optional[LandingZoneProfile] = None,
+    ):
         self.graph = graph
+        self.landing_zone_profile = landing_zone_profile
 
     def apply_all(self) -> BridgeResult:
         """Apply all bridge rules in order."""
@@ -185,7 +195,7 @@ class BridgeRuleEngine:
                 continue
             all_datasets += 1
 
-            zone = classify_dataset_zone(node)
+            zone = classify_dataset_zone(node, self.landing_zone_profile)
             if zone != DatasetZone.RAW:
                 continue
             raw_datasets += 1
@@ -350,6 +360,24 @@ class BridgeRuleEngine:
         """
         orphan_schema = (orphan.schema or "").lower()
         orphan_name = (orphan.name or "").lower()
+        orphan_db = (orphan.database or "").lower()
+
+        # Container validation: if we have a landing zone profile, verify
+        # the orphan actually sits in a known ingestion landing container.
+        # If not, do not bridge — emit a mismatch diagnostic instead.
+        if self.landing_zone_profile and orphan_schema:
+            is_landing, _ = self.landing_zone_profile.is_landing_container(
+                orphan_db, orphan_schema,
+            )
+            if not is_landing:
+                known = self.landing_zone_profile.all_containers
+                return (
+                    None, 0.0, "landing_zone_mismatch",
+                    f"Orphan '{orphan_name}' in container "
+                    f"({orphan_db}.{orphan_schema}) is not in any known "
+                    f"ingestion landing zone; known containers: {known}",
+                    [],
+                )
 
         candidates: List[Tuple[float, str, str, LineageNode]] = []
 
@@ -545,6 +573,19 @@ class BridgeRuleEngine:
                     reason=reason,
                     alternatives=alternatives,
                 ))
+            elif strategy == "landing_zone_mismatch":
+                # Orphan is not in a known landing zone — do NOT bridge.
+                # Record diagnostic so users can update their config.
+                result.diagnostics.append(BridgeDiagnostic(
+                    dataset_id=orphan.id,
+                    dataset_name=orphan.name,
+                    match_strategy="landing_zone_mismatch",
+                    confidence=0.0,
+                    reason=reason,
+                ))
+                logger.info(
+                    "[Bridge] Skipping orphan '%s': %s", orphan.name, reason,
+                )
             else:
                 # No match — fallback to Unknown Loader
                 if unknown_loader_node is None:

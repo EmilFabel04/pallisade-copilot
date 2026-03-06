@@ -4185,8 +4185,17 @@ class ToolExecutor:
         if not github_token:
             return ToolResult(
                 success=False,
-                error="GitHub is not connected. Please connect GitHub in your integrations to apply changes."
+                error="GitHub is not connected. Please connect GitHub in Settings > Integrations to apply changes."
             )
+
+        # Pre-validate the token before proceeding
+        pre_applier = ChangePlanApplier(github_token)
+        try:
+            token_valid, token_error = await pre_applier.validate_token()
+            if not token_valid:
+                return ToolResult(success=False, error=token_error)
+        finally:
+            await pre_applier.close()
 
         # Auto-detect repo from context if not provided
         if not repo_owner or not repo_name:

@@ -345,16 +345,31 @@ async def chat_stream(
             }
 
         async def event_generator():
+            sent_done = False
             try:
                 async for event in llm.chat_stream(
                     messages, context,
                     confirmed_tool_ids=confirmed_ids,
                     pending_tool_call=pending_tc,
                 ):
+                    if event.event_type == "done":
+                        sent_done = True
                     yield event.to_sse()
             except Exception as e:
                 logger.exception("[Stream] Error in event generator")
                 yield StreamEvent("error", {"message": str(e)}).to_sse()
+            finally:
+                # Safety net: always send a 'done' event so the frontend
+                # never gets stuck in isStreaming=true loading state.
+                if not sent_done:
+                    logger.warning("[Stream] Stream ended without 'done' event — injecting one")
+                    yield StreamEvent("done", {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "model": request.model or "unknown",
+                        "stop_reason": "stream_error",
+                        "tool_calls": [],
+                    }).to_sse()
 
         return StreamingResponse(
             event_generator(),
@@ -578,7 +593,11 @@ async def apply_plan(
                 "files_changed": result.files_changed,
             }
         else:
-            raise HTTPException(status_code=500, detail=result.error or "Failed to create Pull Request")
+            error_msg = result.error or "Failed to create Pull Request"
+            # Return 401 for token issues so frontend can prompt reconnection
+            if "invalid or expired" in error_msg.lower() or "reconnect" in error_msg.lower():
+                raise HTTPException(status_code=401, detail=error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
     except HTTPException:
         raise
     except Exception as e:

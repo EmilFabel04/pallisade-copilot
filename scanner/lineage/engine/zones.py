@@ -12,11 +12,16 @@ Lane ordering (left → right):
   ingestion → warehouse_raw → transformation → warehouse_analytics → reporting
 """
 
+from __future__ import annotations
+
 import re
 from enum import Enum
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from ..graph import LineageNode, PlatformDomain, NodeType
+
+if TYPE_CHECKING:
+    from .landing_zone import LandingZoneProfile
 from .platforms import (
     INGESTION_PLATFORMS,
     TRANSFORM_PLATFORMS,
@@ -118,15 +123,20 @@ _ANALYTICS_PATTERNS = [
 ]
 
 
-def classify_dataset_zone(node: LineageNode) -> DatasetZone:
+def classify_dataset_zone(
+    node: LineageNode,
+    landing_zone_profile: Optional[LandingZoneProfile] = None,
+) -> DatasetZone:
     """
     Classify a dataset node into a zone based on naming conventions,
     schema name, and metadata.
 
     Priority order:
-    1. Explicit dbt resource type (staging/intermediate/mart)
-    2. Schema name patterns
-    3. Table name patterns
+    0. Explicit zone hint
+    1. dbt resource type (source/seed → RAW)
+    1.5. Landing zone profile (ingestion landing container → RAW)
+    2. dbt model path patterns
+    3. Schema/name regex patterns
     4. Default based on platform domain
     """
     # 0. Explicit zone hint (from LLM or enrichment)
@@ -140,6 +150,15 @@ def classify_dataset_zone(node: LineageNode) -> DatasetZone:
         return DatasetZone.RAW
     if dbt_type == "seed":
         return DatasetZone.RAW
+
+    # 1.5. Landing zone profile: if this node's container is a known
+    # ingestion landing zone, classify as RAW regardless of schema name.
+    if landing_zone_profile and node.schema:
+        is_landing, confidence = landing_zone_profile.is_landing_container(
+            node.database or "", node.schema,
+        )
+        if is_landing and confidence >= 0.7:
+            return DatasetZone.RAW
 
     # Check dbt model path for stg/int/mart patterns
     dbt_path = node.raw_metadata.get("dbt_path", "") or node.raw_metadata.get("path", "")

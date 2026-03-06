@@ -559,34 +559,75 @@ class CrossToolEdgeSynthesizer:
             len(synced_table_ids), len(ingestion_connector_ids), len(warehouse_table_ids),
         )
 
-        # Path 1: Direct synced_table → warehouse_table by name match
-        # Build warehouse name index for fast lookup
+        # Path 1: Direct synced_table → warehouse_table — container-aware matching
+        # Build warehouse indexes for tiered lookup
         wh_by_name: dict[str, list[str]] = {}
+        wh_by_container_name: dict[tuple[str, str], list[str]] = {}
         for table_id in warehouse_table_ids:
             node = self.graph.nodes.get(table_id)
             if node and node.name:
-                wh_by_name.setdefault(node.name.lower(), []).append(table_id)
+                name_lower = node.name.lower()
+                schema_lower = (node.schema or "").lower()
+                wh_by_name.setdefault(name_lower, []).append(table_id)
+                if schema_lower:
+                    wh_by_container_name.setdefault(
+                        (schema_lower, name_lower), [],
+                    ).append(table_id)
 
         for synced_id in synced_table_ids:
             synced_node = self.graph.nodes.get(synced_id)
             if not synced_node or not synced_node.name:
                 continue
-            candidates = wh_by_name.get(synced_node.name.lower(), [])
-            for wh_id in candidates:
-                wh_node = self.graph.nodes.get(wh_id)
-                if not wh_node:
-                    continue
-                edge = self._create_edge(
-                    synced_id, wh_id,
-                    EdgeType.POPULATES,
-                    synthesis_source="ingestion_synced_table",
+
+            name_lower = synced_node.name.lower()
+            schema_lower = (synced_node.schema or "").lower()
+
+            # Tier 1: Full container match (schema + name)
+            if schema_lower:
+                container_candidates = wh_by_container_name.get(
+                    (schema_lower, name_lower), [],
                 )
-                if edge:
-                    edges_created += 1
-                    logger.info(
-                        "[CrossTool] Synthesized edge: %s → %s (synced_table)",
-                        synced_node.fqn, wh_node.fqn,
+                for wh_id in container_candidates:
+                    wh_node = self.graph.nodes.get(wh_id)
+                    if not wh_node:
+                        continue
+                    edge = self._create_edge(
+                        synced_id, wh_id,
+                        EdgeType.POPULATES,
+                        synthesis_source="ingestion_synced_table_container",
                     )
+                    if edge:
+                        edges_created += 1
+                        logger.info(
+                            "[CrossTool] Synthesized edge: %s → %s (synced_table, container match)",
+                            synced_node.fqn, wh_node.fqn,
+                        )
+                continue  # Container match found or attempted; skip name-only
+
+            # Tier 2: Name-only match — only if unique across warehouse
+            name_candidates = wh_by_name.get(name_lower, [])
+            if len(name_candidates) == 1:
+                wh_id = name_candidates[0]
+                wh_node = self.graph.nodes.get(wh_id)
+                if wh_node:
+                    edge = self._create_edge(
+                        synced_id, wh_id,
+                        EdgeType.POPULATES,
+                        synthesis_source="ingestion_synced_table_name_only",
+                    )
+                    if edge:
+                        edges_created += 1
+                        logger.info(
+                            "[CrossTool] Synthesized edge: %s → %s "
+                            "(synced_table, name-only unique match)",
+                            synced_node.fqn, wh_node.fqn,
+                        )
+            elif len(name_candidates) > 1:
+                logger.info(
+                    "[CrossTool] Skipping ambiguous synced_table match: "
+                    "'%s' found in %d warehouse schemas — need container info",
+                    name_lower, len(name_candidates),
+                )
 
         # Path 2: Connector-level matching (legacy path)
         for ingestion_id in ingestion_connector_ids:
@@ -609,7 +650,7 @@ class CrossToolEdgeSynthesizer:
                 if not table_node:
                     continue
 
-                if self._is_ingestion_destination(table_node, connector_name, ingestion_schema, ingestion_node):
+                if self._is_ingestion_destination(table_node, connector_name, ingestion_schema, ingestion_node, wh_by_name):
                     edge = self._create_edge(
                         ingestion_id,
                         table_id,
@@ -631,11 +672,16 @@ class CrossToolEdgeSynthesizer:
         connector_name: str,
         ingestion_schema: str,
         ingestion_node: LineageNode,
+        wh_by_name: Optional[Dict[str, list]] = None,
     ) -> bool:
         """Stack-agnostic check: was this table populated by this ingestion connector?
 
         Uses multiple matching strategies so that the match works regardless
         of whether nodes were merged (losing metadata) or not.
+
+        Strategies are container-aware: name-only matching (Strategy 5) is
+        only used when the table name is unique across the warehouse OR
+        the connector's destination schema matches the table's schema.
         """
         meta = table_node.raw_metadata
         ingestion_platform = ingestion_node.platform
@@ -684,14 +730,37 @@ class CrossToolEdgeSynthesizer:
             return True
 
         # Strategy 5: table name appears in connector's synced_tables list
-        # The ingestion adapter stores the list of table names it syncs
-        # (e.g., ["customers", "orders", "products"]). Match warehouse tables
-        # by name regardless of schema differences (Postgres "public" vs
-        # BigQuery "raw").
+        # Container-aware: only match if the connector's destination schema
+        # matches the table's schema, OR if the table name is unique across
+        # all warehouse schemas.
         synced_tables = ingestion_node.raw_metadata.get("synced_tables", [])
         if synced_tables and table_node.name:
             table_name_lower = table_node.name.lower()
             if table_name_lower in synced_tables:
+                # Check if connector declares a destination schema
+                dest_schema = (
+                    ingestion_node.raw_metadata.get("dest_schema", "")
+                    or ingestion_node.raw_metadata.get("destination_schema", "")
+                )
+                if dest_schema and table_node.schema:
+                    # Container-confirmed match
+                    if table_node.schema.lower() == dest_schema.lower():
+                        return True
+                    # Container mismatch — do not match
+                    return False
+                # No destination schema known — check uniqueness
+                if wh_by_name:
+                    name_candidates = wh_by_name.get(table_name_lower, [])
+                    if len(name_candidates) == 1:
+                        return True  # Unique across warehouse
+                    # Ambiguous — skip
+                    logger.debug(
+                        "[CrossTool] Skipping ambiguous synced_table match: "
+                        "'%s' from connector '%s' found in %d schemas",
+                        table_name_lower, connector_name, len(name_candidates),
+                    )
+                    return False
+                # No index available — fall through to legacy behavior
                 return True
 
         return False

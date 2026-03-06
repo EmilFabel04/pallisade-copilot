@@ -241,6 +241,16 @@ export function useStreamingChat() {
           }
         }
       }
+      // Safety net: if stream ended without a 'done' or 'error' event,
+      // ensure isStreaming is set to false so the UI doesn't get stuck loading.
+      setStreamingMessage(prev => {
+        if (prev && prev.isStreaming) {
+          console.warn('[useStreamingChat] Stream ended without done/error event — forcing isStreaming=false');
+          return { ...prev, isStreaming: false, stopReason: stopReason || 'stream_ended' };
+        }
+        return prev;
+      });
+      if (!stopReason) stopReason = 'stream_ended';
     } catch (err: any) {
       if (err.name === 'AbortError') {
         stopReason = 'aborted';

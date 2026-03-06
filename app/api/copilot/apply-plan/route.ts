@@ -81,6 +81,34 @@ export async function POST(request: Request) {
       );
     }
 
+    // ── 1.5. Validate token before proceeding ──────────────────────
+    try {
+      const ghValidation = await fetch('https://api.github.com/user', {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Accept': 'application/vnd.github+json',
+          'User-Agent': 'Pallisade-Scout/1.0',
+        },
+      });
+      if (ghValidation.status === 401) {
+        console.error('[apply-plan] GitHub token is invalid (401). User needs to reconnect.');
+        return NextResponse.json(
+          { error: 'GitHub token is invalid or expired. Please reconnect GitHub in Settings > Integrations.' },
+          { status: 401 },
+        );
+      }
+      if (ghValidation.status === 403) {
+        console.error('[apply-plan] GitHub token lacks permissions (403).');
+        return NextResponse.json(
+          { error: 'GitHub token lacks required permissions. Please reconnect GitHub with repo access.' },
+          { status: 403 },
+        );
+      }
+    } catch (e) {
+      console.error('[apply-plan] Failed to validate GitHub token:', e);
+      // Don't block — let the backend handle it
+    }
+
     // ── 2. Resolve the target repo ────────────────────────────────
     // If the frontend didn't provide repo_owner/repo_name, resolve it here
     // from the Integration metadata (where the OAuth callback stores the repo list).

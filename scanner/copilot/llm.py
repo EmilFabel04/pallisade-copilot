@@ -1066,16 +1066,21 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
                         # Auto-execute safe tool
                         logger.info(f"[Stream/Anthropic] Executing tool: {tool_name}")
-                        if tool_name.startswith("mcp_") and mcp_manager:
-                            mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                        try:
+                            if tool_name.startswith("mcp_") and mcp_manager:
+                                mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                                from scanner.copilot.tools import ToolResult
+                                result = ToolResult(
+                                    success=mcp_result.get("success", False),
+                                    data=mcp_result.get("data"),
+                                    error=mcp_result.get("error"),
+                                )
+                            else:
+                                result = await executor.execute(tool_name, tool_input)
+                        except Exception as tool_err:
+                            logger.exception(f"[Stream/Anthropic] Unhandled error executing tool '{tool_name}'")
                             from scanner.copilot.tools import ToolResult
-                            result = ToolResult(
-                                success=mcp_result.get("success", False),
-                                data=mcp_result.get("data"),
-                                error=mcp_result.get("error"),
-                            )
-                        else:
-                            result = await executor.execute(tool_name, tool_input)
+                            result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
 
                         all_tool_calls.append({
                             "tool": tool_name,
@@ -1160,7 +1165,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             })
         finally:
             if mcp_manager:
-                await mcp_manager.shutdown()
+                try:
+                    await mcp_manager.shutdown()
+                except Exception as e:
+                    logger.warning(f"[Stream/Anthropic] MCP shutdown error (ignored): {e}")
 
     async def _chat_openai_stream(
         self,
@@ -1436,16 +1444,21 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             return
 
                         logger.info(f"[Stream/OpenAI] Executing tool: {tool_name}")
-                        if tool_name.startswith("mcp_") and mcp_manager:
-                            mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                        try:
+                            if tool_name.startswith("mcp_") and mcp_manager:
+                                mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                                from scanner.copilot.tools import ToolResult
+                                result = ToolResult(
+                                    success=mcp_result.get("success", False),
+                                    data=mcp_result.get("data"),
+                                    error=mcp_result.get("error"),
+                                )
+                            else:
+                                result = await executor.execute(tool_name, tool_input)
+                        except Exception as tool_err:
+                            logger.exception(f"[Stream/OpenAI] Unhandled error executing tool '{tool_name}'")
                             from scanner.copilot.tools import ToolResult
-                            result = ToolResult(
-                                success=mcp_result.get("success", False),
-                                data=mcp_result.get("data"),
-                                error=mcp_result.get("error"),
-                            )
-                        else:
-                            result = await executor.execute(tool_name, tool_input)
+                            result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
 
                         all_tool_calls.append({
                             "tool": tool_name,
@@ -1519,7 +1532,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             })
         finally:
             if mcp_manager:
-                await mcp_manager.shutdown()
+                try:
+                    await mcp_manager.shutdown()
+                except Exception as e:
+                    logger.warning(f"[Stream/OpenAI] MCP shutdown error (ignored): {e}")
 
     async def _chat_anthropic(
         self,

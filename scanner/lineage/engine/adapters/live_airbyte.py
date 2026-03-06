@@ -190,11 +190,20 @@ class LiveAirbyteAdapter(BaseLineageAdapter):
                     continue
 
                 if dest_namespace_def == "destination":
-                    dest_schema = dest_namespace_fmt or "public"
+                    dest_schema = dest_namespace_fmt or ""
                 elif dest_namespace_def == "source" and stream_namespace:
                     dest_schema = stream_namespace
                 else:
-                    dest_schema = "public"
+                    dest_schema = ""
+
+                if not dest_schema:
+                    logger.debug(
+                        "[LiveAirbyte] No schema resolved for stream %s in "
+                        "connection %s, skipping destination edge "
+                        "(will defer to cross-tool synthesis)",
+                        stream_name, conn_name,
+                    )
+                    continue
 
                 table_name = f"{dest_prefix}{stream_name}" if dest_prefix else stream_name
 

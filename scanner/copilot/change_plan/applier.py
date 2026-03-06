@@ -78,6 +78,36 @@ class ChangePlanApplier:
             await self._session.close()
             self._session = None
 
+    async def validate_token(self) -> tuple[bool, str]:
+        """Validate the GitHub token before attempting any operations.
+
+        Returns (is_valid, error_message).
+        """
+        session = await self._get_session()
+        url = f"{self.github_api_base}/user"
+
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    login = data.get("login", "unknown")
+                    logger.info(f"GitHub token valid — authenticated as @{login}")
+                    return True, ""
+                elif response.status == 401:
+                    return False, (
+                        "GitHub token is invalid or expired. "
+                        "Please reconnect GitHub in Settings > Integrations."
+                    )
+                elif response.status == 403:
+                    return False, (
+                        "GitHub token lacks required permissions. "
+                        "Please reconnect GitHub with 'repo' scope."
+                    )
+                else:
+                    return False, f"GitHub API returned unexpected status {response.status}"
+        except Exception as e:
+            return False, f"Failed to validate GitHub token: {e}"
+
     async def _get_default_branch(self, owner: str, repo: str) -> Optional[str]:
         """Detect the repository's default branch via the GitHub API."""
         session = await self._get_session()
@@ -126,6 +156,12 @@ class ChangePlanApplier:
             )
 
         try:
+            # Step -1: Validate the GitHub token before doing anything
+            token_valid, token_error = await self.validate_token()
+            if not token_valid:
+                plan.status = ChangePlanStatus.FAILED
+                return ApplyResult(success=False, error=token_error)
+
             plan.status = ChangePlanStatus.APPLYING
 
             # Step 0: Auto-detect the repo's default branch if the caller used the default
