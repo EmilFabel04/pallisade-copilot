@@ -825,6 +825,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         max_tool_iterations: int = 15,
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
+        system_prompt_override: Optional[str] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Stream a chat response as SSE events.
@@ -839,17 +840,20 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             max_tool_iterations: Maximum tool call iterations
             confirmed_tool_ids: Tool use IDs or names the user has already approved
             pending_tool_call: Tool call to execute directly (from confirmation flow)
+            system_prompt_override: If provided, use this instead of build_system_prompt()
         """
         if self.provider == "anthropic":
             async for event in self._chat_anthropic_stream(
                 messages, context, max_tool_iterations, confirmed_tool_ids,
                 pending_tool_call=pending_tool_call,
+                system_prompt_override=system_prompt_override,
             ):
                 yield event
         elif self.provider == "openai":
             async for event in self._chat_openai_stream(
                 messages, context, max_tool_iterations, confirmed_tool_ids,
                 pending_tool_call=pending_tool_call,
+                system_prompt_override=system_prompt_override,
             ):
                 yield event
         else:
@@ -862,6 +866,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         max_tool_iterations: int,
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
+        system_prompt_override: Optional[str] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream chat with Anthropic Claude via SSE events."""
         if not self.anthropic_client:
@@ -884,7 +889,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             except Exception as e:
                 logger.error(f"[Stream/Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
 
-        system = self.build_system_prompt(context)
+        system = system_prompt_override if system_prompt_override else self.build_system_prompt(context)
         registry = get_tool_registry()
         tools = registry.to_anthropic_tools(context.integration_types)
 
@@ -1184,6 +1189,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         max_tool_iterations: int,
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
+        system_prompt_override: Optional[str] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream chat with OpenAI GPT via SSE events."""
         if not self.openai_client:
@@ -1206,7 +1212,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             except Exception as e:
                 logger.error(f"[Stream/OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
 
-        system = self.build_system_prompt(context)
+        system = system_prompt_override if system_prompt_override else self.build_system_prompt(context)
         registry = get_tool_registry()
         tools = registry.to_openai_tools(context.integration_types)
 

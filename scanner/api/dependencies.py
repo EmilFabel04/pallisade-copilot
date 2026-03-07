@@ -24,8 +24,7 @@ try:
     ]
     for env_path in env_paths:
         if env_path.exists():
-            load_dotenv(env_path)
-            break
+            load_dotenv(env_path, override=False)
 except ImportError:
     pass  # dotenv not installed, rely on system environment
 

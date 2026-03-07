@@ -35,13 +35,13 @@ _STOP_WORDS = frozenset({
 })
 
 
-def _tokenize_query(text: str) -> List[str]:
+def tokenize_query(text: str) -> List[str]:
     """Split query into meaningful tokens, removing stop words."""
     tokens = re.findall(r'[a-z][a-z0-9_]*', text.lower())
     return [t for t in tokens if t not in _STOP_WORDS and len(t) > 1]
 
 
-def _score_table_relevance(
+def score_table_relevance(
     table: 'TableSchema',
     dataset: str,
     query_lower: str,
@@ -356,13 +356,13 @@ class CopilotContext:
             Tuple of (relevant_list, other_list) where each item is (dataset, TableSchema).
         """
         query_lower = query.lower()
-        query_tokens = set(_tokenize_query(query_lower))
+        query_tokens = set(tokenize_query(query_lower))
 
         scored: list = []
         for schema_key, tables in self.warehouse_schema.items():
             _wh_type, dataset_name = self._parse_schema_key(schema_key)
             for table in tables:
-                score = _score_table_relevance(table, dataset_name, query_lower, query_tokens)
+                score = score_table_relevance(table, dataset_name, query_lower, query_tokens)
                 scored.append((score, dataset_name, table))
 
         # Sort by score descending
@@ -1156,7 +1156,7 @@ class CopilotContextBuilder:
         "stg_orders", "raw.orders", etc.
         """
         query_lower = query.lower()
-        query_tokens = set(_tokenize_query(query_lower))
+        query_tokens = set(tokenize_query(query_lower))
 
         if not query_tokens:
             return []
@@ -1203,7 +1203,7 @@ class CopilotContextBuilder:
     ) -> List[LineageNode]:
         """Static version of _find_relevant_nodes for use from CopilotContext."""
         query_lower = query.lower()
-        query_tokens = set(_tokenize_query(query_lower))
+        query_tokens = set(tokenize_query(query_lower))
 
         if not query_tokens:
             return []

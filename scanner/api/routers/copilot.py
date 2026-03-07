@@ -344,14 +344,52 @@ async def chat_stream(
                 "arguments": request.pending_tool_call.arguments,
             }
 
+        # --- MAAS orchestration (feature-flagged) ---
+        use_maas = False
+        maas_orchestrator = None
+        # Run intent classification for MAAS even when mode was set explicitly
+        if not intent_result and mode in ("ask", "info"):
+            try:
+                history = [
+                    {"role": m.role, "content": m.content}
+                    for m in (request.messages or [])
+                ]
+                intent_result = classify_intent(message, history)
+                context.intent_result = intent_result
+                logger.info(
+                    f"[Stream] Late intent classification for MAAS: "
+                    f"primary={intent_result.primary.intent.value}"
+                    f"({intent_result.primary.score:.2f})"
+                )
+            except Exception:
+                pass
+        if intent_result:
+            try:
+                from copilot.maas.config import is_maas_enabled
+                if is_maas_enabled():
+                    from copilot.maas.orchestrator import MAASOrchestrator
+                    maas_orchestrator = MAASOrchestrator()
+                    use_maas = True
+                    logger.info("[Stream] MAAS enabled — using orchestrator")
+            except Exception as e:
+                logger.warning(f"[Stream] MAAS init failed, falling back to standard: {e}")
+
         async def event_generator():
             sent_done = False
             try:
-                async for event in llm.chat_stream(
-                    messages, context,
-                    confirmed_tool_ids=confirmed_ids,
-                    pending_tool_call=pending_tc,
-                ):
+                if use_maas:
+                    stream = maas_orchestrator.run_stream(
+                        messages, context,
+                        confirmed_tool_ids=confirmed_ids,
+                        pending_tool_call=pending_tc,
+                    )
+                else:
+                    stream = llm.chat_stream(
+                        messages, context,
+                        confirmed_tool_ids=confirmed_ids,
+                        pending_tool_call=pending_tc,
+                    )
+                async for event in stream:
                     if event.event_type == "done":
                         sent_done = True
                     yield event.to_sse()
