@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import ReactFlow, {
   Node,
   Edge,
@@ -136,8 +137,11 @@ function getEdgeStyle(edge: UnifiedLineageEdge, sourceNode?: UnifiedLineageNode)
 // Lane Overview Canvas — extracted to components/lineage/pipeline-overview/
 // ---------------------------------------------------------------------------
 
-export default function LineagePage() {
+function LineagePageInner() {
   const { selectedPipelineId: stackId, loading: pipelineLoading } = usePipeline();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const filterIntegrationId = searchParams.get('integrationId');
   const [lineageData, setLineageData] = useState<UnifiedLineageResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState(false);
@@ -606,8 +610,12 @@ export default function LineagePage() {
   // Apply filters to nodes
   const filteredNodes = useMemo(() => {
     if (!lineageData?.nodes) return [];
-    return lineageData.nodes.filter((node) => nodePassesFilter(node, filters));
-  }, [lineageData?.nodes, filters]);
+    let nodes = lineageData.nodes.filter((node) => nodePassesFilter(node, filters));
+    if (filterIntegrationId) {
+      nodes = nodes.filter((node) => node.integrationId === filterIntegrationId);
+    }
+    return nodes;
+  }, [lineageData?.nodes, filters, filterIntegrationId]);
 
   // Build filtered stats from what's actually visible on the graph
   const filteredStats = useMemo(() => {
@@ -1115,6 +1123,25 @@ export default function LineagePage() {
 
   return (
     <div className="h-[calc(100vh-56px)] flex flex-col -m-6">
+      {/* Integration filter banner */}
+      {filterIntegrationId && (
+        <div className="px-6 py-2.5 bg-[var(--accent)]/10 border-b border-[var(--accent)]/20 flex items-center justify-between">
+          <span className="text-sm text-[var(--text-secondary)]">
+            Filtered to integration <span className="font-medium text-[var(--text)]">{filterIntegrationId}</span>
+          </span>
+          <button
+            onClick={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('integrationId');
+              window.history.replaceState({}, '', url.pathname);
+              router.replace('/dashboard/lineage');
+            }}
+            className="text-xs text-[var(--accent-2)] hover:underline"
+          >
+            Clear filter
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)]">
         <div className="flex items-center justify-between mb-4">
@@ -1865,5 +1892,13 @@ export default function LineagePage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function LineagePage() {
+  return (
+    <Suspense fallback={<div className="h-[calc(100vh-56px)] flex items-center justify-center"><div className="w-6 h-6 border-2 border-[var(--overlay-strong)] border-t-[var(--text-tertiary)] rounded-full animate-spin" /></div>}>
+      <LineagePageInner />
+    </Suspense>
   );
 }

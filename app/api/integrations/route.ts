@@ -51,9 +51,25 @@ export async function GET(request: NextRequest) {
         scanCount: true,
         lastScanAt: true,
         config: true,
+        tokenExpiry: true,
+        lastExtractedAt: true,
+        lastLineageExtractedAt: true,
+        lastSchemaExtractedAt: true,
+        lastLogsExtractedAt: true,
         createdAt: true,
         updatedAt: true,
         pipelineNodes: { select: { id: true } },
+        sourceContract: {
+          select: {
+            ownerUser: true,
+            ownerTeam: true,
+            contactChannel: true,
+            slaTier: true,
+            expectedFreshnessMinutes: true,
+            expectedExtractionFrequencyMinutes: true,
+            notes: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -80,6 +96,28 @@ export async function GET(request: NextRequest) {
         createdAt: true,
         updatedAt: true,
         stackId: true,
+        config: true,
+        integration: {
+          select: {
+            tokenExpiry: true,
+            config: true,
+            lastExtractedAt: true,
+            lastLineageExtractedAt: true,
+            lastSchemaExtractedAt: true,
+            lastLogsExtractedAt: true,
+            sourceContract: {
+              select: {
+                ownerUser: true,
+                ownerTeam: true,
+                contactChannel: true,
+                slaTier: true,
+                expectedFreshnessMinutes: true,
+                expectedExtractionFrequencyMinutes: true,
+                notes: true,
+              },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -97,7 +135,13 @@ export async function GET(request: NextRequest) {
       healthScore: node.healthScore,
       scanCount: null,
       lastScanAt: node.lastScanAt,
-      config: null,
+      config: (node as any).integration?.config || (node as any).config || null,
+      tokenExpiry: (node as any).integration?.tokenExpiry || null,
+      lastExtractedAt: (node as any).integration?.lastExtractedAt || null,
+      lastLineageExtractedAt: (node as any).integration?.lastLineageExtractedAt || null,
+      lastSchemaExtractedAt: (node as any).integration?.lastSchemaExtractedAt || null,
+      lastLogsExtractedAt: (node as any).integration?.lastLogsExtractedAt || null,
+      sourceContract: (node as any).integration?.sourceContract || null,
       createdAt: node.createdAt,
       updatedAt: node.updatedAt,
       // Extra fields to identify source
@@ -105,6 +149,8 @@ export async function GET(request: NextRequest) {
       layer: node.layer,
       stackId: node.stackId,
       findingsCount: node.findingsCount,
+      criticalCount: (node as any).criticalCount || 0,
+      highCount: (node as any).highCount || 0,
     }));
 
     // Combine both sources, with Pipeline nodes first.

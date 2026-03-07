@@ -1816,6 +1816,12 @@ model Integration {
   scanCount  Int       @default(0)
   lastScanAt DateTime?
 
+  // Extraction timestamps (populated by extraction flows)
+  lastExtractedAt         DateTime?
+  lastLineageExtractedAt  DateTime?
+  lastSchemaExtractedAt   DateTime?
+  lastLogsExtractedAt     DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1839,10 +1845,42 @@ model Integration {
   // Universal monitors
   monitors Monitor[]
 
+  // Source contract (1:1)
+  sourceContract SourceContract?
+
   @@unique([organizationId, type, name]) // Prevent duplicate connections
   @@index([organizationId])
   @@index([type])
   @@index([status])
+}
+
+// Ownership + expectations contract for an integration source (1:1 with Integration)
+model SourceContract {
+  id String @id @default(cuid())
+
+  // Ownership
+  ownerUser      String? // User name or ID
+  ownerTeam      String? // Team name or ID
+  contactChannel String? // e.g. #data-alerts, ops@company.com
+
+  // SLA
+  slaTier String? // T0, T1, T2, T3
+
+  // Expectations
+  expectedFreshnessMinutes           Int? // How fresh data should be
+  expectedExtractionFrequencyMinutes Int? // How often extraction should run
+
+  // Notes
+  notes String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  integrationId String      @unique
+
+  @@index([integrationId])
 }
 
 enum IntegrationType {
