@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { usePipeline } from '@/contexts/PipelineContext';
 
@@ -524,7 +525,7 @@ export default function PipelineSettingsPage() {
       )}
 
       {/* Add User Modal */}
-      {showAddUser && (
+      {showAddUser && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/60" onClick={() => setShowAddUser(false)} />
           <div className="relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl p-6 w-full max-w-md space-y-4">
@@ -575,7 +576,8 @@ export default function PipelineSettingsPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

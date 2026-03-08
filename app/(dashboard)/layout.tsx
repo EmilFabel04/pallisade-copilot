@@ -24,11 +24,11 @@ export default async function DashboardLayout({
     <SessionProvider session={session}>
       <SidebarProvider>
         <DashboardProviders>
-          <div className="min-h-screen bg-[var(--surface-sunken)]">
+          <div className="min-h-screen h-[100dvh] bg-[var(--surface-sunken)]">
             <Sidebar />
             <DashboardMain>
               <DashboardHeader />
-              <main className="flex-1 p-6 overflow-y-auto">
+              <main className="flex-1 p-6 overflow-y-auto bg-[var(--surface-sunken)]">
                 {children}
               </main>
             </DashboardMain>

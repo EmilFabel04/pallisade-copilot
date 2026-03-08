@@ -9,6 +9,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Loader2, Check, AlertCircle, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { IntegrationDefinition, ConfigField, INTEGRATION_COLORS } from './types';
@@ -284,7 +285,7 @@ export function IntegrationConfigModal({
 
   const color = INTEGRATION_COLORS[integration.category];
 
-  return (
+  return createPortal(
     <>
       {/* Backdrop */}
       <div
@@ -636,7 +637,8 @@ export function IntegrationConfigModal({
           )}
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 

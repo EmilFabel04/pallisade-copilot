@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   X, Activity, KeyRound, Shield, Zap, ExternalLink, AlertTriangle, CheckCircle,
@@ -121,7 +122,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
     { id: 'contract', label: 'Contract' },
   ];
 
-  return (
+  return createPortal(
     <>
       <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
       <div
@@ -413,6 +414,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
           </div>
         </div>
       </div>
-    </>
+    </>,
+    document.body,
   );
 }

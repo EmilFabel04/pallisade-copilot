@@ -239,6 +239,15 @@ class FailedSyncsMonitor:
             "lookback_hours": self.lookback_hours,
         }
 
+        if status_str == "not_found":
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message=f"Connector '{self.connector_id}' not found. Check the connector_id in the task config.",
+                details=details,
+            )
+
         if status_str == "critical":
             return MonitorResult(
                 monitor_type=self.monitor_type,

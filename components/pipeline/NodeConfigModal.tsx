@@ -8,6 +8,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { PipelineNode, getToolById, LAYER_COLORS, ConfigField } from './types';
 import { Loader2, Check, ExternalLink } from 'lucide-react';
 
@@ -397,8 +398,8 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
   const layerColor = LAYER_COLORS[node.layer];
 
-  return (
-    <div 
+  return createPortal(
+    <div
       className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
@@ -767,7 +768,8 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
