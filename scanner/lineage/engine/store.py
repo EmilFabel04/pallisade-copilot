@@ -29,6 +29,14 @@ from .canonical import canonicalize_graph_in_place
 from .reconciler import ReconcilerConfig, ReconciliationEngine, ReconciliationResult
 from .resolver import ResolverConfig, ResolverPipeline, ResolutionStats
 
+# Import DriverRegistry for graph_domain enforcement (optional — graceful if not loaded)
+try:
+    from scanner.drivers.registry import DriverRegistry as _DriverRegistry
+    from scanner.drivers.base import GraphDomain as _GraphDomain
+except ImportError:
+    _DriverRegistry = None  # type: ignore
+    _GraphDomain = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,7 +163,47 @@ class GraphStore:
         # Apply canonical type mapping
         self.canonicalize()
 
+        # Enforce DATA_PLANE vs CONTROL_PLANE graph domain separation
+        self._enforce_graph_domains()
+
         return self.graph
+
+    def _enforce_graph_domains(self) -> None:
+        """
+        Enforce DATA_PLANE vs CONTROL_PLANE separation.
+
+        Nodes/edges whose originating adapter maps to a CONTROL_PLANE driver
+        get their plane set to CONTROL so they don't pollute the data lineage.
+        """
+        if _DriverRegistry is None or _GraphDomain is None or not self.graph:
+            return
+
+        control_plane_adapters: Set[str] = set()
+        for key in _DriverRegistry.list_control_plane():
+            control_plane_adapters.add(key.lower())
+
+        # Tag edges from CONTROL_PLANE adapters
+        for edge in self.graph.edges.values():
+            if not edge.evidence:
+                continue
+            for ev in edge.evidence:
+                adapter_id_lower = (ev.adapter_id or "").lower()
+                for cp_key in control_plane_adapters:
+                    if cp_key in adapter_id_lower:
+                        edge.plane = LinePlane.CONTROL
+                        break
+
+    def get_data_plane_nodes(self) -> List[LineageNode]:
+        """Return only nodes that belong to DATA_PLANE integrations."""
+        if not self.graph:
+            return []
+        if _DriverRegistry is None:
+            return list(self.graph.nodes.values())
+        control_domains = {d.lower() for d in _DriverRegistry.list_control_plane()}
+        return [
+            n for n in self.graph.nodes.values()
+            if (n.platform or "").lower() not in control_domains
+        ]
 
     def build_graph_from_yaml(self, config_path: str) -> LineageGraph:
         """Build graph from a YAML config file."""

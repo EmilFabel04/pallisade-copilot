@@ -83,6 +83,8 @@ export interface ConfigField {
 }
 
 // Tool definition
+export type GraphDomain = 'DATA_PLANE' | 'CONTROL_PLANE' | 'NONE';
+
 export interface ToolDefinition {
   id: string;
   name: string;
@@ -92,6 +94,8 @@ export interface ToolDefinition {
   // Complementary integrations — IDs of tools that unlock extra capabilities when paired
   recommendedWith?: string[];
   recommendedReason?: string;
+  // DATA_PLANE tools create lineage nodes/edges; CONTROL_PLANE tools do not
+  graphDomain?: GraphDomain;
 }
 
 // All available tools organized by layer with their config fields
@@ -692,4 +696,79 @@ export interface PipelineStack {
   status: 'DRAFT' | 'ACTIVE' | 'PAUSED';
   nodes: PipelineNode[];
   edges: PipelineEdge[];
+}
+
+// ─── Graph Domain Map ────────────────────────────────────────────────
+// Maps tool IDs to their graph domain. DATA_PLANE tools produce lineage
+// nodes/edges; CONTROL_PLANE tools are operational only.
+
+export const GRAPH_DOMAIN_MAP: Record<string, GraphDomain> = {
+  // Warehouses — DATA_PLANE
+  bigquery: 'DATA_PLANE',
+  snowflake: 'DATA_PLANE',
+  postgres: 'DATA_PLANE',
+  redshift: 'DATA_PLANE',
+  databricks: 'DATA_PLANE',
+  sqlserver: 'DATA_PLANE',
+  azure_sql: 'DATA_PLANE',
+  azure_synapse: 'DATA_PLANE',
+  mysql: 'DATA_PLANE',
+  // Ingestion — DATA_PLANE
+  fivetran: 'DATA_PLANE',
+  airbyte: 'DATA_PLANE',
+  stitch: 'DATA_PLANE',
+  // Transformation / Orchestration — DATA_PLANE
+  dbt_cloud: 'DATA_PLANE',
+  dbt_core: 'DATA_PLANE',
+  airflow: 'DATA_PLANE',
+  dagster: 'DATA_PLANE',
+  prefect: 'DATA_PLANE',
+  n8n: 'DATA_PLANE',
+  // Reporting / BI — DATA_PLANE
+  looker: 'DATA_PLANE',
+  tableau: 'DATA_PLANE',
+  metabase: 'DATA_PLANE',
+  powerbi: 'DATA_PLANE',
+  // Observability — DATA_PLANE
+  monte_carlo: 'DATA_PLANE',
+  bigeye: 'DATA_PLANE',
+  soda: 'DATA_PLANE',
+  elementary: 'DATA_PLANE',
+  // Storage — DATA_PLANE
+  amazon_s3: 'DATA_PLANE',
+  gcs: 'DATA_PLANE',
+  adls: 'DATA_PLANE',
+  // Version Control — CONTROL_PLANE
+  github: 'CONTROL_PLANE',
+  github_issues: 'CONTROL_PLANE',
+  gitlab: 'CONTROL_PLANE',
+  bitbucket: 'CONTROL_PLANE',
+  // Notifications — CONTROL_PLANE
+  slack: 'CONTROL_PLANE',
+  teams: 'CONTROL_PLANE',
+  pagerduty: 'CONTROL_PLANE',
+  opsgenie: 'CONTROL_PLANE',
+  // Project Management — CONTROL_PLANE
+  jira: 'CONTROL_PLANE',
+  linear: 'CONTROL_PLANE',
+  asana: 'CONTROL_PLANE',
+  // Infrastructure — CONTROL_PLANE
+  linux_server: 'CONTROL_PLANE',
+  // Other — CONTROL_PLANE
+  custom_webhook: 'CONTROL_PLANE',
+};
+
+/** Look up graph domain for a tool, defaulting to DATA_PLANE. */
+export function getGraphDomain(toolId: string): GraphDomain {
+  return GRAPH_DOMAIN_MAP[toolId] ?? 'DATA_PLANE';
+}
+
+/** Check if a tool is on the data plane (produces lineage). */
+export function isDataPlane(toolId: string): boolean {
+  return getGraphDomain(toolId) === 'DATA_PLANE';
+}
+
+/** Check if a tool is on the control plane (no lineage). */
+export function isControlPlane(toolId: string): boolean {
+  return getGraphDomain(toolId) === 'CONTROL_PLANE';
 }

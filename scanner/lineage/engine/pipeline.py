@@ -85,6 +85,9 @@ async def run_extraction_pipeline(
         # Step 2.6: Health enrichment (Elementary test results → node health)
         health_dict = _run_health_enrichment(graph, tool_configs, run_id)
 
+        # Step 2.6b: Fallback — successfully extracted nodes default to HEALTHY
+        fallback_dict = _apply_extraction_health_fallback(graph, run_id)
+
         # Step 2.7: Infer ingestion landing zones (schema-agnostic)
         # Must run AFTER cross-tool synthesis (which adds adapter edges)
         # and BEFORE bridge rules (which need container awareness).
@@ -151,6 +154,7 @@ async def run_extraction_pipeline(
                 **result.stats,
                 "cross_tool_synthesis": synthesis_dict,
                 "health_enrichment": health_dict,
+                "health_fallback": fallback_dict,
                 "landing_zones": landing_zone_dict,
                 "bridge": bridge_dict,
                 "views_built": list(views.keys()),
@@ -337,6 +341,31 @@ def _run_health_enrichment(
             run_id, e,
         )
         return None
+
+
+def _apply_extraction_health_fallback(
+    graph: Any,
+    run_id: str,
+) -> Dict[str, int]:
+    """Mark successfully-extracted nodes as HEALTHY if still UNKNOWN.
+
+    Runs after Elementary enrichment so test-based health takes priority.
+    Nodes with observed_at set were directly discovered by an adapter,
+    so if no test data contradicts, they're considered healthy.
+    """
+    from ..graph import HealthStatus
+
+    promoted = 0
+    for node in graph.nodes.values():
+        if node.health_status == HealthStatus.UNKNOWN and node.observed_at is not None:
+            node.health_status = HealthStatus.HEALTHY
+            promoted += 1
+
+    logger.info(
+        "[Pipeline:%s] Health fallback: %d nodes promoted UNKNOWN→HEALTHY",
+        run_id, promoted,
+    )
+    return {"promoted_to_healthy": promoted}
 
 
 async def _run_reconciliation(

@@ -1390,6 +1390,58 @@ class ToolRegistry:
             ],
         ))
 
+        # ==========================================
+        # DRIVER TOOLS (integration health & metadata)
+        # ==========================================
+
+        self._register(Tool(
+            name="check_integration_health",
+            description=(
+                "Check the health / connectivity of a connected integration. "
+                "Returns OK/FAIL status, latency, and last-checked timestamp."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            parameters=[
+                ToolParameter(
+                    "integration_type", "string",
+                    "The integration type to check (e.g. BIGQUERY, SNOWFLAKE, FIVETRAN, SLACK)",
+                    required=True,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="list_integration_assets",
+            description=(
+                "List the data assets discovered from an integration (tables, connectors, "
+                "models, dashboards, etc.) with counts and sample names."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            parameters=[
+                ToolParameter(
+                    "integration_type", "string",
+                    "The integration type to list assets for (e.g. BIGQUERY, DBT_CLOUD, FIVETRAN)",
+                    required=True,
+                ),
+            ],
+        ))
+
+        self._register(Tool(
+            name="get_integration_capabilities",
+            description=(
+                "Get the capabilities of a connected integration — what it can do "
+                "(query, extract metadata, extract lineage, fetch logs, write, etc.)."
+            ),
+            category=ToolCategory.INFRASTRUCTURE,
+            parameters=[
+                ToolParameter(
+                    "integration_type", "string",
+                    "The integration type (e.g. BIGQUERY, AIRFLOW, SLACK, JIRA)",
+                    required=True,
+                ),
+            ],
+        ))
+
     def _register(self, tool: Tool) -> None:
         """Register a tool."""
         self._tools[tool.name] = tool

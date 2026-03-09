@@ -83,6 +83,11 @@ export interface ControlPlaneSource {
   stackId: string | null;
   createdAt: string;
   updatedAt: string;
+
+  // Driver metadata (populated from DriverRegistry)
+  graphDomain?: 'DATA_PLANE' | 'CONTROL_PLANE' | 'NONE';
+  eventsEmitted?: string[];
+  recommendedMonitors?: string[];
 }
 
 export type SourceStatus = 'healthy' | 'degraded' | 'disconnected' | 'expiring_soon' | 'pending';
@@ -92,12 +97,15 @@ export type SourceCapability = 'Query' | 'Logs' | 'Lineage' | 'Metadata' | 'Writ
 export type SortField = 'name' | 'status' | 'layer' | 'lastTestedAt' | 'lastExtractedAt';
 export type SortDir = 'asc' | 'desc';
 
+export type GraphDomainFilter = 'ALL' | 'DATA_PLANE' | 'CONTROL_PLANE';
+
 export interface SourceFilters {
   search: string;
   layers: Set<PipelineLayer>;
   statuses: Set<SourceStatus>;
   extractionStatuses: Set<ExtractionStatus>;
   slaTiers: Set<SlaTier>;
+  graphDomain: GraphDomainFilter;
   sort: { field: SortField; dir: SortDir };
 }
 
@@ -136,6 +144,7 @@ export function getDefaultFilters(): SourceFilters {
     statuses: new Set(),
     extractionStatuses: new Set(),
     slaTiers: new Set(),
+    graphDomain: 'ALL',
     sort: { field: 'name', dir: 'asc' },
   };
 }

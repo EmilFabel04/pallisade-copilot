@@ -211,6 +211,23 @@ export default function SourcesPage() {
           )}
         </div>
 
+        {/* Domain filter (Data Plane / Control Plane / All) */}
+        <div className="flex items-center gap-1 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)] p-0.5">
+          {(['ALL', 'DATA_PLANE', 'CONTROL_PLANE'] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => setFilters(f => ({ ...f, graphDomain: d }))}
+              className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                filters.graphDomain === d
+                  ? 'bg-[var(--active-bg)] text-[var(--text)]'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              {d === 'ALL' ? 'All' : d === 'DATA_PLANE' ? 'Data' : 'Control'}
+            </button>
+          ))}
+        </div>
+
         {/* Layer filter */}
         <FilterDropdown
           label="Layer"

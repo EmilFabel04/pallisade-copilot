@@ -96,6 +96,26 @@ export function LineageFilterBar({
         </div>
       )}
 
+      {/* Graph Domain toggle */}
+      {!isControlPlane && (
+        <div className="flex items-center gap-0.5 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] p-0.5">
+          {(['ALL', 'DATA_PLANE', 'CONTROL_PLANE'] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => onChange({ ...filters, graphDomain: d })}
+              className={`
+                px-2 py-1 rounded-md text-[11px] font-medium transition-colors
+                ${filters.graphDomain === d
+                  ? 'bg-[var(--overlay-strong)] text-[var(--text)]'
+                  : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'}
+              `}
+            >
+              {d === 'ALL' ? 'All' : d === 'DATA_PLANE' ? 'Data' : 'Control'}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Separator */}
       {!isControlPlane && <div className="w-px h-6 bg-[var(--overlay-medium)]" />}
 

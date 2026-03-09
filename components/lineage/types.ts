@@ -243,6 +243,8 @@ export function formatColumnMapping(col: string | ColumnMapping): string {
 export type LineageLevelFilter = 'all' | 'tool' | 'table' | 'column';
 
 // Filter state for the lineage view
+export type GraphDomainFilter = 'ALL' | 'DATA_PLANE' | 'CONTROL_PLANE';
+
 export interface LineageFilterState {
   layers: Set<PipelineLayer>;     // Which layers are visible
   showToolNodes: boolean;          // Show ingestion/transformation/warehouse/reporting tool nodes
@@ -251,6 +253,7 @@ export interface LineageFilterState {
   lineageLevel: LineageLevelFilter; // Filter edges by lineage level
   minConfidence: number;            // Min confidence threshold (0.0–1.0)
   showInferred: boolean;            // Show inferred (bridge) nodes and edges
+  graphDomain: GraphDomainFilter;   // DATA_PLANE / CONTROL_PLANE / ALL
 }
 
 // Quick filter preset
@@ -679,6 +682,7 @@ export function getDefaultFilterState(): LineageFilterState {
     lineageLevel: 'all',
     minConfidence: 0,
     showInferred: false,
+    graphDomain: 'ALL',
   };
 }
 
@@ -693,6 +697,7 @@ export function applyFilterPreset(preset: LineageFilterPreset): LineageFilterSta
     lineageLevel: 'all',
     minConfidence: 0,
     showInferred: false,
+    graphDomain: 'ALL',
   };
 }
 

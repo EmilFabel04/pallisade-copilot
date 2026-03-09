@@ -96,6 +96,13 @@ class IntegrationLayer(Enum):
     WAREHOUSE = "warehouse"
     REPORTING = "reporting"
     OBSERVABILITY = "observability"
+    ORCHESTRATION = "orchestration"
+    STORAGE = "storage"
+    VERSION_CONTROL = "version_control"
+    NOTIFICATIONS = "notifications"
+    TICKETING = "ticketing"
+    INFRASTRUCTURE = "infrastructure"
+    OTHER = "other"
 
 
 @dataclass
@@ -108,10 +115,19 @@ class IntegrationInfo:
     status: str
     config: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+    graph_domain: str = "DATA_PLANE"  # DATA_PLANE | CONTROL_PLANE | NONE
+
     @property
     def is_active(self) -> bool:
         return self.status == "ACTIVE"
+
+    @property
+    def is_data_plane(self) -> bool:
+        return self.graph_domain == "DATA_PLANE"
+
+    @property
+    def is_control_plane(self) -> bool:
+        return self.graph_domain == "CONTROL_PLANE"
 
 
 @dataclass

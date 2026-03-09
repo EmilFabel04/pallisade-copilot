@@ -15,6 +15,14 @@ from .context_builder import CopilotContext, IntegrationInfo, TableSchema
 from lineage.engine.store import Filters
 from lineage.graph import LineageLevel, LinePlane, PlatformDomain, AssetKind
 
+# Driver imports (lazy — may not be loaded if loader hasn't run yet)
+try:
+    from scanner.drivers.registry import DriverRegistry
+    from scanner.drivers.base import IntegrationDriver as _DriverBase
+except ImportError:
+    DriverRegistry = None  # type: ignore
+    _DriverBase = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,10 +43,12 @@ class ToolExecutor:
         """
         self.context = context
         self._adapters: Dict[str, Any] = {}
+        self._drivers: Dict[str, Any] = {}  # integration_type -> IntegrationDriver instance
         # In-session cache of anomaly metric values.
         # Key: "table_fqn.column.metric" → list of floats collected across runs.
         self._anomaly_baselines: Dict[str, List[float]] = {}
         self._initialize_adapters()
+        self._initialize_drivers()
     
     def _initialize_adapters(self):
         """Initialize adapters for connected integrations."""
@@ -56,6 +66,50 @@ class ToolExecutor:
             except Exception as e:
                 logger.warning(f"Failed to initialize adapter for {integration.type}: {e}")
     
+    def _initialize_drivers(self):
+        """Initialize IntegrationDriver instances for connected integrations."""
+        if DriverRegistry is None:
+            return
+        for integration in self.context.integrations:
+            if not integration.is_active:
+                continue
+            itype = integration.type.upper()
+            if itype in self._drivers:
+                continue
+            driver_cls = DriverRegistry.get(itype)
+            if driver_cls is not None:
+                try:
+                    self._drivers[itype] = driver_cls()
+                except Exception as e:
+                    logger.debug("Failed to create driver for %s: %s", itype, e)
+
+    def get_driver(self, integration_type: str) -> Optional[Any]:
+        """Look up a loaded IntegrationDriver by type."""
+        return self._drivers.get(integration_type.upper())
+
+    async def execute_driver_health_check(self, integration_type: str) -> ToolResult:
+        """Run health_check via the driver for a given integration."""
+        driver = self.get_driver(integration_type)
+        if not driver:
+            return ToolResult(success=False, error=f"No driver for {integration_type}")
+        # Find config from context
+        for integ in self.context.integrations:
+            if integ.type.upper() == integration_type.upper():
+                result = driver.health_check(integ.config)
+                return ToolResult(success=result.ok, data=result.to_dict(), error=None if result.ok else result.message)
+        return ToolResult(success=False, error=f"Integration {integration_type} not connected")
+
+    async def execute_driver_metadata(self, integration_type: str) -> ToolResult:
+        """Run extract_metadata via the driver for a given integration."""
+        driver = self.get_driver(integration_type)
+        if not driver:
+            return ToolResult(success=False, error=f"No driver for {integration_type}")
+        for integ in self.context.integrations:
+            if integ.type.upper() == integration_type.upper():
+                summaries = driver.extract_metadata(integ.config)
+                return ToolResult(success=True, data=[s.to_dict() for s in summaries])
+        return ToolResult(success=False, error=f"Integration {integration_type} not connected")
+
     async def fetch_warehouse_schema(self) -> Dict[str, List[TableSchema]]:
         """
         Fetch schema information from warehouses relevant to the user's query.

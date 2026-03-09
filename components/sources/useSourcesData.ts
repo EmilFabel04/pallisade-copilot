@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePipeline } from '@/contexts/PipelineContext';
-import { PipelineLayer } from '@/components/pipeline/types';
+import { PipelineLayer, getGraphDomain } from '@/components/pipeline/types';
 import { getCapabilities } from './capabilities';
 import {
   ControlPlaneSource,
@@ -189,6 +189,7 @@ function normalize(raw: any, allToolTypes: string[]): ControlPlaneSource {
     inheritanceState: raw.inheritanceState || null,
     config: raw.config || null,
     stackId: raw.stackId || null,
+    graphDomain: getGraphDomain(toolType),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -255,6 +256,11 @@ export function filterAndSort(sources: ControlPlaneSource[], filters: SourceFilt
   // SLA tier filter
   if (filters.slaTiers.size > 0) {
     result = result.filter(s => s.contract?.slaTier && filters.slaTiers.has(s.contract.slaTier));
+  }
+
+  // Graph domain filter (DATA_PLANE / CONTROL_PLANE / ALL)
+  if (filters.graphDomain && filters.graphDomain !== 'ALL') {
+    result = result.filter(s => s.graphDomain === filters.graphDomain);
   }
 
   // Sort

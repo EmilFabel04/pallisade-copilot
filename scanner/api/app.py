@@ -74,11 +74,16 @@ def create_app() -> FastAPI:
             content={"error": "Internal server error", "detail": str(exc)}
         )
     
+    # Register all integration drivers
+    from scanner.drivers.loader import register_all_drivers
+    register_all_drivers()
+
     # Register Routers
     from .routers import health_router, database_router, lineage_router, coverage_router, server_router
     from .routers.copilot import router as copilot_router
     from .routers.dbt import router as dbt_router
     from .routers.schedule import router as schedule_router
+    from .routers.drivers import router as drivers_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -103,6 +108,9 @@ def create_app() -> FastAPI:
 
     # Server/Infrastructure API
     app.include_router(server_router, prefix="/api/v1", tags=["Server"])
+
+    # Integration Drivers API
+    app.include_router(drivers_router, prefix="/api/v1", tags=["Drivers"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

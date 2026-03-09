@@ -46,11 +46,16 @@ export function Section({
 
 // ─── Health Row ───────────────────────────────────────────────────────
 
-export function HealthRow({ label, count, color }: { label: string; count: number; color: string }) {
+export function HealthRow({ label, pct, color }: { label: string; pct: number; color: string }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-[12px]" style={{ color }}>{label}</span>
-      <span className="text-[12px] text-[var(--text)]">{count}</span>
+      <div className="flex items-center gap-2 flex-1">
+        <span className="text-[12px]" style={{ color }}>{label}</span>
+        <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden">
+          <div className="h-full rounded-full" style={{ backgroundColor: color, width: `${pct}%` }} />
+        </div>
+      </div>
+      <span className="text-[12px] text-[var(--text)] ml-2 w-10 text-right">{pct}%</span>
     </div>
   );
 }
@@ -62,13 +67,14 @@ export function HealthSummaryDisplay({ summary }: { summary: HealthSummary }) {
   if (total === 0) {
     return <p className="text-[12px] text-[var(--muted)] italic">No health data available</p>;
   }
+  const pct = (n: number) => Math.round((n / total) * 100);
   return (
     <div className="space-y-1.5">
-      {summary.healthy > 0 && <HealthRow label="Healthy" count={summary.healthy} color="#10B981" />}
-      {summary.degraded > 0 && <HealthRow label="Degraded" count={summary.degraded} color="#F59E0B" />}
-      {summary.failing > 0 && <HealthRow label="Failing" count={summary.failing} color="#EF4444" />}
-      {summary.stale > 0 && <HealthRow label="Stale" count={summary.stale} color="#F59E0B" />}
-      {summary.unknown > 0 && <HealthRow label="Unknown" count={summary.unknown} color="#6B7280" />}
+      {summary.healthy > 0 && <HealthRow label="Healthy" pct={pct(summary.healthy)} color="#10B981" />}
+      {summary.degraded > 0 && <HealthRow label="Degraded" pct={pct(summary.degraded)} color="#F59E0B" />}
+      {summary.failing > 0 && <HealthRow label="Failing" pct={pct(summary.failing)} color="#EF4444" />}
+      {summary.stale > 0 && <HealthRow label="Stale" pct={pct(summary.stale)} color="#F59E0B" />}
+      {summary.unknown > 0 && <HealthRow label="Unknown" pct={pct(summary.unknown)} color="#6B7280" />}
     </div>
   );
 }
