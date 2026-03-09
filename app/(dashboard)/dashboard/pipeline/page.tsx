@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, CircleAlert, CircleDashed, GitBranch, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, X, Zap } from 'lucide-react';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
 import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
@@ -660,12 +661,7 @@ export default function PipelinePage() {
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-3 min-w-0">
-                          <div
-                            className="w-9 h-9 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
-                            style={{ backgroundColor: `${gColor}30`, color: gColor }}
-                          >
-                            {connector.name.charAt(0)}
-                          </div>
+                          <ToolIcon toolType={connector.id} size={36} />
                           <div className="min-w-0">
                             <h4 className="font-medium text-sm truncate">{connector.name}</h4>
                             <p className="text-xs text-[var(--muted)] mt-0.5 truncate">{connector.description}</p>

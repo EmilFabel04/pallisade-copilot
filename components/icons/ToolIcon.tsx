@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -13,10 +13,23 @@ import { cn } from '@/lib/utils';
  *   <ToolIcon toolType="snowflake" size={20} className="flex-shrink-0" />
  *
  * To add a new integration:
- *   1. Add an SVG component function below
- *   2. Add entry to TOOL_SVGS registry
- *   3. Add entry to TOOL_LABELS
+ *   1. Add SVG to public/icon_logos/ and add entry to EXTERNAL_SVG_MAP
+ *      (or add inline SVG component + TOOL_SVGS entry as fallback)
+ *   2. Add entry to TOOL_LABELS
  */
+
+/** Detect light mode (html.light class set by layout.tsx). */
+function useIsLightMode() {
+  const [isLight, setIsLight] = useState(false);
+  useEffect(() => {
+    const check = () => setIsLight(document.documentElement.classList.contains('light'));
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
+  return isLight;
+}
 
 export interface ToolIconProps {
   toolType: string;
@@ -27,9 +40,40 @@ export interface ToolIconProps {
 
 export function ToolIcon({ toolType, size = 28, className }: ToolIconProps) {
   const key = toolType.toLowerCase();
-  const LogoSvg = TOOL_SVGS[key];
   const label = TOOL_LABELS[key] || toolType.replace(/_/g, ' ');
+  const isLight = useIsLightMode();
 
+  // 1. Prefer external SVG file from public/icon_logos/
+  const entry = EXTERNAL_SVG_MAP[key];
+  const externalPath = entry
+    ? typeof entry === 'string'
+      ? entry
+      : isLight ? entry.light : entry.dark
+    : null;
+
+  if (externalPath) {
+    return (
+      <div
+        className={cn('flex items-center justify-center flex-shrink-0 rounded-lg', className)}
+        style={{ width: size, height: size }}
+        role="img"
+        aria-label={label}
+        title={label}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={externalPath}
+          alt=""
+          width={size}
+          height={size}
+          style={{ width: size, height: size, objectFit: 'contain' }}
+        />
+      </div>
+    );
+  }
+
+  // 2. Fall back to inline React SVG component
+  const LogoSvg = TOOL_SVGS[key];
   if (LogoSvg) {
     return (
       <div
@@ -44,7 +88,7 @@ export function ToolIcon({ toolType, size = 28, className }: ToolIconProps) {
     );
   }
 
-  // Fallback: coloured initial
+  // 3. Fallback: coloured initial badge
   const color = FALLBACK_COLORS[key] || '#6B7280';
   const initials = key.slice(0, 2).toUpperCase();
   const fontSize = Math.max(8, size * 0.32);
@@ -112,6 +156,56 @@ const TOOL_LABELS: Record<string, string> = {
   bitbucket: 'Bitbucket',
   linux_server: 'Linux Server',
   custom_webhook: 'Custom Webhook',
+};
+
+// ─── External SVG files (public/icon_logos/) ────────────────
+// These take priority over inline SVG components.
+// Use a string for a single icon, or { dark, light } for theme variants.
+type SvgEntry = string | { dark: string; light: string };
+const EXTERNAL_SVG_MAP: Record<string, SvgEntry> = {
+  // Warehouses
+  bigquery: '/icon_logos/google-bigquery-logo-1.svg',
+  snowflake: '/icon_logos/snowflake-data-cloud-icon.svg',
+  redshift: '/icon_logos/aws-redshift-logo.svg',
+  postgres: '/icon_logos/postgresql.svg',
+  sqlserver: '/icon_logos/azure-sql-server.svg',
+  azure_sql: '/icon_logos/azure-sql-server.svg',
+  azure_synapse: '/icon_logos/Microsoft_Azure-OXJddnt9u_brandlogos.net.svg',
+  databricks: '/icon_logos/azure-databricks.svg',
+  // Ingestion
+  fivetran: '/icon_logos/fivetran_logo_icon_170149.svg',
+  airbyte: '/icon_logos/Airbyte_idZV_I3WYE_0.svg',
+  // Transformation / Orchestration
+  dbt_cloud: '/icon_logos/dbt-seeklogo.svg',
+  dbt_core: '/icon_logos/dbt-seeklogo.svg',
+  airflow: '/icon_logos/apache-airflow.svg',
+  dagster: '/icon_logos/dagster-primary-mark.svg',
+  prefect: '/icon_logos/prefect-1.svg',
+  // Reporting / BI
+  looker: '/icon_logos/google-looker-seeklogo.svg',
+  tableau: '/icon_logos/tableau-icon-svgrepo-com.svg',
+  metabase: '/icon_logos/metabase.svg',
+  powerbi: '/icon_logos/powerbi.svg',
+  // Cloud Storage
+  amazon_s3: { dark: '/icon_logos/amazon-web-services-light.svg', light: '/icon_logos/amazon-web-services.svg' },
+  gcs: '/icon_logos/google-cloud-platform.svg',
+  adls: '/icon_logos/Microsoft_Azure-OXJddnt9u_brandlogos.net.svg',
+  // Version Control
+  github: { dark: '/icon_logos/github-light.svg', light: '/icon_logos/github.svg' },
+  github_issues: { dark: '/icon_logos/github-light.svg', light: '/icon_logos/github.svg' },
+  gitlab: '/icon_logos/gitlab.svg',
+  bitbucket: '/icon_logos/bitbucket.svg',
+  // Notifications
+  slack: '/icon_logos/slack.svg',
+  pagerduty: '/icon_logos/pagerduty.svg',
+  opsgenie: '/icon_logos/atlassian-opsgenie.svg',
+  teams: '/icon_logos/microsoft-teams.svg',
+  // Project Management
+  jira: '/icon_logos/jira.svg',
+  linear: { dark: '/icon_logos/linear-dark.svg', light: '/icon_logos/linear.svg' },
+  asana: '/icon_logos/asana.svg',
+  // Infrastructure
+  linux_server: '/icon_logos/linux.svg',
 };
 
 // ─── Fallback colours for future unknown tools ──────────────
@@ -643,5 +737,5 @@ const TOOL_SVGS: Record<string, (props: SvgProps) => React.ReactElement> = {
   custom_webhook: CustomWebhookLogo,
 };
 
-// Populate the exported list now that TOOL_SVGS is defined.
-INTEGRATION_TYPES = Object.keys(TOOL_SVGS);
+// Populate the exported list — union of external SVGs and inline SVGs.
+INTEGRATION_TYPES = [...new Set([...Object.keys(EXTERNAL_SVG_MAP), ...Object.keys(TOOL_SVGS)])];
