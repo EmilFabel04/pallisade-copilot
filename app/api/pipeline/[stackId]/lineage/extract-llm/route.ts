@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
+import { notifyEvents } from '@/lib/notifications';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -172,6 +173,13 @@ export async function POST(
     if (!scannerResponse.ok) {
       const errorText = await scannerResponse.text().catch(() => 'Unknown error');
       console.error(`[LLM-EXTRACT] Scanner API error: ${scannerResponse.status} ${errorText}`);
+
+      notifyEvents.lineageExtractionFailed(
+        organizationId, stackId, (session.user as any).id,
+        toolConfigs.map((t: any) => t.tool_type).join(', '),
+        errorText.slice(0, 200),
+      );
+
       return NextResponse.json(
         { error: `LLM extraction failed: ${errorText}` },
         { status: scannerResponse.status }

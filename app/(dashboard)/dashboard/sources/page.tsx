@@ -35,7 +35,7 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 ];
 
 export default function SourcesPage() {
-  const { sources, summary, loading, error, refresh } = useSourcesData();
+  const { sources, summary, pipelineContract, loading, error, refresh } = useSourcesData();
   const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
   const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
   const [contractSource, setContractSource] = useState<ControlPlaneSource | null>(null);
@@ -371,6 +371,7 @@ export default function SourcesPage() {
       {contractSource && (
         <EditContractModal
           source={contractSource}
+          pipelineContract={pipelineContract}
           onClose={() => setContractSource(null)}
           onSaved={handleContractSaved}
         />

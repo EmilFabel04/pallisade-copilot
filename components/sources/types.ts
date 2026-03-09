@@ -1,4 +1,5 @@
 import { PipelineLayer } from '@/components/pipeline/types';
+import type { EffectiveContract, InheritanceState } from '@/components/contracts/types';
 
 // Source contract (ownership + expectations)
 export interface SourceContractData {
@@ -9,6 +10,10 @@ export interface SourceContractData {
   expectedFreshnessMinutes: number | null;
   expectedExtractionFrequencyMinutes: number | null;
   notes: string | null;
+  // Inheritance fields
+  inheritFromPipeline?: boolean;
+  pipelineStackId?: string | null;
+  overridesJson?: Record<string, any> | null;
 }
 
 export type SlaTier = 'T0' | 'T1' | 'T2' | 'T3';
@@ -70,6 +75,8 @@ export interface ControlPlaneSource {
 
   // Contract
   contract: SourceContractData | null;
+  effectiveContract: EffectiveContract | null;
+  inheritanceState: InheritanceState | null;
 
   // Metadata
   config: Record<string, any> | null;

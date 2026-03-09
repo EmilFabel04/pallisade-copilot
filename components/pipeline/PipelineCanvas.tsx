@@ -29,6 +29,7 @@ import 'reactflow/dist/style.css';
 import { PipelineNode, PipelineEdge, LAYER_COLORS, PipelineLayer } from './types';
 import NodeConfigModal from './NodeConfigModal';
 import { LayoutGrid, Trash2 } from 'lucide-react';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 interface PipelineCanvasProps {
   nodes: PipelineNode[];
@@ -118,22 +119,7 @@ function CustomNode({ data }: { data: any }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div
-            style={{
-              width: '36px',
-              height: '36px',
-              borderRadius: '8px',
-              background: `${layerColor}30`,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: layerColor,
-              fontWeight: 'bold',
-              fontSize: '14px',
-            }}
-          >
-            {data.name?.charAt(0) || 'N'}
-          </div>
+          <ToolIcon toolType={data.toolType || data.name || ''} size={36} />
           <div>
             <div style={{ fontWeight: '600', color: 'var(--text)', fontSize: '14px' }}>
               {data.name || 'Node'}

@@ -9,6 +9,7 @@
 import { memo } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
 import { PipelineNode, ToolDefinition, LAYER_COLORS, STATUS_COLORS, PipelineLayer } from './types';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 interface PipelineNodeData extends PipelineNode {
   tool?: ToolDefinition;
@@ -49,13 +50,8 @@ function PipelineNodeComponent({ data, selected }: NodeProps<PipelineNodeData>) 
         className="px-4 py-3 flex items-center gap-3"
         style={{ backgroundColor: `${layerColor}15` }}
       >
-        {/* Tool Icon Circle */}
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold"
-          style={{ backgroundColor: `${layerColor}25`, color: layerColor }}
-        >
-          {data.name.charAt(0).toUpperCase()}
-        </div>
+        {/* Tool Icon */}
+        <ToolIcon toolType={data.toolType} size={40} />
         
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm text-[var(--text)] truncate">{data.name}</div>

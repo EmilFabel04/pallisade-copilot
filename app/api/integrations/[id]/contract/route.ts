@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { validateOverrides } from '@/components/contracts/types';
 
 // GET /api/integrations/[id]/contract — fetch source contract
 export async function GET(
@@ -40,10 +41,11 @@ export async function PATCH(
 
     const body = await request.json();
 
-    // Validate allowed fields only
+    // Validate allowed fields
     const allowed = [
       'ownerUser', 'ownerTeam', 'contactChannel', 'slaTier',
       'expectedFreshnessMinutes', 'expectedExtractionFrequencyMinutes', 'notes',
+      'inheritFromPipeline', 'pipelineStackId', 'overridesJson',
     ];
     const data: Record<string, any> = {};
     for (const key of allowed) {
@@ -66,13 +68,27 @@ export async function PATCH(
       }
     }
 
-    // Verify integration exists
+    // Validate inheritFromPipeline
+    if ('inheritFromPipeline' in data) {
+      data.inheritFromPipeline = Boolean(data.inheritFromPipeline);
+    }
+
+    // Verify integration exists and get its type for override validation
     const integration = await prisma.integration.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, type: true },
     });
     if (!integration) {
       return NextResponse.json({ error: 'Integration not found' }, { status: 404 });
+    }
+
+    // Validate overridesJson against tool-specific schema
+    if (data.overridesJson && typeof data.overridesJson === 'object' && Object.keys(data.overridesJson).length > 0) {
+      const validation = validateOverrides(integration.type, data.overridesJson);
+      if (!validation.success) {
+        return NextResponse.json({ error: validation.error }, { status: 400 });
+      }
+      data.overridesJson = validation.data;
     }
 
     const contract = await prisma.sourceContract.upsert({

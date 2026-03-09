@@ -2,6 +2,7 @@
 
 import { useRef, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 export type MentionItem = {
   label: string;
@@ -10,31 +11,6 @@ export type MentionItem = {
   nodeId: string;
   toolType: string;
   detail?: string;
-};
-
-const TOOL_LABELS: Record<string, string> = {
-  pipeline: 'ALL',
-  bigquery: 'BQ', snowflake: 'SF', postgres: 'PG', redshift: 'RS',
-  dbt_cloud: 'dbt', dbt_core: 'dbt',
-  fivetran: 'FT', airbyte: 'AB', stitch: 'ST',
-  looker: 'LK', tableau: 'TB', metabase: 'MB',
-  airflow: 'AF', dagster: 'DG', prefect: 'PF',
-};
-
-const TOOL_COLORS: Record<string, string> = {
-  pipeline: 'bg-gradient-to-br from-violet-500 to-blue-500',
-  bigquery: 'bg-blue-500',
-  snowflake: 'bg-cyan-400',
-  postgres: 'bg-indigo-500',
-  redshift: 'bg-red-500',
-  dbt_cloud: 'bg-orange-500',
-  dbt_core: 'bg-orange-500',
-  fivetran: 'bg-pink-500',
-  airbyte: 'bg-violet-500',
-  airflow: 'bg-teal-500',
-  dagster: 'bg-purple-500',
-  looker: 'bg-emerald-500',
-  tableau: 'bg-sky-500',
 };
 
 interface MentionDropdownProps {
@@ -85,8 +61,6 @@ export function MentionDropdown({ items, selectedIndex, onSelect, onClose }: Men
   const renderItem = (item: MentionItem) => {
     const idx = globalIndex++;
     const isSelected = idx === selectedIndex;
-    const toolLabel = TOOL_LABELS[item.toolType] || item.toolType.slice(0, 2).toUpperCase();
-    const dotColor = TOOL_COLORS[item.toolType] || 'bg-gray-500';
 
     return (
       <div
@@ -101,9 +75,7 @@ export function MentionDropdown({ items, selectedIndex, onSelect, onClose }: Men
           onSelect(item);
         }}
       >
-        <div className={cn('w-5 h-5 rounded flex items-center justify-center flex-shrink-0', dotColor)}>
-          <span className="text-[8px] font-bold text-white">{toolLabel}</span>
-        </div>
+        <ToolIcon toolType={item.toolType} size={20} />
         <div className="flex-1 min-w-0">
           <span className="text-xs text-[var(--text-secondary)] truncate">{item.label}</span>
         </div>

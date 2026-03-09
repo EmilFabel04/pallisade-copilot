@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { encrypt } from '@/lib/crypto';
+import { notifyEvents } from '@/lib/notifications';
 
 // GET /api/integrations/[id] - Get a specific integration
 export async function GET(
@@ -151,6 +152,12 @@ export async function DELETE(
     await prisma.integration.delete({
       where: { id },
     });
+
+    // Fire-and-forget notification
+    notifyEvents.integrationDeleted(
+      user?.organizationId || '', (session.user as any).id,
+      existing.name, id,
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

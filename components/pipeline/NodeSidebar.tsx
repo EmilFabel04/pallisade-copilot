@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import { TOOLS, LAYER_COLORS, PipelineLayer } from './types';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 interface NodeSidebarProps {
   onAddNode: (toolType: string, layer: string) => void;
@@ -127,13 +128,8 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
                     }}
                     className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-[var(--overlay-faint)] hover:bg-[var(--hover-bg)] border border-transparent hover:border-[var(--border-medium)] transition-all group"
                   >
-                    {/* Tool Icon Circle */}
-                    <div
-                      className="w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold group-hover:scale-105 transition-transform"
-                      style={{ backgroundColor: `${LAYER_COLORS[layer]}20`, color: LAYER_COLORS[layer] }}
-                    >
-                      {tool.name.charAt(0)}
-                    </div>
+                    {/* Tool Icon */}
+                    <ToolIcon toolType={tool.id} size={36} className="group-hover:scale-105 transition-transform" />
                     <div className="flex-1 text-left min-w-0">
                       <div className="text-sm font-medium text-[var(--text)] truncate">{tool.name}</div>
                       <div className="text-[10px] text-[var(--muted)] truncate">{tool.description}</div>

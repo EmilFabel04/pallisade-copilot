@@ -7,6 +7,7 @@ import { SlackClient } from '@/lib/integrations/slack';
 import { JiraClient } from '@/lib/integrations/jira';
 import { formatPlanForSlack, formatPlanForJira, formatPlanForGitHubIssue } from '@/lib/integrations/share-plan';
 import type { ChangePlan } from '@/types/change-plan';
+import { notifyEvents } from '@/lib/notifications';
 
 interface SharePlanRequest {
   plan: ChangePlan;
@@ -102,6 +103,8 @@ export async function POST(request: NextRequest) {
         const message = formatPlanForSlack(plan);
         await slackClient.sendMessage(message);
 
+        notifyEvents.planShared(user.organizationId!, undefined, (session.user as any).id, plan.title || 'Change Plan', 'Slack');
+
         return NextResponse.json({
           success: true,
           message: 'Plan shared to Slack successfully',
@@ -132,6 +135,8 @@ export async function POST(request: NextRequest) {
 
         const issue = formatPlanForJira(plan);
         const result = await jiraClient.createIssue(issue);
+
+        notifyEvents.planShared(user.organizationId!, undefined, (session.user as any).id, plan.title || 'Change Plan', 'Jira');
 
         return NextResponse.json({
           success: true,
@@ -186,6 +191,8 @@ export async function POST(request: NextRequest) {
         }
 
         const githubIssue = await response.json();
+
+        notifyEvents.planShared(user.organizationId!, undefined, (session.user as any).id, plan.title || 'Change Plan', 'GitHub');
 
         return NextResponse.json({
           success: true,

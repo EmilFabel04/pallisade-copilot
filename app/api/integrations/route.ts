@@ -3,6 +3,9 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { encrypt, decrypt } from '@/lib/crypto';
+import { resolveEffectiveContract } from '@/lib/contracts/resolver';
+import { PipelineContractData, SourceContractWithOverrides } from '@/components/contracts/types';
+import { notifyEvents } from '@/lib/notifications';
 
 // GET /api/integrations - List all integrations for the user's organization
 // Now includes both legacy Integrations AND Pipeline nodes for compatibility
@@ -59,17 +62,7 @@ export async function GET(request: NextRequest) {
         createdAt: true,
         updatedAt: true,
         pipelineNodes: { select: { id: true } },
-        sourceContract: {
-          select: {
-            ownerUser: true,
-            ownerTeam: true,
-            contactChannel: true,
-            slaTier: true,
-            expectedFreshnessMinutes: true,
-            expectedExtractionFrequencyMinutes: true,
-            notes: true,
-          },
-        },
+        sourceContract: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -114,6 +107,9 @@ export async function GET(request: NextRequest) {
                 expectedFreshnessMinutes: true,
                 expectedExtractionFrequencyMinutes: true,
                 notes: true,
+                inheritFromPipeline: true,
+                pipelineStackId: true,
+                overridesJson: true,
               },
             },
           },
@@ -166,8 +162,54 @@ export async function GET(request: NextRequest) {
       }));
     const allIntegrations = [...pipelineAsIntegrations, ...dedupedLegacy];
 
-    return NextResponse.json({ 
-      integrations: allIntegrations,
+    // Fetch pipeline contract if stackId provided, for effective contract resolution
+    let pipelineContractData: PipelineContractData | null = null;
+    if (stackId) {
+      try {
+        const pc = await prisma.pipelineContract.findUnique({
+          where: { pipelineStackId: stackId },
+        });
+        if (pc) {
+          pipelineContractData = {
+            ownerUser: pc.ownerUser,
+            ownerTeam: pc.ownerTeam,
+            contactChannel: pc.contactChannel,
+            slaTier: pc.slaTier as any,
+            expectedFreshnessMinutes: pc.expectedFreshnessMinutes,
+            expectedExtractionFrequencyMinutes: pc.expectedExtractionFrequencyMinutes,
+            alertPolicyJson: pc.alertPolicyJson as any,
+            notes: pc.notes,
+          };
+        }
+      } catch (err) {
+        console.error('Error fetching pipeline contract:', err);
+      }
+    }
+
+    // Compute effective contract for each integration
+    const integrationsWithEffective = allIntegrations.map(integration => {
+      try {
+        const sc = integration.sourceContract as SourceContractWithOverrides | null;
+        const intType = integration.type || '';
+        const effective = resolveEffectiveContract(pipelineContractData, sc, intType);
+        return {
+          ...integration,
+          effectiveContract: effective,
+          inheritanceState: effective.inheritanceState,
+        };
+      } catch (err) {
+        console.error('Error resolving contract for integration:', integration.id, err);
+        return {
+          ...integration,
+          effectiveContract: null,
+          inheritanceState: null,
+        };
+      }
+    });
+
+    return NextResponse.json({
+      integrations: integrationsWithEffective,
+      pipelineContract: pipelineContractData,
       // Also provide separate access for modern consumers
       pipelineNodes,
       legacyIntegrations,
@@ -278,6 +320,11 @@ export async function POST(request: NextRequest) {
         organizationId,
       },
     });
+
+    // Fire-and-forget notification
+    notifyEvents.integrationCreated(
+      organizationId!, undefined, user.id, name, type, integration.id,
+    );
 
     return NextResponse.json({
       integration: {

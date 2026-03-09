@@ -2,8 +2,22 @@
 
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Save, Loader2 } from 'lucide-react';
+import { X, Save, Loader2, ArrowDown } from 'lucide-react';
 import { ControlPlaneSource, SourceContractData, SlaTier } from './types';
+import {
+  EffectiveContract,
+  PipelineContractData,
+  SourceContractWithOverrides,
+  InheritanceState,
+  INHERITANCE_CONFIG,
+  getOverrideKey,
+  OVERRIDE_LABELS,
+  validateOverrides,
+} from '@/components/contracts/types';
+import { resolveEffectiveContract } from '@/lib/contracts/resolver';
+import WarehouseOverrides from '@/components/contracts/overrides/WarehouseOverrides';
+import TransformationOverrides from '@/components/contracts/overrides/TransformationOverrides';
+import OrchestrationOverrides from '@/components/contracts/overrides/OrchestrationOverrides';
 
 const SLA_OPTIONS: { value: SlaTier; label: string }[] = [
   { value: 'T0', label: 'T0 — Critical' },
@@ -14,22 +28,39 @@ const SLA_OPTIONS: { value: SlaTier; label: string }[] = [
 
 interface Props {
   source: ControlPlaneSource;
+  pipelineContract?: PipelineContractData | null;
   onClose: () => void;
   onSaved: () => void;
 }
 
-export default function EditContractModal({ source, onClose, onSaved }: Props) {
+export default function EditContractModal({ source, pipelineContract, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState<SourceContractData>({
-    ownerUser: source.contract?.ownerUser || null,
-    ownerTeam: source.contract?.ownerTeam || null,
-    contactChannel: source.contract?.contactChannel || null,
-    slaTier: source.contract?.slaTier || null,
-    expectedFreshnessMinutes: source.contract?.expectedFreshnessMinutes || null,
-    expectedExtractionFrequencyMinutes: source.contract?.expectedExtractionFrequencyMinutes || null,
-    notes: source.contract?.notes || null,
-  });
+
+  // Core fields
+  const [ownerUser, setOwnerUser] = useState(source.contract?.ownerUser || '');
+  const [ownerTeam, setOwnerTeam] = useState(source.contract?.ownerTeam || '');
+  const [contactChannel, setContactChannel] = useState(source.contract?.contactChannel || '');
+  const [slaTier, setSlaTier] = useState<string>(source.contract?.slaTier || '');
+  const [expectedFreshnessMinutes, setExpectedFreshnessMinutes] = useState<string>(
+    source.contract?.expectedFreshnessMinutes?.toString() || ''
+  );
+  const [expectedExtractionFrequencyMinutes, setExpectedExtractionFrequencyMinutes] = useState<string>(
+    source.contract?.expectedExtractionFrequencyMinutes?.toString() || ''
+  );
+  const [notes, setNotes] = useState(source.contract?.notes || '');
+
+  // Inheritance
+  const [inheritFromPipeline, setInheritFromPipeline] = useState(
+    (source.contract as any)?.inheritFromPipeline ?? true
+  );
+
+  // Tool-specific overrides
+  const [overrides, setOverrides] = useState<Record<string, any>>(
+    (source.contract as any)?.overridesJson || {}
+  );
+
+  const overrideKey = getOverrideKey(source.integrationType);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -37,14 +68,48 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // Build effective contract preview
+  const sourceForResolver: SourceContractWithOverrides = {
+    ownerUser: ownerUser || null,
+    ownerTeam: ownerTeam || null,
+    contactChannel: contactChannel || null,
+    slaTier: (slaTier || null) as SlaTier | null,
+    expectedFreshnessMinutes: expectedFreshnessMinutes ? Number(expectedFreshnessMinutes) : null,
+    expectedExtractionFrequencyMinutes: expectedExtractionFrequencyMinutes ? Number(expectedExtractionFrequencyMinutes) : null,
+    notes: notes || null,
+    inheritFromPipeline,
+    pipelineStackId: source.stackId,
+    overridesJson: Object.keys(overrides).length > 0 ? overrides : null,
+  };
+  const effective = resolveEffectiveContract(pipelineContract || null, sourceForResolver, source.integrationType);
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     try {
+      // Clean overrides: remove undefined values
+      const cleanOverrides: Record<string, any> = {};
+      for (const [k, v] of Object.entries(overrides)) {
+        if (v !== undefined && v !== null && v !== '') cleanOverrides[k] = v;
+      }
+
+      const body: Record<string, any> = {
+        ownerUser: ownerUser || null,
+        ownerTeam: ownerTeam || null,
+        contactChannel: contactChannel || null,
+        slaTier: slaTier || null,
+        expectedFreshnessMinutes: expectedFreshnessMinutes ? Number(expectedFreshnessMinutes) : null,
+        expectedExtractionFrequencyMinutes: expectedExtractionFrequencyMinutes ? Number(expectedExtractionFrequencyMinutes) : null,
+        notes: notes || null,
+        inheritFromPipeline,
+        pipelineStackId: source.stackId || null,
+        overridesJson: Object.keys(cleanOverrides).length > 0 ? cleanOverrides : null,
+      };
+
       const res = await fetch(`/api/integrations/${source.id}/contract`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -58,12 +123,14 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
     }
   };
 
-  const update = (key: keyof SourceContractData, value: any) => {
-    setForm(f => ({ ...f, [key]: value || null }));
-  };
-
   const inputClass =
     'w-full px-4 py-3 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)] text-[var(--text)] text-sm placeholder:text-[var(--text-faint)] focus:outline-none focus:border-[var(--border-medium)] transition-colors';
+
+  const pipelinePlaceholder = (field: keyof PipelineContractData) => {
+    if (!inheritFromPipeline || !pipelineContract) return undefined;
+    const val = pipelineContract[field];
+    return val ? `Pipeline default: ${val}` : undefined;
+  };
 
   return createPortal(
     <>
@@ -92,32 +159,59 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
               </div>
             )}
 
+            {/* Inheritance Toggle */}
+            {pipelineContract && (
+              <div className="pb-6 mb-6 border-b border-[var(--subtle-border)]">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-faint)] mb-1">Pipeline Inheritance</h3>
+                    <p className="text-xs text-[var(--text-faint)]">
+                      {inheritFromPipeline
+                        ? 'Inheriting defaults from pipeline contract. Set fields below to override.'
+                        : 'Standalone contract — not inheriting from pipeline.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setInheritFromPipeline(!inheritFromPipeline)}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      inheritFromPipeline ? 'bg-[var(--accent)]' : 'bg-[var(--overlay-medium)]'
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                      inheritFromPipeline ? 'translate-x-5' : ''
+                    }`} />
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Ownership */}
             <Section title="Ownership">
               <Field label="Owner (User)">
                 <input
                   type="text"
-                  value={form.ownerUser || ''}
-                  onChange={(e) => update('ownerUser', e.target.value)}
-                  placeholder="e.g. jane.doe"
+                  value={ownerUser}
+                  onChange={(e) => setOwnerUser(e.target.value)}
+                  placeholder={pipelinePlaceholder('ownerUser') || 'e.g. jane.doe'}
                   className={inputClass}
                 />
               </Field>
               <Field label="Owner (Team)">
                 <input
                   type="text"
-                  value={form.ownerTeam || ''}
-                  onChange={(e) => update('ownerTeam', e.target.value)}
-                  placeholder="e.g. Data Platform"
+                  value={ownerTeam}
+                  onChange={(e) => setOwnerTeam(e.target.value)}
+                  placeholder={pipelinePlaceholder('ownerTeam') || 'e.g. Data Platform'}
                   className={inputClass}
                 />
               </Field>
               <Field label="Contact Channel">
                 <input
                   type="text"
-                  value={form.contactChannel || ''}
-                  onChange={(e) => update('contactChannel', e.target.value)}
-                  placeholder="e.g. #data-alerts"
+                  value={contactChannel}
+                  onChange={(e) => setContactChannel(e.target.value)}
+                  placeholder={pipelinePlaceholder('contactChannel') || 'e.g. #data-alerts'}
                   className={inputClass}
                 />
               </Field>
@@ -127,11 +221,15 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
             <Section title="SLA & Expectations">
               <Field label="SLA Tier">
                 <select
-                  value={form.slaTier || ''}
-                  onChange={(e) => update('slaTier', e.target.value)}
+                  value={slaTier}
+                  onChange={(e) => setSlaTier(e.target.value)}
                   className={inputClass}
                 >
-                  <option value="">None</option>
+                  <option value="">
+                    {inheritFromPipeline && pipelineContract?.slaTier
+                      ? `Pipeline default: ${pipelineContract.slaTier}`
+                      : 'None'}
+                  </option>
                   {SLA_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
@@ -141,9 +239,9 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
                 <input
                   type="number"
                   min={0}
-                  value={form.expectedFreshnessMinutes ?? ''}
-                  onChange={(e) => update('expectedFreshnessMinutes', e.target.value ? Number(e.target.value) : null)}
-                  placeholder="e.g. 60"
+                  value={expectedFreshnessMinutes}
+                  onChange={(e) => setExpectedFreshnessMinutes(e.target.value)}
+                  placeholder={pipelinePlaceholder('expectedFreshnessMinutes') || 'e.g. 60'}
                   className={inputClass}
                 />
               </Field>
@@ -151,24 +249,74 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
                 <input
                   type="number"
                   min={0}
-                  value={form.expectedExtractionFrequencyMinutes ?? ''}
-                  onChange={(e) => update('expectedExtractionFrequencyMinutes', e.target.value ? Number(e.target.value) : null)}
-                  placeholder="e.g. 360"
+                  value={expectedExtractionFrequencyMinutes}
+                  onChange={(e) => setExpectedExtractionFrequencyMinutes(e.target.value)}
+                  placeholder={pipelinePlaceholder('expectedExtractionFrequencyMinutes') || 'e.g. 360'}
                   className={inputClass}
                 />
               </Field>
             </Section>
 
             {/* Notes */}
-            <Section title="Notes" noBorder>
+            <Section title="Notes">
               <textarea
-                value={form.notes || ''}
-                onChange={(e) => update('notes', e.target.value)}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
                 placeholder="Additional notes about this source..."
                 rows={3}
                 className={`${inputClass} resize-none`}
               />
             </Section>
+
+            {/* Tool-Specific Overrides */}
+            {overrideKey && (
+              <Section title={`${OVERRIDE_LABELS[overrideKey]} Overrides`}>
+                {overrideKey === 'warehouse' && (
+                  <WarehouseOverrides value={overrides} onChange={setOverrides} inputClass={inputClass} />
+                )}
+                {overrideKey === 'transformation' && (
+                  <TransformationOverrides value={overrides} onChange={setOverrides} inputClass={inputClass} />
+                )}
+                {overrideKey === 'orchestration' && (
+                  <OrchestrationOverrides value={overrides} onChange={setOverrides} inputClass={inputClass} />
+                )}
+                {!['warehouse', 'transformation', 'orchestration'].includes(overrideKey) && (
+                  <p className="text-xs text-[var(--text-faint)]">
+                    Tool-specific overrides for {OVERRIDE_LABELS[overrideKey]} will be available soon.
+                  </p>
+                )}
+              </Section>
+            )}
+
+            {/* Effective Contract Preview */}
+            <div className="mt-2 p-4 rounded-lg bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
+              <div className="flex items-center gap-2 mb-3">
+                <ArrowDown className="w-3.5 h-3.5 text-[var(--text-faint)]" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-faint)]">
+                  Effective Contract Preview
+                </h3>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                  INHERITANCE_CONFIG[effective.inheritanceState].bg
+                } ${INHERITANCE_CONFIG[effective.inheritanceState].color}`}>
+                  {INHERITANCE_CONFIG[effective.inheritanceState].label}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                <PreviewField label="Owner" value={effective.ownerUser || effective.ownerTeam} />
+                <PreviewField label="Contact" value={effective.contactChannel} />
+                <PreviewField label="SLA Tier" value={effective.slaTier} />
+                <PreviewField label="Freshness" value={effective.expectedFreshnessMinutes ? `${effective.expectedFreshnessMinutes}m` : null} />
+                <PreviewField label="Extraction Freq" value={effective.expectedExtractionFrequencyMinutes ? `${effective.expectedExtractionFrequencyMinutes}m` : null} />
+                {Object.keys(effective.toolOverrides).length > 0 && (
+                  <div className="col-span-2 mt-1 pt-1 border-t border-[var(--subtle-border)]">
+                    <span className="text-[var(--text-faint)]">Tool overrides: </span>
+                    <span className="text-[var(--text-secondary)]">
+                      {Object.entries(effective.toolOverrides).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Footer */}
@@ -197,9 +345,9 @@ export default function EditContractModal({ source, onClose, onSaved }: Props) {
   );
 }
 
-function Section({ title, noBorder, children }: { title: string; noBorder?: boolean; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className={noBorder ? '' : 'pb-6 mb-6 border-b border-[var(--subtle-border)]'}>
+    <div className="pb-6 mb-6 border-b border-[var(--subtle-border)]">
       <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-faint)] mb-4">{title}</h3>
       <div className="space-y-5">{children}</div>
     </div>
@@ -211,6 +359,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <label className="block text-[13px] font-medium text-[var(--text-tertiary)] mb-2">{label}</label>
       {children}
+    </div>
+  );
+}
+
+function PreviewField({ label, value }: { label: string; value: string | number | null | undefined }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="text-[var(--text-faint)]">{label}:</span>
+      <span className={value ? 'text-[var(--text-secondary)]' : 'text-[var(--text-faint)] italic'}>
+        {value || 'not set'}
+      </span>
     </div>
   );
 }

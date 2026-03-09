@@ -5,24 +5,12 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   X, Activity, KeyRound, Shield, Zap, ExternalLink, AlertTriangle, CheckCircle,
-  Clock, Database, Cloud, BarChart3, GitBranch, Cog, Eye, HardDrive, Layers, Server,
-  Download, FileText, User, Users, Hash, MessageSquare, StickyNote, Edit3,
+  Clock, Download, FileText, User, Users, Hash, MessageSquare, StickyNote, Edit3,
 } from 'lucide-react';
 import { LAYER_COLORS, LAYER_LABELS, getToolById } from '@/components/pipeline/types';
 import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG, SLA_CONFIG } from './types';
 import { CAPABILITY_CONFIG } from './capabilities';
-
-const TOOL_ICONS: Record<string, typeof Database> = {
-  bigquery: Database, snowflake: Database, postgres: Database, redshift: Database,
-  sqlserver: Database, azure_sql: Database, azure_synapse: Database, databricks: Database, mysql: Database,
-  fivetran: Cloud, airbyte: Cloud, stitch: Cloud,
-  dbt_cloud: GitBranch, dbt_core: GitBranch,
-  airflow: Cog, dagster: Cog, prefect: Cog, n8n: Cog,
-  looker: BarChart3, tableau: BarChart3, powerbi: BarChart3, metabase: BarChart3,
-  elementary: Eye, monte_carlo: Eye, bigeye: Eye, soda: Eye,
-  amazon_s3: HardDrive, gcs: HardDrive, adls: HardDrive,
-  github: Server,
-};
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 type DrawerTab = 'health' | 'extraction' | 'contract';
 
@@ -77,7 +65,6 @@ interface Props {
 export default function SourceDetailDrawer({ source, onClose, onEditContract }: Props) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<DrawerTab>('health');
-  const Icon = TOOL_ICONS[source.toolType] || Layers;
   const tool = getToolById(source.toolType);
   const displayName = tool?.name || source.name;
   const statusCfg = STATUS_CONFIG[source.status];
@@ -133,12 +120,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
         <div className="sticky top-0 bg-[var(--surface)] border-b border-[var(--subtle-border)] px-5 py-4 z-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div
-                className="w-10 h-10 rounded-lg flex items-center justify-center"
-                style={{ backgroundColor: `${layerColor}15` }}
-              >
-                <Icon className="w-5 h-5" style={{ color: layerColor }} />
-              </div>
+              <ToolIcon toolType={source.toolType} size={40} />
               <div>
                 <div className="text-sm font-semibold text-[var(--text)]">{displayName}</div>
                 <div className="text-xs text-[var(--text-faint)]">

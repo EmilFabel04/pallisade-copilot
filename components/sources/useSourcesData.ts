@@ -142,6 +142,9 @@ function normalizeContract(raw: any): SourceContractData | null {
     expectedFreshnessMinutes: raw.expectedFreshnessMinutes ?? null,
     expectedExtractionFrequencyMinutes: raw.expectedExtractionFrequencyMinutes ?? null,
     notes: raw.notes || null,
+    inheritFromPipeline: raw.inheritFromPipeline ?? true,
+    pipelineStackId: raw.pipelineStackId || null,
+    overridesJson: raw.overridesJson || null,
   };
 }
 
@@ -182,6 +185,8 @@ function normalize(raw: any, allToolTypes: string[]): ControlPlaneSource {
     criticalCount: raw.criticalCount || 0,
     highCount: raw.highCount || 0,
     contract,
+    effectiveContract: raw.effectiveContract || null,
+    inheritanceState: raw.inheritanceState || null,
     config: raw.config || null,
     stackId: raw.stackId || null,
     createdAt: raw.createdAt,
@@ -284,6 +289,7 @@ export function filterAndSort(sources: ControlPlaneSource[], filters: SourceFilt
 export function useSourcesData() {
   const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
   const [sources, setSources] = useState<ControlPlaneSource[]>([]);
+  const [pipelineContract, setPipelineContract] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const lastPipelineIdRef = useRef<string | null>(null);
@@ -316,6 +322,7 @@ export function useSourcesData() {
       const normalized = rawIntegrations.map((r: any) => normalize(r, allToolTypes));
 
       setSources(normalized);
+      setPipelineContract(data.pipelineContract || null);
       saveCache(selectedPipelineId, normalized);
     } catch (err: any) {
       setError(err.message || 'Unknown error');
@@ -333,5 +340,5 @@ export function useSourcesData() {
 
   const summary = computeSummary(sources);
 
-  return { sources, summary, loading: loading || pipelineLoading, error, refresh };
+  return { sources, summary, pipelineContract, loading: loading || pipelineLoading, error, refresh };
 }

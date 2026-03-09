@@ -5,7 +5,6 @@ import { useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, CircleAlert, CircleDashed, GitBranch, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, X, Zap } from 'lucide-react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
-import PipelineCanvas from '@/components/pipeline/PipelineCanvas';
 import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
 import { IntegrationConfigModal } from '@/components/pipeline/IntegrationConfigModal';
 import {
@@ -23,7 +22,6 @@ import {
 
 type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
 type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
-type PlaneFilter = 'all' | 'data' | 'control';
 
 interface ConnectorCard {
   id: string;
@@ -170,11 +168,7 @@ export default function PipelinePage() {
   const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [environment, setEnvironment] = useState<(typeof ENVIRONMENTS)[number]>('Prod');
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set());
-  const [planeFilter, setPlaneFilter] = useState<PlaneFilter>('all');
-  const [onlyImpacted, setOnlyImpacted] = useState(false);
-  const [onlyCriticalPaths, setOnlyCriticalPaths] = useState(false);
-  const [assetSearch, setAssetSearch] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set(CORE_GROUP_ORDER));
   const [nodeModal, setNodeModal] = useState<PipelineNode | null>(null);
   const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
@@ -232,20 +226,6 @@ export default function PipelinePage() {
     return { completed, total: CHECKLIST_STEPS.length, percent: Math.round((completed / CHECKLIST_STEPS.length) * 100) };
   }, [connectorStatusById]);
 
-  const filteredMapNodes = useMemo(() => {
-    let visible = [...stack.nodes];
-    if (planeFilter === 'data') visible = visible.filter((n) => ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING'].includes(n.layer));
-    if (planeFilter === 'control') visible = visible.filter((n) => ['ORCHESTRATION', 'VERSION_CONTROL'].includes(n.layer));
-    if (onlyImpacted) visible = visible.filter((n) => (n.findingsCount || 0) > 0 || (n.highCount || 0) > 0 || (n.criticalCount || 0) > 0);
-    if (onlyCriticalPaths) visible = visible.filter((n) => (n.criticalCount || 0) > 0);
-    if (assetSearch.trim()) { const q = assetSearch.toLowerCase(); visible = visible.filter((n) => n.name.toLowerCase().includes(q) || n.toolType.toLowerCase().includes(q)); }
-    return visible;
-  }, [assetSearch, onlyCriticalPaths, onlyImpacted, planeFilter, stack.nodes]);
-
-  const filteredMapEdges = useMemo(() => {
-    const ids = new Set(filteredMapNodes.map((n) => n.id));
-    return stack.edges.filter((e) => ids.has(e.sourceId) && ids.has(e.targetId));
-  }, [filteredMapNodes, stack.edges]);
 
   // ─── Actions ──────────────────────────────────────────────
   const savePipeline = useCallback(async (nextStack: PipelineStack, silent = false) => {
@@ -388,6 +368,33 @@ export default function PipelinePage() {
     else if (error) { toast.error(`Authentication error: ${error}`); window.history.replaceState({}, '', '/dashboard/pipeline'); }
   }, [fetchIntegrations, searchParams]);
 
+  // Deep-link: open a specific tool's config modal via ?openConfig=<toolType>
+  useEffect(() => {
+    if (loading) return;
+    const openConfig = searchParams.get('openConfig');
+    if (!openConfig) return;
+    // Expand the group containing this connector so it's visible behind the modal
+    const connector = connectorCatalog.find((c) => c.id === openConfig);
+    if (connector) {
+      setCollapsedGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(connector.group);
+        return next;
+      });
+    }
+    const existingNode = stack.nodes.find((n) => n.toolType === openConfig);
+    if (existingNode) {
+      setNodeModal(existingNode);
+    } else {
+      // Check if it's an integration (Slack, etc.)
+      const integrationDef = Object.values(INTEGRATIONS).flat().find((i) => i.id === openConfig);
+      if (integrationDef) {
+        setIntegrationModal(integrationDef);
+      }
+    }
+    window.history.replaceState({}, '', '/dashboard/pipeline');
+  }, [loading, searchParams, stack.nodes, connectorCatalog]);
+
   // Track which tool types have already been auto-discovered to avoid re-running on every refetch
   const autoDiscoveredRef = useRef<Set<string>>(new Set());
   // Gate auto-discovery: don't run until the initial pipeline load is complete
@@ -467,20 +474,6 @@ export default function PipelinePage() {
     toast.success('Connector configured');
   }, [nodeModal, savePipeline]);
 
-  const onNodesChange = useCallback((nodes: PipelineNode[]) => setStack((prev) => ({ ...prev, nodes })), []);
-  const onEdgesChange = useCallback((edges: PipelineEdge[]) => setStack((prev) => ({ ...prev, edges })), []);
-
-  // Canvas config save — triggered when user edits a node via the canvas modal (double-click)
-  const handleCanvasSaveConfig = useCallback((nodeId: string, config: Record<string, any>) => {
-    setStack((prev) => {
-      const nextNodes = prev.nodes.map((n) =>
-        n.id === nodeId ? { ...n, config, status: 'CONNECTED' as const } : n
-      );
-      const nextStack = { ...prev, nodes: nextNodes };
-      void savePipeline(nextStack, true);
-      return nextStack;
-    });
-  }, [savePipeline]);
 
   if (loading) {
     return (
@@ -794,104 +787,6 @@ export default function PipelinePage() {
         ))}
       </section>
 
-      {/* ── Pipeline Map Section ───────────────────────────── */}
-      <section className="dashboard-card p-4">
-        <div className="flex items-center justify-between gap-4 mb-4 px-1">
-          <div>
-            <h2 className="text-xl font-semibold">Pipeline Map</h2>
-            <p className="text-sm text-[var(--muted)] mt-1">Auto-generated from connected integrations</p>
-          </div>
-        </div>
-
-        <div className="flex gap-4 h-[620px]">
-          {/* Filter Sidebar */}
-          <div className="w-72 flex-shrink-0 rounded-xl border border-[var(--border-medium)] bg-[var(--overlay-faint)] p-3 space-y-3 overflow-y-auto">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-[var(--muted)] mb-2">Plane filter</div>
-              <div className="flex items-center gap-1">
-                {(['all', 'data', 'control'] as PlaneFilter[]).map((f) => (
-                  <button
-                    key={f}
-                    onClick={() => setPlaneFilter(f)}
-                    className={`px-2.5 py-1.5 rounded-md text-xs border transition-all ${
-                      planeFilter === f
-                        ? 'border-[var(--accent)] bg-[var(--accent)]/15 text-[var(--text)]'
-                        : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] text-[var(--muted)] hover:text-[var(--text)]'
-                    }`}
-                  >
-                    {f === 'all' ? 'All planes' : `${f.charAt(0).toUpperCase()}${f.slice(1)} plane`}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <label className="flex items-center justify-between text-xs cursor-pointer group/toggle">
-              <span className="text-[var(--muted)] group-hover/toggle:text-[var(--text)] transition-colors">Only impacted assets</span>
-              <input
-                type="checkbox"
-                checked={onlyImpacted}
-                onChange={(e) => setOnlyImpacted(e.target.checked)}
-                className="accent-[var(--accent-2)]"
-              />
-            </label>
-
-            <label className="flex items-center justify-between text-xs cursor-pointer group/toggle">
-              <span className="text-[var(--muted)] group-hover/toggle:text-[var(--text)] transition-colors">Only critical paths</span>
-              <input
-                type="checkbox"
-                checked={onlyCriticalPaths}
-                onChange={(e) => setOnlyCriticalPaths(e.target.checked)}
-                className="accent-[var(--accent-2)]"
-              />
-            </label>
-
-            <div>
-              <div className="text-xs text-[var(--muted)] mb-1">Search assets</div>
-              <input
-                value={assetSearch}
-                onChange={(e) => setAssetSearch(e.target.value)}
-                placeholder="table / model / dashboard"
-                className="form-input !px-3 !py-2 !text-xs !rounded-md"
-              />
-            </div>
-
-            <div className="pt-2 border-t border-[var(--border-medium)] text-xs text-[var(--muted)]">
-              Environment: <span className="text-[var(--text)] font-medium">{environment}</span>
-            </div>
-
-            {/* Map legend */}
-            <div className="pt-2 border-t border-[var(--border-medium)]">
-              <div className="text-xs text-[var(--muted)] mb-2">Legend</div>
-              <div className="space-y-1.5">
-                {(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'] as PipelineLayer[]).map((layer) => (
-                  <div key={layer} className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS[layer] }} />
-                    <span className="text-[11px] text-[var(--muted)]">{layer.charAt(0) + layer.slice(1).toLowerCase()}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="pt-2 border-t border-[var(--border-medium)] text-[11px] text-[var(--muted)]">
-              Drag nodes to reposition. Connect handles to create edges.
-            </div>
-          </div>
-
-          {/* Canvas */}
-          <div className="flex-1 rounded-xl overflow-hidden border border-[var(--border-medium)]">
-            <PipelineCanvas
-              nodes={filteredMapNodes}
-              edges={filteredMapEdges}
-              stackId={stack.id}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onSave={() => savePipeline(stack, true)}
-              onSaveConfig={handleCanvasSaveConfig}
-              readOnly={false}
-            />
-          </div>
-        </div>
-      </section>
 
       {/* ── Modals ─────────────────────────────────────────── */}
       {nodeModal && (

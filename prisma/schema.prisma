@@ -40,7 +40,8 @@ model User {
   tasks            Task[]
   chatSessions     ChatSession[]
   copilotSessions  CopilotSession[]
-  notifications    Notification[]
+  notificationReads    NotificationRead[]
+  notificationsActored NotificationEvent[] @relation("NotificationActor")
   scanSchedules    ScanSchedule[]
   auditLogs        AuditLog[]
   appliedFixes     AppliedFix[]
@@ -156,6 +157,9 @@ model Organization {
   issueFingerprints IssueFingerprint[]
   fixPatterns       FixPattern[]
   fixOutcomes       FixOutcome[]
+
+  // Notifications
+  notificationEvents NotificationEvent[]
 
   @@index([domain])
 }
@@ -310,6 +314,13 @@ model PipelineStack {
 
   // Copilot context (onboarding data)
   context PipelineContext?
+
+  // Contracts
+  pipelineContract PipelineContract?
+  sourceContracts  SourceContract[]
+
+  // Notifications
+  notificationEvents NotificationEvent[]
 
   @@index([organizationId])
   @@index([status])
@@ -1362,29 +1373,52 @@ enum DebugStatus {
 // NOTIFICATIONS
 // ============================================
 
-model Notification {
-  id        String           @id @default(cuid())
-  type      NotificationType
-  title     String
-  message   String
-  read      Boolean          @default(false)
-  link      String?
-  createdAt DateTime         @default(now())
+model NotificationEvent {
+  id              String               @id @default(cuid())
+  organizationId  String
+  pipelineStackId String?
+  actorUserId     String?
+  eventType       String
+  severity        NotificationSeverity @default(INFO)
+  title           String
+  message         String
+  dedupeKey       String?
+  entityType      String?
+  entityId        String?
+  actionUrl       String?
+  metadata        Json?
+  createdAt       DateTime             @default(now())
 
-  // Relations
-  user   User   @relation(fields: [userId], references: [id])
-  userId String
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  pipelineStack PipelineStack? @relation(fields: [pipelineStackId], references: [id])
+  actorUser     User?          @relation("NotificationActor", fields: [actorUserId], references: [id])
+  reads         NotificationRead[]
 
-  @@index([userId])
-  @@index([read])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, eventType])
+  @@index([pipelineStackId])
+  @@index([dedupeKey, createdAt])
+  @@index([entityType, entityId])
 }
 
-enum NotificationType {
-  REPORT_READY
-  TASK_DUE
-  PLAN_UPDATE
-  SECURITY_ALERT
-  SYSTEM
+enum NotificationSeverity {
+  INFO
+  WARN
+  ERROR
+  CRITICAL
+}
+
+model NotificationRead {
+  id                  String            @id @default(cuid())
+  userId              String
+  notificationEventId String
+  readAt              DateTime          @default(now())
+
+  user              User              @relation(fields: [userId], references: [id])
+  notificationEvent NotificationEvent @relation(fields: [notificationEventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, notificationEventId])
+  @@index([userId])
 }
 
 // ============================================
@@ -1876,11 +1910,51 @@ model SourceContract {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relation
+  // Pipeline inheritance
+  inheritFromPipeline Boolean @default(true)
+  overridesJson       Json? // Tool-specific overrides validated by integration type
+
+  // Relations
   integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   integrationId String      @unique
 
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id])
+  pipelineStackId String?
+
   @@index([integrationId])
+  @@index([pipelineStackId])
+}
+
+// Pipeline-level contract — sets defaults for all tools in a pipeline
+model PipelineContract {
+  id String @id @default(cuid())
+
+  // Ownership
+  ownerUser      String?
+  ownerTeam      String?
+  contactChannel String?
+
+  // SLA
+  slaTier String? // T0, T1, T2, T3
+
+  // Expectations
+  expectedFreshnessMinutes           Int?
+  expectedExtractionFrequencyMinutes Int?
+
+  // Alert routing
+  alertPolicyJson Json? // { channels: [], severityRouting: {} }
+
+  // Notes
+  notes String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation — 1:1 with PipelineStack
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String        @unique
+
+  @@index([pipelineStackId])
 }
 
 enum IntegrationType {

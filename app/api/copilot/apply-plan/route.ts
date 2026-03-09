@@ -5,6 +5,7 @@ import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
 import { resolveStackIntegrations } from '@/lib/integration-credentials';
+import { notifyEvents } from '@/lib/notifications';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -176,6 +177,15 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: data.detail || 'Failed to apply plan' },
         { status: response.status },
+      );
+    }
+
+    // Fire-and-forget notification for PR creation
+    if (data.pr_url || data.pull_request_url) {
+      const prUrl = data.pr_url || data.pull_request_url;
+      notifyEvents.planApplied(
+        user.organizationId!, pipelineStack?.id, user.id,
+        `${repo_owner}/${repo_name}`, prUrl,
       );
     }
 

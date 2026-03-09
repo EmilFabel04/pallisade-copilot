@@ -1,8 +1,8 @@
 'use client';
 
 import { useSession } from 'next-auth/react';
-import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
 import { PipelineSelector } from './PipelineSelector';
 
 // Map routes to page titles
@@ -15,6 +15,7 @@ const pageTitles: Record<string, string> = {
   '/dashboard/pipeline': 'Pipeline',
   '/dashboard/pipeline/settings': 'Pipeline Settings',
   '/dashboard/schedule': 'Scheduled Tasks',
+  '/dashboard/notifications': 'Notifications',
   '/dashboard/team': 'Team',
   '/dashboard/settings': 'Settings',
 };
@@ -22,13 +23,33 @@ const pageTitles: Record<string, string> = {
 export function DashboardHeader() {
   const { data: session } = useSession();
   const pathname = usePathname();
+  const router = useRouter();
   const [showSearch, setShowSearch] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   // Get page title from pathname
-  const pageTitle = Object.entries(pageTitles).find(([path]) => 
+  const pageTitle = Object.entries(pageTitles).find(([path]) =>
     pathname === path || pathname.startsWith(path + '/')
   )?.[1] || 'Dashboard';
+
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const res = await fetch('/api/notifications/unread-count');
+      if (res.ok) {
+        const data = await res.json();
+        setUnreadCount(data.count || 0);
+      }
+    } catch {
+      // Silently fail
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchUnreadCount();
+    const interval = setInterval(fetchUnreadCount, 30000);
+    return () => clearInterval(interval);
+  }, [fetchUnreadCount]);
 
   return (
     <header className="h-14 flex items-center justify-between px-6 border-b border-[var(--border-faint)] bg-[var(--surface-inset)]/90 backdrop-blur-sm sticky top-0 z-30">
@@ -42,7 +63,7 @@ export function DashboardHeader() {
       {/* Right - Actions */}
       <div className="flex items-center gap-2">
         {/* Search Button */}
-        <button 
+        <button
           onClick={() => setShowSearch(true)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] border border-[var(--subtle-border)] transition-colors"
         >
@@ -56,16 +77,23 @@ export function DashboardHeader() {
         </button>
 
         {/* Notifications */}
-        <button className="relative p-2 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-colors">
+        <button
+          onClick={() => router.push('/dashboard/notifications')}
+          className="relative p-2 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-colors"
+        >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
           </svg>
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--accent)] rounded-full" />
+          {unreadCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center px-1 rounded-full bg-[var(--accent)] text-white text-[10px] font-semibold leading-none">
+              {unreadCount > 99 ? '99+' : unreadCount}
+            </span>
+          )}
         </button>
 
         {/* User Menu */}
         <div className="relative">
-          <button 
+          <button
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors"
           >

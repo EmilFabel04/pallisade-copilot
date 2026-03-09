@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { usePipeline } from '@/contexts/PipelineContext';
+import type { SlaTier, PipelineContractData } from '@/components/contracts/types';
 
 interface PipelineDetails {
   id: string;
@@ -65,6 +66,17 @@ export default function PipelineSettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   
+  // Pipeline contract state
+  const [contractForm, setContractForm] = useState<PipelineContractData>({
+    ownerUser: null, ownerTeam: null, contactChannel: null,
+    slaTier: null, expectedFreshnessMinutes: null,
+    expectedExtractionFrequencyMinutes: null, alertPolicyJson: null, notes: null,
+  });
+  const [contractSaving, setContractSaving] = useState(false);
+  const [contractDirty, setContractDirty] = useState(false);
+  const [applyingDefaults, setApplyingDefaults] = useState(false);
+  const [coverage, setCoverage] = useState<{ totalIntegrations: number; inherited: number; overridden: number; noContract: number } | null>(null);
+
   // Add user modal
   const [showAddUser, setShowAddUser] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -258,6 +270,83 @@ export default function PipelineSettingsPage() {
     }
   };
 
+  // Fetch pipeline contract
+  const fetchContract = useCallback(async () => {
+    if (!selectedPipelineId) return;
+    try {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/contract`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.contract) {
+          setContractForm({
+            ownerUser: data.contract.ownerUser || null,
+            ownerTeam: data.contract.ownerTeam || null,
+            contactChannel: data.contract.contactChannel || null,
+            slaTier: data.contract.slaTier || null,
+            expectedFreshnessMinutes: data.contract.expectedFreshnessMinutes ?? null,
+            expectedExtractionFrequencyMinutes: data.contract.expectedExtractionFrequencyMinutes ?? null,
+            alertPolicyJson: data.contract.alertPolicyJson || null,
+            notes: data.contract.notes || null,
+          });
+        }
+        setCoverage(data.coverage || null);
+      }
+    } catch (err) {
+      console.error('Failed to fetch contract:', err);
+    }
+  }, [selectedPipelineId]);
+
+  useEffect(() => { fetchContract(); }, [fetchContract]);
+
+  const updateContract = (key: keyof PipelineContractData, value: any) => {
+    setContractForm(f => ({ ...f, [key]: value || null }));
+    setContractDirty(true);
+  };
+
+  const handleSaveContract = async () => {
+    if (!selectedPipelineId) return;
+    setContractSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/contract`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(contractForm),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save contract');
+      }
+      setContractDirty(false);
+      await fetchContract();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setContractSaving(false);
+    }
+  };
+
+  const handleApplyDefaults = async () => {
+    if (!selectedPipelineId) return;
+    setApplyingDefaults(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/contract/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to apply defaults');
+      }
+      await fetchContract();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setApplyingDefaults(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto py-8 flex items-center justify-center">
@@ -356,6 +445,137 @@ export default function PipelineSettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Pipeline Contract */}
+      {canEdit && (
+        <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-medium text-[var(--text)]">Pipeline Contract</h2>
+              <p className="text-sm text-[var(--muted)] mt-0.5">Default ownership, SLA, and expectations for all tools</p>
+            </div>
+            {coverage && (
+              <div className="flex items-center gap-3 text-xs">
+                {coverage.inherited > 0 && (
+                  <span className="px-2 py-1 rounded bg-blue-500/15 text-blue-400">{coverage.inherited} inherited</span>
+                )}
+                {coverage.overridden > 0 && (
+                  <span className="px-2 py-1 rounded bg-amber-500/15 text-amber-400">{coverage.overridden} overridden</span>
+                )}
+                {coverage.noContract > 0 && (
+                  <span className="px-2 py-1 rounded bg-zinc-500/15 text-zinc-400">{coverage.noContract} no contract</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Owner (User)</label>
+              <input
+                type="text"
+                value={contractForm.ownerUser || ''}
+                onChange={(e) => updateContract('ownerUser', e.target.value)}
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
+                placeholder="e.g. jane.doe"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Owner (Team)</label>
+              <input
+                type="text"
+                value={contractForm.ownerTeam || ''}
+                onChange={(e) => updateContract('ownerTeam', e.target.value)}
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
+                placeholder="e.g. Data Platform"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Contact Channel</label>
+              <input
+                type="text"
+                value={contractForm.contactChannel || ''}
+                onChange={(e) => updateContract('contactChannel', e.target.value)}
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
+                placeholder="e.g. #data-alerts"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">SLA Tier</label>
+              <select
+                value={contractForm.slaTier || ''}
+                onChange={(e) => updateContract('slaTier', e.target.value)}
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:outline-none focus:border-[var(--accent)]/50"
+              >
+                <option value="">None</option>
+                <option value="T0">T0 — Critical</option>
+                <option value="T1">T1 — High</option>
+                <option value="T2">T2 — Medium</option>
+                <option value="T3">T3 — Low</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Expected Freshness (minutes)</label>
+              <input
+                type="number"
+                min={0}
+                value={contractForm.expectedFreshnessMinutes ?? ''}
+                onChange={(e) => updateContract('expectedFreshnessMinutes', e.target.value ? Number(e.target.value) : null)}
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
+                placeholder="e.g. 60"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Extraction Frequency (minutes)</label>
+              <input
+                type="number"
+                min={0}
+                value={contractForm.expectedExtractionFrequencyMinutes ?? ''}
+                onChange={(e) => updateContract('expectedExtractionFrequencyMinutes', e.target.value ? Number(e.target.value) : null)}
+                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
+                placeholder="e.g. 360"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Notes</label>
+            <textarea
+              value={contractForm.notes || ''}
+              onChange={(e) => updateContract('notes', e.target.value)}
+              rows={2}
+              className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50 resize-none"
+              placeholder="Additional notes..."
+            />
+          </div>
+
+          <div className="flex items-center gap-3 pt-4 border-t border-[var(--subtle-border)]">
+            <button
+              onClick={handleSaveContract}
+              disabled={contractSaving || !contractDirty}
+              className="px-6 py-2.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+            >
+              {contractSaving ? 'Saving...' : 'Save Contract'}
+            </button>
+            <button
+              onClick={handleApplyDefaults}
+              disabled={applyingDefaults}
+              className="px-4 py-2.5 bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] text-[var(--text)] text-sm rounded-lg transition-colors disabled:opacity-50"
+            >
+              {applyingDefaults ? 'Applying...' : 'Apply to All Tools'}
+            </button>
+            {coverage && coverage.noContract === 0 && coverage.totalIntegrations > 0 && (
+              <span className="text-xs text-emerald-400 ml-2">All tools covered</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Token Usage (Admin Only) */}
       {isOrgAdmin && (

@@ -14,6 +14,7 @@ import { X, Loader2, Check, AlertCircle, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { IntegrationDefinition, ConfigField, INTEGRATION_COLORS } from './types';
 import { encrypt } from '@/lib/crypto';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 // Integrations that use OAuth instead of manual config
 const OAUTH_INTEGRATIONS = ['github_issues', 'github', 'slack'];
@@ -721,29 +722,5 @@ function ConfigFieldInput({
 
 // Integration Icon Component
 function IntegrationIcon({ id }: { id: string }) {
-  const icons: Record<string, { icon: string; color: string }> = {
-    slack: { icon: 'S', color: '#4A154B' },
-    teams: { icon: 'T', color: '#6264A7' },
-    pagerduty: { icon: 'PD', color: '#06AC38' },
-    opsgenie: { icon: 'OG', color: '#2684FF' },
-    jira: { icon: 'J', color: '#0052CC' },
-    linear: { icon: 'L', color: '#5E6AD2' },
-    asana: { icon: 'A', color: '#F06A6A' },
-    github_issues: { icon: 'GH', color: '#24292e' },
-    monte_carlo: { icon: 'MC', color: '#00D4AA' },
-    bigeye: { icon: 'BE', color: '#FF6B35' },
-    soda: { icon: 'SD', color: '#00C7B7' },
-    elementary: { icon: 'EL', color: '#FF914D' },
-  };
-
-  const config = icons[id] || { icon: id.slice(0, 2).toUpperCase(), color: '#6B7280' };
-
-  return (
-    <div
-      className="w-10 h-10 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
-      style={{ backgroundColor: config.color }}
-    >
-      {config.icon}
-    </div>
-  );
+  return <ToolIcon toolType={id} size={40} />;
 }

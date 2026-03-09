@@ -17,6 +17,7 @@ import { MessageActionMenu, MessageActionButton, SaveArtifactModal } from '@/com
 import { OnboardingBanner } from '@/components/copilot';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
 import { ToolConfirmation } from '@/components/copilot/ToolConfirmation';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 type ToolCall = {
   id?: string;
@@ -178,12 +179,16 @@ function AssistantPageInner() {
   const [sidebarWidth, setSidebarWidth] = useState(256);
   const [isResizing, setIsResizing] = useState(false);
   const [selectedMode, setSelectedMode] = useState('ask');
-  const [selectedModel, setSelectedModel] = useState('gpt-5.2');
+  const selectedModel = 'gpt-5.2';
   const [thinkingStep, setThinkingStep] = useState(0);
   const [brailleFrame, setBrailleFrame] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
   const [loadingSources, setLoadingSources] = useState(false);
+  const [llmIntegrations, setLlmIntegrations] = useState<Array<{
+    id: string; name: string; type: string; layer: string; status: string;
+    capabilities: string[]; hasCredentials: boolean;
+  }>>([]);
   const [shareModal, setShareModal] = useState<{
     plan: ChangePlan;
     targetType: 'slack' | 'jira' | 'github_issue';
@@ -264,13 +269,11 @@ function AssistantPageInner() {
     }
   }, []);
 
-  // Load mode and model from localStorage on client
+  // Load mode from localStorage on client
   useEffect(() => {
     if (!modelLoadedRef.current) {
       const savedMode = localStorage.getItem('pallisade-copilot-mode');
-      const savedModel = localStorage.getItem('pallisade-copilot-model');
       if (savedMode) setSelectedMode(savedMode);
-      if (savedModel) setSelectedModel(savedModel);
       modelLoadedRef.current = true;
     }
   }, []);
@@ -281,13 +284,6 @@ function AssistantPageInner() {
       localStorage.setItem('pallisade-copilot-mode', selectedMode);
     }
   }, [selectedMode]);
-
-  // Persist model selection to localStorage
-  useEffect(() => {
-    if (modelLoadedRef.current) {
-      localStorage.setItem('pallisade-copilot-model', selectedModel);
-    }
-  }, [selectedModel]);
 
   // Fetch sources when pipeline changes (uses cached data)
   useEffect(() => {
@@ -435,9 +431,21 @@ function AssistantPageInner() {
   const fetchSources = async (pipelineId: string, refresh: boolean = false) => {
     setLoadingSources(true);
     try {
-      const res = await fetch(`/api/pipeline?id=${pipelineId}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      // Fetch pipeline nodes + tables/models/connectors in parallel with LLM integrations
+      const [pipelineRes, llmRes] = await Promise.all([
+        fetch(`/api/pipeline?id=${pipelineId}`),
+        fetch(`/api/copilot/integrations?pipelineStackId=${pipelineId}`),
+      ]);
+
+      // LLM integrations
+      if (llmRes.ok) {
+        const llmData = await llmRes.json();
+        setLlmIntegrations(llmData.integrations || []);
+      }
+
+      // Pipeline sources
+      if (!pipelineRes.ok) return;
+      const data = await pipelineRes.json();
       const stack = data.stack;
       if (!stack?.nodes) return;
 
@@ -1666,16 +1674,6 @@ function AssistantPageInner() {
                   <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[var(--surface-raised)] border-t border-[var(--subtle-border)] rounded-b-xl">
                     <div className="flex items-center gap-2">
                       <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
-                      <select
-                        value={selectedModel}
-                        onChange={(e) => setSelectedModel(e.target.value)}
-                        className="px-2 py-1 text-[11px] rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text-tertiary)] focus:outline-none focus:border-[var(--overlay-strong)] cursor-pointer"
-                      >
-                        <option value="gpt-5.2">GPT-5.2</option>
-                        <option value="gpt-5.2-mini">GPT-5.2 Mini</option>
-                        <option value="claude-sonnet">Claude Sonnet</option>
-                        <option value="claude-haiku">Claude Haiku</option>
-                      </select>
                       <span className="text-[10px] text-[var(--text-faint)] hidden sm:inline">Enter to send</span>
                     </div>
                     {isLoading ? (
@@ -1765,7 +1763,7 @@ function AssistantPageInner() {
                 <div className="flex items-center justify-center py-8">
                   <div className="w-5 h-5 red-spinner" />
                 </div>
-              ) : sourceData.nodes.length === 0 ? (
+              ) : llmIntegrations.length === 0 && sourceData.tables.length === 0 && sourceData.models.length === 0 ? (
                 <div className="text-center py-8">
                   <div className="w-12 h-12 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] flex items-center justify-center mx-auto mb-3">
                     {Icons.cube}
@@ -1775,27 +1773,60 @@ function AssistantPageInner() {
                 </div>
               ) : (
                 <div className="space-y-4 pr-2">
-                  {/* Connected Stack */}
-                  <div>
-                    <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connected Stack</h4>
-                    <div className="space-y-1.5">
-                      {sourceData.nodes.map((node) => (
-                        <div key={node.id} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-                          <SourceIcon toolType={node.toolType} />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs font-medium truncate">{node.name}</div>
-                            <div className="text-[10px] text-[var(--muted)] capitalize">{node.layer.toLowerCase()}</div>
-                          </div>
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" title="Connected" />
+                  {/* Tools — LLM capabilities derived from connected integrations */}
+                  {(() => {
+                    const types = new Set(llmIntegrations.map((i) => i.type.toLowerCase()));
+                    const tools: { label: string; icon: string; match: string[] }[] = [
+                      { label: 'Query warehouse', icon: '⌕', match: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'] },
+                      { label: 'Browse schemas', icon: '⊞', match: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'] },
+                      { label: 'Trace lineage', icon: '⤮', match: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks', 'dbt_cloud', 'dbt_core'] },
+                      { label: 'dbt models & tests', icon: '◈', match: ['dbt_cloud', 'dbt_core'] },
+                      { label: 'Sync status', icon: '⇄', match: ['fivetran', 'airbyte', 'stitch'] },
+                      { label: 'Dashboards', icon: '▦', match: ['looker', 'tableau', 'metabase', 'powerbi'] },
+                      { label: 'Orchestration', icon: '⟳', match: ['airflow', 'dagster', 'prefect'] },
+                    ];
+                    const available = tools.filter((t) => t.match.some((m) => types.has(m)));
+                    if (available.length === 0) return null;
+                    return (
+                      <div>
+                        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Tools</h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {available.map((t) => (
+                            <span key={t.label} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[10px] text-[var(--text-secondary)]">
+                              <span className="opacity-60">{t.icon}</span> {t.label}
+                            </span>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                      </div>
+                    );
+                  })()}
 
-                  {/* dbt Models */}
+                  {/* Integrations — what the LLM can actually call */}
+                  {llmIntegrations.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Integrations</h4>
+                      <div className="space-y-1.5">
+                        {llmIntegrations.map((intg) => (
+                          <div key={intg.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
+                            <SourceIcon toolType={intg.type} />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium truncate">{intg.name}</div>
+                              <div className="text-[10px] text-[var(--muted)] capitalize">{intg.layer.toLowerCase()}</div>
+                            </div>
+                            <span className={cn(
+                              'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                              intg.hasCredentials ? 'bg-emerald-400' : 'bg-amber-400'
+                            )} title={intg.hasCredentials ? 'Connected' : 'No credentials'} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Models */}
                   {sourceData.models.length > 0 && (
                     <SourceSection
-                      title="dbt Models"
+                      title="Models"
                       count={sourceData.models.length}
                       items={sourceData.models}
                       renderItem={(model) => (
@@ -1816,7 +1847,7 @@ function AssistantPageInner() {
                     />
                   )}
 
-                  {/* Warehouse Tables */}
+                  {/* Tables */}
                   {sourceData.tables.length > 0 && (
                     <SourceSection
                       title="Tables"
@@ -1830,25 +1861,6 @@ function AssistantPageInner() {
                       )}
                       groupBy={(table) => table.dataset || table.schema}
                     />
-                  )}
-
-                  {/* Connectors */}
-                  {sourceData.connectors.length > 0 && (
-                    <div>
-                      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connectors</h4>
-                      <div className="space-y-1">
-                        {sourceData.connectors.map((c) => (
-                          <div key={c.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
-                            <span className="text-xs">{c.name}</span>
-                            <span className={cn(
-                              'text-[10px]',
-                              c.status === 'active' ? 'text-emerald-400' :
-                              c.status === 'failed' ? 'text-red-400' : 'text-[var(--muted)]'
-                            )}>{c.status}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   )}
                 </div>
               )}
@@ -1920,30 +1932,7 @@ function AssistantPageInner() {
 }
 
 function SourceIcon({ toolType }: { toolType: string }) {
-  const icons: Record<string, string> = {
-    bigquery: 'BQ', snowflake: 'SF', postgres: 'PG', redshift: 'RS',
-    dbt_cloud: 'dbt', dbt_core: 'dbt',
-    fivetran: 'FT', airbyte: 'AB', stitch: 'ST',
-    looker: 'LK', tableau: 'TB', metabase: 'MB',
-    airflow: 'AF', dagster: 'DG', prefect: 'PF',
-  };
-  const colors: Record<string, string> = {
-    bigquery: 'from-blue-500 to-blue-600',
-    snowflake: 'from-cyan-400 to-cyan-500',
-    postgres: 'from-indigo-500 to-indigo-600',
-    dbt_cloud: 'from-orange-500 to-orange-600',
-    dbt_core: 'from-orange-500 to-orange-600',
-    fivetran: 'from-pink-500 to-pink-600',
-    airbyte: 'from-violet-500 to-violet-600',
-  };
-  return (
-    <div className={cn(
-      'w-7 h-7 rounded-lg bg-gradient-to-br flex items-center justify-center flex-shrink-0',
-      colors[toolType] || 'from-gray-500 to-gray-600'
-    )}>
-      <span className="text-[9px] font-bold text-white">{icons[toolType] || toolType.slice(0, 2).toUpperCase()}</span>
-    </div>
-  );
+  return <ToolIcon toolType={toolType} size={28} />;
 }
 
 function SourceSection<T>({

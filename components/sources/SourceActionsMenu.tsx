@@ -28,8 +28,8 @@ export default function SourceActionsMenu({ source, onTestConnection, onViewDeta
   const items = [
     { icon: Wifi, label: 'Test Connection', action: () => onTestConnection(source) },
     { icon: FileText, label: 'Edit Contract', action: () => onEditContract(source) },
-    { icon: KeyRound, label: 'Re-authenticate', action: () => window.open('/dashboard/pipeline', '_self') },
-    { icon: RotateCw, label: 'Rotate Key', action: () => window.open('/dashboard/pipeline', '_self') },
+    { icon: KeyRound, label: 'Re-authenticate', action: () => window.open(`/dashboard/pipeline?openConfig=${source.toolType}`, '_self') },
+    { icon: RotateCw, label: 'Rotate Key', action: () => window.open(`/dashboard/pipeline?openConfig=${source.toolType}`, '_self') },
     ...(source.layer === 'WAREHOUSE'
       ? [{ icon: Star, label: 'Set as Default', action: () => {} }]
       : []),

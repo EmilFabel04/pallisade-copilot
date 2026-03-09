@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { CATEGORY_VISUALS, CATEGORY_LAYER_MAP, type UnifiedNodeCategory } from './types';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 // Map platform names to layer colors for multi-platform badges / split indicators
 const PLATFORM_COLORS: Record<string, string> = {
@@ -213,8 +214,6 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
     ? (data.domainColor || '#6366F1')
     : (LAYER_COLORS[data.layer] || '#6366F1');
   const statusConfig = getStatusConfig(data.status);
-  const toolInitial = data.toolType?.charAt(0).toUpperCase() || data.name.charAt(0).toUpperCase();
-
   // Control Plane mode: larger tool cards with asset count + health bar
   if (data.isControlPlane) {
     const health = data.healthSummary;
@@ -238,12 +237,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         />
 
         <div className="flex items-center gap-3 mb-3">
-          <div
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-base"
-            style={{ backgroundColor: layerColor }}
-          >
-            {toolInitial}
-          </div>
+          <ToolIcon toolType={data.toolType || data.name} size={40} />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <span className="text-[var(--text)] font-semibold text-[14px] truncate">{data.name}</span>
@@ -327,13 +321,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
 
       {/* Header with icon and name */}
       <div className="flex items-center gap-3 mb-2">
-        {/* Tool icon circle */}
-        <div
-          className="w-9 h-9 rounded-lg flex items-center justify-center text-white font-bold text-sm"
-          style={{ backgroundColor: layerColor }}
-        >
-          {toolInitial}
-        </div>
+        <ToolIcon toolType={data.toolType || data.name} size={36} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[var(--text)] font-medium text-sm truncate">{data.name}</span>

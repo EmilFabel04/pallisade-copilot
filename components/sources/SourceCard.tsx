@@ -1,22 +1,12 @@
 'use client';
 
-import { Clock, Database, Cloud, BarChart3, GitBranch, Server, Layers, Eye, Cog, HardDrive, User } from 'lucide-react';
+import { Clock, User } from 'lucide-react';
 import { LAYER_COLORS, LAYER_LABELS, getToolById } from '@/components/pipeline/types';
 import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG, SLA_CONFIG } from './types';
+import { INHERITANCE_CONFIG } from '@/components/contracts/types';
 import { CAPABILITY_CONFIG } from './capabilities';
 import SourceActionsMenu from './SourceActionsMenu';
-
-const TOOL_ICONS: Record<string, typeof Database> = {
-  bigquery: Database, snowflake: Database, postgres: Database, redshift: Database,
-  sqlserver: Database, azure_sql: Database, azure_synapse: Database, databricks: Database, mysql: Database,
-  fivetran: Cloud, airbyte: Cloud, stitch: Cloud,
-  dbt_cloud: GitBranch, dbt_core: GitBranch,
-  airflow: Cog, dagster: Cog, prefect: Cog, n8n: Cog,
-  looker: BarChart3, tableau: BarChart3, powerbi: BarChart3, metabase: BarChart3,
-  elementary: Eye, monte_carlo: Eye, bigeye: Eye, soda: Eye,
-  amazon_s3: HardDrive, gcs: HardDrive, adls: HardDrive,
-  github: Server,
-};
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 function formatTimeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -39,7 +29,6 @@ interface Props {
 }
 
 export default function SourceCard({ source, onClick, onTestConnection, onDisconnect, onEditContract }: Props) {
-  const Icon = TOOL_ICONS[source.toolType] || Layers;
   const tool = getToolById(source.toolType);
   const displayName = tool?.name || source.name;
   const statusCfg = STATUS_CONFIG[source.status];
@@ -57,12 +46,7 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
     >
       {/* Icon + Name */}
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div
-          className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-          style={{ backgroundColor: `${layerColor}15` }}
-        >
-          <Icon className="w-4.5 h-4.5" style={{ color: layerColor }} />
-        </div>
+        <ToolIcon toolType={source.toolType} size={36} />
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--text)] truncate">{displayName}</div>
           {source.scopeSummary && (
@@ -94,6 +78,15 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
       {slaCfg && (
         <div className={`hidden md:flex shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${slaCfg.bg} ${slaCfg.color}`}>
           {source.contract!.slaTier}
+        </div>
+      )}
+
+      {/* Contract inheritance badge */}
+      {source.inheritanceState && (
+        <div className={`hidden md:flex shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+          INHERITANCE_CONFIG[source.inheritanceState].bg
+        } ${INHERITANCE_CONFIG[source.inheritanceState].color}`}>
+          {INHERITANCE_CONFIG[source.inheritanceState].label}
         </div>
       )}
 

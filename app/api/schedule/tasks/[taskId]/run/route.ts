@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
+import { notifyEvents } from '@/lib/notifications';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -357,6 +358,22 @@ export async function POST(
       where: { id: task.id },
       data: updateData,
     });
+
+    // Fire-and-forget notification
+    const pipelineStack = await prisma.pipelineStack.findFirst({
+      where: { organizationId },
+      select: { id: true },
+    });
+    if (status === 'FAIL' || status === 'ERROR') {
+      notifyEvents.monitorFailed(
+        organizationId, pipelineStack?.id, (session.user as any).id,
+        task.name, task.id, result.message || 'Monitor check failed',
+      );
+    } else if (status === 'PASS') {
+      notifyEvents.monitorPassed(
+        organizationId, pipelineStack?.id, task.name, task.id,
+      );
+    }
 
     return NextResponse.json({ run, result });
   } catch (error: any) {
