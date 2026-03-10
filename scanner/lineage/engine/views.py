@@ -1402,13 +1402,39 @@ class ViewBuilder:
                 src_all_tks = _resolve_tks(src_platforms)
                 tgt_all_tks = _resolve_tks(tgt_platforms)
 
+                # Filter candidates: each node may only use its original
+                # lane (for its primary platform) or a secondary platform's
+                # lane.  This prevents an analytics node from being assigned
+                # to warehouse_raw just because "bigquery" maps to both lanes.
+                orig_src_lane = src_tk[0]
+                orig_tgt_lane = tgt_tk[0]
+                src_primary = (src_node.platform or "").lower()
+                tgt_primary = (tgt_node.platform or "").lower()
+
+                def _filter_tks(all_tks: Set[Tuple[str, str]], orig_lane: str, primary_plat: str) -> Set[Tuple[str, str]]:
+                    """Keep only: (a) the original lane for the primary platform,
+                    or (b) any lane for secondary platforms."""
+                    result: Set[Tuple[str, str]] = set()
+                    for tk in all_tks:
+                        tk_plat = tool_info.get(tk, {}).get("platform", "")
+                        if tk_plat == primary_plat or tk_plat in {primary_plat}:
+                            # Primary platform: only keep the original lane
+                            if tk[0] == orig_lane:
+                                result.add(tk)
+                        else:
+                            # Secondary platform (e.g. dbt): allow its natural lane
+                            result.add(tk)
+                    return result
+
+                src_all_tks = _filter_tks(src_all_tks, orig_src_lane, src_primary)
+                tgt_all_tks = _filter_tks(tgt_all_tks, orig_tgt_lane, tgt_primary)
+
                 # Find a cross-tool pair. Scoring:
                 #  +2 if src and tgt are DIFFERENT platforms (true cross-tool)
                 #  +1 if src matches source node's primary platform
                 #  +1 if src lane matches source node's functional role
                 #  +3 if data flows left→right (src lane ≤ tgt lane)
                 #  -3 if data flows right→left (src lane > tgt lane)
-                src_primary = (src_node.platform or "").lower()
                 src_role = tool_info.get(src_tk, {}).get("functional_role", "")
                 cross_pair = None
                 best_score = -1
@@ -1527,6 +1553,15 @@ class ViewBuilder:
                     )
                     if _has_transform:
                         continue
+
+                # Debug: trace any same-platform cross-warehouse-lane edge
+                if src_tk[0] != tgt_tk[0]:
+                    logger.info(
+                        "[LanePipelineOverview] CROSS-LANE edge: %s(%s)→%s(%s) "
+                        "src_tk=%s tgt_tk=%s discovered_from=%s",
+                        src_node.name, src_node.fqn, tgt_node.name, tgt_node.fqn,
+                        src_tk, tgt_tk, edge.discovered_from,
+                    )
 
                 _cross_tool += 1
                 pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
