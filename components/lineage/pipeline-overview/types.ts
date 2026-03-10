@@ -46,7 +46,11 @@ export interface ToolNodeMetadata {
 export interface EdgeMetadata {
   semanticType: string;
   label: string;
+  evidenceType?: string; // data_derivation | job_orchestration | code_ownership | hosting | monitoring | inferred_adjacency
   dataFlowCount: number;
+  flowAssetCount?: number;
+  topPairs?: { src: string; tgt: string; count: number }[];
+  evidenceMix?: Record<string, number>;
   srcLane: string;
   tgtLane: string;
 }
@@ -84,13 +88,16 @@ export interface SemanticEdgeStyle {
 }
 
 export const SEMANTIC_EDGE_STYLES: Record<string, SemanticEdgeStyle> = {
-  ingests:      { label: 'Ingests',      color: '#8B5CF6' },
-  feeds:        { label: 'Feeds',        color: '#3B82F6' },
-  transforms:   { label: 'Builds',       color: '#F59E0B' },
-  orchestrates: { label: 'Orchestrates', color: '#F97316', dashArray: '6,3' },
-  serves:       { label: 'Serves',       color: '#EC4899' },
-  builds:       { label: 'Builds',       color: '#F59E0B' },
-  data_flow:    { label: 'Data Flow',    color: '#6366F1' },
+  ingests:          { label: 'Ingests',       color: '#8B5CF6' },
+  feeds:            { label: 'Feeds',         color: '#3B82F6' },
+  transforms:       { label: 'Builds',        color: '#F59E0B' },
+  orchestrates:     { label: 'Orchestrates',  color: '#F97316', dashArray: '6,3' },
+  serves:           { label: 'Serves',        color: '#EC4899' },
+  builds:           { label: 'Builds',        color: '#F59E0B' },
+  manages_code_for: { label: 'Manages Code',  color: '#6B7280', dashArray: '4,2' },
+  hosts:            { label: 'Hosts',          color: '#9CA3AF', dashArray: '4,2' },
+  monitors:         { label: 'Monitors',       color: '#14B8A6', dashArray: '4,2' },
+  data_flow:        { label: 'Data Flow',      color: '#6366F1' },
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -121,7 +128,11 @@ export function getEdgeMeta(edge: ViewEdge): EdgeMetadata {
   return {
     semanticType: m.semanticType ?? 'data_flow',
     label: m.label ?? 'Data Flow',
+    evidenceType: m.evidenceType,
     dataFlowCount: m.dataFlowCount ?? edge.evidenceCount ?? 0,
+    flowAssetCount: m.flowAssetCount,
+    topPairs: m.topPairs,
+    evidenceMix: m.evidenceMix,
     srcLane: m.srcLane ?? '',
     tgtLane: m.tgtLane ?? '',
   };
@@ -145,6 +156,7 @@ export const HEALTH_COLORS: Record<string, string> = {
 /** Coverage gap display labels */
 export const COVERAGE_GAP_LABELS: Record<string, string> = {
   no_data_extracted: 'No data extracted',
+  no_activity_data_yet: 'No activity data yet',
   sparse_lineage: 'Sparse lineage',
   no_query_history: 'No query history',
   limited_perms: 'Limited perms',

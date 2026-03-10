@@ -17,6 +17,7 @@ import { WarehouseDetailView } from './WarehouseDetailView';
 import { ReportingDetailView } from './ReportingDetailView';
 import { InfraDetailView } from './InfraDetailView';
 import { QualityDetailView } from './QualityDetailView';
+import { VersionControlDetailView } from './VersionControlDetailView';
 import { GenericDetailView } from './GenericDetailView';
 
 // ─── Domain tab content router ───────────────────────────────────────
@@ -45,6 +46,8 @@ function DomainTabContent({
       return <InfraDetailView items={items} tabKey={tabKey} />;
     case 'quality':
       return <QualityDetailView items={items} tabKey={tabKey} />;
+    case 'version_control':
+      return <VersionControlDetailView items={items} tabKey={tabKey} />;
     default:
       return <GenericDetailView items={items} tabKey={tabKey} />;
   }

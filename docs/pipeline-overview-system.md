@@ -38,11 +38,13 @@ Both are rendered from a single canonical `LineageGraph` built by the extraction
 | Pipeline overview types | `components/lineage/pipeline-overview/types.ts` |
 | Inspector panel | `components/lineage/pipeline-overview/InspectorPanel.tsx` |
 | Tool detail views | `components/lineage/pipeline-overview/tool-details/` |
+| VCS detail view | `components/lineage/pipeline-overview/tool-details/VersionControlDetailView.tsx` |
 | Next.js API proxy | `app/api/pipeline/[stackId]/lineage/engine/route.ts` |
 | FastAPI view endpoints | `scanner/api/routers/lineage.py` |
 | ViewBuilder (all views) | `scanner/lineage/engine/views.py` |
 | Platform registry | `scanner/lineage/engine/platforms.py` |
 | Canonical type system | `scanner/lineage/engine/canonical.py` |
+| Edge semantic policy | `scanner/lineage/engine/edge_semantics.py` |
 | Zone/lane classification | `scanner/lineage/engine/zones.py` |
 | Investigator (extraction) | `scanner/lineage/engine/investigator.py` |
 | Resolver (dedup) | `scanner/lineage/engine/resolver.py` |
@@ -192,31 +194,145 @@ INGESTION → WAREHOUSE_RAW → TRANSFORMATION → WAREHOUSE_ANALYTICS → REPOR
  Fivetran      BigQuery          dbt              BigQuery            Looker
 ```
 
-**Algorithm:**
-1. Walk all graph nodes, classify each into a lane via `assign_lane()` using zone/capability/platform
-2. Group by `(lane, platform, integration_id)` → one tool box per group
-3. Merge pipeline stack tools not covered by engine discovery
-4. Build tool-to-tool flow edges with semantic types (`ingests`, `feeds`, `transforms`, `serves`)
-5. Infer edges for isolated tools (lane-adjacency, confidence=0.3)
-6. Deduplicate: merge same tool across lanes into one canonical node
-7. Compute topological order and assign positions
+**Algorithm (`build_lane_pipeline_overview` in `views.py`):**
 
-**Lane Assignment:**
+#### Step 1 — Discover Tools per Lane from Engine Graph
+
+Walk all graph nodes. For each node, determine its lane via `assign_lane()` using zone patterns, actor capabilities, and platform category. Build `tool_info` dict keyed by `(lane, tool_id)` where `tool_id = f"{platform}:{integration_id}"` (or just `platform` if no integration).
+
+**Lane Assignment Rules:**
 - Orchestrators (Airflow, Dagster) → `transformation` lane
 - Infrastructure (Linux) → `ingestion` lane
 - Raw zone datasets → `warehouse_raw`
 - Mart/analytics zone datasets → `warehouse_analytics`
 - BI tools → `reporting`
 
-**Semantic Edge Types:**
+Each `tool_info` entry tracks: `platform`, `display_name`, `integration_id`, `asset_count`, `is_orchestrator`, `is_infra`.
 
-| Source Lane → Target Lane | Semantic Type | Label |
-|---------------------------|---------------|-------|
-| ingestion → warehouse_raw | `ingests` | Ingests |
-| warehouse_raw → transformation | `feeds` | Feeds |
-| transformation → warehouse_analytics | `transforms` | Builds |
-| warehouse_analytics → reporting | `serves` | Serves |
-| transformation → warehouse_raw | `orchestrates` | Orchestrates |
+Also builds two indexes:
+- `node_to_tool: Dict[node_id → (lane, tool_id)]` — for edge traversal in Step 4
+- `tool_key_to_graph_nodes: Dict[(lane, tool_id) → List[LineageNode]]` — for enrichment in Step 3
+
+#### Step 2 — Merge Pipeline Tool Nodes Not in Graph
+
+Tools from the frontend pipeline config (`self.tool_nodes`) that have no engine-discovered nodes are added to `tool_info`. Skips tools already covered by integration ID. For tools where the platform already exists in a lane, merges into the existing entry instead of creating duplicates.
+
+#### Step 2.5 — Cross-Tool Asset Counting (Platform Index)
+
+Builds `_platform_to_tks` — a reverse index mapping platform names → all `tool_info` keys for that platform. Uses `get_platform()` from the platform registry for alias resolution (e.g. both `"dbt"` and `"dbt_core"` map to the same tool key).
+
+Then counts assets under secondary platforms: for each graph node, collects all platforms it belongs to (primary `node.platform` + `discovered_platforms` from raw_metadata + `dbt_resource_type` fallback). Increments `asset_count` in the corresponding secondary tool entries.
+
+This is critical for resolver-merged nodes: a BigQuery table that was originally a dbt model has `discovered_platforms: ["bigquery", "dbt_core"]` — the dbt tool's asset count gets incremented even though the node's primary platform is now `bigquery`.
+
+#### Step 3 — Build One ViewNode per Tool per Lane
+
+For each tool in `tool_info`, enrich with:
+- **Health summary** — aggregate healthy/degraded/failing/unknown/stale counts from graph nodes
+- **Job count** — count job-like nodes (`canonical_type=job`, `dbt_resource_type in (model,seed,snapshot)`, Airflow `dag_id`/`is_task`, Fivetran `connector_id`/`sync_id`)
+- **Last run timestamp** — most recent `observed_at` across all nodes
+- **Sub-nodes** — up to 20 sample nodes with id, name, type, fqn, isJob
+- **Coverage gaps** — `"no_data_extracted"` if from pipeline stack with 0 assets; `"sparse_lineage"` if many assets but few cross-tool edges
+
+ViewNode ID format: `f"tool:{lane}:{tool_id}"`, canonical_type: `"service"`.
+
+#### Step 4a — Evidence-Based Cross-Tool Edges
+
+Iterate all data-plane edges in the graph. For each edge, look up the source and target tool keys via `node_to_tool`. If they belong to different tools → aggregate into `_ToolEdgeAgg`.
+
+**Resolver-merge handling:** After the resolver merges dbt models into warehouse nodes, both edge endpoints may have the same primary platform (e.g. both `platform=bigquery`). When `src_tk == tgt_tk`, the algorithm recovers the original cross-tool relationship:
+
+1. **Collect all platforms per node** via `_node_platforms()`: primary platform + `discovered_platforms` from `raw_metadata` + fallback: if `dbt_resource_type in ("model","seed","snapshot")`, inject `"dbt"`
+2. **Resolve to tool keys** via `_resolve_tks()`: look up each platform in `_platform_to_tks` with alias resolution (`get_platform()` maps `"dbt"` → `"dbt_core"`)
+3. **Select best cross-pair**: prefer the pair where `src_tk` matches the source node's primary platform (natural data-flow direction: warehouse→transformation)
+
+This works generically for any resolver merge: bigquery+dbt, snowflake+dbt, postgres+spark, databricks+dataform, etc.
+
+#### Step 4b — Job Bypass Synthesis Edges
+
+Compress `dataset→job→dataset` paths into direct tool-to-tool edges. `_compute_job_bypass_edges()` finds JOB nodes with upstream and downstream dataset/semantic nodes, creates synthetic edges with `edge_type` from the upstream leg and confidence = min of both legs. Added to aggregations with source `"bridge:job_bypass"`.
+
+#### Step 4c — Build ViewEdges from Aggregations
+
+Each `_ToolEdgeAgg` is converted to a `ViewEdge` via `_aggregate_tool_edge()`:
+
+- **evidence_count** = `len(agg.edges)` — number of cross-tool data flow edges
+- **flowAssetCount** = `len(agg.asset_ids)` — unique nodes involved
+- **Weighted confidence** = `sum(confidence × w) / sum(w)` where `w = 1.0 + log(1.0 + evidence_count_per_edge)`, clamped to [0.3, 0.95]
+- **Evidence mix** — normalized counter of evidence source labels (e.g. `dbt_manifest: 0.6, query_history: 0.4`)
+- **Top pairs** — up to 10 most frequent `(src_name, tgt_name)` asset pairs
+- **Semantic type** — derived by `edge_semantics.derive_semantic_type()` from tool categories and evidence type (see Part 7), then validated by `enforce_semantic_constraints()`. The dominant lane pair is tracked via `_ToolEdgeAgg.lane_pair_counts` so merges don't corrupt semantics.
+
+| Evidence Type | Category Pair | Semantic Type | Label |
+|---------------|---------------|---------------|-------|
+| `data_derivation` | ingestion → warehouse | `ingests` | Ingests |
+| `data_derivation` | warehouse → transformation | `feeds` | Feeds |
+| `data_derivation` | transformation → warehouse | `builds` | Builds |
+| `data_derivation` | warehouse → reporting | `serves` | Serves |
+| `job_orchestration` | orchestration → transformation | `orchestrates` | Orchestrates |
+| `code_ownership` | version_control → transformation | `manages_code_for` | Manages Code |
+| `hosting` | infrastructure → ingestion | `hosts` | Hosts |
+| `monitoring` | quality → warehouse | `monitors` | Monitors |
+| *(fallback)* | any | `data_flow` | Data Flow |
+
+#### Step 4d — Config-Driven Control-Plane Edges
+
+Tools like Airflow, GitHub, and Linux often have no graph-evidence edges because their adapters are stubs or discovery-only. Instead of the old lane-adjacency inference (which created nonsensical edges like Fivetran→GitHub), control-plane edges are derived from **category pairing rules**:
+
+```python
+_CP_RULES = [
+    ("orchestration",   {"transformation", "ingestion"},                    JOB_ORCHESTRATION),
+    ("version_control", {"transformation", "orchestration"},                CODE_OWNERSHIP),
+    ("infrastructure",  {"ingestion", "orchestration", "transformation"},   HOSTING),
+    ("quality",         {"warehouse", "transformation"},                    MONITORING),
+]
+```
+
+For each rule, every tool in the source category gets an edge to every tool in each target category, provided no evidence-based edge already exists between that pair. These edges use `derive_semantic_type()` + `enforce_semantic_constraints()` for correct labels.
+
+**Properties:**
+- `confidence=0.6` — higher than old inferred (0.3) but lower than evidence-based
+- `inferred=False` — these are real structural relationships from the pipeline config
+- `evidence_count=0` — distinguishes from data-evidence edges in the UI (dashed lines)
+- Only created when no evidence-based edge already exists for that pair
+
+**Example** (BigQuery + dbt + Airflow + Fivetran + Linux + GitHub pipeline):
+- Airflow → dbt: `orchestrates` (config-derived)
+- Airflow → Fivetran: `orchestrates` (config-derived)
+- GitHub → dbt: `manages_code_for` (config-derived)
+- GitHub → Airflow: `manages_code_for` (config-derived)
+- Linux → Fivetran: `hosts` (config-derived)
+- Linux → Airflow: `hosts` (config-derived)
+
+#### Step 4e — Cross-Lane Deduplication
+
+The same tool may appear in multiple lanes (e.g. BigQuery in both `warehouse_raw` and `warehouse_analytics`). This step:
+
+1. Groups view nodes by canonical tool_id (stripped of lane prefix)
+2. Merges multi-lane entries: aggregates health, assets, jobs, sub-nodes; keeps latest timestamp
+3. Remaps all edge source/target IDs to canonical tool IDs
+4. Merges duplicate edges for the same (source, target) pair: sums evidence_count, takes max confidence, prefers real edges over inferred, drops self-loops
+
+Final node ID format: `f"tool:{tool_id}"` (no lane prefix).
+
+#### Step 4f — Topological Ordering
+
+Computes a topo order for each tool within its layer based on the average layer order of upstream tools. Used for deterministic vertical positioning in Step 5.
+
+#### Step 5 — Layout
+
+Groups nodes by layer, sorts within each layer (orchestrators/infra last, then by topo order, then alphabetically). Assigns compact x/y positions:
+- `LANE_X_SPACING = 300px` between layers
+- `TOOL_Y_SPACING = 80px` between tools in the same layer
+- Only non-empty layers get x positions (empty layers are skipped)
+
+Layer layout order: INGESTION(0) → WAREHOUSE(1) → TRANSFORMATION(2) → ORCHESTRATION(3) → REPORTING(4) → INFRASTRUCTURE(5) → VERSION_CONTROL(6) → STORAGE(7)
+
+#### Step 6 — Stats & Metadata
+
+Builds the final `RenderedView` with:
+- **lanes** — per-layer metadata: name, label, order, x position, node count
+- **stats** — totalNodes, totalEdges, orchestratorCount, laneDistribution, opsSummary (totalTools, totalAssets, healthDistribution, coverageGapCount)
 
 ### View 2: Data Plane
 
@@ -256,6 +372,7 @@ Fetched when user clicks a tool node in the control plane. Returns domain-specif
 | `reporting` | Dashboards, Explores/Sources | Dashboards with view counts; explores with connection info |
 | `infrastructure` | Services, Hosts | Running services extracted from raw_metadata; host nodes |
 | `quality` | Monitors, Status | Test monitors with pass/fail; aggregate pass rate |
+| `version_control` | Repos, Activity | Repo list from config (owner/org); connection status, sync timestamps |
 
 **Response shape:**
 ```json
@@ -334,15 +451,18 @@ category="warehouse"      → WarehouseDetailView
 category="reporting"      → ReportingDetailView
 category="infrastructure" → InfraDetailView
 category="quality"        → QualityDetailView
+category="version_control" → VersionControlDetailView
 default                   → GenericDetailView
 ```
 
 ### Edge Inspector
 
 When clicking an edge in the control plane, shows:
-- Semantic type label (color-coded)
+- Semantic type label (color-coded) with evidence type badge (e.g. "data derivation", "job orchestration")
 - Data flow count and confidence bar
 - Source and target tool summaries
+
+Config-derived edges (evidence_count=0) show the semantic label without a flow count. Evidence-based edges show `"Label · N flows"`.
 
 ---
 
@@ -381,8 +501,8 @@ Every edge carries a confidence score (0.0–1.0) and evidence refs:
 | API metadata (Fivetran) | 0.9 |
 | Compiled SQL (view definitions) | 0.8 |
 | Query history (BigQuery jobs) | 0.6 |
+| Config-derived control-plane | 0.6 |
 | Bridge rules (inferred) | ≤ 0.5 |
-| Lane-adjacency (inferred) | 0.3 |
 | Regex/pattern matching | 0.3 |
 
 The data plane colors edges by confidence: green (≥0.8), amber (0.5–0.8), red (<0.5).
@@ -397,10 +517,53 @@ The data plane colors edges by confidence: green (≥0.8), amber (0.5–0.8), re
 
 3. **Job bypass in data plane** — Job nodes are excluded. When dataset→job→dataset exists, a direct bypass edge is created with evidence from both original edges.
 
-4. **Resolver merge preserves provenance** — When dbt models merge into BigQuery nodes, `discovered_platforms` and `dbt_resource_type` are preserved in raw_metadata for the Inspector Panel to use.
+4. **Resolver merge preserves provenance** — When dbt models merge into BigQuery nodes, `discovered_platforms` and `dbt_resource_type` are preserved in raw_metadata. The pipeline overview uses these to recover cross-tool edges (via `_platform_to_tks` alias-aware index) even when both endpoints share the same primary platform after merge.
 
 5. **Atomic run publishing** — Failed extractions never update `current_run_id`, so the frontend always sees a complete graph.
 
 6. **Infrastructure is discovery-only** — Linux servers create `system` nodes (excluded from data plane) with running_services/hosted_tools metadata, visible only in the control plane Inspector Panel.
 
 7. **Non-fatal enrichment** — Health enrichment, LLM reconciliation, and cross-tool synthesis all fail silently without breaking the pipeline.
+
+8. **Category-driven edge semantics** — Edge labels are derived from `(src_category, tgt_category, evidence_type)` via `edge_semantics.py`, not from lane adjacency. This prevents nonsensical labels like "BigQuery orchestrates dbt". Constraint enforcement (`enforce_semantic_constraints`) downgrades invalid labels to `data_flow` (e.g. `orchestrates` must originate from an orchestration tool).
+
+9. **Config-driven control-plane edges replace lane-adjacency inference** — The old system connected disconnected tools to their nearest lane neighbors, creating false edges (Fivetran→GitHub, Airflow→BigQuery). The new system derives edges from category pairing rules (orchestration→transformation = orchestrates, version_control→transformation = manages_code_for, etc.), producing only structurally meaningful connections.
+
+---
+
+## Part 7: Edge Semantic Policy (`edge_semantics.py`)
+
+The edge semantics module is the single source of truth for how tool-to-tool edges get labeled. It replaces the old lane-pair-based `_derive_semantic_type()` that was fragile and produced wrong labels after cross-lane merges.
+
+### Evidence Types
+
+| Constant | Meaning | Source |
+|----------|---------|--------|
+| `DATA_DERIVATION` | Asset A derives from asset B | SQL parsing, dbt manifest, query history |
+| `JOB_ORCHESTRATION` | Tool A schedules/triggers tool B | Airflow DAG refs, orchestrator configs |
+| `CODE_OWNERSHIP` | Tool A manages source code for tool B | VCS repo → project mapping |
+| `HOSTING` | Tool A hosts/runs tool B | Infrastructure → service mapping |
+| `MONITORING` | Tool A monitors/tests tool B | Quality tool → warehouse monitoring |
+| `INFERRED_ADJACENCY` | Legacy fallback for lane-pair heuristics | Lane adjacency (deprecated for new edges) |
+
+### `derive_semantic_type(src_category, tgt_category, evidence_type, src_lane?, tgt_lane?)`
+
+Returns `(semantic_type_code, display_label)` based on the rules matrix:
+
+- **DATA_DERIVATION**: Uses explicit `(src_cat, tgt_cat)` lookup table (ingestion→warehouse = "ingests", warehouse→transformation = "feeds", etc.)
+- **JOB_ORCHESTRATION**: Returns "orchestrates" only if `src_cat == "orchestration"` and `tgt_cat` is in `{ingestion, transformation, warehouse, reporting}`
+- **CODE_OWNERSHIP**: Returns "manages_code_for" only if `src_cat == "version_control"` and `tgt_cat` is in `{transformation, orchestration, warehouse, reporting}`
+- **HOSTING**: Returns "hosts" only if `src_cat == "infrastructure"` and `tgt_cat` is in `{ingestion, orchestration, transformation, warehouse, reporting}`
+- **MONITORING**: Returns "monitors" only if `src_cat == "quality"` and `tgt_cat` is in `{warehouse, transformation, orchestration, reporting}`
+- **INFERRED_ADJACENCY**: Falls back to lane-pair map for legacy compatibility
+- **Unknown**: Returns `("data_flow", "Data Flow")`
+
+### `enforce_semantic_constraints(semantic_type, label, src_category, tgt_category, evidence_type)`
+
+Guardrail that downgrades invalid labels to `("data_flow", "Data Flow")`:
+
+- `orchestrates` requires `src_category == "orchestration"`
+- `hosts` requires `src_category == "infrastructure"`
+- `manages_code_for` requires `src_category == "version_control"`
+- `monitors` requires `src_category == "quality"`
+- Data-flow verbs (`ingests`, `feeds`, `builds`, `serves`) require `evidence_type` in `{DATA_DERIVATION, INFERRED_ADJACENCY}`

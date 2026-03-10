@@ -229,36 +229,87 @@ function EdgeInspector({
           >
             {style.label}
           </span>
+          {meta.evidenceType && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--overlay-bg)] text-[var(--muted)] capitalize">
+              {meta.evidenceType.replace(/_/g, ' ')}
+            </span>
+          )}
         </div>
         <p className="text-[12px] text-[var(--muted)]">
           {src?.name || edge.sourceId} → {tgt?.name || edge.targetId}
         </p>
       </div>
 
-      {/* Flow count */}
+      {/* Flow stats */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data Flows</label>
           <p className="text-2xl font-semibold text-[var(--text)] mt-1">{meta.dataFlowCount}</p>
         </div>
-        <div>
-          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Confidence</label>
-          <div className="flex items-center gap-2 mt-2">
-            <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-faint)] overflow-hidden">
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${edge.confidence * 100}%`,
-                  backgroundColor: edge.confidence >= 0.8 ? '#10B981' : edge.confidence >= 0.5 ? '#F59E0B' : '#EF4444',
-                }}
-              />
-            </div>
-            <span className="text-[12px] font-semibold text-[var(--text)] tabular-nums">
-              {Math.round(edge.confidence * 100)}%
-            </span>
+        {meta.flowAssetCount != null && meta.flowAssetCount > 0 && (
+          <div>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Assets Involved</label>
+            <p className="text-2xl font-semibold text-[var(--text)] mt-1">{meta.flowAssetCount}</p>
           </div>
+        )}
+      </div>
+
+      {/* Confidence */}
+      <div>
+        <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Confidence</label>
+        <div className="flex items-center gap-2 mt-2">
+          <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-faint)] overflow-hidden">
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${edge.confidence * 100}%`,
+                backgroundColor: edge.confidence >= 0.8 ? '#10B981' : edge.confidence >= 0.5 ? '#F59E0B' : '#EF4444',
+              }}
+            />
+          </div>
+          <span className="text-[12px] font-semibold text-[var(--text)] tabular-nums">
+            {Math.round(edge.confidence * 100)}%
+          </span>
         </div>
       </div>
+
+      {/* Top Flows */}
+      {meta.topPairs && meta.topPairs.length > 0 && (
+        <Section title="Top Flows" count={meta.topPairs.length} defaultOpen>
+          <div className="space-y-1">
+            {meta.topPairs.map((pair, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded bg-[var(--overlay-bg)]">
+                <span className="text-[11px] text-[var(--text)] font-mono truncate flex-1">
+                  {pair.src} → {pair.tgt}
+                </span>
+                <span className="text-[10px] text-[var(--muted)] tabular-nums shrink-0">
+                  ×{pair.count}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* Evidence Sources */}
+      {meta.evidenceMix && Object.keys(meta.evidenceMix).length > 0 && (
+        <Section title="Evidence Sources" count={Object.keys(meta.evidenceMix).length} defaultOpen>
+          <div className="space-y-1">
+            {Object.entries(meta.evidenceMix)
+              .sort(([, a], [, b]) => b - a)
+              .map(([source, count]) => (
+                <div key={source} className="flex items-center justify-between px-2 py-1 rounded bg-[var(--overlay-bg)]">
+                  <span className="text-[11px] text-[var(--text)] capitalize">
+                    {source.replace(/_/g, ' ')}
+                  </span>
+                  <span className="text-[10px] text-[var(--muted)] tabular-nums">
+                    {count}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </Section>
+      )}
 
       {/* Source & Target details */}
       <Section title="Source" defaultOpen>

@@ -279,7 +279,7 @@ function LineagePageInner() {
                 id: e.id,
                 source: e.sourceId,
                 target: e.targetId,
-                dataFlowCount: e.evidenceCount,
+                dataFlowCount: e.metadata?.dataFlowCount ?? e.evidenceCount ?? 0,
                 sampleAssets: [],
               })),
               stats: {
@@ -915,8 +915,8 @@ function LineagePageInner() {
           type: 'smoothstep',
           animated: ve.evidenceCount > 0,
           label: ve.metadata?.label
-            ? `${ve.metadata.label} · ${ve.evidenceCount}`
-            : ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : 'connected',
+            ? `${ve.metadata.label}${ve.evidenceCount > 0 ? ` · ${ve.evidenceCount}` : ''}`
+            : ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : '',
           style: {
             stroke: `${edgeColor}80`,
             strokeWidth: ve.evidenceCount > 0

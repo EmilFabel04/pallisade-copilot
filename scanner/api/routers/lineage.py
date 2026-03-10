@@ -1756,20 +1756,24 @@ async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
     Serves from pre-computed run artifacts when available,
     falls back to on-demand computation.
     """
-    # Try pre-computed view from run registry
-    registry = _get_run_registry(stack_id)
-    if registry.current_run_id:
-        record = registry.get_run(registry.current_run_id)
-        if record and "lane_pipeline_overview" in record.artifacts.views:
-            return record.artifacts.views["lane_pipeline_overview"]
-
-    # Fallback: compute on-demand
+    # Always compute on-demand to pick up latest code changes and tool_nodes.
+    # Pre-computed views from run registry can become stale when tool_nodes
+    # are enriched or edge aggregation logic changes.
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    _log.info("[Engine] lane-pipeline-overview: computing on-demand (v2 — evidence-based edges)")
     store = _get_engine_store(stack_id)
     if not store.graph or not store.graph.nodes:
+        _log.info("[Engine] lane-pipeline-overview: empty graph, returning empty response")
         return RenderedViewResponse(
             viewType="lane_pipeline_overview",
             stats={"totalNodes": 0, "totalEdges": 0},
         ).dict()
+
+    _log.info(
+        "[Engine] lane-pipeline-overview: graph has %d nodes, %d edges, %d tool_nodes",
+        len(store.graph.nodes), len(store.graph.edges), len(store.tool_nodes or []),
+    )
 
     try:
         try:
@@ -1779,6 +1783,10 @@ async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
 
         builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
         view = builder.build_lane_pipeline_overview()
+        _log.info(
+            "[Engine] lane-pipeline-overview: result has %d nodes, %d edges",
+            len(view.nodes), len(view.edges),
+        )
         return view.to_dict()
     except Exception as e:
         import logging
@@ -2633,15 +2641,24 @@ async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[st
         store = _get_engine_store(_current_stack_id)
 
         # Build tool_nodes list so Pipeline Overview shows ALL integrated tools
-        _tool_nodes = [
-            {
+        _VCS_TOOL_TYPES = {"github", "gitlab", "bitbucket"}
+        _tool_nodes = []
+        for tc in request.tool_configs:
+            tn: dict = {
                 "tool_type": tc.tool_type,
                 "integration_id": tc.integration_id or "",
                 "name": tc.tool_type.replace("_", " ").title(),
                 "layer": tc.layer or "",
             }
-            for tc in request.tool_configs
-        ]
+            # Include safe metadata for VCS/control-plane tools (no secrets)
+            if tc.tool_type.lower() in _VCS_TOOL_TYPES and tc.config:
+                tn["config"] = {
+                    "owner": tc.config.get("owner") or tc.config.get("org", ""),
+                    "repo": tc.config.get("repo", ""),
+                    "repos": tc.config.get("repos") or tc.config.get("repositories", []),
+                    "org": tc.config.get("owner") or tc.config.get("org", ""),
+                }
+            _tool_nodes.append(tn)
 
         pipeline_config = ExtractionPipelineConfig(tool_nodes=_tool_nodes)
 
@@ -2749,15 +2766,24 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         store = _get_engine_store(_current_stack_id)
 
         # Build tool_nodes list so Pipeline Overview shows ALL integrated tools
-        _tool_nodes = [
-            {
+        _VCS_TOOL_TYPES_LLM = {"github", "gitlab", "bitbucket"}
+        _tool_nodes = []
+        for tc in request.tool_configs:
+            tn: dict = {
                 "tool_type": tc.tool_type,
                 "integration_id": tc.integration_id or "",
                 "name": tc.tool_type.replace("_", " ").title(),
                 "layer": tc.layer or "",
             }
-            for tc in request.tool_configs
-        ]
+            # Include safe metadata for VCS/control-plane tools (no secrets)
+            if tc.tool_type.lower() in _VCS_TOOL_TYPES_LLM and tc.config:
+                tn["config"] = {
+                    "owner": tc.config.get("owner") or tc.config.get("org", ""),
+                    "repo": tc.config.get("repo", ""),
+                    "repos": tc.config.get("repos") or tc.config.get("repositories", []),
+                    "org": tc.config.get("owner") or tc.config.get("org", ""),
+                }
+            _tool_nodes.append(tn)
 
         # Resolve LLM API key from environment based on provider
         import os

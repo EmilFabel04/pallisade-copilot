@@ -16,11 +16,13 @@ Three views are supported:
 """
 
 import logging
-from collections import defaultdict
+import math
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..graph import (
+    EdgeType,
     LineageEdge,
     LineageGraph,
     LineageNode,
@@ -66,6 +68,71 @@ class _BypassInfo:
     downstream_edge_id: str
     min_confidence: float
     total_evidence: int
+
+
+@dataclass
+class _ToolEdgeAgg:
+    """Aggregated derivation evidence for a tool→tool edge."""
+    edges: List[LineageEdge]       # underlying canonical derivation edges
+    pair_counts: Counter           # Counter[(src_name, tgt_name)] — frequency
+    asset_ids: Set[str]            # unique node IDs involved (both src + tgt)
+    lane_pair_counts: Counter = field(default_factory=Counter)  # Counter[(src_lane, tgt_lane)]
+
+
+# ── Evidence label normalisation ──────────────────────────────────────────
+
+_EVIDENCE_LABEL_MAP: Dict[str, str] = {
+    "live_dbt": "dbt_manifest",
+    "dbt_manifest": "dbt_manifest",
+    "live_warehouse": "query_history",
+    "warehouse_catalog": "query_history",
+    "live_fivetran": "fivetran_api",
+    "live_airbyte": "airbyte_api",
+    "compiled_sql": "compiled_sql",
+    "regex": "regex",
+}
+
+
+def _normalise_evidence_label(edge: LineageEdge) -> str:
+    """Return a stable, human-readable evidence label for a derivation edge.
+
+    Priority:
+      1. edge.discovered_from (already human-readable)
+      2. First evidence.adapter_id mapped through _EVIDENCE_LABEL_MAP
+      3. Raw adapter_id as last resort
+    """
+    df = edge.discovered_from or ""
+    if df:
+        if df.startswith("bridge:"):
+            return "bridge_inferred"
+        return df
+    for ev in edge.evidence:
+        mapped = _EVIDENCE_LABEL_MAP.get(ev.adapter_id)
+        if mapped:
+            return mapped
+        return ev.adapter_id  # raw fallback
+    return "unknown"
+
+
+# ── Control-plane category helpers ────────────────────────────────────────
+
+_CONTROL_PLANE_CATEGORIES = frozenset({"version_control", "infrastructure"})
+_CONTROL_PLANE_PLATFORMS = frozenset({
+    "github", "gitlab", "bitbucket",                    # VCS
+    "slack", "pagerduty", "opsgenie", "teams",          # Notifications
+    "jira", "linear", "asana",                          # Ticketing
+    "custom_webhook",                                    # Other
+    "linux", "linux_server", "ssh",                      # Infrastructure
+})
+
+
+def _is_control_plane_category(category: str, platform: str = "") -> bool:
+    """Check if a tool is control-plane (no data lineage assets expected)."""
+    if category in _CONTROL_PLANE_CATEGORIES:
+        return True
+    if platform.lower() in _CONTROL_PLANE_PLATFORMS:
+        return True
+    return False
 
 
 # Layout constants
@@ -247,7 +314,17 @@ class RenderedView:
 # Platform → layer / domain helpers (for Pipeline Overview dedup)
 # ---------------------------------------------------------------------------
 
-from .platforms import get_platform, ToolCategory
+from .platforms import get_platform, get_category, ToolCategory
+from .edge_semantics import (
+    CODE_OWNERSHIP,
+    DATA_DERIVATION,
+    HOSTING,
+    INFERRED_ADJACENCY,
+    JOB_ORCHESTRATION,
+    MONITORING,
+    derive_semantic_type,
+    enforce_semantic_constraints,
+)
 
 _CATEGORY_TO_LAYER: Dict[str, str] = {
     "warehouse": "WAREHOUSE",
@@ -283,26 +360,8 @@ def _get_display_domain(platform: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Semantic edge type helpers (for Pipeline Overview)
+# Now delegated to edge_semantics module — see derive_semantic_type()
 # ---------------------------------------------------------------------------
-
-def _derive_semantic_type(src_lane: str, tgt_lane: str) -> Tuple[str, str]:
-    """Derive a semantic edge type and display label from source/target lanes."""
-    _LANE_PAIR_MAP = {
-        ("ingestion", "warehouse_raw"): ("ingests", "Ingests"),
-        ("ingestion", "warehouse_analytics"): ("ingests", "Ingests"),
-        ("warehouse_raw", "transformation"): ("feeds", "Feeds"),
-        ("transformation", "warehouse_analytics"): ("transforms", "Builds"),
-        ("transformation", "warehouse_raw"): ("transforms", "Builds"),
-        ("warehouse_analytics", "reporting"): ("serves", "Serves"),
-        ("warehouse_raw", "reporting"): ("serves", "Serves"),
-    }
-    result = _LANE_PAIR_MAP.get((src_lane, tgt_lane))
-    if result:
-        return result
-    # Fallback heuristics
-    if src_lane == "transformation" or tgt_lane == "transformation":
-        return ("orchestrates", "Orchestrates") if tgt_lane == "transformation" else ("builds", "Builds")
-    return ("data_flow", "Data Flow")
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +380,132 @@ class ViewBuilder:
     ):
         self.graph = graph
         self.tool_nodes = tool_nodes or []
+
+    def _compute_job_bypass_edges(self) -> List[_BypassInfo]:
+        """Compute bypass edges for JOB nodes: dataset→job→dataset → dataset→dataset.
+
+        Reusable across data-plane view and lane pipeline overview.
+        """
+        selected_types = {
+            CanonicalNodeType.DATASET.value,
+            CanonicalNodeType.SEMANTIC.value,
+        }
+        bypass_edges: List[_BypassInfo] = []
+        for node in self.graph.nodes.values():
+            ct = node.canonical_type or map_node_type(node).value
+            if ct != CanonicalNodeType.JOB.value:
+                continue
+            upstream_pairs: List[Tuple[str, LineageEdge]] = []
+            downstream_pairs: List[Tuple[str, LineageEdge]] = []
+            for edge in self.graph.edges.values():
+                if edge.target_id == node.id:
+                    src = self.graph.nodes.get(edge.source_id)
+                    if src:
+                        src_ct = src.canonical_type or map_node_type(src).value
+                        if src_ct in selected_types:
+                            upstream_pairs.append((src.id, edge))
+                if edge.source_id == node.id:
+                    tgt = self.graph.nodes.get(edge.target_id)
+                    if tgt:
+                        tgt_ct = tgt.canonical_type or map_node_type(tgt).value
+                        if tgt_ct in selected_types:
+                            downstream_pairs.append((tgt.id, edge))
+            for up_id, up_edge in upstream_pairs:
+                for down_id, down_edge in downstream_pairs:
+                    if up_id != down_id:
+                        bypass_edges.append(_BypassInfo(
+                            upstream_id=up_id,
+                            downstream_id=down_id,
+                            upstream_edge_id=up_edge.id,
+                            downstream_edge_id=down_edge.id,
+                            min_confidence=min(up_edge.confidence, down_edge.confidence),
+                            total_evidence=len(up_edge.evidence) + len(down_edge.evidence),
+                        ))
+        return bypass_edges
+
+    @staticmethod
+    def _aggregate_tool_edge(
+        pair_key: str,
+        agg: _ToolEdgeAgg,
+        src_lane: str,
+        tgt_lane: str,
+        src_category: Optional[str] = None,
+        tgt_category: Optional[str] = None,
+        evidence_type: str = DATA_DERIVATION,
+    ) -> ViewEdge:
+        """Build a ViewEdge from aggregated underlying derivation edges."""
+        flow_count = len(agg.edges)
+        asset_count = len(agg.asset_ids)
+
+        # Weighted confidence: w_i = 1 + log(1 + evidence_count_i)
+        total_w = 0.0
+        weighted_c = 0.0
+        evidence_mix: Dict[str, int] = defaultdict(int)
+        all_evidence_refs: List[str] = []
+
+        for e in agg.edges:
+            ev_count = len(e.evidence)
+            w = 1.0 + math.log(1.0 + ev_count)
+            total_w += w
+            weighted_c += e.confidence * w
+            label = _normalise_evidence_label(e)
+            evidence_mix[label] += 1
+            for ev in e.evidence:
+                if ev.source_ref and len(all_evidence_refs) < 20:
+                    all_evidence_refs.append(ev.source_ref)
+
+        confidence = (weighted_c / total_w) if total_w > 0 else 0.5
+        confidence = max(0.3, min(0.95, confidence))
+
+        # Top pairs by frequency, stable sort for determinism
+        top_raw = agg.pair_counts.most_common(10)
+        top_pairs = sorted(
+            [{"src": p[0], "tgt": p[1], "count": c} for (p, c) in top_raw],
+            key=lambda x: (-x["count"], x["src"], x["tgt"]),
+        )
+
+        # Use dominant lane pair from underlying edges (resilient to node merge)
+        dominant_src_lane = src_lane
+        dominant_tgt_lane = tgt_lane
+        if agg.lane_pair_counts:
+            dominant_pair = agg.lane_pair_counts.most_common(1)[0][0]
+            dominant_src_lane, dominant_tgt_lane = dominant_pair
+
+        # Category-driven semantic type derivation
+        semantic_type, semantic_label = derive_semantic_type(
+            src_category, tgt_category, evidence_type,
+            dominant_src_lane, dominant_tgt_lane,
+        )
+        # Safety net: enforce constraints
+        semantic_type, semantic_label = enforce_semantic_constraints(
+            semantic_type, semantic_label,
+            src_category, tgt_category, evidence_type,
+        )
+
+        src_id, tgt_id = pair_key.split("→")
+
+        return ViewEdge(
+            id=f"flow-{pair_key}",
+            source_id=src_id,
+            target_id=tgt_id,
+            canonical_type="derives",
+            original_type="data_flow",
+            confidence=round(confidence, 3),
+            inferred=False,
+            evidence_count=len(agg.edges),  # Number of cross-tool edges (data flows)
+            evidence_refs=all_evidence_refs[:20],
+            metadata={
+                "semanticType": semantic_type,
+                "label": semantic_label,
+                "evidenceType": evidence_type,
+                "dataFlowCount": flow_count,
+                "flowAssetCount": asset_count,
+                "topPairs": top_pairs,
+                "evidenceMix": dict(evidence_mix),
+                "srcLane": dominant_src_lane,
+                "tgtLane": dominant_tgt_lane,
+            },
+        )
 
     def build_pipeline_overview(self) -> RenderedView:
         """
@@ -712,6 +897,20 @@ class ViewBuilder:
                     tool_info[tk]["asset_count"] = tool_info[tk].get("asset_count", 0) + 1
                     tool_key_to_graph_nodes[tk].append(node)
 
+        # Log discovered tools for debugging
+        logger.info(
+            "[LanePipelineOverview] Discovered %d tools from graph + %d from pipeline stack. "
+            "Graph: %d nodes, %d edges. node_to_tool covers %d nodes.",
+            sum(1 for t in tool_info.values() if not t.get("from_pipeline_stack")),
+            sum(1 for t in tool_info.values() if t.get("from_pipeline_stack")),
+            len(self.graph.nodes), len(self.graph.edges), len(node_to_tool),
+        )
+        for tk, info in sorted(tool_info.items()):
+            logger.info(
+                "[LanePipelineOverview]   Tool %s: platform=%s, assets=%d, from_stack=%s",
+                tk, info["platform"], info["asset_count"], info.get("from_pipeline_stack", False),
+            )
+
         # ── Step 3: Build one ViewNode per tool per lane ──────────────
         view_nodes: List[ViewNode] = []
 
@@ -803,141 +1002,253 @@ class ViewBuilder:
                 },
             ))
 
-        # ── Step 4: Build tool-to-tool flow edges ─────────────────────
-        # Aggregate graph edges into cross-tool flows
-        tool_edge_counts: Dict[str, int] = defaultdict(int)  # "src_tk→tgt_tk" → count
+        # ── Step 4: Build evidence-based tool-to-tool flow edges ─────
+        # Aggregate ALL data-plane cross-tool edges with rich evidence.
+        # The pipeline overview shows tool→tool connections — any edge type
+        # that crosses tool boundaries represents real data flow (service→
+        # dataset, job→dataset, dataset→dataset, dataset→semantic, etc.).
+        tool_edge_aggs: Dict[str, _ToolEdgeAgg] = {}
+
+        def _add_to_agg(pair_key: str, edge: LineageEdge,
+                         src_name: str, tgt_name: str,
+                         src_nid: str, tgt_nid: str,
+                         src_lane: str = "", tgt_lane: str = "") -> None:
+            if pair_key not in tool_edge_aggs:
+                tool_edge_aggs[pair_key] = _ToolEdgeAgg(
+                    edges=[], pair_counts=Counter(), asset_ids=set(),
+                )
+            a = tool_edge_aggs[pair_key]
+            a.edges.append(edge)
+            a.pair_counts[(src_name, tgt_name)] += 1
+            a.asset_ids.add(src_nid)
+            a.asset_ids.add(tgt_nid)
+            if src_lane or tgt_lane:
+                a.lane_pair_counts[(src_lane, tgt_lane)] += 1
+
+        # 4a: All data-plane edges that cross tool boundaries
+        #
+        # After resolver merging, many nodes share the same primary platform
+        # (e.g. dbt models merged into BigQuery tables → platform=bigquery).
+        # To recover cross-tool edges, also check discovered_platforms on
+        # source/target nodes.  If the two nodes were *originally* from
+        # different tools (based on discovered_platforms), the edge counts
+        # as cross-tool.
+        _skip_same = 0
+        _skip_no_tk = 0
+        _skip_control = 0
+        _cross_tool = 0
 
         for edge in self.graph.edges.values():
             if edge.plane == LinePlane.CONTROL:
+                _skip_control += 1
                 continue
             src_tk = node_to_tool.get(edge.source_id)
             tgt_tk = node_to_tool.get(edge.target_id)
+            if not src_tk or not tgt_tk:
+                _skip_no_tk += 1
+                continue
+
+            src_node = self.graph.nodes.get(edge.source_id)
+            tgt_node = self.graph.nodes.get(edge.target_id)
+            if not src_node or not tgt_node:
+                continue
+
+            # Primary tool keys match — but check if resolver-merged
+            # nodes were originally from different platforms.
+            if src_tk == tgt_tk:
+                # Collect all platforms each node belongs to
+                # (primary platform + discovered_platforms + dbt fallback)
+                def _node_platforms(node: LineageNode) -> Set[str]:
+                    rm = node.raw_metadata or {}
+                    plats = set(dp.lower() for dp in rm.get("discovered_platforms", []))
+                    plats.add((node.platform or "").lower())
+                    # dbt_resource_type fallback (discovered_platforms may be
+                    # lost during serialization round-trips)
+                    if (node.platform or "").lower() != "dbt" and not plats.intersection({"dbt", "dbt_core"}):
+                        if rm.get("dbt_resource_type") in ("model", "seed", "snapshot"):
+                            plats.add("dbt")
+                    return plats
+
+                src_platforms = _node_platforms(src_node)
+                tgt_platforms = _node_platforms(tgt_node)
+
+                # Resolve platform names → tool_info keys using the
+                # alias-aware _platform_to_tks index (built in Step 2.5).
+                def _resolve_tks(platforms: Set[str]) -> Set[Tuple[str, str]]:
+                    result: Set[Tuple[str, str]] = set()
+                    for p in platforms:
+                        for tk in _platform_to_tks.get(p, []):
+                            result.add(tk)
+                        # Resolve canonical name (e.g. "dbt" → "dbt_core")
+                        p_info = get_platform(p)
+                        if p_info and p_info.name != p:
+                            for tk in _platform_to_tks.get(p_info.name, []):
+                                result.add(tk)
+                    return result
+
+                src_all_tks = _resolve_tks(src_platforms)
+                tgt_all_tks = _resolve_tks(tgt_platforms)
+
+                # Find a cross-tool pair. Prefer the pair where src_tk
+                # matches the source node's primary platform (natural
+                # data-flow direction: warehouse → transformation).
+                src_primary = (src_node.platform or "").lower()
+                cross_pair = None
+                best_score = -1
+                for s_tk in sorted(src_all_tks):
+                    for t_tk in sorted(tgt_all_tks):
+                        if s_tk == t_tk:
+                            continue
+                        # Score: prefer src matching source's primary platform
+                        score = 1 if tool_info.get(s_tk, {}).get("platform") == src_primary else 0
+                        if score > best_score:
+                            best_score = score
+                            cross_pair = (s_tk, t_tk)
+
+                if not cross_pair:
+                    _skip_same += 1
+                    continue
+                src_tk, tgt_tk = cross_pair
+
+            _cross_tool += 1
+            pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
+            _add_to_agg(pair_key, edge, src_node.name, tgt_node.name,
+                        src_node.id, tgt_node.id,
+                        src_lane=src_tk[0], tgt_lane=tgt_tk[0])
+
+        logger.info(
+            "[LanePipelineOverview] Step 4a: %d total edges, %d control-plane, "
+            "%d no tool key, %d same-tool (after merge check), %d cross-tool",
+            len(self.graph.edges), _skip_control, _skip_no_tk,
+            _skip_same, _cross_tool,
+        )
+
+        # 4b: Job-bypass edges (dataset→job→dataset compressed to dataset→dataset)
+        # These supplement 4a by creating direct dataset→dataset links through
+        # intermediate job nodes, adding evidence from both legs.
+        for bp in self._compute_job_bypass_edges():
+            src_node = self.graph.nodes.get(bp.upstream_id)
+            tgt_node = self.graph.nodes.get(bp.downstream_id)
+            if not src_node or not tgt_node:
+                continue
+            src_tk = node_to_tool.get(bp.upstream_id)
+            tgt_tk = node_to_tool.get(bp.downstream_id)
             if not src_tk or not tgt_tk or src_tk == tgt_tk:
                 continue
             pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
-            tool_edge_counts[pair_key] += 1
+            # Create a synthetic edge for the bypass
+            up_edge = self.graph.edges.get(bp.upstream_edge_id)
+            synth_edge = LineageEdge(
+                id=f"bypass-{bp.upstream_id}-{bp.downstream_id}",
+                source_id=bp.upstream_id,
+                target_id=bp.downstream_id,
+                edge_type=up_edge.edge_type if up_edge else EdgeType.DERIVED_FROM,
+                confidence=bp.min_confidence,
+                discovered_from="bridge:job_bypass",
+            )
+            _add_to_agg(pair_key, synth_edge, src_node.name, tgt_node.name,
+                        src_node.id, tgt_node.id,
+                        src_lane=src_tk[0], tgt_lane=tgt_tk[0])
 
-        # Build a node-id-to-lane lookup for semantic type derivation
+        # Build node-id-to-lane and node-id-to-platform lookups
         # Use cluster_id (positional lane) not layer (display category)
         view_node_lane: Dict[str, str] = {}
+        view_node_platform: Dict[str, str] = {}
         for vn in view_nodes:
             view_node_lane[vn.id] = vn.cluster_id
+            view_node_platform[vn.id] = vn.platform
 
         view_edges: List[ViewEdge] = []
-        for pair, count in tool_edge_counts.items():
-            src_id, tgt_id = pair.split("→")
+        for pair_key in sorted(tool_edge_aggs.keys()):
+            agg = tool_edge_aggs[pair_key]
+            src_id, tgt_id = pair_key.split("→")
             src_lane = view_node_lane.get(src_id, "")
             tgt_lane = view_node_lane.get(tgt_id, "")
-            semantic_type, semantic_label = _derive_semantic_type(src_lane, tgt_lane)
-            view_edges.append(ViewEdge(
-                id=f"flow-{pair}",
-                source_id=src_id,
-                target_id=tgt_id,
-                canonical_type="derives",
-                original_type="data_flow",
-                confidence=1.0,
-                inferred=False,
-                evidence_count=count,
-                metadata={
-                    "semanticType": semantic_type,
-                    "label": semantic_label,
-                    "dataFlowCount": count,
-                    "srcLane": src_lane,
-                    "tgtLane": tgt_lane,
-                },
-            ))
+            src_plat = view_node_platform.get(src_id, "")
+            tgt_plat = view_node_platform.get(tgt_id, "")
+            src_cat = get_category(src_plat)
+            tgt_cat = get_category(tgt_plat)
+            ve = self._aggregate_tool_edge(
+                pair_key, agg, src_lane, tgt_lane,
+                src_category=src_cat.value if src_cat else None,
+                tgt_category=tgt_cat.value if tgt_cat else None,
+                evidence_type=DATA_DERIVATION,
+            )
+            view_edges.append(ve)
+            logger.info(
+                "[LanePipelineOverview] Evidence edge: %s → %s (%d flows, %d assets, evidence_count=%d)",
+                src_id, tgt_id, len(agg.edges), len(agg.asset_ids), ve.evidence_count,
+            )
 
-        # ── Step 4a: Infer edges for zero-edge tools ──────────────────
-        # Tools from the pipeline stack or with only control-plane edges
-        # get no data-flow edges above.  Infer lane-adjacency connections
-        # so they appear connected in the overview.
-        connected_tool_ids: Set[str] = set()
-        for pair in tool_edge_counts:
-            src_id, tgt_id = pair.split("→")
-            connected_tool_ids.add(src_id)
-            connected_tool_ids.add(tgt_id)
+        logger.info(
+            "[LanePipelineOverview] Step 4 total: %d evidence-based edges, %d tool-to-tool aggregations",
+            sum(len(a.edges) for a in tool_edge_aggs.values()), len(tool_edge_aggs),
+        )
 
-        # Group existing view nodes by lane for neighbour lookup
-        # Use cluster_id (positional lane) not layer (display category)
-        lane_to_tools: Dict[str, List[ViewNode]] = defaultdict(list)
+        # ── Step 4c: Config-driven control-plane edges ────────────────
+        # Create edges between tools based on their category relationships
+        # (orchestrates, manages_code_for, hosts, monitors) derived from
+        # the pipeline configuration — no graph evidence needed.
+        _CP_RULES: List[Tuple[str, frozenset, str]] = [
+            ("orchestration", frozenset({"transformation", "ingestion"}), JOB_ORCHESTRATION),
+            ("version_control", frozenset({"transformation", "orchestration"}), CODE_OWNERSHIP),
+            ("infrastructure", frozenset({"ingestion", "orchestration", "transformation"}), HOSTING),
+            ("quality", frozenset({"warehouse", "transformation"}), MONITORING),
+        ]
+
+        # Index view_nodes by category
+        _cat_to_nodes: Dict[str, List[ViewNode]] = defaultdict(list)
         for vn in view_nodes:
-            lane_to_tools[vn.cluster_id].append(vn)
+            cat = get_category(vn.platform)
+            if cat:
+                _cat_to_nodes[cat.value].append(vn)
 
-        ordered_lanes = [l.value for l in PipelineLane]
+        # Collect existing evidence-based pair keys to avoid duplicates
+        _existing_pairs: Set[str] = set()
+        for pair_key in tool_edge_aggs:
+            _existing_pairs.add(pair_key)
 
-        for vn in view_nodes:
-            if vn.id in connected_tool_ids:
-                continue  # already has edges
+        _cp_count = 0
+        for src_cat, tgt_cats, ev_type in _CP_RULES:
+            for src_vn in _cat_to_nodes.get(src_cat, []):
+                for tgt_cat in sorted(tgt_cats):
+                    for tgt_vn in _cat_to_nodes.get(tgt_cat, []):
+                        if src_vn.id == tgt_vn.id:
+                            continue
+                        pair_key = f"{src_vn.id}→{tgt_vn.id}"
+                        if pair_key in _existing_pairs:
+                            continue
+                        _existing_pairs.add(pair_key)
 
-            my_lane_idx = LANE_ORDER.get(vn.cluster_id, -1)
-            if my_lane_idx < 0:
-                continue
+                        sem_type, sem_label = derive_semantic_type(
+                            src_cat, tgt_cat, ev_type,
+                        )
+                        sem_type, sem_label = enforce_semantic_constraints(
+                            sem_type, sem_label, src_cat, tgt_cat, ev_type,
+                        )
+                        view_edges.append(ViewEdge(
+                            id=f"cp-{pair_key}",
+                            source_id=src_vn.id,
+                            target_id=tgt_vn.id,
+                            canonical_type=sem_type,
+                            original_type=ev_type,
+                            confidence=0.6,
+                            inferred=False,
+                            evidence_count=0,
+                            metadata={
+                                "semanticType": sem_type,
+                                "label": sem_label,
+                                "evidenceType": ev_type,
+                                "dataFlowCount": 0,
+                            },
+                        ))
+                        _cp_count += 1
 
-            # Find nearest upstream lane (lower index) that has tools
-            for idx in range(my_lane_idx - 1, -1, -1):
-                lane_name = ordered_lanes[idx]
-                neighbors = lane_to_tools.get(lane_name, [])
-                if neighbors:
-                    for neighbor in neighbors:
-                        pair_key = f"{neighbor.id}→{vn.id}"
-                        if pair_key not in tool_edge_counts:
-                            tool_edge_counts[pair_key] = 0
-                            src_lane = view_node_lane.get(neighbor.id, "")
-                            tgt_lane = view_node_lane.get(vn.id, "")
-                            sem_type, sem_label = _derive_semantic_type(src_lane, tgt_lane)
-                            view_edges.append(ViewEdge(
-                                id=f"inferred-{pair_key}",
-                                source_id=neighbor.id,
-                                target_id=vn.id,
-                                canonical_type="derives",
-                                original_type="inferred_adjacency",
-                                confidence=0.3,
-                                inferred=True,
-                                evidence_count=0,
-                                metadata={
-                                    "semanticType": sem_type,
-                                    "label": sem_label,
-                                    "dataFlowCount": 0,
-                                    "srcLane": src_lane,
-                                    "tgtLane": tgt_lane,
-                                    "inferredReason": "lane_adjacency",
-                                },
-                            ))
-                            connected_tool_ids.add(vn.id)
-                    break  # only connect to nearest upstream lane
-
-            # Find nearest downstream lane (higher index) that has tools
-            for idx in range(my_lane_idx + 1, len(ordered_lanes)):
-                lane_name = ordered_lanes[idx]
-                neighbors = lane_to_tools.get(lane_name, [])
-                if neighbors:
-                    for neighbor in neighbors:
-                        pair_key = f"{vn.id}→{neighbor.id}"
-                        if pair_key not in tool_edge_counts:
-                            tool_edge_counts[pair_key] = 0
-                            src_lane = view_node_lane.get(vn.id, "")
-                            tgt_lane = view_node_lane.get(neighbor.id, "")
-                            sem_type, sem_label = _derive_semantic_type(src_lane, tgt_lane)
-                            view_edges.append(ViewEdge(
-                                id=f"inferred-{pair_key}",
-                                source_id=vn.id,
-                                target_id=neighbor.id,
-                                canonical_type="derives",
-                                original_type="inferred_adjacency",
-                                confidence=0.3,
-                                inferred=True,
-                                evidence_count=0,
-                                metadata={
-                                    "semanticType": sem_type,
-                                    "label": sem_label,
-                                    "dataFlowCount": 0,
-                                    "srcLane": src_lane,
-                                    "tgtLane": tgt_lane,
-                                    "inferredReason": "lane_adjacency",
-                                },
-                            ))
-                            connected_tool_ids.add(neighbor.id)
-                    break  # only connect to nearest downstream lane
+        if _cp_count:
+            logger.info(
+                "[LanePipelineOverview] Step 4c: %d config-driven control-plane edges",
+                _cp_count,
+            )
 
         # ── Step 4b: Deduplicate ViewNodes by tool_id ─────────────────
         # Merge nodes for the same tool across different lanes into one
@@ -1060,6 +1371,10 @@ class ViewBuilder:
                 )
                 if not edge.inferred:
                     existing.inferred = False  # real edge overrides inferred
+                    # Preserve semantics from the evidence-based edge
+                    existing.metadata["semanticType"] = edge.metadata.get("semanticType", existing.metadata.get("semanticType"))
+                    existing.metadata["label"] = edge.metadata.get("label", existing.metadata.get("label"))
+                    existing.metadata["evidenceType"] = edge.metadata.get("evidenceType", existing.metadata.get("evidenceType"))
             else:
                 edge_map[key] = edge
         view_edges = list(edge_map.values())
@@ -1310,7 +1625,9 @@ class ViewBuilder:
 
         # Coverage gaps
         coverage_gaps: List[str] = []
-        if not tool_nodes_list:
+        if not tool_nodes_list and _is_control_plane_category(category, platform):
+            coverage_gaps.append("no_activity_data_yet")
+        elif not tool_nodes_list:
             coverage_gaps.append("no_data_extracted")
         else:
             # Check sparse lineage
@@ -1329,6 +1646,12 @@ class ViewBuilder:
         # Build connections (upstream/downstream tools from graph edges)
         connections = self._build_tool_connections(tool_node_ids)
 
+        # For control-plane tools with no graph nodes, use tab group items
+        # as the asset count so the summary doesn't show 0.
+        total_assets = len(tool_nodes_list)
+        if total_assets == 0 and _is_control_plane_category(category, platform):
+            total_assets = sum(len(items) for items in groups.values())
+
         return {
             "toolId": tool_view_id,
             "platform": platform,
@@ -1337,7 +1660,7 @@ class ViewBuilder:
             "displayName": display_name,
             "integrationId": integration_id,
             "summary": {
-                "totalAssets": len(tool_nodes_list),
+                "totalAssets": total_assets,
                 "healthSummary": health_summary,
                 "jobCount": job_count,
                 "lastRunTs": last_run_ts,
@@ -1363,6 +1686,7 @@ class ViewBuilder:
             "reporting": self._tabs_reporting,
             "infrastructure": self._tabs_infra,
             "quality": self._tabs_quality,
+            "version_control": self._tabs_version_control,
         }
         builder = builders.get(category, self._tabs_generic)
         return builder(nodes, tool_node_ids)
@@ -1691,6 +2015,100 @@ class ViewBuilder:
         groups = {"monitors": monitors, "status": status_items}
         return tabs, groups
 
+    def _tabs_version_control(
+        self, nodes: List[LineageNode], tool_node_ids: Set[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
+        """Version control tools: Repos + Activity from config/integration_stats.
+
+        Works with or without config on tool_nodes. When config is missing
+        (e.g. restored from older snapshot), shows connection status from
+        the tool node's status field.
+        """
+        repo_items: List[Dict[str, Any]] = []
+        activity_items: List[Dict[str, Any]] = []
+
+        # VCS tools have no graph nodes (CONTROL_PLANE).
+        # Pull repo/activity data from pipeline tool_nodes config.
+        _VCS_PLATFORMS = {"github", "gitlab", "bitbucket"}
+        for tn in self.tool_nodes:
+            tn_type = (tn.get("toolType") or tn.get("tool_type") or "").lower()
+            if tn_type not in _VCS_PLATFORMS:
+                continue
+
+            config = tn.get("config") or tn.get("configuration") or {}
+            repos = config.get("repos") or config.get("repositories") or []
+            # Fallback: single repo field → synthesize a one-element list
+            if not repos and config.get("repo"):
+                repos = [config["repo"]]
+            org = config.get("org") or config.get("organization") or config.get("owner") or ""
+            int_id = tn.get("integrationId") or tn.get("integration_id") or ""
+            name = tn.get("name") or tn_type.title()
+            status = (tn.get("status") or "").upper()
+
+            # Build repo items
+            if isinstance(repos, list):
+                for repo in repos[:50]:  # bounded
+                    repo_name = repo if isinstance(repo, str) else (repo.get("name", str(repo)) if isinstance(repo, dict) else str(repo))
+                    repo_items.append({
+                        "id": f"repo:{org}/{repo_name}" if org else f"repo:{repo_name}",
+                        "name": f"{org}/{repo_name}" if org else repo_name,
+                        "fqn": f"{org}/{repo_name}" if org else repo_name,
+                        "canonicalType": "repository",
+                        "originalType": "repository",
+                        "healthStatus": "healthy",
+                        "observedAt": None,
+                        "container": org,
+                        "zone": "",
+                        "metadata": {},
+                    })
+
+            # Activity from integration_stats (if populated by driver)
+            stats = config.get("integration_stats") or {}
+
+            # Determine health from stats or tool node status
+            is_connected = status in ("CONNECTED", "HEALTHY")
+            has_synced = bool(stats.get("last_sync_at") or stats.get("last_event_at"))
+            health = "healthy" if has_synced else ("healthy" if is_connected else "unknown")
+
+            activity_items.append({
+                "id": f"vcs:status:{int_id or tn_type}",
+                "name": f"{name} connection",
+                "fqn": f"vcs:{tn_type}:{int_id}",
+                "canonicalType": "integration_status",
+                "originalType": "vcs_connection",
+                "healthStatus": health,
+                "observedAt": stats.get("last_event_at") or stats.get("last_sync_at"),
+                "container": "",
+                "zone": "",
+                "metadata": {
+                    "platform": tn_type,
+                    "org": org,
+                    "repoCount": len(repos) if isinstance(repos, list) else 0,
+                    "integrationId": int_id,
+                    "connectionStatus": status or "unknown",
+                    "lastSyncAt": stats.get("last_sync_at"),
+                    "lastEventAt": stats.get("last_event_at"),
+                    "lastErrorAt": stats.get("last_error_at"),
+                    "lastErrorMessage": stats.get("last_error_message"),
+                    "prs7d": stats.get("prs_7d_total", 0),
+                    "openPrs7d": stats.get("open_prs_7d", 0),
+                    "mergedPrs7d": stats.get("merged_prs_7d", 0),
+                    "issues7d": stats.get("issues_7d_total", 0),
+                    "webhookStatus": stats.get("webhook_status", "unknown"),
+                },
+            })
+
+        # Include any graph nodes (future adapters)
+        for n in nodes:
+            activity_items.append(self._node_to_item(n))
+
+        tabs = [
+            {"key": "repos", "label": "Repositories", "count": len(repo_items)},
+            {"key": "activity", "label": "Activity", "count": len(activity_items)},
+        ]
+        groups = {"repos": repo_items, "activity": activity_items}
+        return tabs, groups
+
     def _tabs_generic(
         self, nodes: List[LineageNode], tool_node_ids: Set[str],
     ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
@@ -1774,41 +2192,9 @@ class ViewBuilder:
             CanonicalNodeType.SEMANTIC.value,
         }
 
-        # Build bypass edges for JOB nodes: when dataset → job → dataset
-        # exists, create a direct dataset → dataset derives edge so the
-        # data plane stays clean.  Carry confidence and evidence from the
-        # original edges for provenance.
-        job_bypass_edges: List[_BypassInfo] = []
-        for node in self.graph.nodes.values():
-            ct = node.canonical_type or map_node_type(node).value
-            if ct != CanonicalNodeType.JOB.value:
-                continue
-            upstream_pairs: List[Tuple[str, LineageEdge]] = []
-            downstream_pairs: List[Tuple[str, LineageEdge]] = []
-            for edge in self.graph.edges.values():
-                if edge.target_id == node.id:
-                    src = self.graph.nodes.get(edge.source_id)
-                    if src:
-                        src_ct = src.canonical_type or map_node_type(src).value
-                        if src_ct in selected_types:
-                            upstream_pairs.append((src.id, edge))
-                if edge.source_id == node.id:
-                    tgt = self.graph.nodes.get(edge.target_id)
-                    if tgt:
-                        tgt_ct = tgt.canonical_type or map_node_type(tgt).value
-                        if tgt_ct in selected_types:
-                            downstream_pairs.append((tgt.id, edge))
-            for up_id, up_edge in upstream_pairs:
-                for down_id, down_edge in downstream_pairs:
-                    if up_id != down_id:
-                        job_bypass_edges.append(_BypassInfo(
-                            upstream_id=up_id,
-                            downstream_id=down_id,
-                            upstream_edge_id=up_edge.id,
-                            downstream_edge_id=down_edge.id,
-                            min_confidence=min(up_edge.confidence, down_edge.confidence),
-                            total_evidence=len(up_edge.evidence) + len(down_edge.evidence),
-                        ))
+        # Build bypass edges for JOB nodes: dataset→job→dataset → direct
+        # dataset→dataset derives.  Uses shared helper.
+        job_bypass_edges = self._compute_job_bypass_edges()
 
         # Step 2: Safety-net dedup for tool-platform table nodes.
         # The resolver should catch these; this is a warning-only fallback.

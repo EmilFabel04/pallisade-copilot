@@ -137,15 +137,33 @@ export async function POST(
       });
     }
 
-    // Build tool_nodes for view builder
-    const toolNodes = connectedNodes.map((n) => ({
-      id: n.id,
-      name: n.name,
-      toolType: n.toolType,
-      layer: n.layer,
-      status: n.status,
-      integrationId: n.integrationId,
-    }));
+    // Build tool_nodes for view builder (include safe metadata for VCS/control-plane tools)
+    const toolNodes = connectedNodes.map((n) => {
+      const base: Record<string, any> = {
+        id: n.id,
+        name: n.name,
+        toolType: n.toolType,
+        layer: n.layer,
+        status: n.status,
+        integrationId: n.integrationId,
+      };
+      // For VCS tools, include non-secret config fields so backend can show repos/org
+      if (n.layer === 'VERSION_CONTROL') {
+        const cfg = resolveNodeConfig(n);
+        if (cfg) {
+          base.config = {
+            owner: cfg.owner || cfg.org || cfg.organization || '',
+            repo: cfg.repo || '',
+            repos: cfg.repos || cfg.repositories || [],
+            org: cfg.owner || cfg.org || cfg.organization || '',
+            branch: cfg.branch || 'main',
+            // Pass integration_stats if available (populated by driver)
+            ...(cfg.integration_stats ? { integration_stats: cfg.integration_stats } : {}),
+          };
+        }
+      }
+      return base;
+    });
 
     if (toolConfigs.length === 0) {
       return NextResponse.json({
