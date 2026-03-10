@@ -102,6 +102,7 @@ class GraphStore:
         self.graph: Optional[LineageGraph] = None
         self.resolution_stats: Optional[ResolutionStats] = None
         self.tool_nodes: List[Dict[str, Any]] = []
+        self.pipeline_edges: List[Dict[str, Any]] = []
 
     def build_graph(self, config: Dict[str, Any]) -> LineageGraph:
         """

@@ -198,16 +198,20 @@ INGESTION → WAREHOUSE_RAW → TRANSFORMATION → WAREHOUSE_ANALYTICS → REPOR
 
 #### Step 1 — Discover Tools per Lane from Engine Graph
 
-Walk all graph nodes. For each node, determine its lane via `assign_lane()` using zone patterns, actor capabilities, and platform category. Build `tool_info` dict keyed by `(lane, tool_id)` where `tool_id = f"{platform}:{integration_id}"` (or just `platform` if no integration).
+Walk all graph nodes. For each node:
 
-**Lane Assignment Rules:**
-- Orchestrators (Airflow, Dagster) → `transformation` lane
-- Infrastructure (Linux) → `ingestion` lane
-- Raw zone datasets → `warehouse_raw`
-- Mart/analytics zone datasets → `warehouse_analytics`
-- BI tools → `reporting`
+1. **Compute functional role** via `resolve_functional_role(node, canonical_type, dataset_zone, actor_capability)` — returns a `FunctionalRole` value string (see Part 8)
+2. **Assign lane** via `assign_lane(node, ..., functional_role=role)` — role-aware lane placement (see Part 8)
+3. Store `functional_role` in `tool_info[tk]["functional_role"]`
 
-Each `tool_info` entry tracks: `platform`, `display_name`, `integration_id`, `asset_count`, `is_orchestrator`, `is_infra`.
+Build `tool_info` dict keyed by `(lane, tool_id)` where `tool_id = f"{platform}:{integration_id}"` (or just `platform` if no integration).
+
+**Lane Assignment Precedence (in `assign_lane()`):**
+1. Explicit `lane_override` in `raw_metadata` — if a valid `PipelineLane` value
+2. Functional role mapping via `_ROLE_TO_LANE` dict
+3. Zone/capability classification (original logic)
+
+Each `tool_info` entry tracks: `platform`, `display_name`, `integration_id`, `asset_count`, `is_orchestrator`, `is_infra`, `functional_role`.
 
 Also builds two indexes:
 - `node_to_tool: Dict[node_id → (lane, tool_id)]` — for edge traversal in Step 4
@@ -234,6 +238,8 @@ For each tool in `tool_info`, enrich with:
 - **Sub-nodes** — up to 20 sample nodes with id, name, type, fqn, isJob
 - **Coverage gaps** — `"no_data_extracted"` if from pipeline stack with 0 assets; `"sparse_lineage"` if many assets but few cross-tool edges
 
+ViewNode metadata now includes `functionalRole` (string from `FunctionalRole` enum).
+
 ViewNode ID format: `f"tool:{lane}:{tool_id}"`, canonical_type: `"service"`.
 
 #### Step 4a — Evidence-Based Cross-Tool Edges
@@ -252,6 +258,21 @@ This works generically for any resolver merge: bigquery+dbt, snowflake+dbt, post
 
 Compress `dataset→job→dataset` paths into direct tool-to-tool edges. `_compute_job_bypass_edges()` finds JOB nodes with upstream and downstream dataset/semantic nodes, creates synthetic edges with `edge_type` from the upstream leg and confidence = min of both legs. Added to aggregations with source `"bridge:job_bypass"`.
 
+**Bypass Drilldown Metadata:** Each bypass info now carries `job_node_id` and `job_node_name`. After ViewEdges are built, bypass drilldown is attached as `bypassPath` metadata (capped at 5 jobs per edge):
+
+```json
+{
+  "bypassPath": {
+    "jobs": [
+      {"jobNodeId": "airflow:dag_sync", "jobNodeName": "dag_sync", "originalEdgeIds": ["e1", "e2"]}
+    ],
+    "summary": "1 job compressed: dag_sync"
+  }
+}
+```
+
+Bypass paths represent **compressed evidence** — these are real observed job chains, not inferred connections. An edge with `edgeOrigin: "evidence"` can still have a `bypassPath`.
+
 #### Step 4c — Build ViewEdges from Aggregations
 
 Each `_ToolEdgeAgg` is converted to a `ViewEdge` via `_aggregate_tool_edge()`:
@@ -261,7 +282,11 @@ Each `_ToolEdgeAgg` is converted to a `ViewEdge` via `_aggregate_tool_edge()`:
 - **Weighted confidence** = `sum(confidence × w) / sum(w)` where `w = 1.0 + log(1.0 + evidence_count_per_edge)`, clamped to [0.3, 0.95]
 - **Evidence mix** — normalized counter of evidence source labels (e.g. `dbt_manifest: 0.6, query_history: 0.4`)
 - **Top pairs** — up to 10 most frequent `(src_name, tgt_name)` asset pairs
-- **Semantic type** — derived by `edge_semantics.derive_semantic_type()` from tool categories and evidence type (see Part 7), then validated by `enforce_semantic_constraints()`. The dominant lane pair is tracked via `_ToolEdgeAgg.lane_pair_counts` so merges don't corrupt semantics.
+- **Edge origin (`edgeOrigin`)** — classifies how the edge was discovered:
+  - `"evidence"` — backed by observed lineage evidence (data derivation, query history, manifest)
+  - `"inferred"` — from bridge rules, weak matching, or unresolved association logic
+  - `"structural"` — config-derived control-plane edges (set in Step 4d)
+- **Semantic type** — derived by `edge_semantics.derive_semantic_type()` from tool categories, evidence type, and **functional roles** (see Part 7). When `src_role`/`tgt_role` are available, role-pair rules are checked before category-pair rules for finer-grained semantics (e.g. `warehouse_raw→transformation = "feeds"` vs generic `warehouse→transformation`). Validated by `enforce_semantic_constraints()`. The dominant lane pair is tracked via `_ToolEdgeAgg.lane_pair_counts` so merges don't corrupt semantics.
 
 | Evidence Type | Category Pair | Semantic Type | Label |
 |---------------|---------------|---------------|-------|
@@ -275,12 +300,12 @@ Each `_ToolEdgeAgg` is converted to a `ViewEdge` via `_aggregate_tool_edge()`:
 | `monitoring` | quality → warehouse | `monitors` | Monitors |
 | *(fallback)* | any | `data_flow` | Data Flow |
 
-#### Step 4d — Config-Driven Control-Plane Edges
+#### Step 4d — Evidence-Gated Control-Plane Edges
 
-Tools like Airflow, GitHub, and Linux often have no graph-evidence edges because their adapters are stubs or discovery-only. Instead of the old lane-adjacency inference (which created nonsensical edges like Fivetran→GitHub), control-plane edges are derived from **category pairing rules**:
+Tools like Airflow, GitHub, and Linux often have no graph-evidence edges because their adapters are stubs or discovery-only. CP edges are created through a **three-probe evidence gate** (`_probe_control_plane_evidence()`):
 
 ```python
-_CP_RULES = [
+_CP_CATEGORY_PAIRS = [
     ("orchestration",   {"transformation", "ingestion"},                    JOB_ORCHESTRATION),
     ("version_control", {"transformation", "orchestration"},                CODE_OWNERSHIP),
     ("infrastructure",  {"ingestion", "orchestration", "transformation"},   HOSTING),
@@ -288,32 +313,57 @@ _CP_RULES = [
 ]
 ```
 
-For each rule, every tool in the source category gets an edge to every tool in each target category, provided no evidence-based edge already exists between that pair. These edges use `derive_semantic_type()` + `enforce_semantic_constraints()` for correct labels.
+For each category pair, the prober checks three evidence sources in order:
 
-**Properties:**
-- `confidence=0.6` — higher than old inferred (0.3) but lower than evidence-based
-- `inferred=False` — these are real structural relationships from the pipeline config
-- `evidence_count=0` — distinguishes from data-evidence edges in the UI (dashed lines)
-- Only created when no evidence-based edge already exists for that pair
+1. **Metadata cross-reference** (confidence 0.7) — `raw_metadata` contains explicit tool references (e.g. `orchestrated_tools: ["dbt_core"]`, `managed_repos: ["dbt_core", "airflow"]`). Matches against target tool's normalized identity set (canonical name + aliases + integration_id).
+
+2. **PipelineEdge structural evidence** (confidence 0.8) — User-drawn PipelineEdge records from the database connecting the two tools.
+
+3. **Pipeline co-presence fallback** (confidence 0.5) — If both tools exist in the same pipeline AND the source tool has NO explicit metadata targets. Guardrails:
+   - **HOSTING**: never uses coexistence (too noisy — infrastructure needs real evidence)
+   - **JOB_ORCHESTRATION/CODE_OWNERSHIP**: only if source has no metadata-specified targets (if `orchestrated_tools` or `managed_repos` is set, those are the only targets)
+   - **MONITORING**: always allows coexistence (quality tools monitor everything co-located)
+
+**Metadata enrichment** happens at two levels:
+- **Frontend** (`route.ts`): Injects `managed_tools` into GitHub config based on which tools received GitHub attachments
+- **Backend** (`_derive_cp_metadata()` in `lineage.py`): Derives `orchestrated_tools`, `managed_repos`, `hosted_platforms` from tool configs
+
+**Relationship basis** (`relationshipBasis` in edge metadata):
+- `"metadata_reference"` — backed by explicit metadata cross-reference
+- `"explicit_config"` — from PipelineEdge records
+- `"pipeline_coexistence"` — tools co-exist in the pipeline (weak signal)
+- `"monitoring_coexistence"` — quality tool monitors co-located data
 
 **Example** (BigQuery + dbt + Airflow + Fivetran + Linux + GitHub pipeline):
-- Airflow → dbt: `orchestrates` (config-derived)
-- Airflow → Fivetran: `orchestrates` (config-derived)
-- GitHub → dbt: `manages_code_for` (config-derived)
-- GitHub → Airflow: `manages_code_for` (config-derived)
-- Linux → Fivetran: `hosts` (config-derived)
-- Linux → Airflow: `hosts` (config-derived)
+- Airflow → dbt: `orchestrates` (metadata_reference — `orchestrated_tools: ["dbt_core"]`)
+- GitHub → dbt: `manages_code_for` (metadata_reference — `managed_tools: ["dbt_core", "airflow"]`)
+- GitHub → Airflow: `manages_code_for` (metadata_reference — same)
+- Linux: no edges (no hosting evidence available)
 
-#### Step 4e — Cross-Lane Deduplication
+#### Step 4e — Role-Aware Cross-Lane Deduplication
 
-The same tool may appear in multiple lanes (e.g. BigQuery in both `warehouse_raw` and `warehouse_analytics`). This step:
+The same tool may appear in multiple lanes (e.g. BigQuery in both `warehouse_raw` and `warehouse_analytics`). This step uses **role-aware splitting** to decide whether multi-lane entries should merge or stay split:
 
+**Split decision (`_should_split()`):**
+- Collects all distinct `functionalRole` values for a canonical tool_id across lanes
+- Checks if the role set matches `_SPLITTABLE_ROLE_PAIRS` (currently: `{warehouse_raw, warehouse_analytics}`)
+- If matched → keep as separate nodes (e.g. BigQuery raw ≠ BigQuery analytics)
+- If not matched → merge as before
+
+**For split tools:**
+- Each role gets its own node with ID `tool:{tool_id}:role:{role}` (e.g. `tool:bigquery:role:warehouse_raw`)
+- Health, assets, jobs, sub-nodes are per-role (not aggregated)
+- Edges target the role-specific node
+
+**For merged tools (non-splittable):**
 1. Groups view nodes by canonical tool_id (stripped of lane prefix)
 2. Merges multi-lane entries: aggregates health, assets, jobs, sub-nodes; keeps latest timestamp
-3. Remaps all edge source/target IDs to canonical tool IDs
-4. Merges duplicate edges for the same (source, target) pair: sums evidence_count, takes max confidence, prefers real edges over inferred, drops self-loops
+3. Final node ID format: `f"tool:{tool_id}"` (no lane prefix)
 
-Final node ID format: `f"tool:{tool_id}"` (no lane prefix).
+**Edge merge:**
+- Remaps all edge source/target IDs to canonical (or role-suffixed) IDs
+- Merges duplicate edges for the same (source, target) pair: sums evidence_count, takes max confidence, prefers real edges over inferred, drops self-loops
+- **Evidence-backed `edgeOrigin` wins over structural** on merge — if any constituent edge has `edgeOrigin: "evidence"`, the merged edge keeps `"evidence"`
 
 #### Step 4f — Topological Ordering
 
@@ -461,6 +511,11 @@ When clicking an edge in the control plane, shows:
 - Semantic type label (color-coded) with evidence type badge (e.g. "data derivation", "job orchestration")
 - Data flow count and confidence bar
 - Source and target tool summaries
+- **Provenance** — plain-language explanation of the edge origin:
+  - `"evidence"` → "Derived from observed lineage evidence"
+  - `"structural"` → "Derived from configured pipeline relationships"
+  - `"inferred"` → "Inferred from weak matching, bridge rules, or unresolved association logic"
+- **Compressed Path** (collapsible) — when `bypassPath` exists, shows the intermediate job names that were compressed into the direct edge, with a summary string
 
 Config-derived edges (evidence_count=0) show the semantic label without a flow count. Evidence-based edges show `"Label · N flows"`.
 
@@ -529,6 +584,12 @@ The data plane colors edges by confidence: green (≥0.8), amber (0.5–0.8), re
 
 9. **Config-driven control-plane edges replace lane-adjacency inference** — The old system connected disconnected tools to their nearest lane neighbors, creating false edges (Fivetran→GitHub, Airflow→BigQuery). The new system derives edges from category pairing rules (orchestration→transformation = orchestrates, version_control→transformation = manages_code_for, etc.), producing only structurally meaningful connections.
 
+10. **Functional roles over platform categories** — Platform category is too coarse (Databricks is both warehouse and orchestration, BigQuery serves raw and analytics). `FunctionalRole` resolves what each node actually does using metadata, zone classification, and capability signals. This enables role-aware dedup, role-pair edge semantics, and correct lane assignment.
+
+11. **Role-aware dedup preserves warehouse topology** — Warehouse platforms with both raw and analytics datasets split into two nodes (e.g. BigQuery raw + BigQuery analytics) rather than collapsing into one. This correctly represents the data flow: ingestion→BQ(raw)→transformation→BQ(analytics)→reporting. Split decisions are controlled by `_SPLITTABLE_ROLE_PAIRS`, currently limited to `{warehouse_raw, warehouse_analytics}`.
+
+12. **Three-tier edge provenance** — Every control-plane edge carries `edgeOrigin` distinguishing evidence-backed, structural (config-derived), and inferred edges. Bypass paths (compressed job chains) are orthogonal to provenance — they appear on evidence edges because they compress real observed job chains, not invented connections.
+
 ---
 
 ## Part 7: Edge Semantic Policy (`edge_semantics.py`)
@@ -546,11 +607,11 @@ The edge semantics module is the single source of truth for how tool-to-tool edg
 | `MONITORING` | Tool A monitors/tests tool B | Quality tool → warehouse monitoring |
 | `INFERRED_ADJACENCY` | Legacy fallback for lane-pair heuristics | Lane adjacency (deprecated for new edges) |
 
-### `derive_semantic_type(src_category, tgt_category, evidence_type, src_lane?, tgt_lane?)`
+### `derive_semantic_type(src_category, tgt_category, evidence_type, src_lane?, tgt_lane?, src_role?, tgt_role?)`
 
 Returns `(semantic_type_code, display_label)` based on the rules matrix:
 
-- **DATA_DERIVATION**: Uses explicit `(src_cat, tgt_cat)` lookup table (ingestion→warehouse = "ingests", warehouse→transformation = "feeds", etc.)
+- **DATA_DERIVATION**: **Role-pair rules checked first** when `src_role`/`tgt_role` are provided (see below), then falls back to explicit `(src_cat, tgt_cat)` lookup table (ingestion→warehouse = "ingests", warehouse→transformation = "feeds", etc.)
 - **JOB_ORCHESTRATION**: Returns "orchestrates" only if `src_cat == "orchestration"` and `tgt_cat` is in `{ingestion, transformation, warehouse, reporting}`
 - **CODE_OWNERSHIP**: Returns "manages_code_for" only if `src_cat == "version_control"` and `tgt_cat` is in `{transformation, orchestration, warehouse, reporting}`
 - **HOSTING**: Returns "hosts" only if `src_cat == "infrastructure"` and `tgt_cat` is in `{ingestion, orchestration, transformation, warehouse, reporting}`
@@ -558,7 +619,23 @@ Returns `(semantic_type_code, display_label)` based on the rules matrix:
 - **INFERRED_ADJACENCY**: Falls back to lane-pair map for legacy compatibility
 - **Unknown**: Returns `("data_flow", "Data Flow")`
 
-### `enforce_semantic_constraints(semantic_type, label, src_category, tgt_category, evidence_type)`
+#### Role-Pair Derivation Rules (`_ROLE_DERIVATION_RULES`)
+
+When functional roles are available, these finer-grained rules take precedence over category-pair rules for `DATA_DERIVATION` edges:
+
+| Source Role | Target Role | Semantic Type | Label |
+|-------------|-------------|---------------|-------|
+| `warehouse_raw` | `transformation` | `feeds` | Feeds |
+| `ingestion` | `warehouse_raw` | `ingests` | Ingests |
+| `transformation` | `warehouse_analytics` | `builds` | Builds |
+| `warehouse_analytics` | `reporting` | `serves` | Serves |
+| `warehouse_analytics` | `semantic` | `serves` | Serves |
+| `warehouse_raw` | `warehouse_analytics` | `feeds` | Feeds |
+| `ingestion` | `transformation` | `ingests` | Ingests |
+
+This matters because category-pair rules can't distinguish warehouse_raw from warehouse_analytics (both are category=`warehouse`). With role-pair rules, BigQuery(raw)→dbt correctly becomes "Feeds" while dbt→BigQuery(analytics) correctly becomes "Builds".
+
+### `enforce_semantic_constraints(semantic_type, label, src_category, tgt_category, evidence_type, src_role?, tgt_role?)`
 
 Guardrail that downgrades invalid labels to `("data_flow", "Data Flow")`:
 
@@ -567,3 +644,107 @@ Guardrail that downgrades invalid labels to `("data_flow", "Data Flow")`:
 - `manages_code_for` requires `src_category == "version_control"`
 - `monitors` requires `src_category == "quality"`
 - Data-flow verbs (`ingests`, `feeds`, `builds`, `serves`) require `evidence_type` in `{DATA_DERIVATION, INFERRED_ADJACENCY}`
+
+---
+
+## Part 8: Functional Roles (`zones.py`)
+
+### FunctionalRole Enum
+
+More specific than platform category — captures what a node actually does in the pipeline regardless of which platform hosts it.
+
+| Value | Description |
+|-------|-------------|
+| `warehouse_raw` | Raw/source data storage (raw zone, landing, bronze) |
+| `warehouse_analytics` | Transformed/curated data (mart, analytics, gold) |
+| `transformation` | Data transformation (dbt models, Spark jobs) |
+| `orchestration` | Pipeline scheduling (Airflow DAGs, Dagster) |
+| `ingestion` | Data loading (Fivetran, Airbyte) |
+| `reporting` | BI and visualization (Looker, Tableau) |
+| `quality` | Data quality monitoring (Elementary, Great Expectations) |
+| `version_control` | Source code management (GitHub, GitLab) |
+| `infrastructure` | Hosting/compute (Linux servers, K8s) |
+| `semantic` | Semantic layer (dashboards, explores, metrics) |
+| `job_runtime` | Generic job/service with no specific capability |
+
+### `resolve_functional_role(node, canonical_type, dataset_zone?, actor_capability?) → str`
+
+4-tier priority chain:
+
+1. **Explicit override** — `node.raw_metadata["functional_role"]` if a valid `FunctionalRole` value
+2. **Metadata heuristics** — `dag_id` or `is_orchestrator` → `orchestration`
+3. **Canonical type routing:**
+   - `"semantic"` → `semantic`
+   - `"dataset"` → zone-based: RAW/UNKNOWN → `warehouse_raw`, STAGING/INTERMEDIATE → `warehouse_raw` (if warehouse platform) or `transformation`, MART/ANALYTICS → `warehouse_analytics`
+   - `"system"` → `infrastructure`
+   - `"service"`/`"job"` → capability-based mapping, else `job_runtime`
+4. **Platform category fallback** — `get_category(platform)` → role via `_CAT_TO_ROLE`
+
+### Role-to-Lane Mapping (`_ROLE_TO_LANE`)
+
+| Functional Role | Pipeline Lane |
+|----------------|---------------|
+| `warehouse_raw` | `warehouse_raw` |
+| `warehouse_analytics` | `warehouse_analytics` |
+| `transformation` | `transformation` |
+| `orchestration` | `transformation` |
+| `ingestion` | `ingestion` |
+| `reporting` | `reporting` |
+| `quality` | `transformation` |
+| `version_control` | `ingestion` |
+| `infrastructure` | `ingestion` |
+| `semantic` | `reporting` |
+| `job_runtime` | `transformation` |
+
+### Lane Assignment Precedence (`assign_lane()`)
+
+1. **Explicit `lane_override`** — `node.raw_metadata["lane_override"]` if valid `PipelineLane` value
+2. **Functional role mapping** — via `_ROLE_TO_LANE` dict
+3. **Original zone/capability logic** — unchanged fallback
+
+---
+
+## Part 9: Edge Provenance
+
+Every tool-to-tool edge in the control plane carries an `edgeOrigin` field classifying how the edge was discovered:
+
+| Origin | Meaning | When Set |
+|--------|---------|----------|
+| `"evidence"` | Backed by observed lineage evidence | At least one constituent graph edge has real evidence (data derivation, query history, dbt manifest) |
+| `"structural"` | Config-derived pipeline relationship | CP edges generated by category pairing rules (Step 4d) |
+| `"inferred"` | Weak matching or bridge rules | All constituent edges are bridge-sourced, unresolved, or weak-matched |
+
+**Key distinction:** Bypass paths (`bypassPath`) are **not** "inferred" — they represent compressed evidence from real job chains (dataset→job→dataset). An edge with `edgeOrigin: "evidence"` can carry a `bypassPath`.
+
+**Merge behavior:** When edges merge during dedup (Step 4e), evidence-backed origin wins: if any constituent edge has `edgeOrigin: "evidence"`, the merged edge keeps `"evidence"`.
+
+### Frontend Display
+
+The Inspector Panel shows provenance as a plain-language explanation:
+- `"evidence"` → "Derived from observed lineage evidence"
+- `"structural"` → "Derived from configured pipeline relationships"
+- `"inferred"` → "Inferred from weak matching, bridge rules, or unresolved association logic"
+
+The bypass drilldown is a separate collapsible section showing compressed job paths with job names and a summary string.
+
+### Frontend Types
+
+```typescript
+// EdgeMetadata additions
+edgeOrigin?: 'evidence' | 'structural' | 'inferred';
+bypassPath?: BypassPath;
+
+interface BypassJob {
+  jobNodeId: string;
+  jobNodeName: string;
+  originalEdgeIds: string[];
+}
+
+interface BypassPath {
+  jobs: BypassJob[];
+  summary: string;
+}
+
+// ToolNodeMetadata addition
+functionalRole?: string;
+```

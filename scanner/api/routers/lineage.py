@@ -1733,7 +1733,7 @@ async def view_pipeline_overview(stack_id: Optional[str] = Query(None)):
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes, pipeline_edges=getattr(store, 'pipeline_edges', []))
         view = builder.build_pipeline_overview()
         return view.to_dict()
     except Exception as e:
@@ -1781,7 +1781,7 @@ async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes, pipeline_edges=getattr(store, 'pipeline_edges', []))
         view = builder.build_lane_pipeline_overview()
         _log.info(
             "[Engine] lane-pipeline-overview: result has %d nodes, %d edges",
@@ -1820,7 +1820,7 @@ async def view_tool_details(
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes, pipeline_edges=getattr(store, 'pipeline_edges', []))
         return builder.build_tool_details(tool_view_id)
     except Exception as e:
         import logging
@@ -1862,7 +1862,7 @@ async def view_data_plane(stack_id: Optional[str] = Query(None)):
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes, pipeline_edges=getattr(store, 'pipeline_edges', []))
         view = builder.build_data_plane()
         return view.to_dict()
     except Exception as e:
@@ -1929,7 +1929,7 @@ async def data_plane_neighbors(
         except ImportError:
             from scanner.lineage.engine.views import ViewBuilder
 
-        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes)
+        builder = ViewBuilder(store.graph, tool_nodes=store.tool_nodes, pipeline_edges=getattr(store, 'pipeline_edges', []))
         view = builder.build_data_plane()
         view_dict = view.to_dict()
         result = compute_neighbors_from_view(
@@ -2595,6 +2595,150 @@ async def _preprocess_airflow_configs(tool_configs, logger_instance=None) -> Non
                 _log.warning("[airflow-preprocess] GitHub DAG fetch failed: %s", gh_err)
 
 
+def _derive_cp_metadata(tc_layer: str, tc_config: dict, all_tool_configs: list) -> dict:
+    """Derive control-plane relationship metadata from a tool's config.
+
+    Returns a dict of evidence keys (e.g. orchestrated_tools, managed_repos)
+    to be stored as raw_metadata on the tool_node. Uses generic category-based
+    logic — no vendor-specific branching.
+    """
+    raw_meta: dict = {}
+    layer = (tc_layer or "").upper()
+
+    if layer == "ORCHESTRATION" and tc_config:
+        orchestrated = []
+        gh = tc_config.get("github") or {}
+        if isinstance(gh, dict):
+            # GitHub attachment with dbt_root or dag_directory → orchestrates dbt/other tools
+            has_gh_link = gh.get("dbt_root") is not None or gh.get("dag_directory") is not None
+            if has_gh_link:
+                # Find transformation tools in the pipeline
+                transform_tools = [
+                    t.tool_type.lower() for t in all_tool_configs
+                    if (t.layer or "").upper() == "TRANSFORMATION"
+                    or "dbt" in t.tool_type.lower()
+                ]
+                orchestrated.extend(transform_tools)
+        for key in ("dag_tasks", "workflow_targets", "orchestrated_tools"):
+            vals = tc_config.get(key)
+            if isinstance(vals, list):
+                for v in vals:
+                    if isinstance(v, str) and v.lower() not in orchestrated:
+                        orchestrated.append(v.lower())
+        if orchestrated:
+            raw_meta["orchestrated_tools"] = orchestrated
+
+    if layer == "INFRASTRUCTURE" and tc_config:
+        hosted = []
+        for key in ("hosted_tools", "hosted_platforms", "managed_services", "hosted_services"):
+            vals = tc_config.get(key)
+            if isinstance(vals, list) and vals:
+                hosted = vals
+                break
+        # Fallback: check if other tools' configs reference the same host
+        if not hosted:
+            infra_host = (tc_config.get("hostname") or tc_config.get("host") or "").lower()
+            if infra_host:
+                for other_tc in all_tool_configs:
+                    if other_tc.tool_type.lower() == tc_config.get("_self_tool_type", ""):
+                        continue
+                    other_cfg = other_tc.config or {}
+                    other_host = (
+                        other_cfg.get("host") or other_cfg.get("hostname")
+                        or other_cfg.get("server") or ""
+                    ).lower()
+                    if other_host and (other_host == infra_host or infra_host in other_host or other_host in infra_host):
+                        hosted.append(other_tc.tool_type.lower())
+        if hosted:
+            raw_meta["hosted_platforms"] = hosted
+
+    if layer == "VERSION_CONTROL" and tc_config:
+        # Primary source: frontend tells us exactly which tools this VCS manages
+        # (based on which tools received GitHub attachments)
+        explicit_managed = tc_config.get("managed_tools")
+        if isinstance(explicit_managed, list) and explicit_managed:
+            raw_meta["managed_repos"] = [t.lower() for t in explicit_managed]
+            # Done — no need for heuristic repo matching
+            import logging
+            _enrich_log = logging.getLogger(__name__)
+            _enrich_log.info("[CP-Enrich] layer=%s → metadata=%s (from managed_tools)", layer, raw_meta)
+            return raw_meta
+
+        repos = tc_config.get("repos") or tc_config.get("repositories") or []
+        # Also include single repo if present
+        single_repo = tc_config.get("repo")
+        owner = tc_config.get("owner") or tc_config.get("org") or ""
+        if single_repo and owner:
+            full_repo = f"{owner}/{single_repo}".lower()
+            if full_repo not in [
+                (r if isinstance(r, str) else (r or {}).get("full_name", "")).lower()
+                for r in repos
+            ]:
+                repos = list(repos) + [full_repo]
+
+        managed = []
+        if repos:
+            # Normalize repo names for matching
+            repo_names = [
+                (r if isinstance(r, str) else (r or {}).get("full_name", "") or (r or {}).get("name", "")).lower()
+                for r in repos
+            ]
+            for other_tc in all_tool_configs:
+                if other_tc.tool_type.lower() == tc_config.get("_self_tool_type", ""):
+                    continue
+                other_lower = other_tc.tool_type.lower()
+                other_cfg = other_tc.config or {}
+                # Check 1: repo name contains tool type
+                if any(other_lower.replace("_", "") in rn for rn in repo_names):
+                    managed.append(other_lower)
+                    continue
+                # Check 2: other tool's config references a repo from this VCS
+                other_gh_repo = (
+                    other_cfg.get("github_repo")
+                    or (other_cfg.get("github") or {}).get("repo")
+                    or ""
+                ).lower()
+                if other_gh_repo and any(
+                    rn and (rn.endswith(other_gh_repo.split("/")[-1]) or other_gh_repo.endswith(rn.split("/")[-1]))
+                    for rn in repo_names if rn
+                ):
+                    managed.append(other_lower)
+
+        # Fallback: no repos configured, but we have an owner.
+        # Check if other tools reference repos under this VCS owner.
+        if not managed and owner:
+            owner_lower = owner.lower()
+            for other_tc in all_tool_configs:
+                if other_tc.tool_type.lower() == tc_config.get("_self_tool_type", ""):
+                    continue
+                other_lower = other_tc.tool_type.lower()
+                other_cfg = other_tc.config or {}
+                other_gh_repo = (
+                    other_cfg.get("github_repo")
+                    or (other_cfg.get("github") or {}).get("repo")
+                    or ""
+                ).lower()
+                if other_gh_repo and (
+                    other_gh_repo.startswith(f"{owner_lower}/")
+                    or f"/{owner_lower}/" in other_gh_repo
+                    or other_gh_repo == owner_lower  # attachment without specific repo
+                ):
+                    managed.append(other_lower)
+
+        if managed:
+            raw_meta["managed_repos"] = list(set(managed))
+
+    import logging
+    _enrich_log = logging.getLogger(__name__)
+    if raw_meta:
+        _enrich_log.info("[CP-Enrich] layer=%s → metadata=%s", layer, raw_meta)
+    else:
+        _enrich_log.info("[CP-Enrich] layer=%s — no CP metadata derived (config keys: %s)",
+                         layer, list((tc_config or {}).keys())[:10])
+
+    return raw_meta
+
+
 @router.post("/lineage/investigate", response_model=InvestigateResponse)
 async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[str] = Query(None)):
     """
@@ -2658,6 +2802,14 @@ async def investigate_lineage(request: InvestigateRequest, stack_id: Optional[st
                     "repos": tc.config.get("repos") or tc.config.get("repositories", []),
                     "org": tc.config.get("owner") or tc.config.get("org", ""),
                 }
+
+            # Derive relationship metadata from config (evidence for CP edges)
+            cfg_for_meta = dict(tc.config or {})
+            cfg_for_meta["_self_tool_type"] = tc.tool_type.lower()
+            raw_meta = _derive_cp_metadata(tc.layer or "", cfg_for_meta, request.tool_configs)
+            if raw_meta:
+                tn["raw_metadata"] = raw_meta
+
             _tool_nodes.append(tn)
 
         pipeline_config = ExtractionPipelineConfig(tool_nodes=_tool_nodes)
@@ -2714,6 +2866,7 @@ class InvestigateLLMRequest(BaseModel):
     use_llm_reconciler: bool = True
     llm_provider: str = "anthropic"
     llm_model: Optional[str] = None
+    pipeline_edges: Optional[List[Dict[str, Any]]] = None
 
 
 @router.post("/lineage/investigate-llm", response_model=InvestigateResponse)
@@ -2783,6 +2936,14 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
                     "repos": tc.config.get("repos") or tc.config.get("repositories", []),
                     "org": tc.config.get("owner") or tc.config.get("org", ""),
                 }
+
+            # Derive relationship metadata from config (evidence for CP edges)
+            cfg_for_meta = dict(tc.config or {})
+            cfg_for_meta["_self_tool_type"] = tc.tool_type.lower()
+            raw_meta = _derive_cp_metadata(tc.layer or "", cfg_for_meta, request.tool_configs)
+            if raw_meta:
+                tn["raw_metadata"] = raw_meta
+
             _tool_nodes.append(tn)
 
         # Resolve LLM API key from environment based on provider
@@ -2790,6 +2951,7 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         _llm_key = os.environ.get(
             "OPENAI_API_KEY" if request.llm_provider == "openai" else "ANTHROPIC_API_KEY"
         )
+        _pipeline_edges = request.pipeline_edges or []
         pipeline_config = ExtractionPipelineConfig(
             use_llm_planner=request.use_llm_planner,
             use_llm_reconciler=request.use_llm_reconciler,
@@ -2797,10 +2959,12 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
             llm_model=request.llm_model,
             llm_api_key=_llm_key,
             tool_nodes=_tool_nodes,
+            pipeline_edges=_pipeline_edges,
         )
 
         run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
         store.tool_nodes = _tool_nodes
+        store.pipeline_edges = _pipeline_edges
 
         # Build response from run record
         record = registry.get_run(run_id)
@@ -2854,6 +3018,7 @@ class LLMExtractRequest(BaseModel):
     llm_provider: str = "anthropic"
     llm_model: Optional[str] = None
     tool_nodes: Optional[List[Dict[str, Any]]] = None
+    pipeline_edges: Optional[List[Dict[str, Any]]] = None
 
 
 @router.post("/lineage/extract-llm")
@@ -2947,6 +3112,7 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
                     from lineage.graph import LineageGraph
                 store.graph = LineageGraph.from_dict(graph)
                 store.tool_nodes = request.tool_nodes or []
+                store.pipeline_edges = request.pipeline_edges or []
 
                 import json
                 yield f"data: {json.dumps({'type': 'persisted', 'data': {'run_id': run_id}})}\n\n"

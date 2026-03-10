@@ -42,6 +42,7 @@ from .canonical import (
 from .zones import (
     ActorCapability,
     DatasetZone,
+    FunctionalRole,
     PipelineLane,
     LANE_ORDER,
     INFRA_PLATFORMS,
@@ -54,6 +55,7 @@ from .zones import (
     classify_actor_capability,
     classify_data_plane_layer,
     classify_dataset_zone,
+    resolve_functional_role,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,8 @@ class _BypassInfo:
     downstream_edge_id: str
     min_confidence: float
     total_evidence: int
+    job_node_id: str = ""
+    job_node_name: str = ""
 
 
 @dataclass
@@ -316,6 +320,10 @@ class RenderedView:
 
 from .platforms import get_platform, get_category, ToolCategory
 from .edge_semantics import (
+    BASIS_EXPLICIT_CONFIG,
+    BASIS_METADATA_REFERENCE,
+    BASIS_MONITORING_COEXISTENCE,
+    BASIS_PIPELINE_COEXISTENCE,
     CODE_OWNERSHIP,
     DATA_DERIVATION,
     HOSTING,
@@ -325,6 +333,208 @@ from .edge_semantics import (
     derive_semantic_type,
     enforce_semantic_constraints,
 )
+
+# ---------------------------------------------------------------------------
+# Control-plane evidence probing
+#
+# Control-plane edges must come from normalized evidence or narrowly-scoped
+# policy fallbacks, never from vendor-specific assumptions or adjacency.
+# All matching uses normalized canonical names from the platform registry
+# and alias resolution — zero vendor-specific branching.
+# ---------------------------------------------------------------------------
+
+# Generic metadata key families per evidence type.
+# Drivers emit these keys in raw_metadata; the prober checks them against
+# the target tool's normalized canonical platform name + aliases.
+_CP_EVIDENCE_KEYS: Dict[str, List[str]] = {
+    JOB_ORCHESTRATION: [
+        "orchestrated_tools", "managed_connectors", "triggered_tools",
+        "dag_tasks", "workflow_targets",
+    ],
+    CODE_OWNERSHIP: [
+        "managed_repos", "code_targets", "project_repos",
+        "repository_tools",
+    ],
+    HOSTING: [
+        "hosted_platforms", "hosted_tools", "managed_services",
+        "hosted_services",
+    ],
+    MONITORING: [
+        "monitored_tools", "monitored_platforms", "quality_targets",
+    ],
+}
+
+
+def _build_normalized_identity_set(platform: str, integration_id: Optional[str], display_name: str) -> Set[str]:
+    """Build a set of normalized identities for a tool using the platform registry.
+
+    Includes canonical name, all aliases, integration_id, and lowercased display name.
+    No vendor-specific logic — purely registry-driven.
+    """
+    identities: Set[str] = set()
+    platform_lower = platform.lower()
+    identities.add(platform_lower)
+
+    p_info = get_platform(platform_lower)
+    if p_info:
+        identities.add(p_info.name.lower())
+        for alias in p_info.aliases:
+            identities.add(alias.lower())
+
+    if integration_id:
+        identities.add(integration_id.lower())
+
+    if display_name:
+        identities.add(display_name.lower())
+
+    return identities
+
+
+def _probe_control_plane_evidence(
+    src_vn: "ViewNode",
+    tgt_vn: "ViewNode",
+    ev_type: str,
+    tool_info: Dict[Tuple[str, str], Dict],
+    tool_key_to_graph_nodes: Dict[Tuple[str, str], List],
+    pipeline_edges: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Tuple[str, float]]:
+    """Probe for evidence justifying a control-plane edge.
+
+    Returns (relationship_basis, confidence) or None if no evidence found.
+    All matching uses normalized canonical names from the platform registry
+    and alias resolution — no vendor-specific branching.
+
+    Probe order (first match wins):
+      1. Metadata cross-reference — raw_metadata contains explicit tool references
+      2. PipelineEdge structural evidence — user-drawn edges in pipeline config
+      3. Monitoring coexistence — narrow fallback ONLY for MONITORING evidence type
+    """
+    # ── Probe 1: Metadata cross-reference ─────────────────────────────
+    evidence_keys = _CP_EVIDENCE_KEYS.get(ev_type, [])
+    if evidence_keys:
+        # Build normalized identity set for the target tool
+        tgt_platform = tgt_vn.metadata.get("platform_raw", tgt_vn.platform or "")
+        tgt_int_id = tgt_vn.metadata.get("integrationId")
+        tgt_display = tgt_vn.name or ""
+        tgt_identities = _build_normalized_identity_set(tgt_platform, tgt_int_id, tgt_display)
+
+        # Parse src tool key from src_vn.id  (format: "tool:<lane>:<tool_id>")
+        src_id_parts = src_vn.id.split(":", 2)
+        src_tk_lane = src_id_parts[1] if len(src_id_parts) >= 3 else ""
+        src_tk_tool = src_id_parts[2] if len(src_id_parts) >= 3 else src_vn.id
+        src_tk = (src_tk_lane, src_tk_tool)
+
+        # Check graph nodes belonging to the source tool for metadata references
+        for gn in tool_key_to_graph_nodes.get(src_tk, []):
+            rm = gn.raw_metadata or {}
+            for key in evidence_keys:
+                values = rm.get(key)
+                if not values:
+                    continue
+                # Normalize to list
+                if isinstance(values, str):
+                    values = [values]
+                if not isinstance(values, (list, tuple)):
+                    continue
+                for val in values:
+                    if isinstance(val, str) and val.lower() in tgt_identities:
+                        return (BASIS_METADATA_REFERENCE, 0.7)
+
+        # Also check tool_node-level metadata (from pipeline stack config)
+        src_info = tool_info.get(src_tk, {})
+        src_raw_meta = src_info.get("raw_metadata") or {}
+        if src_raw_meta:
+            logger.debug(
+                "[CP-Probe] src=%s → tgt=%s: tool_info raw_metadata=%s, tgt_identities=%s",
+                src_vn.id, tgt_vn.id, src_raw_meta, tgt_identities,
+            )
+        for key in evidence_keys:
+            values = src_raw_meta.get(key)
+            if not values:
+                continue
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, (list, tuple)):
+                continue
+            for val in values:
+                if isinstance(val, str) and val.lower() in tgt_identities:
+                    return (BASIS_METADATA_REFERENCE, 0.7)
+
+    # ── Probe 2: PipelineEdge structural evidence ──────────────────────
+    # User-drawn PipelineEdge records connecting these two tools.
+    if pipeline_edges:
+        src_int_id = src_vn.metadata.get("integrationId")
+        tgt_int_id = tgt_vn.metadata.get("integrationId")
+        # Also gather graph node IDs for each tool
+        src_id_parts = src_vn.id.split(":", 2)
+        src_tk2 = (src_id_parts[1] if len(src_id_parts) >= 3 else "",
+                   src_id_parts[2] if len(src_id_parts) >= 3 else src_vn.id)
+        tgt_id_parts = tgt_vn.id.split(":", 2)
+        tgt_tk2 = (tgt_id_parts[1] if len(tgt_id_parts) >= 3 else "",
+                   tgt_id_parts[2] if len(tgt_id_parts) >= 3 else tgt_vn.id)
+        src_gn_ids = {gn.id for gn in tool_key_to_graph_nodes.get(src_tk2, [])}
+        tgt_gn_ids = {gn.id for gn in tool_key_to_graph_nodes.get(tgt_tk2, [])}
+
+        for pe in pipeline_edges:
+            pe_src = pe.get("sourceId", "")
+            pe_tgt = pe.get("targetId", "")
+            src_match = (
+                pe_src in src_gn_ids
+                or (src_int_id and pe_src == src_int_id)
+            )
+            tgt_match = (
+                pe_tgt in tgt_gn_ids
+                or (tgt_int_id and pe_tgt == tgt_int_id)
+            )
+            if src_match and tgt_match:
+                return (BASIS_EXPLICIT_CONFIG, 0.8)
+
+    # ── Probe 3: Pipeline co-presence fallback ───────────────────────
+    # If two tools from valid CP categories co-exist in the same pipeline,
+    # create a weak edge — but with guardrails:
+    #
+    #  - HOSTING: never use coexistence (too noisy — need real evidence)
+    #  - JOB_ORCHESTRATION: only if the source tool has NO metadata-specified
+    #    targets (if orchestrated_tools is set, those are the real targets)
+    #  - CODE_OWNERSHIP: only if the source tool has NO managed_repos metadata
+    #  - MONITORING: always allow (quality tools monitor everything co-located)
+
+    if ev_type == MONITORING:
+        return (BASIS_MONITORING_COEXISTENCE, 0.4)
+
+    if ev_type == HOSTING:
+        # Infrastructure edges need explicit evidence — coexistence is too broad
+        return None
+
+    # For orchestration and VCS: only coexist if the source has no explicit
+    # metadata targets (otherwise the metadata already defines the edges).
+    src_raw_meta_for_coex = src_info.get("raw_metadata") or {}
+    _has_explicit_targets = False
+    for key in evidence_keys:
+        if src_raw_meta_for_coex.get(key):
+            _has_explicit_targets = True
+            break
+    # Also check graph nodes for explicit metadata
+    if not _has_explicit_targets:
+        for gn in tool_key_to_graph_nodes.get(src_tk, []):
+            rm = gn.raw_metadata or {}
+            for key in evidence_keys:
+                if rm.get(key):
+                    _has_explicit_targets = True
+                    break
+            if _has_explicit_targets:
+                break
+
+    if _has_explicit_targets:
+        # Source has metadata specifying its targets — don't create
+        # coexistence edges to tools NOT in the metadata.
+        return None
+
+    return (BASIS_PIPELINE_COEXISTENCE, 0.5)
+
+    # ── No evidence found — suppress edge ─────────────────────────────
+    # (unreachable — kept for clarity)
+
 
 _CATEGORY_TO_LAYER: Dict[str, str] = {
     "warehouse": "WAREHOUSE",
@@ -377,9 +587,11 @@ class ViewBuilder:
         self,
         graph: LineageGraph,
         tool_nodes: Optional[List[Dict[str, Any]]] = None,
+        pipeline_edges: Optional[List[Dict[str, Any]]] = None,
     ):
         self.graph = graph
         self.tool_nodes = tool_nodes or []
+        self.pipeline_edges = pipeline_edges or []
 
     def _compute_job_bypass_edges(self) -> List[_BypassInfo]:
         """Compute bypass edges for JOB nodes: dataset→job→dataset → dataset→dataset.
@@ -420,6 +632,8 @@ class ViewBuilder:
                             downstream_edge_id=down_edge.id,
                             min_confidence=min(up_edge.confidence, down_edge.confidence),
                             total_evidence=len(up_edge.evidence) + len(down_edge.evidence),
+                            job_node_id=node.id,
+                            job_node_name=node.name or node.id,
                         ))
         return bypass_edges
 
@@ -432,6 +646,8 @@ class ViewBuilder:
         src_category: Optional[str] = None,
         tgt_category: Optional[str] = None,
         evidence_type: str = DATA_DERIVATION,
+        src_role: Optional[str] = None,
+        tgt_role: Optional[str] = None,
     ) -> ViewEdge:
         """Build a ViewEdge from aggregated underlying derivation edges."""
         flow_count = len(agg.edges)
@@ -442,9 +658,15 @@ class ViewBuilder:
         weighted_c = 0.0
         evidence_mix: Dict[str, int] = defaultdict(int)
         all_evidence_refs: List[str] = []
+        has_real_evidence = False
+        has_bridge = False
 
         for e in agg.edges:
             ev_count = len(e.evidence)
+            if ev_count > 0:
+                has_real_evidence = True
+            if (e.discovered_from or "").startswith("bridge:"):
+                has_bridge = True
             w = 1.0 + math.log(1.0 + ev_count)
             total_w += w
             weighted_c += e.confidence * w
@@ -456,6 +678,14 @@ class ViewBuilder:
 
         confidence = (weighted_c / total_w) if total_w > 0 else 0.5
         confidence = max(0.3, min(0.95, confidence))
+
+        # Determine edge origin (provenance classification)
+        if has_real_evidence:
+            edge_origin = "evidence"
+        elif has_bridge and not has_real_evidence:
+            edge_origin = "inferred"
+        else:
+            edge_origin = "evidence"
 
         # Top pairs by frequency, stable sort for determinism
         top_raw = agg.pair_counts.most_common(10)
@@ -471,15 +701,17 @@ class ViewBuilder:
             dominant_pair = agg.lane_pair_counts.most_common(1)[0][0]
             dominant_src_lane, dominant_tgt_lane = dominant_pair
 
-        # Category-driven semantic type derivation
+        # Category + role-driven semantic type derivation
         semantic_type, semantic_label = derive_semantic_type(
             src_category, tgt_category, evidence_type,
             dominant_src_lane, dominant_tgt_lane,
+            src_role=src_role, tgt_role=tgt_role,
         )
         # Safety net: enforce constraints
         semantic_type, semantic_label = enforce_semantic_constraints(
             semantic_type, semantic_label,
             src_category, tgt_category, evidence_type,
+            src_role=src_role, tgt_role=tgt_role,
         )
 
         src_id, tgt_id = pair_key.split("→")
@@ -498,6 +730,7 @@ class ViewBuilder:
                 "semanticType": semantic_type,
                 "label": semantic_label,
                 "evidenceType": evidence_type,
+                "edgeOrigin": edge_origin,
                 "dataFlowCount": flow_count,
                 "flowAssetCount": asset_count,
                 "topPairs": top_pairs,
@@ -748,13 +981,16 @@ class ViewBuilder:
             dataset_zone = classify_dataset_zone(node) if ct == "dataset" else None
             actor_cap = classify_actor_capability(node) if ct in ("service", "job", "system") else None
 
+            # Compute functional role for richer semantics
+            functional_role = resolve_functional_role(node, ct, dataset_zone, actor_cap)
+
             # Determine which lane this node would fall in
             if actor_cap == ActorCapability.ORCHESTRATION:
                 lane = PipelineLane.TRANSFORMATION.value
             elif ct == "system" or actor_cap == ActorCapability.INFRA:
                 lane = PipelineLane.INGESTION.value
             else:
-                lane = assign_lane(node, ct, dataset_zone, actor_cap)
+                lane = assign_lane(node, ct, dataset_zone, actor_cap, functional_role=functional_role)
 
             # Tool identity: group by platform (+ integration_id if present)
             platform = (node.platform or "unknown").lower()
@@ -777,6 +1013,8 @@ class ViewBuilder:
                     "asset_count": 0,
                     "is_orchestrator": actor_cap == ActorCapability.ORCHESTRATION,
                     "is_infra": actor_cap == ActorCapability.INFRA or ct == "system",
+                    "functional_role": functional_role,
+                    "raw_metadata": {},
                 }
             tool_info[tk]["asset_count"] += 1
 
@@ -839,6 +1077,7 @@ class ViewBuilder:
                     "is_orchestrator": tool_type in ORCHESTRATION_PLATFORMS,
                     "is_infra": tool_type in INFRA_PLATFORMS,
                     "from_pipeline_stack": True,
+                    "raw_metadata": tn.get("raw_metadata") or {},
                 }
                 platform_per_lane[(lane, tool_type)] = tk
                 if int_id:
@@ -848,6 +1087,25 @@ class ViewBuilder:
         # keep both.  If it only appears in raw (all nodes classified raw),
         # check if there are analytics-zone datasets and split.
         # (No change needed — assign_lane already handles this.)
+
+        # ── Step 2a: Merge raw_metadata from tool_nodes into tool_info ──
+        # Graph-discovered tools (Step 1) don't get raw_metadata from the
+        # pipeline stack's tool_nodes.  The API layer derives CP evidence
+        # (orchestrated_tools, managed_repos, etc.) and stores it in
+        # tool_node["raw_metadata"].  Merge it here so the CP prober can
+        # find it.
+        for tn in self.tool_nodes:
+            int_id = tn.get("integrationId") or tn.get("integration_id") or ""
+            tn_raw = tn.get("raw_metadata")
+            if not tn_raw:
+                continue
+            # Find matching tool_info entry by integration_id
+            for tk, info in tool_info.items():
+                if int_id and info.get("integration_id") == int_id:
+                    existing_rm = info.get("raw_metadata") or {}
+                    existing_rm.update(tn_raw)
+                    info["raw_metadata"] = existing_rm
+                    break
 
         # ── Step 2.5: Cross-tool asset counting for merged nodes ──────
         # After resolver merges (e.g., dbt model → BigQuery table), nodes
@@ -953,6 +1211,12 @@ class ViewBuilder:
                         "isJob": is_job,
                     })
 
+            # Collect distinct schemas from graph nodes
+            schemas: List[str] = sorted({
+                gn.schema for gn in graph_nodes
+                if gn.schema and gn.canonical_type == "dataset"
+            })
+
             # Coverage gaps
             coverage_gaps: List[str] = []
             if info["asset_count"] == 0 and info.get("from_pipeline_stack"):
@@ -988,11 +1252,13 @@ class ViewBuilder:
                     "isOrchestrator": info.get("is_orchestrator", False),
                     "isInfra": info.get("is_infra", False),
                     "fromPipelineStack": info.get("from_pipeline_stack", False),
+                    "functionalRole": info.get("functional_role", ""),
                     "healthSummary": health_summary,
                     "jobCount": job_count,
                     "lastRunTs": last_run_ts,
                     "coverageGaps": coverage_gaps,
                     "subNodes": sub_nodes,
+                    "schemas": schemas,
                     "totalSubNodeCount": len(graph_nodes),
                     "jobSupport": (
                         "not_applicable" if platform in WAREHOUSE_PLATFORMS or platform in INFRA_PLATFORMS
@@ -1089,18 +1355,30 @@ class ViewBuilder:
                 src_all_tks = _resolve_tks(src_platforms)
                 tgt_all_tks = _resolve_tks(tgt_platforms)
 
-                # Find a cross-tool pair. Prefer the pair where src_tk
-                # matches the source node's primary platform (natural
-                # data-flow direction: warehouse → transformation).
+                # Find a cross-tool pair. Scoring:
+                #  +2 if src and tgt are DIFFERENT platforms (true cross-tool)
+                #  +1 if src matches source node's primary platform
+                #  +1 if src lane matches source node's functional role
                 src_primary = (src_node.platform or "").lower()
+                src_role = tool_info.get(src_tk, {}).get("functional_role", "")
                 cross_pair = None
                 best_score = -1
                 for s_tk in sorted(src_all_tks):
                     for t_tk in sorted(tgt_all_tks):
                         if s_tk == t_tk:
                             continue
-                        # Score: prefer src matching source's primary platform
-                        score = 1 if tool_info.get(s_tk, {}).get("platform") == src_primary else 0
+                        s_plat = tool_info.get(s_tk, {}).get("platform", "")
+                        t_plat = tool_info.get(t_tk, {}).get("platform", "")
+                        score = 0
+                        # Prefer cross-platform pairs (bigquery→dbt > bigquery→bigquery)
+                        if s_plat != t_plat:
+                            score += 2
+                        # Prefer src matching primary platform
+                        if s_plat == src_primary:
+                            score += 1
+                        # Prefer src lane matching functional role
+                        if s_tk[0] == src_role:
+                            score += 1
                         if score > best_score:
                             best_score = score
                             cross_pair = (s_tk, t_tk)
@@ -1126,6 +1404,8 @@ class ViewBuilder:
         # 4b: Job-bypass edges (dataset→job→dataset compressed to dataset→dataset)
         # These supplement 4a by creating direct dataset→dataset links through
         # intermediate job nodes, adding evidence from both legs.
+        # Also collect bypass drilldown metadata per pair_key.
+        _bypass_drilldown: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for bp in self._compute_job_bypass_edges():
             src_node = self.graph.nodes.get(bp.upstream_id)
             tgt_node = self.graph.nodes.get(bp.downstream_id)
@@ -1149,14 +1429,22 @@ class ViewBuilder:
             _add_to_agg(pair_key, synth_edge, src_node.name, tgt_node.name,
                         src_node.id, tgt_node.id,
                         src_lane=src_tk[0], tgt_lane=tgt_tk[0])
+            # Collect bypass drilldown (cap at 5 per pair)
+            if len(_bypass_drilldown[pair_key]) < 5:
+                _bypass_drilldown[pair_key].append({
+                    "jobNodeId": bp.job_node_id,
+                    "jobNodeName": bp.job_node_name,
+                    "originalEdgeIds": [bp.upstream_edge_id, bp.downstream_edge_id],
+                })
 
-        # Build node-id-to-lane and node-id-to-platform lookups
-        # Use cluster_id (positional lane) not layer (display category)
+        # Build node-id-to-lane, node-id-to-platform, and node-id-to-role lookups
         view_node_lane: Dict[str, str] = {}
         view_node_platform: Dict[str, str] = {}
+        view_node_role: Dict[str, str] = {}
         for vn in view_nodes:
             view_node_lane[vn.id] = vn.cluster_id
             view_node_platform[vn.id] = vn.platform
+            view_node_role[vn.id] = vn.metadata.get("functionalRole", "")
 
         view_edges: List[ViewEdge] = []
         for pair_key in sorted(tool_edge_aggs.keys()):
@@ -1168,12 +1456,23 @@ class ViewBuilder:
             tgt_plat = view_node_platform.get(tgt_id, "")
             src_cat = get_category(src_plat)
             tgt_cat = get_category(tgt_plat)
+            src_role = view_node_role.get(src_id, "")
+            tgt_role = view_node_role.get(tgt_id, "")
             ve = self._aggregate_tool_edge(
                 pair_key, agg, src_lane, tgt_lane,
                 src_category=src_cat.value if src_cat else None,
                 tgt_category=tgt_cat.value if tgt_cat else None,
                 evidence_type=DATA_DERIVATION,
+                src_role=src_role or None,
+                tgt_role=tgt_role or None,
             )
+            # Attach bypass drilldown metadata if present
+            drilldown = _bypass_drilldown.get(pair_key)
+            if drilldown:
+                ve.metadata["bypassPath"] = {
+                    "jobs": drilldown,
+                    "summary": f"via {', '.join(d['jobNodeName'] for d in drilldown[:3])}",
+                }
             view_edges.append(ve)
             logger.info(
                 "[LanePipelineOverview] Evidence edge: %s → %s (%d flows, %d assets, evidence_count=%d)",
@@ -1185,11 +1484,16 @@ class ViewBuilder:
             sum(len(a.edges) for a in tool_edge_aggs.values()), len(tool_edge_aggs),
         )
 
-        # ── Step 4c: Config-driven control-plane edges ────────────────
-        # Create edges between tools based on their category relationships
-        # (orchestrates, manages_code_for, hosts, monitors) derived from
-        # the pipeline configuration — no graph evidence needed.
-        _CP_RULES: List[Tuple[str, frozenset, str]] = [
+        # ── Step 4c: Evidence-gated control-plane edges ────────────────
+        # Control-plane edges must come from normalized evidence or
+        # narrowly-scoped policy fallbacks, never from vendor-specific
+        # assumptions or adjacency.
+        #
+        # Category pairs define WHICH tool categories CAN connect and
+        # with what evidence type.  The _probe_control_plane_evidence()
+        # function gates each candidate pair — if no evidence exists,
+        # the edge is suppressed.
+        _CP_CATEGORY_PAIRS: List[Tuple[str, frozenset, str]] = [
             ("orchestration", frozenset({"transformation", "ingestion"}), JOB_ORCHESTRATION),
             ("version_control", frozenset({"transformation", "orchestration"}), CODE_OWNERSHIP),
             ("infrastructure", frozenset({"ingestion", "orchestration", "transformation"}), HOSTING),
@@ -1209,7 +1513,8 @@ class ViewBuilder:
             _existing_pairs.add(pair_key)
 
         _cp_count = 0
-        for src_cat, tgt_cats, ev_type in _CP_RULES:
+        _cp_suppressed = 0
+        for src_cat, tgt_cats, ev_type in _CP_CATEGORY_PAIRS:
             for src_vn in _cat_to_nodes.get(src_cat, []):
                 for tgt_cat in sorted(tgt_cats):
                     for tgt_vn in _cat_to_nodes.get(tgt_cat, []):
@@ -1218,6 +1523,18 @@ class ViewBuilder:
                         pair_key = f"{src_vn.id}→{tgt_vn.id}"
                         if pair_key in _existing_pairs:
                             continue
+
+                        # Evidence gate: probe for actual justification
+                        probe_result = _probe_control_plane_evidence(
+                            src_vn, tgt_vn, ev_type,
+                            tool_info, tool_key_to_graph_nodes,
+                            pipeline_edges=self.pipeline_edges,
+                        )
+                        if probe_result is None:
+                            _cp_suppressed += 1
+                            continue
+
+                        basis, confidence = probe_result
                         _existing_pairs.add(pair_key)
 
                         sem_type, sem_label = derive_semantic_type(
@@ -1226,45 +1543,121 @@ class ViewBuilder:
                         sem_type, sem_label = enforce_semantic_constraints(
                             sem_type, sem_label, src_cat, tgt_cat, ev_type,
                         )
+
+                        # Determine edge origin from evidence strength
+                        if basis == BASIS_MONITORING_COEXISTENCE:
+                            edge_origin = "inferred"
+                            is_inferred = True
+                        else:
+                            edge_origin = "structural"
+                            is_inferred = False
+
                         view_edges.append(ViewEdge(
                             id=f"cp-{pair_key}",
                             source_id=src_vn.id,
                             target_id=tgt_vn.id,
                             canonical_type=sem_type,
                             original_type=ev_type,
-                            confidence=0.6,
-                            inferred=False,
+                            confidence=confidence,
+                            inferred=is_inferred,
                             evidence_count=0,
                             metadata={
                                 "semanticType": sem_type,
                                 "label": sem_label,
                                 "evidenceType": ev_type,
+                                "edgeOrigin": edge_origin,
+                                "relationshipBasis": basis,
                                 "dataFlowCount": 0,
                             },
                         ))
                         _cp_count += 1
 
-        if _cp_count:
+        if _cp_count or _cp_suppressed:
             logger.info(
-                "[LanePipelineOverview] Step 4c: %d config-driven control-plane edges",
-                _cp_count,
+                "[LanePipelineOverview] Step 4c: %d evidence-gated CP edges, "
+                "%d suppressed (no evidence)",
+                _cp_count, _cp_suppressed,
             )
 
         # ── Step 4b: Deduplicate ViewNodes by tool_id ─────────────────
         # Merge nodes for the same tool across different lanes into one
         # canonical node per tool.  Remap edge IDs accordingly.
+        # Role-aware: warehouse platforms with both raw and analytics roles
+        # are kept as separate nodes instead of being collapsed.
+        _SPLITTABLE_ROLE_PAIRS = {
+            frozenset({FunctionalRole.WAREHOUSE_RAW.value, FunctionalRole.WAREHOUSE_ANALYTICS.value}),
+        }
+
+        # Pre-pass: collect functional roles per canonical tool_id
+        _tool_id_roles: Dict[str, Set[str]] = defaultdict(set)
+        for vn in view_nodes:
+            parts = vn.id.split(":", 2)
+            canonical_tool_id = parts[2] if len(parts) >= 3 else vn.id
+            role = vn.metadata.get("functionalRole", "")
+            if role:
+                _tool_id_roles[canonical_tool_id].add(role)
+
+        def _should_split(canonical_tool_id: str) -> bool:
+            roles = _tool_id_roles.get(canonical_tool_id, set())
+            if len(roles) < 2:
+                return False
+            return frozenset(roles) in _SPLITTABLE_ROLE_PAIRS
+
         tool_id_groups: Dict[str, List[ViewNode]] = defaultdict(list)
         for vn in view_nodes:
             parts = vn.id.split(":", 2)  # ["tool", lane, tool_id]
             canonical_tool_id = parts[2] if len(parts) >= 3 else vn.id
-            tool_id_groups[canonical_tool_id].append(vn)
+            role = vn.metadata.get("functionalRole", "")
+            if _should_split(canonical_tool_id) and role:
+                group_key = f"{canonical_tool_id}:role:{role}"
+            else:
+                group_key = canonical_tool_id
+            tool_id_groups[group_key].append(vn)
+
+        # Collapse splits where one side has zero assets back to a single node
+        _to_collapse: List[str] = []
+        for group_key, group in tool_id_groups.items():
+            if ":role:" in group_key:
+                total = sum(vn.metadata.get("assetCount", 0) for vn in group)
+                if total == 0:
+                    _to_collapse.append(group_key)
+        for key in _to_collapse:
+            base = key.split(":role:")[0]
+            sibling_keys = [
+                k for k in tool_id_groups
+                if k.startswith(base + ":role:") and k != key
+            ]
+            if sibling_keys:
+                # Merge empty side into the non-empty sibling
+                tool_id_groups[sibling_keys[0]].extend(tool_id_groups.pop(key))
+            else:
+                # No sibling — rename to base key (unsplit)
+                tool_id_groups[base] = tool_id_groups.pop(key)
 
         old_id_to_new_id: Dict[str, str] = {}
         merged_view_nodes: List[ViewNode] = []
 
+        _ROLE_DISPLAY: Dict[str, str] = {
+            "warehouse_raw": "Raw",
+            "warehouse_analytics": "Analytics",
+        }
+
         for canonical_tool_id, group in sorted(tool_id_groups.items()):
             new_id = f"tool:{canonical_tool_id}"
             platform = group[0].platform
+
+            # Derive role-qualified display name for split nodes
+            _is_split = ":role:" in canonical_tool_id
+            _split_role = canonical_tool_id.split(":role:")[-1] if _is_split else ""
+            # Prefer schema names over generic "Raw"/"Analytics" when available
+            _group_schemas = sorted({
+                s for vn in group
+                for s in (vn.metadata.get("schemas") or [])
+            })
+            if _group_schemas and _is_split:
+                _role_suffix = ", ".join(_group_schemas)
+            else:
+                _role_suffix = _ROLE_DISPLAY.get(_split_role, _split_role.replace("_", " ").title()) if _is_split else ""
 
             for vn in group:
                 old_id_to_new_id[vn.id] = new_id
@@ -1273,6 +1666,8 @@ class ViewBuilder:
                 vn = group[0]
                 original_lane = vn.metadata.get("lane")
                 vn.id = new_id
+                if _role_suffix:
+                    vn.name = f"{vn.name} · {_role_suffix}"
                 vn.layer = _platform_to_layer(platform)
                 vn.cluster_id = vn.layer
                 vn.metadata["lanes"] = [original_lane] if original_lane else []
@@ -1320,9 +1715,13 @@ class ViewBuilder:
                     is_infra = is_infra or meta.get("isInfra", False)
                     from_pipeline_stack = from_pipeline_stack or meta.get("fromPipelineStack", False)
 
+                # Pick the most informative functional role from the group
+                merged_role = group[0].metadata.get("functionalRole", "")
+
+                _display_name = f"{group[0].name} · {_role_suffix}" if _role_suffix else group[0].name
                 merged_view_nodes.append(ViewNode(
                     id=new_id,
-                    name=group[0].name,
+                    name=_display_name,
                     canonical_type="service",
                     original_type="service",
                     platform=platform,
@@ -1339,6 +1738,7 @@ class ViewBuilder:
                         "isOrchestrator": is_orchestrator,
                         "isInfra": is_infra,
                         "fromPipelineStack": from_pipeline_stack,
+                        "functionalRole": merged_role,
                         "healthSummary": merged_health,
                         "jobCount": total_jobs,
                         "lastRunTs": last_run_ts,
@@ -1375,6 +1775,9 @@ class ViewBuilder:
                     existing.metadata["semanticType"] = edge.metadata.get("semanticType", existing.metadata.get("semanticType"))
                     existing.metadata["label"] = edge.metadata.get("label", existing.metadata.get("label"))
                     existing.metadata["evidenceType"] = edge.metadata.get("evidenceType", existing.metadata.get("evidenceType"))
+                # Evidence-backed origin wins over structural on merge
+                if edge.metadata.get("edgeOrigin") == "evidence":
+                    existing.metadata["edgeOrigin"] = "evidence"
             else:
                 edge_map[key] = edge
         view_edges = list(edge_map.values())
@@ -1513,6 +1916,7 @@ class ViewBuilder:
         #
         # Lane overview format:  "tool:{lane}:{platform}:{integration_id}"
         #                    or  "tool:{lane}:{platform}"
+        # Role-aware split:      "tool:{platform}:role:{role}"
         # Legacy/non-lane:       "tool:{platform}:{integration_id}"
         #                    or  "tool:{platform}"
         #                    or  "{platform}:{integration_id}"
@@ -1525,6 +1929,14 @@ class ViewBuilder:
             remainder = tool_view_id[len(prefix):]
         else:
             remainder = tool_view_id
+
+        # Detect and strip ":role:{role}" suffix (role-aware split IDs)
+        role_filter: Optional[str] = None
+        _role_marker = ":role:"
+        role_idx = remainder.find(_role_marker)
+        if role_idx != -1:
+            role_filter = remainder[role_idx + len(_role_marker):]
+            remainder = remainder[:role_idx]
 
         # If the first segment is a lane value, strip it
         parts = remainder.split(":", 1)
@@ -1589,10 +2001,25 @@ class ViewBuilder:
                 tool_nodes_list.append(node)
                 tool_node_ids.add(node.id)
 
+        # If a role filter was extracted from the ID, narrow to that role's
+        # nodes.  Fall back to the full set if filtering would empty it.
+        if role_filter and len(tool_nodes_list) > 1:
+            from .zones import resolve_functional_role
+            filtered = [
+                n for n in tool_nodes_list
+                if resolve_functional_role(
+                    n,
+                    (n.raw_metadata or {}).get("canonical_type", "dataset"),
+                ) == role_filter
+            ]
+            if filtered:
+                tool_nodes_list = filtered
+                tool_node_ids = {n.id for n in filtered}
+
         logger.info(
-            "[ToolDetails] %s → platform=%s, integration_id=%s, "
+            "[ToolDetails] %s → platform=%s, integration_id=%s, role_filter=%s, "
             "platform_matches=%s, matched_nodes=%d (graph_total=%d)",
-            tool_view_id, platform, integration_id,
+            tool_view_id, platform, integration_id, role_filter,
             platform_matches, len(tool_nodes_list), len(self.graph.nodes),
         )
 

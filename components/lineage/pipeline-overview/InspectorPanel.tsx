@@ -11,6 +11,7 @@ import {
   getOverallHealth,
   HEALTH_COLORS,
   SEMANTIC_EDGE_STYLES,
+  RELATIONSHIP_BASIS_LABELS,
 } from './types';
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
@@ -111,6 +112,11 @@ function NodeInspector({
           >
             {laneLabel}
           </span>
+          {meta.functionalRole && (meta.functionalRole === 'warehouse_raw' || meta.functionalRole === 'warehouse_analytics') && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-[var(--muted)] bg-[var(--bg-secondary)] border border-[var(--border)]">
+              {meta.functionalRole === 'warehouse_raw' ? 'Raw' : 'Analytics'}
+            </span>
+          )}
           <span className="text-[11px] text-[var(--muted)] capitalize">{node.platform || 'Unknown'}</span>
         </div>
       </div>
@@ -307,6 +313,37 @@ function EdgeInspector({
                   </span>
                 </div>
               ))}
+          </div>
+        </Section>
+      )}
+
+      {/* Edge Provenance */}
+      {meta.edgeOrigin && (
+        <div>
+          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Provenance</label>
+          <p className="text-[12px] text-[var(--text)] mt-1">
+            {meta.edgeOrigin === 'evidence' && 'Derived from observed lineage evidence'}
+            {meta.edgeOrigin === 'structural' && 'Derived from configured pipeline relationships'}
+            {meta.edgeOrigin === 'inferred' && 'Inferred from weak matching or bridge rules'}
+          </p>
+          {meta.relationshipBasis && (
+            <p className="text-[11px] text-[var(--muted)] mt-0.5">
+              Basis: {RELATIONSHIP_BASIS_LABELS[meta.relationshipBasis] || meta.relationshipBasis}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Bypass Path Drilldown */}
+      {meta.bypassPath && meta.bypassPath.jobs.length > 0 && (
+        <Section title="Compressed Path" count={meta.bypassPath.jobs.length} defaultOpen>
+          <p className="text-[11px] text-[var(--muted)] mb-2">{meta.bypassPath.summary}</p>
+          <div className="space-y-1">
+            {meta.bypassPath.jobs.map((job, i) => (
+              <div key={i} className="px-2 py-1 rounded bg-[var(--overlay-bg)]">
+                <span className="text-[11px] text-[var(--text)] font-mono">{job.jobNodeName}</span>
+              </div>
+            ))}
           </div>
         </Section>
       )}

@@ -79,6 +79,17 @@ export async function POST(
       }, { status: 400 });
     }
 
+    // Fetch user-drawn PipelineEdge records for CP evidence
+    const pipelineEdges = await prisma.pipelineEdge.findMany({
+      where: {
+        OR: [
+          { sourceId: { in: connectedNodes.map((n) => n.id) } },
+          { targetId: { in: connectedNodes.map((n) => n.id) } },
+        ],
+      },
+      select: { sourceId: true, targetId: true, label: true, dataFlow: true },
+    });
+
     // If nodeId specified, only include that node
     const nodesToProcess = nodeId
       ? connectedNodes.filter(n => n.id === nodeId)
@@ -166,6 +177,34 @@ export async function POST(
       });
     }
 
+    // Enrich GitHub tool_config with the tools it manages.
+    // The frontend knows exactly which tools got GitHub attachments injected —
+    // those are the tools whose code lives in this GitHub integration.
+    if (githubAttachment) {
+      const managedToolTypes = toolConfigs
+        .filter(tc => {
+          if (tc.layer === 'VERSION_CONTROL') return false;
+          const cfg = tc.config || {};
+          // Tool got a GitHub attachment if its config has a github object
+          // with a matching repo/token, or github_repo was set from the attachment
+          return cfg.github?.token === githubAttachment.token
+            || cfg.github_token === githubAttachment.token
+            || cfg.github_repo === githubAttachment.repo;
+        })
+        .map(tc => tc.tool_type.toLowerCase());
+
+      if (managedToolTypes.length > 0) {
+        const ghConfig = toolConfigs.find(tc => tc.layer === 'VERSION_CONTROL');
+        if (ghConfig) {
+          ghConfig.config = {
+            ...ghConfig.config,
+            managed_tools: managedToolTypes,
+            repo: githubAttachment.repo,
+          };
+        }
+      }
+    }
+
     if (toolConfigs.length === 0) {
       return NextResponse.json({
         error: 'No extractable tool configurations found'
@@ -183,6 +222,7 @@ export async function POST(
         use_llm_planner: true,
         use_llm_reconciler: false,
         llm_provider: 'openai',
+        pipeline_edges: pipelineEdges,
       }),
       signal: AbortSignal.timeout(600000), // 10 minute timeout (LLM reconciler needs more time)
     });

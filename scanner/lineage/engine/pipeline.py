@@ -43,6 +43,7 @@ class ExtractionPipelineConfig:
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
     tool_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    pipeline_edges: List[Dict[str, Any]] = field(default_factory=list)
 
 
 async def run_extraction_pipeline(
@@ -138,7 +139,7 @@ async def run_extraction_pipeline(
             )
 
         # Step 7: Build rendered views
-        views = _build_views(graph, config.tool_nodes, run_id)
+        views = _build_views(graph, config.tool_nodes, run_id, config.pipeline_edges)
 
         # Step 8: Persist artifacts and atomically publish
         artifacts = RunArtifacts(
@@ -411,11 +412,12 @@ def _build_views(
     graph: Any,
     tool_nodes: List[Dict[str, Any]],
     run_id: str,
+    pipeline_edges: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Build all rendered views from the final canonical graph."""
     views: Dict[str, Dict[str, Any]] = {}
 
-    builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+    builder = ViewBuilder(graph, tool_nodes=tool_nodes, pipeline_edges=pipeline_edges)
 
     for view_name, build_fn in [
         ("pipeline_overview", builder.build_pipeline_overview),

@@ -1362,7 +1362,7 @@ function AssistantPageInner() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3 pb-24">
+              <div className="space-y-3 pb-36">
                 {messages.map((message) => (
                   <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
                     {message.role === 'assistant' && (
@@ -1645,7 +1645,7 @@ function AssistantPageInner() {
           </ScrollArea>
 
             {/* Input - floating at bottom of chat area */}
-            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-4 pt-8 bg-gradient-to-t from-[var(--bg)] from-60% to-transparent pointer-events-none">
+            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-4 pt-10 bg-gradient-to-t from-[var(--bg)] from-75% to-transparent pointer-events-none">
               <div className="pointer-events-auto">
             <div className="max-w-2xl mx-auto">
               <form onSubmit={handleSubmit}>

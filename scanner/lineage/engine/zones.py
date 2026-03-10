@@ -56,6 +56,28 @@ class ActorCapability(Enum):
     QUALITY = "quality"
 
 
+class FunctionalRole(Enum):
+    """Node-level functional role combining canonical type, zone, and capability.
+
+    More specific than platform category — captures what a node actually does
+    in the pipeline regardless of which platform hosts it.
+    """
+    WAREHOUSE_RAW = "warehouse_raw"
+    WAREHOUSE_ANALYTICS = "warehouse_analytics"
+    TRANSFORMATION = "transformation"
+    ORCHESTRATION = "orchestration"
+    INGESTION = "ingestion"
+    REPORTING = "reporting"
+    QUALITY = "quality"
+    VERSION_CONTROL = "version_control"
+    INFRASTRUCTURE = "infrastructure"
+    SEMANTIC = "semantic"
+    JOB_RUNTIME = "job_runtime"
+
+
+_FUNCTIONAL_ROLE_VALUES = frozenset(r.value for r in FunctionalRole)
+
+
 class PipelineLane(Enum):
     """Fixed lanes for the Pipeline Overview view (left → right)."""
     INGESTION = "ingestion"
@@ -315,17 +337,149 @@ def classify_actor_capability(node: LineageNode) -> Optional[ActorCapability]:
     return None
 
 
-def assign_lane(
+def resolve_functional_role(
     node: LineageNode,
     canonical_type: str,
     dataset_zone: Optional[DatasetZone] = None,
     actor_capability: Optional[ActorCapability] = None,
 ) -> str:
+    """Resolve the functional role of a node.
+
+    More specific than platform category — uses node metadata, canonical type,
+    zone, and capability to determine what a node actually does in the pipeline.
+
+    Priority:
+      1. Explicit override in raw_metadata["functional_role"]
+      2. Metadata-driven heuristics (e.g. orchestration metadata on warehouse)
+      3. Canonical type + zone/capability classification
+      4. Platform category fallback
+
+    Returns a FunctionalRole value string.
     """
-    Assign a node to a pipeline lane for the overview view.
+    # 1. Explicit override
+    override = (node.raw_metadata or {}).get("functional_role", "")
+    if override and override in _FUNCTIONAL_ROLE_VALUES:
+        return override
+
+    rm = node.raw_metadata or {}
+    platform = (node.platform or "").lower()
+
+    # 2. Metadata heuristics — orchestration signals on any node
+    if rm.get("dag_id") or rm.get("is_orchestrator"):
+        return FunctionalRole.ORCHESTRATION.value
+
+    # 3. Canonical type routing
+    if canonical_type == "semantic":
+        return FunctionalRole.SEMANTIC.value
+
+    if canonical_type == "dataset":
+        # Resolver-merged dbt models materialised in the warehouse are
+        # transformation outputs → warehouse_analytics, regardless of
+        # naming-based zone (stg_*, int_*).  dbt sources are excluded
+        # because they lack dbt_resource_type="model".
+        _is_dbt_model = rm.get("dbt_resource_type") == "model" or (
+            any(
+                dp.lower() in ("dbt", "dbt_core")
+                for dp in rm.get("discovered_platforms", [])
+            )
+            and rm.get("dbt_unique_id", "").startswith("model.")
+        )
+        if _is_dbt_model and platform in WAREHOUSE_PLATFORMS:
+            return FunctionalRole.WAREHOUSE_ANALYTICS.value
+
+        zone = dataset_zone or classify_dataset_zone(node)
+        if zone in (DatasetZone.RAW, DatasetZone.UNKNOWN):
+            return FunctionalRole.WAREHOUSE_RAW.value
+        if zone in (DatasetZone.STAGING, DatasetZone.INTERMEDIATE):
+            if platform in WAREHOUSE_PLATFORMS:
+                return FunctionalRole.WAREHOUSE_RAW.value
+            return FunctionalRole.TRANSFORMATION.value
+        if zone in (DatasetZone.MART, DatasetZone.ANALYTICS):
+            return FunctionalRole.WAREHOUSE_ANALYTICS.value
+
+    if canonical_type == "system":
+        return FunctionalRole.INFRASTRUCTURE.value
+
+    if canonical_type in ("service", "job"):
+        cap = actor_capability or classify_actor_capability(node)
+        if cap == ActorCapability.INGESTION:
+            return FunctionalRole.INGESTION.value
+        if cap == ActorCapability.TRANSFORMATION:
+            return FunctionalRole.TRANSFORMATION.value
+        if cap == ActorCapability.ORCHESTRATION:
+            return FunctionalRole.ORCHESTRATION.value
+        if cap == ActorCapability.REPORTING:
+            return FunctionalRole.REPORTING.value
+        if cap == ActorCapability.QUALITY:
+            return FunctionalRole.QUALITY.value
+        if cap == ActorCapability.INFRA:
+            return FunctionalRole.INFRASTRUCTURE.value
+        return FunctionalRole.JOB_RUNTIME.value
+
+    # 4. Platform category fallback
+    from .platforms import get_category, ToolCategory
+    cat = get_category(platform)
+    if cat:
+        _CAT_TO_ROLE = {
+            ToolCategory.WAREHOUSE: FunctionalRole.WAREHOUSE_RAW.value,
+            ToolCategory.INGESTION: FunctionalRole.INGESTION.value,
+            ToolCategory.TRANSFORMATION: FunctionalRole.TRANSFORMATION.value,
+            ToolCategory.ORCHESTRATION: FunctionalRole.ORCHESTRATION.value,
+            ToolCategory.REPORTING: FunctionalRole.REPORTING.value,
+            ToolCategory.QUALITY: FunctionalRole.QUALITY.value,
+            ToolCategory.INFRASTRUCTURE: FunctionalRole.INFRASTRUCTURE.value,
+            ToolCategory.VERSION_CONTROL: FunctionalRole.VERSION_CONTROL.value,
+        }
+        return _CAT_TO_ROLE.get(cat, FunctionalRole.WAREHOUSE_RAW.value)
+
+    return FunctionalRole.WAREHOUSE_RAW.value
+
+
+# Mapping from functional role → pipeline lane (for role-aware lane assignment)
+_ROLE_TO_LANE: Dict[str, str] = {
+    FunctionalRole.WAREHOUSE_RAW.value: PipelineLane.WAREHOUSE_RAW.value,
+    FunctionalRole.WAREHOUSE_ANALYTICS.value: PipelineLane.WAREHOUSE_ANALYTICS.value,
+    FunctionalRole.TRANSFORMATION.value: PipelineLane.TRANSFORMATION.value,
+    FunctionalRole.ORCHESTRATION.value: PipelineLane.TRANSFORMATION.value,
+    FunctionalRole.INGESTION.value: PipelineLane.INGESTION.value,
+    FunctionalRole.REPORTING.value: PipelineLane.REPORTING.value,
+    FunctionalRole.QUALITY.value: PipelineLane.TRANSFORMATION.value,
+    FunctionalRole.VERSION_CONTROL.value: PipelineLane.INGESTION.value,
+    FunctionalRole.INFRASTRUCTURE.value: PipelineLane.INGESTION.value,
+    FunctionalRole.SEMANTIC.value: PipelineLane.REPORTING.value,
+    FunctionalRole.JOB_RUNTIME.value: PipelineLane.TRANSFORMATION.value,
+}
+
+
+def assign_lane(
+    node: LineageNode,
+    canonical_type: str,
+    dataset_zone: Optional[DatasetZone] = None,
+    actor_capability: Optional[ActorCapability] = None,
+    functional_role: Optional[str] = None,
+) -> str:
+    """Assign a node to a pipeline lane for the overview view.
+
+    Precedence:
+      1. Explicit lane_override in raw_metadata
+      2. Functional role mapping
+      3. Zone/capability classification (original logic)
 
     Returns the lane name as a string.
     """
+    # 1. Explicit lane override
+    lane_override = (node.raw_metadata or {}).get("lane_override", "")
+    if lane_override and lane_override in {l.value for l in PipelineLane}:
+        return lane_override
+
+    # 2. Functional role mapping
+    if functional_role:
+        lane = _ROLE_TO_LANE.get(functional_role)
+        if lane:
+            return lane
+
+    # 3. Original zone/capability logic (fallback)
+
     # Datasets → zone-based lane
     if canonical_type == "dataset":
         zone = dataset_zone or classify_dataset_zone(node)
@@ -335,7 +489,6 @@ def assign_lane(
         if zone in (DatasetZone.RAW, DatasetZone.UNKNOWN):
             return PipelineLane.WAREHOUSE_RAW.value
         if zone == DatasetZone.STAGING:
-            # Warehouse-stored staging data stays in warehouse_raw
             return PipelineLane.WAREHOUSE_RAW.value if is_warehouse else PipelineLane.TRANSFORMATION.value
         if zone == DatasetZone.INTERMEDIATE:
             return PipelineLane.WAREHOUSE_RAW.value if is_warehouse else PipelineLane.TRANSFORMATION.value
@@ -355,12 +508,10 @@ def assign_lane(
     if cap == ActorCapability.REPORTING:
         return PipelineLane.REPORTING.value
 
-    # Systems, orchestration, infra → don't place in main lanes
-    # (orchestration is an overlay, not a lane node)
     if cap == ActorCapability.ORCHESTRATION:
-        return PipelineLane.TRANSFORMATION.value  # overlay position
+        return PipelineLane.TRANSFORMATION.value
     if cap == ActorCapability.INFRA:
-        return PipelineLane.INGESTION.value  # leftmost fallback
+        return PipelineLane.INGESTION.value
 
     # Default
     return PipelineLane.WAREHOUSE_RAW.value

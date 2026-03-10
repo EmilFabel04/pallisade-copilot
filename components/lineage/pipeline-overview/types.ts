@@ -32,6 +32,7 @@ export interface ToolNodeMetadata {
   isOrchestrator: boolean;
   isInfra: boolean;
   fromPipelineStack: boolean;
+  functionalRole?: string;
   healthSummary: HealthSummary;
   jobCount: number;
   lastRunTs: string | null;
@@ -43,17 +44,40 @@ export interface ToolNodeMetadata {
 
 // ── Edge metadata ────────────────────────────────────────────────────────
 
+export interface BypassJob {
+  jobNodeId: string;
+  jobNodeName: string;
+  originalEdgeIds: string[];
+}
+
+export interface BypassPath {
+  jobs: BypassJob[];
+  summary: string;
+}
+
 export interface EdgeMetadata {
   semanticType: string;
   label: string;
   evidenceType?: string; // data_derivation | job_orchestration | code_ownership | hosting | monitoring | inferred_adjacency
+  edgeOrigin?: 'evidence' | 'structural' | 'inferred';
+  relationshipBasis?: string; // WHY this edge exists (see RELATIONSHIP_BASIS_LABELS)
   dataFlowCount: number;
   flowAssetCount?: number;
   topPairs?: { src: string; tgt: string; count: number }[];
   evidenceMix?: Record<string, number>;
   srcLane: string;
   tgtLane: string;
+  bypassPath?: BypassPath;
 }
+
+/** Human-readable labels for relationship basis values (no vendor-specific text). */
+export const RELATIONSHIP_BASIS_LABELS: Record<string, string> = {
+  asset_evidence: 'Observed data lineage',
+  metadata_reference: 'Metadata cross-reference',
+  explicit_config: 'Explicitly configured',
+  monitoring_coexistence: 'Quality tool monitors data assets',
+  pipeline_coexistence: 'Tools co-exist in pipeline',
+};
 
 // ── OpsSummary (from stats.opsSummary) ───────────────────────────────────
 
@@ -129,12 +153,15 @@ export function getEdgeMeta(edge: ViewEdge): EdgeMetadata {
     semanticType: m.semanticType ?? 'data_flow',
     label: m.label ?? 'Data Flow',
     evidenceType: m.evidenceType,
+    edgeOrigin: m.edgeOrigin,
+    relationshipBasis: m.relationshipBasis,
     dataFlowCount: m.dataFlowCount ?? edge.evidenceCount ?? 0,
     flowAssetCount: m.flowAssetCount,
     topPairs: m.topPairs,
     evidenceMix: m.evidenceMix,
     srcLane: m.srcLane ?? '',
     tgtLane: m.tgtLane ?? '',
+    bypassPath: m.bypassPath,
   };
 }
 

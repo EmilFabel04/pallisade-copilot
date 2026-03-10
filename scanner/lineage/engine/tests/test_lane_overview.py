@@ -261,14 +261,14 @@ class TestRawDatasetLaneAssignment:
             )
 
     def test_lane_overview_has_bigquery_tool_in_warehouse_layer(self, n8n_bq_dbt_graph):
-        """After dedup, BigQuery should appear once with layer=WAREHOUSE and warehouse_raw in lanes."""
+        """After role-aware dedup, BigQuery appears as 2 nodes (raw + analytics) with layer=WAREHOUSE."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
-        assert len(bq_nodes) == 1, f"BigQuery should appear exactly once, got {len(bq_nodes)}"
-        assert bq_nodes[0].layer == "WAREHOUSE"
-        assert "warehouse_raw" in bq_nodes[0].metadata.get("lanes", [])
+        assert len(bq_nodes) == 2, f"BigQuery should appear twice (raw + analytics), got {len(bq_nodes)}"
+        for bn in bq_nodes:
+            assert bn.layer == "WAREHOUSE"
 
 
 # ---- 2) Ingestion actor exists upstream (bridge if needed) ----
@@ -429,16 +429,14 @@ class TestAnalyticsLaneAssignment:
         lane = assign_lane(node, node.canonical_type, zone)
         assert lane == PipelineLane.WAREHOUSE_ANALYTICS.value
 
-    def test_lane_overview_bigquery_has_warehouse_analytics_lane(self, n8n_bq_dbt_graph):
-        """After dedup, the single BigQuery node should list warehouse_analytics in its lanes."""
+    def test_lane_overview_bigquery_has_warehouse_analytics_role(self, n8n_bq_dbt_graph):
+        """After role-aware dedup, one BigQuery node has warehouse_analytics role."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
-        assert len(bq_nodes) == 1, "BigQuery should appear exactly once after dedup"
-        assert "warehouse_analytics" in bq_nodes[0].metadata.get("lanes", []), (
-            "BigQuery should list warehouse_analytics in its lanes metadata"
-        )
+        analytics_nodes = [n for n in bq_nodes if n.metadata.get("functionalRole") == "warehouse_analytics"]
+        assert len(analytics_nodes) == 1, "One BigQuery node should have warehouse_analytics role"
 
 
 # ---- 5) No dataset labeled as 'source' because indegree=0 ----
@@ -912,7 +910,7 @@ class TestConfigDrivenControlPlaneEdges:
     """Test Step 4c: config-driven control-plane edges between tools."""
 
     def test_orchestration_creates_orchestrates_edge(self):
-        """Airflow + dbt in same pipeline → orchestrates edge."""
+        """Orchestration tool with metadata evidence → orchestrates edge."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -924,7 +922,8 @@ class TestConfigDrivenControlPlaneEdges:
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
         tool_nodes = [
-            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
+             "raw_metadata": {"orchestrated_tools": ["dbt_core"]}},
             {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
         ]
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
@@ -940,12 +939,13 @@ class TestConfigDrivenControlPlaneEdges:
             e for e in view.edges
             if e.source_id == af_id and e.target_id == dbt_id
         ]
-        assert len(orch_edges) == 1, "Airflow→dbt should have orchestrates edge"
+        assert len(orch_edges) == 1, "Orchestration→transformation with metadata should have edge"
         assert orch_edges[0].metadata["semanticType"] == "orchestrates"
         assert orch_edges[0].metadata["evidenceType"] == "job_orchestration"
+        assert orch_edges[0].metadata["relationshipBasis"] == "metadata_reference"
 
     def test_vcs_creates_manages_code_for_edge(self):
-        """GitHub + dbt in same pipeline → manages_code_for edge."""
+        """VCS tool with metadata evidence → manages_code_for edge."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -957,7 +957,8 @@ class TestConfigDrivenControlPlaneEdges:
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
         tool_nodes = [
-            {"toolType": "github", "integrationId": "gh_001", "name": "GitHub"},
+            {"toolType": "github", "integrationId": "gh_001", "name": "GitHub",
+             "raw_metadata": {"managed_repos": ["dbt_core"]}},
             {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
         ]
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
@@ -973,12 +974,13 @@ class TestConfigDrivenControlPlaneEdges:
             e for e in view.edges
             if e.source_id == gh_id and e.target_id == dbt_id
         ]
-        assert len(code_edges) == 1, "GitHub→dbt should have manages_code_for edge"
+        assert len(code_edges) == 1, "VCS→transformation with metadata should have edge"
         assert code_edges[0].metadata["semanticType"] == "manages_code_for"
         assert code_edges[0].metadata["evidenceType"] == "code_ownership"
+        assert code_edges[0].metadata["relationshipBasis"] == "metadata_reference"
 
     def test_infra_creates_hosts_edge(self):
-        """Linux + Fivetran in same pipeline → hosts edge."""
+        """Infrastructure tool with metadata evidence → hosts edge."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -990,7 +992,8 @@ class TestConfigDrivenControlPlaneEdges:
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
         tool_nodes = [
-            {"toolType": "linux", "integrationId": "linux_001", "name": "Linux Server"},
+            {"toolType": "linux", "integrationId": "linux_001", "name": "Linux Server",
+             "raw_metadata": {"hosted_platforms": ["fivetran"]}},
             {"toolType": "fivetran", "integrationId": "ft_001", "name": "Fivetran"},
         ]
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
@@ -1006,12 +1009,13 @@ class TestConfigDrivenControlPlaneEdges:
             e for e in view.edges
             if e.source_id == linux_id and e.target_id == ft_id
         ]
-        assert len(host_edges) == 1, "Linux→Fivetran should have hosts edge"
+        assert len(host_edges) == 1, "Infrastructure→ingestion with metadata should have edge"
         assert host_edges[0].metadata["semanticType"] == "hosts"
         assert host_edges[0].metadata["evidenceType"] == "hosting"
+        assert host_edges[0].metadata["relationshipBasis"] == "metadata_reference"
 
-    def test_full_pipeline_control_plane_edges(self):
-        """Full pipeline with all tools creates correct control-plane edges."""
+    def test_full_pipeline_control_plane_edges_with_evidence(self):
+        """Full pipeline with metadata evidence creates correct CP edges."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -1023,17 +1027,20 @@ class TestConfigDrivenControlPlaneEdges:
         canonicalize_graph_in_place(graph.nodes, graph.edges)
 
         tool_nodes = [
-            {"toolType": "linux", "integrationId": "linux_001", "name": "Linux Server"},
+            {"toolType": "linux", "integrationId": "linux_001", "name": "Linux Server",
+             "raw_metadata": {"hosted_platforms": ["fivetran", "airflow"]}},
             {"toolType": "fivetran", "integrationId": "ft_001", "name": "Fivetran"},
             {"toolType": "bigquery", "integrationId": "bq_001", "name": "BigQuery"},
             {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
-            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
-            {"toolType": "github", "integrationId": "gh_001", "name": "GitHub"},
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
+             "raw_metadata": {"orchestrated_tools": ["dbt_core", "fivetran"]}},
+            {"toolType": "github", "integrationId": "gh_001", "name": "GitHub",
+             "raw_metadata": {"managed_repos": ["dbt_core", "airflow"]}},
         ]
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
         view = builder.build_lane_pipeline_overview()
 
-        # Build edge lookup: (src_platform, tgt_platform) → edge
+        # Build edge lookup: (src_platform, tgt_platform) → semanticType
         node_plat = {n.id: n.platform for n in view.nodes}
         edge_pairs = {}
         for e in view.edges:
@@ -1041,7 +1048,7 @@ class TestConfigDrivenControlPlaneEdges:
             tp = node_plat.get(e.target_id, "")
             edge_pairs[(sp, tp)] = e.metadata.get("semanticType")
 
-        # Check expected control-plane edges
+        # Check expected evidence-backed CP edges
         assert edge_pairs.get(("airflow", "dbt_core")) == "orchestrates"
         assert edge_pairs.get(("airflow", "fivetran")) == "orchestrates"
         assert edge_pairs.get(("github", "dbt_core")) == "manages_code_for"
@@ -1099,57 +1106,509 @@ class TestConfigDrivenControlPlaneEdges:
         assert len(real_edges) > 0, "Evidence-based edges should still exist"
 
 
+# ---- Evidence-gated control-plane edge tests ----
+
+class TestEvidenceGatedControlPlaneEdges:
+    """Test that CP edges require evidence and are never created from adjacency alone.
+
+    All tests use abstract category relationships (orchestration, VCS,
+    infrastructure, quality) — concrete tool names appear only as fixture
+    data, never as logic conditionals.
+    """
+
+    def test_cp_edge_between_orchestration_and_ingestion_via_coexistence(self):
+        """Orchestration + ingestion tools in same pipeline → weak coexistence edge."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
+            {"toolType": "fivetran", "integrationId": "ft_001", "name": "Fivetran"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        af_ids = {n.id for n in view.nodes if n.platform == "airflow"}
+        ft_ids = {n.id for n in view.nodes if n.platform == "fivetran"}
+        cross_edges = [
+            e for e in view.edges
+            if (e.source_id in af_ids and e.target_id in ft_ids)
+            or (e.source_id in ft_ids and e.target_id in af_ids)
+        ]
+        assert len(cross_edges) >= 1, "Co-existing tools should produce coexistence edge"
+        assert cross_edges[0].metadata["relationshipBasis"] == "pipeline_coexistence"
+
+    def test_cp_edge_between_vcs_and_transformation_via_coexistence(self):
+        """VCS + transformation tools in same pipeline → weak coexistence edge."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "github", "integrationId": "gh_001", "name": "GitHub"},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        gh_ids = {n.id for n in view.nodes if n.platform == "github"}
+        dbt_ids = {n.id for n in view.nodes if n.platform == "dbt_core"}
+        cross_edges = [
+            e for e in view.edges
+            if (e.source_id in gh_ids and e.target_id in dbt_ids)
+            or (e.source_id in dbt_ids and e.target_id in gh_ids)
+        ]
+        assert len(cross_edges) >= 1, "Co-existing VCS+transformation should produce edge"
+        assert cross_edges[0].metadata["relationshipBasis"] == "pipeline_coexistence"
+
+    def test_cp_edge_between_infra_and_ingestion_via_coexistence(self):
+        """Infrastructure + ingestion tools → weak coexistence edge."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "linux", "integrationId": "linux_001", "name": "Linux Server"},
+            {"toolType": "fivetran", "integrationId": "ft_001", "name": "Fivetran"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        linux_ids = {n.id for n in view.nodes if n.platform == "linux"}
+        ft_ids = {n.id for n in view.nodes if n.platform == "fivetran"}
+        cross_edges = [
+            e for e in view.edges
+            if (e.source_id in linux_ids and e.target_id in ft_ids)
+            or (e.source_id in ft_ids and e.target_id in linux_ids)
+        ]
+        assert len(cross_edges) == 0, "Infrastructure needs real evidence, not coexistence"
+
+    def test_metadata_reference_creates_cp_edge(self):
+        """Orchestration tool with metadata referencing target → edge exists."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "dagster", "integrationId": "dag_001", "name": "Dagster",
+             "raw_metadata": {"orchestrated_tools": ["spark"]}},
+            {"toolType": "spark", "integrationId": "spark_001", "name": "Spark"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        dag_ids = {n.id for n in view.nodes if n.platform == "dagster"}
+        spark_ids = {n.id for n in view.nodes if n.platform == "spark"}
+        assert len(dag_ids) >= 1 and len(spark_ids) >= 1
+
+        orch_edges = [
+            e for e in view.edges
+            if e.source_id in dag_ids and e.target_id in spark_ids
+        ]
+        assert len(orch_edges) == 1, "Metadata-backed orchestration edge should exist"
+        assert orch_edges[0].metadata["relationshipBasis"] == "metadata_reference"
+        assert orch_edges[0].metadata["edgeOrigin"] == "structural"
+
+    def test_monitoring_coexistence_creates_weak_edge(self):
+        """Quality + warehouse tools coexisting → weak monitoring edge."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "elementary", "integrationId": "el_001", "name": "Elementary"},
+            {"toolType": "bigquery", "integrationId": "bq_001", "name": "BigQuery"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        # Find quality→warehouse edges
+        el_ids = {n.id for n in view.nodes if n.platform == "elementary"}
+        # BigQuery nodes may have role suffixes
+        bq_ids = {n.id for n in view.nodes if n.platform == "bigquery"}
+        monitoring_edges = [
+            e for e in view.edges
+            if e.source_id in el_ids and e.target_id in bq_ids
+        ]
+        assert len(monitoring_edges) >= 1, "Quality tool should have monitoring edge via coexistence"
+        for me in monitoring_edges:
+            assert me.metadata["relationshipBasis"] == "monitoring_coexistence"
+            assert me.metadata["edgeOrigin"] == "inferred"
+            assert me.confidence <= 0.4
+
+    def test_coexistence_applied_to_orchestration_with_lower_confidence(self):
+        """Orchestration + ingestion without metadata → coexistence edge with low confidence."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "prefect", "integrationId": "pf_001", "name": "Prefect"},
+            {"toolType": "airbyte", "integrationId": "ab_001", "name": "Airbyte"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        pf_ids = {n.id for n in view.nodes if n.platform == "prefect"}
+        ab_ids = {n.id for n in view.nodes if n.platform == "airbyte"}
+        cross_edges = [
+            e for e in view.edges
+            if (e.source_id in pf_ids and e.target_id in ab_ids)
+            or (e.source_id in ab_ids and e.target_id in pf_ids)
+        ]
+        assert len(cross_edges) >= 1, "Coexistence should create orchestration edge"
+        assert cross_edges[0].metadata["relationshipBasis"] == "pipeline_coexistence"
+        assert cross_edges[0].confidence <= 0.5
+
+    def test_every_cp_edge_has_relationship_basis(self):
+        """Every CP edge must carry a relationshipBasis in metadata."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
+             "raw_metadata": {"orchestrated_tools": ["dbt_core"]}},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
+            {"toolType": "elementary", "integrationId": "el_001", "name": "Elementary"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        cp_edges = [e for e in view.edges if e.id.startswith("cp-")]
+        assert len(cp_edges) >= 1, "Should have at least one CP edge"
+        for e in cp_edges:
+            assert "relationshipBasis" in e.metadata, (
+                f"CP edge {e.id} missing relationshipBasis"
+            )
+            assert e.metadata["relationshipBasis"] in (
+                "metadata_reference", "monitoring_coexistence",
+                "explicit_config", "asset_evidence", "pipeline_coexistence",
+            ), f"Unknown basis: {e.metadata['relationshipBasis']}"
+
+    def test_metadata_match_uses_platform_alias(self):
+        """Metadata referencing an alias (not canonical name) should still create edge."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        # "dbt" is an alias for canonical "dbt_core"
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
+             "raw_metadata": {"orchestrated_tools": ["dbt"]}},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        af_ids = {n.id for n in view.nodes if n.platform == "airflow"}
+        dbt_ids = {n.id for n in view.nodes if n.platform == "dbt_core"}
+        orch_edges = [
+            e for e in view.edges
+            if e.source_id in af_ids and e.target_id in dbt_ids
+        ]
+        assert len(orch_edges) == 1, (
+            "Alias 'dbt' should resolve to canonical 'dbt_core' via platform registry"
+        )
+
+    def test_mixed_stack_generalization(self):
+        """Different tool combinations show same evidence-gated behavior."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "snowflake",
+            PlatformDomain.WAREHOUSE, database="MYDB", schema="RAW",
+            integration_id="sf_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        # Dagster + Airbyte with evidence, Prefect + Stitch without evidence
+        tool_nodes = [
+            {"toolType": "dagster", "integrationId": "dag_001", "name": "Dagster",
+             "raw_metadata": {"orchestrated_tools": ["airbyte"]}},
+            {"toolType": "airbyte", "integrationId": "ab_001", "name": "Airbyte"},
+            {"toolType": "prefect", "integrationId": "pf_001", "name": "Prefect"},
+            {"toolType": "stitch", "integrationId": "st_001", "name": "Stitch"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        node_plat = {n.id: n.platform for n in view.nodes}
+        edge_pairs = set()
+        for e in view.edges:
+            sp = node_plat.get(e.source_id, "")
+            tp = node_plat.get(e.target_id, "")
+            edge_pairs.add((sp, tp))
+
+        # Dagster→Airbyte should exist (has metadata evidence)
+        assert ("dagster", "airbyte") in edge_pairs, (
+            "Dagster→Airbyte should exist (metadata evidence)"
+        )
+        # Metadata-backed edge should have higher confidence than coexistence
+        dag_ids = {n.id for n in view.nodes if n.platform == "dagster"}
+        ab_ids = {n.id for n in view.nodes if n.platform == "airbyte"}
+        dag_ab_edges = [e for e in view.edges if e.source_id in dag_ids and e.target_id in ab_ids]
+        pf_ids = {n.id for n in view.nodes if n.platform == "prefect"}
+        st_ids = {n.id for n in view.nodes if n.platform == "stitch"}
+        pf_st_edges = [e for e in view.edges
+                       if (e.source_id in pf_ids and e.target_id in st_ids)
+                       or (e.source_id in st_ids and e.target_id in pf_ids)]
+        if dag_ab_edges and pf_st_edges:
+            assert dag_ab_edges[0].confidence > pf_st_edges[0].confidence, (
+                "Metadata evidence should produce higher confidence than coexistence"
+            )
+
+    def test_data_plane_purity(self):
+        """Data-plane view must not contain CP edges from tool adjacency."""
+        graph = LineageGraph()
+        # Create data-flow nodes
+        raw_t = _make_node(
+            "orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        analytics_t = _make_node(
+            "dim_orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="analytics",
+            integration_id="bq_001",
+        )
+        graph.add_node(raw_t)
+        graph.add_node(analytics_t)
+        graph.add_edge(_make_edge(raw_t.id, analytics_t.id, EdgeType.DERIVED_FROM))
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        # Add orchestration tool to pipeline stack
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        dp_view = builder.build_data_plane()
+
+        # Data-plane should only have data-flow edges, no CP edges
+        for e in dp_view.edges:
+            assert not e.id.startswith("cp-"), (
+                f"Data-plane view should not contain CP edge: {e.id}"
+            )
+
+
+# ---- Config enrichment and PipelineEdge evidence tests ----
+
+class TestConfigEnrichmentAndPipelineEdges:
+    """Test that config-derived metadata and PipelineEdge records produce CP edges."""
+
+    def test_config_enrichment_orchestration_dbt(self):
+        """Orchestration tool with orchestrated_tools metadata creates CP edge to dbt."""
+        graph = LineageGraph()
+        dbt_model = _make_node(
+            "stg_orders", NodeType.TABLE, "dbt_core",
+            PlatformDomain.TRANSFORM,
+            integration_id="dbt_001",
+        )
+        graph.add_node(dbt_model)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {
+                "toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
+                "raw_metadata": {"orchestrated_tools": ["dbt_core"]},
+            },
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt Core"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        af_ids = {n.id for n in view.nodes if n.platform == "airflow"}
+        dbt_ids = {n.id for n in view.nodes if n.platform == "dbt_core"}
+        cp_edges = [
+            e for e in view.edges
+            if e.source_id in af_ids and e.target_id in dbt_ids
+            and e.id.startswith("cp-")
+        ]
+        assert len(cp_edges) >= 1, "orchestrated_tools metadata should create CP edge"
+        assert cp_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
+
+    def test_config_enrichment_vcs_repos(self):
+        """VCS tool with managed_repos metadata creates CP edge to matching tools."""
+        graph = LineageGraph()
+        dbt_model = _make_node(
+            "stg_orders", NodeType.TABLE, "dbt_core",
+            PlatformDomain.TRANSFORM,
+            integration_id="dbt_001",
+        )
+        graph.add_node(dbt_model)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {
+                "toolType": "github", "integrationId": "gh_001", "name": "GitHub",
+                "raw_metadata": {"managed_repos": ["dbt_core"]},
+            },
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt Core"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        gh_ids = {n.id for n in view.nodes if n.platform == "github"}
+        dbt_ids = {n.id for n in view.nodes if n.platform == "dbt_core"}
+        cp_edges = [
+            e for e in view.edges
+            if e.source_id in gh_ids and e.target_id in dbt_ids
+            and e.id.startswith("cp-")
+        ]
+        assert len(cp_edges) >= 1, "managed_repos metadata should create CP edge"
+        assert cp_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
+
+    def test_pipeline_edge_creates_cp_edge(self):
+        """PipelineEdge record connecting two tools creates CP edge with BASIS_EXPLICIT_CONFIG."""
+        graph = LineageGraph()
+        dbt_model = _make_node(
+            "stg_orders", NodeType.TABLE, "dbt_core",
+            PlatformDomain.TRANSFORM,
+            integration_id="dbt_001",
+        )
+        graph.add_node(dbt_model)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt Core"},
+        ]
+        pipeline_edges = [
+            {"sourceId": "af_001", "targetId": "dbt_001", "label": "orchestrates"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes, pipeline_edges=pipeline_edges)
+        view = builder.build_lane_pipeline_overview()
+
+        af_ids = {n.id for n in view.nodes if n.platform == "airflow"}
+        dbt_ids = {n.id for n in view.nodes if n.platform == "dbt_core"}
+        cp_edges = [
+            e for e in view.edges
+            if e.source_id in af_ids and e.target_id in dbt_ids
+            and e.id.startswith("cp-")
+        ]
+        assert len(cp_edges) >= 1, "PipelineEdge should create CP edge"
+        assert cp_edges[0].metadata.get("relationshipBasis") == "explicit_config"
+        assert cp_edges[0].confidence >= 0.8
+
+    def test_pipeline_edge_without_matching_category_no_edge(self):
+        """PipelineEdge between two warehouse tools does not create CP edge."""
+        graph = LineageGraph()
+        bq_table = _make_node(
+            "orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_table)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "bigquery", "integrationId": "bq_001", "name": "BigQuery"},
+            {"toolType": "snowflake", "integrationId": "sf_001", "name": "Snowflake"},
+        ]
+        # PipelineEdge connecting two warehouse tools
+        pipeline_edges = [
+            {"sourceId": "bq_001", "targetId": "sf_001", "label": "mirrors"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes, pipeline_edges=pipeline_edges)
+        view = builder.build_lane_pipeline_overview()
+
+        # CP category pairs don't include warehouse→warehouse, so no CP edge
+        cp_edges = [e for e in view.edges if e.id.startswith("cp-")]
+        assert len(cp_edges) == 0, (
+            "PipelineEdge between two warehouse tools should not create CP edge"
+        )
+
+
 # ---- Deduplicated tool nodes tests ----
 
 class TestDeduplicatedToolNodes:
     """Test Step 4b: tools spanning multiple lanes are deduplicated into one node."""
 
-    def test_bigquery_appears_once(self, n8n_bq_dbt_graph):
-        """BigQuery should appear exactly once even if it has raw + analytics datasets."""
+    def test_bigquery_splits_into_raw_and_analytics(self, n8n_bq_dbt_graph):
+        """BigQuery with raw + analytics datasets should split into 2 role-aware nodes."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
-        assert len(bq_nodes) == 1, (
-            f"Expected 1 BigQuery node, got {len(bq_nodes)}: "
+        assert len(bq_nodes) == 2, (
+            f"Expected 2 BigQuery nodes (raw+analytics), got {len(bq_nodes)}: "
             f"{[n.id for n in bq_nodes]}"
         )
+        roles = {n.metadata.get("functionalRole") for n in bq_nodes}
+        assert "warehouse_raw" in roles
+        assert "warehouse_analytics" in roles
 
-    def test_deduplicated_node_has_canonical_id(self, n8n_bq_dbt_graph):
-        """Deduplicated node ID should be tool:{tool_id} (no lane prefix)."""
+    def test_deduplicated_node_has_role_aware_id(self, n8n_bq_dbt_graph):
+        """Role-split node IDs should contain role suffix."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
         bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
-        assert len(bq_nodes) == 1
-        # ID should NOT contain lane names
-        for lane_name in ("warehouse_raw", "warehouse_analytics", "ingestion", "transformation", "reporting"):
-            # The ID pattern is tool:{tool_id}, not tool:{lane}:{tool_id}
-            # After the first "tool:" prefix, the next segment should be the platform, not a lane
-            parts = bq_nodes[0].id.split(":", 2)
-            if len(parts) >= 3:
-                assert parts[1] != lane_name, (
-                    f"Node ID {bq_nodes[0].id} still has lane prefix '{lane_name}'"
-                )
+        assert len(bq_nodes) == 2
+        ids = {n.id for n in bq_nodes}
+        # IDs should contain :role: suffix for split nodes
+        assert any(":role:warehouse_raw" in nid for nid in ids)
+        assert any(":role:warehouse_analytics" in nid for nid in ids)
 
-    def test_deduplicated_node_merges_asset_counts(self, n8n_bq_dbt_graph):
-        """Merged BigQuery node should have combined asset count from both lanes."""
+    def test_deduplicated_node_asset_counts_split(self, n8n_bq_dbt_graph):
+        """Role-split BigQuery nodes should each have their lane's asset count."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        bq_node = [n for n in view.nodes if n.platform == "bigquery"][0]
-        # Should include raw.charges, raw.customers, analytics.fct_revenue = 3
-        assert bq_node.metadata["assetCount"] >= 3
+        bq_nodes = {n.metadata.get("functionalRole"): n for n in view.nodes if n.platform == "bigquery"}
+        # Raw has charges + customers = 2, analytics has fct_revenue = 1
+        assert bq_nodes["warehouse_raw"].metadata["assetCount"] >= 2
+        assert bq_nodes["warehouse_analytics"].metadata["assetCount"] >= 1
 
-    def test_deduplicated_node_has_lanes_metadata(self, n8n_bq_dbt_graph):
-        """Merged node should list its original lanes in metadata."""
+    def test_deduplicated_node_lanes_metadata(self, n8n_bq_dbt_graph):
+        """Each role-split node should list its own lane in metadata."""
         builder = ViewBuilder(n8n_bq_dbt_graph)
         view = builder.build_lane_pipeline_overview()
 
-        bq_node = [n for n in view.nodes if n.platform == "bigquery"][0]
-        lanes = bq_node.metadata.get("lanes", [])
-        assert "warehouse_raw" in lanes
-        assert "warehouse_analytics" in lanes
+        bq_nodes = {n.metadata.get("functionalRole"): n for n in view.nodes if n.platform == "bigquery"}
+        assert "warehouse_raw" in bq_nodes["warehouse_raw"].metadata.get("lanes", [])
+        assert "warehouse_analytics" in bq_nodes["warehouse_analytics"].metadata.get("lanes", [])
 
     def test_deduplicated_node_layer_is_pipeline_layer(self, n8n_bq_dbt_graph):
         """Merged BigQuery node should have layer='WAREHOUSE'."""
@@ -2593,3 +3052,395 @@ class TestEdgeSemanticPolicy:
             None, None, DATA_DERIVATION,
         )
         assert sem_type == "data_flow"
+
+
+# ---- Tests for Functional Roles (Requirement A) ----
+
+from scanner.lineage.engine.zones import resolve_functional_role, FunctionalRole
+
+class TestFunctionalRoles:
+    """Node-level functional role resolution."""
+
+    def test_raw_dataset_gets_warehouse_raw_role(self):
+        node = _make_node(
+            "charges", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="raw", schema="stripe",
+        )
+        role = resolve_functional_role(node, "dataset", DatasetZone.RAW)
+        assert role == "warehouse_raw"
+
+    def test_analytics_dataset_gets_warehouse_analytics_role(self):
+        node = _make_node(
+            "fct_revenue", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="analytics", schema="marts",
+        )
+        role = resolve_functional_role(node, "dataset", DatasetZone.MART)
+        assert role == "warehouse_analytics"
+
+    def test_dbt_staging_model_gets_transformation_role(self):
+        node = _make_node(
+            "stg_charges", NodeType.MODEL, "dbt",
+            PlatformDomain.TRANSFORM,
+            raw_metadata={"dbt_resource_type": "model", "dbt_path": "models/staging/stg_charges.sql"},
+        )
+        role = resolve_functional_role(node, "dataset", DatasetZone.STAGING)
+        assert role == "transformation"
+
+    def test_node_with_orchestration_metadata_gets_orchestration_role(self):
+        node = _make_node(
+            "etl_dag", NodeType.DAG, "databricks",
+            PlatformDomain.WAREHOUSE,
+            raw_metadata={"dag_id": "etl_pipeline"},
+        )
+        role = resolve_functional_role(node, "job")
+        assert role == "orchestration"
+
+    def test_explicit_override_respected(self):
+        node = _make_node(
+            "custom", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE,
+            raw_metadata={"functional_role": "transformation"},
+        )
+        role = resolve_functional_role(node, "dataset")
+        assert role == "transformation"
+
+    def test_platform_category_fallback(self):
+        node = _make_node(
+            "svc", NodeType.SOURCE, "airflow",
+            PlatformDomain.ORCHESTRATION,
+        )
+        role = resolve_functional_role(node, "service")
+        assert role == "orchestration"
+
+    def test_semantic_node_gets_semantic_role(self):
+        node = _make_node(
+            "dashboard", NodeType.DASHBOARD, "looker",
+            PlatformDomain.BI,
+        )
+        role = resolve_functional_role(node, "semantic")
+        assert role == "semantic"
+
+    def test_system_node_gets_infrastructure_role(self):
+        node = _make_node(
+            "server", NodeType.SOURCE, "linux_server",
+            PlatformDomain.OTHER,
+        )
+        node.canonical_type = "system"
+        role = resolve_functional_role(node, "system")
+        assert role == "infrastructure"
+
+    def test_unknown_zone_dataset_gets_warehouse_raw(self):
+        node = _make_node(
+            "misc_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE,
+        )
+        role = resolve_functional_role(node, "dataset", DatasetZone.UNKNOWN)
+        assert role == "warehouse_raw"
+
+    def test_merged_dbt_staging_model_gets_warehouse_analytics(self):
+        """Resolver-merged dbt staging model in BigQuery → warehouse_analytics, not raw."""
+        node = _make_node(
+            "stg_customers", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="analytics",
+            raw_metadata={
+                "discovered_platforms": ["bigquery", "dbt"],
+                "dbt_resource_type": "model",
+                "dbt_unique_id": "model.my_project.stg_customers",
+            },
+        )
+        role = resolve_functional_role(node, "dataset", DatasetZone.STAGING)
+        assert role == "warehouse_analytics"
+
+    def test_dbt_source_stays_warehouse_raw(self):
+        """dbt source (raw table pointer) should stay warehouse_raw."""
+        node = _make_node(
+            "raw_events", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="public",
+            raw_metadata={},  # sources don't get dbt_resource_type after merge
+        )
+        role = resolve_functional_role(node, "dataset", DatasetZone.RAW)
+        assert role == "warehouse_raw"
+
+
+# ---- Tests for Role-Aware Dedup (Requirement B) ----
+
+class TestRoleAwareDedup:
+    """Same-platform multi-role preservation in cross-lane dedup."""
+
+    def test_warehouse_splits_into_raw_and_analytics(self, n8n_bq_dbt_graph):
+        """BigQuery with raw + analytics datasets produces 2 role-split nodes."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        assert len(bq_nodes) == 2
+        roles = {n.metadata.get("functionalRole") for n in bq_nodes}
+        assert roles == {"warehouse_raw", "warehouse_analytics"}
+
+    def test_single_role_tool_still_merges(self, n8n_bq_dbt_graph):
+        """dbt tool appearing in one role should merge to a single node."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        dbt_nodes = [n for n in view.nodes if n.platform == "dbt"]
+        assert len(dbt_nodes) == 1
+
+    def test_split_nodes_have_role_suffixed_ids(self, n8n_bq_dbt_graph):
+        """Role-split nodes should have :role: in their IDs."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        for bn in bq_nodes:
+            assert ":role:" in bn.id
+
+    def test_cross_role_edges_not_self_loops(self, n8n_bq_dbt_graph):
+        """After split, BigQuery raw→BigQuery analytics should be a valid edge, not a self-loop."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        node_ids = {n.id for n in view.nodes}
+        for edge in view.edges:
+            assert edge.source_id != edge.target_id, f"Self-loop edge: {edge.id}"
+            assert edge.source_id in node_ids
+            assert edge.target_id in node_ids
+
+    def test_split_nodes_have_role_display_labels(self, n8n_bq_dbt_graph):
+        """Role-split nodes should show role in display name using schema names."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        assert len(bq_nodes) == 2
+        names = {n.name for n in bq_nodes}
+        # Both should have role suffixes via " · "
+        for name in names:
+            assert " · " in name, f"Split node name lacks role suffix: {name}"
+        # Check that schema names are used (e.g. "stripe" for raw, "marts, staging" for analytics)
+        assert any("stripe" in n.name for n in bq_nodes), f"Expected schema name in split labels, got: {names}"
+
+    def test_unsplit_tool_keeps_plain_name(self, n8n_bq_dbt_graph):
+        """Non-split tools (e.g. dbt) should keep their plain name without role suffix."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        dbt_nodes = [n for n in view.nodes if n.platform == "dbt"]
+        assert len(dbt_nodes) == 1
+        assert " · " not in dbt_nodes[0].name
+
+
+class TestEmptySplitSuppression:
+    """Role split should be suppressed when one side has zero assets."""
+
+    def test_empty_role_collapses_to_single_node(self):
+        """If analytics role has zero assets, BigQuery should render as single node."""
+        graph = LineageGraph()
+
+        # Only raw-zone tables — no analytics tables
+        for name in ["raw_events", "raw_users"]:
+            n = _make_node(
+                name, NodeType.TABLE, "bigquery",
+                PlatformDomain.WAREHOUSE, database="project", schema="raw",
+                integration_id="bq_001",
+            )
+            graph.add_node(n)
+
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+        builder = ViewBuilder(graph)
+        view = builder.build_lane_pipeline_overview()
+
+        bq_nodes = [n for n in view.nodes if n.platform == "bigquery"]
+        # Should be a single node — not split because only one role has assets
+        assert len(bq_nodes) == 1
+        assert ":role:" not in bq_nodes[0].id
+        assert " · " not in bq_nodes[0].name
+
+
+# ---- Tests for Edge Provenance (Requirement C) ----
+
+class TestEdgeProvenance:
+    """Explicit edge origin classification."""
+
+    def test_evidence_edges_have_evidence_origin(self, n8n_bq_dbt_graph):
+        """Graph-derived edges should have edgeOrigin='evidence'."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        evidence_edges = [e for e in view.edges if e.evidence_count > 0]
+        for e in evidence_edges:
+            assert e.metadata.get("edgeOrigin") in ("evidence", "inferred"), (
+                f"Edge {e.id} has evidence_count={e.evidence_count} but edgeOrigin={e.metadata.get('edgeOrigin')}"
+            )
+
+    def test_cp_edges_have_structural_origin_and_basis(self):
+        """Evidence-backed CP edges should have edgeOrigin='structural' and relationshipBasis."""
+        graph = LineageGraph()
+        bq_svc = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="project", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_svc)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
+             "raw_metadata": {"orchestrated_tools": ["dbt_core"]}},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        cp_edges = [e for e in view.edges if e.id.startswith("cp-")]
+        assert len(cp_edges) >= 1, "Should have at least one CP edge (orchestrates)"
+        for e in cp_edges:
+            assert e.metadata.get("edgeOrigin") == "structural"
+            assert e.metadata.get("relationshipBasis") == "metadata_reference"
+
+    def test_evidence_wins_over_structural_on_merge(self, n8n_bq_dbt_graph):
+        """When evidence and structural edges merge, evidence origin wins."""
+        builder = ViewBuilder(n8n_bq_dbt_graph)
+        view = builder.build_lane_pipeline_overview()
+
+        # All non-CP edges with evidence should be 'evidence'
+        for e in view.edges:
+            if e.evidence_count > 0:
+                assert e.metadata.get("edgeOrigin") != "structural"
+
+
+# ---- Tests for Lane Override Precedence (Requirement D) ----
+
+class TestLaneOverridePrecedence:
+    """Lane assignment override precedence."""
+
+    def test_explicit_lane_override_beats_role(self):
+        """raw_metadata.lane_override should take priority over functional role."""
+        node = _make_node(
+            "special_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="raw", schema="data",
+            raw_metadata={"lane_override": "reporting"},
+        )
+        lane = assign_lane(node, "dataset", DatasetZone.RAW, functional_role="warehouse_raw")
+        assert lane == "reporting"
+
+    def test_role_beats_category_fallback(self):
+        """Functional role should determine lane over default category logic."""
+        node = _make_node(
+            "analytics_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="analytics", schema="marts",
+        )
+        lane = assign_lane(node, "dataset", DatasetZone.MART, functional_role="warehouse_analytics")
+        assert lane == "warehouse_analytics"
+
+    def test_no_role_falls_back_to_existing_logic(self):
+        """Without functional_role, original zone-based logic is used."""
+        node = _make_node(
+            "raw_table", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="raw", schema="stripe",
+        )
+        lane = assign_lane(node, "dataset", DatasetZone.RAW)
+        assert lane == "warehouse_raw"
+
+
+# ---- Tests for Role-Aware Semantic Derivation ----
+
+class TestRoleAwareSemanticDerivation:
+    """Role-pair rules for finer-grained edge semantics."""
+
+    def test_warehouse_raw_to_transformation_feeds(self):
+        sem, label = derive_semantic_type(
+            "warehouse", "transformation", DATA_DERIVATION,
+            src_role="warehouse_raw", tgt_role="transformation",
+        )
+        assert sem == "feeds"
+
+    def test_transformation_to_warehouse_analytics_builds(self):
+        sem, label = derive_semantic_type(
+            "transformation", "warehouse", DATA_DERIVATION,
+            src_role="transformation", tgt_role="warehouse_analytics",
+        )
+        assert sem == "builds"
+
+    def test_warehouse_analytics_to_reporting_serves(self):
+        sem, label = derive_semantic_type(
+            "warehouse", "reporting", DATA_DERIVATION,
+            src_role="warehouse_analytics", tgt_role="reporting",
+        )
+        assert sem == "serves"
+
+    def test_role_rules_take_precedence_over_category(self):
+        """Role pair (warehouse_raw→warehouse_analytics) resolves even though
+        category pair (warehouse→warehouse) has no rule."""
+        sem, label = derive_semantic_type(
+            "warehouse", "warehouse", DATA_DERIVATION,
+            src_role="warehouse_raw", tgt_role="warehouse_analytics",
+        )
+        assert sem == "feeds"
+
+    def test_no_roles_falls_back_to_category_rules(self):
+        sem, label = derive_semantic_type(
+            "ingestion", "warehouse", DATA_DERIVATION,
+        )
+        assert sem == "ingests"
+
+
+# ---- Tests for Bypass Drilldown (Requirement E) ----
+
+class TestBypassDrilldown:
+    """Job bypass drilldown metadata on edges."""
+
+    @pytest.fixture
+    def graph_with_job_bypass(self):
+        """Graph with dataset→job→dataset path that creates a bypass."""
+        graph = LineageGraph()
+        src_table = _make_node(
+            "raw_orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="raw", schema="public",
+            integration_id="bq_001",
+        )
+        job_node = _make_node(
+            "etl_task", NodeType.TASK, "airflow",
+            PlatformDomain.ORCHESTRATION, integration_id="af_001",
+        )
+        tgt_table = _make_node(
+            "fct_orders", NodeType.TABLE, "bigquery",
+            PlatformDomain.WAREHOUSE, database="analytics", schema="marts",
+            integration_id="bq_001",
+        )
+        graph.add_node(src_table)
+        graph.add_node(job_node)
+        graph.add_node(tgt_table)
+
+        graph.add_edge(_make_edge(
+            src_table.id, job_node.id, EdgeType.READS_FROM, confidence=0.9,
+        ))
+        graph.add_edge(_make_edge(
+            job_node.id, tgt_table.id, EdgeType.WRITES_TO, confidence=0.8,
+        ))
+
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+        return graph
+
+    def test_bypass_edges_carry_job_metadata(self, graph_with_job_bypass):
+        builder = ViewBuilder(graph_with_job_bypass)
+        view = builder.build_lane_pipeline_overview()
+
+        edges_with_bypass = [e for e in view.edges if e.metadata.get("bypassPath")]
+        # The bypass should create a BQ→BQ edge with drilldown
+        assert len(edges_with_bypass) >= 1, (
+            f"Expected bypass edges, got: {[(e.id, e.metadata.keys()) for e in view.edges]}"
+        )
+
+    def test_bypass_summary_includes_job_name(self, graph_with_job_bypass):
+        builder = ViewBuilder(graph_with_job_bypass)
+        view = builder.build_lane_pipeline_overview()
+
+        for e in view.edges:
+            bp = e.metadata.get("bypassPath")
+            if bp:
+                assert "summary" in bp
+                assert "etl_task" in bp["summary"]
+                assert len(bp["jobs"]) >= 1
+                assert bp["jobs"][0]["jobNodeName"] == "etl_task"
+                return
+        pytest.fail("No bypass edge found")

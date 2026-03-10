@@ -25,6 +25,19 @@ MONITORING = "monitoring"
 INFERRED_ADJACENCY = "inferred_adjacency"
 
 # ---------------------------------------------------------------------------
+# Relationship basis constants (WHY a control-plane edge exists)
+#
+# Control-plane edges must come from normalized evidence or narrowly-scoped
+# policy fallbacks, never from vendor-specific assumptions or adjacency.
+# ---------------------------------------------------------------------------
+
+BASIS_ASSET_EVIDENCE = "asset_evidence"                  # Aggregated cross-tool data flow
+BASIS_METADATA_REFERENCE = "metadata_reference"          # raw_metadata cross-reference
+BASIS_EXPLICIT_CONFIG = "explicit_config"                # Declared in tool_nodes config
+BASIS_MONITORING_COEXISTENCE = "monitoring_coexistence"  # Quality tool + monitored target (narrow)
+BASIS_PIPELINE_COEXISTENCE = "pipeline_coexistence"      # Tools co-exist in the same pipeline stack
+
+# ---------------------------------------------------------------------------
 # Category layer order (for tie-breaking direction)
 # ---------------------------------------------------------------------------
 
@@ -88,6 +101,20 @@ _LANE_PAIR_MAP: Dict[Tuple[str, str], Tuple[str, str]] = {
 
 _DATA_FLOW = ("data_flow", "Data Flow")
 
+# ---------------------------------------------------------------------------
+# Role-pair derivation rules (more specific than category-pair rules)
+# Uses FunctionalRole values for finer-grained semantic types.
+# ---------------------------------------------------------------------------
+
+_ROLE_DERIVATION_RULES: Dict[Tuple[str, str], Tuple[str, str]] = {
+    ("warehouse_raw", "transformation"): ("feeds", "Feeds"),
+    ("ingestion", "warehouse_raw"): ("ingests", "Ingests"),
+    ("transformation", "warehouse_analytics"): ("builds", "Builds"),
+    ("warehouse_analytics", "reporting"): ("serves", "Serves"),
+    ("warehouse_analytics", "semantic"): ("serves", "Serves"),
+    ("warehouse_raw", "warehouse_analytics"): ("feeds", "Feeds"),
+    ("ingestion", "transformation"): ("ingests", "Ingests"),
+}
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -100,8 +127,13 @@ def derive_semantic_type(
     evidence_type: str,
     src_lane: Optional[str] = None,
     tgt_lane: Optional[str] = None,
+    src_role: Optional[str] = None,
+    tgt_role: Optional[str] = None,
 ) -> Tuple[str, str]:
-    """Derive a semantic edge type from categories and evidence.
+    """Derive a semantic edge type from categories, roles, and evidence.
+
+    When src_role/tgt_role are provided, role-pair rules are checked first
+    for finer-grained semantics (e.g. warehouse_raw→transformation = "feeds").
 
     Returns (semantic_type_code, display_label).
     """
@@ -109,6 +141,12 @@ def derive_semantic_type(
     tgt_cat = (tgt_category or "").lower()
 
     if evidence_type == DATA_DERIVATION:
+        # Role-pair rules first (more specific)
+        if src_role and tgt_role:
+            result = _ROLE_DERIVATION_RULES.get((src_role, tgt_role))
+            if result:
+                return result
+        # Category-pair rules (existing)
         result = _DATA_DERIVATION_RULES.get((src_cat, tgt_cat))
         if result:
             return result
@@ -160,6 +198,8 @@ def enforce_semantic_constraints(
     src_category: Optional[str],
     tgt_category: Optional[str],
     evidence_type: str,
+    src_role: Optional[str] = None,
+    tgt_role: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Guardrail: downgrade invalid semantic labels to 'data_flow'.
 

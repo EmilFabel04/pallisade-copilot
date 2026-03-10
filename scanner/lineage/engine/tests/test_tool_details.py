@@ -500,3 +500,53 @@ def test_dbt_sources_excluded_from_models():
     assert result["summary"]["totalAssets"] == 1
     assert len(result["groups"]["models"]) == 1
     assert result["groups"]["models"][0]["name"] == "stg_orders"
+
+
+# ---- Test 11: Role-aware tool_view_id parsing ----
+
+def test_role_aware_tool_view_id():
+    """build_tool_details must handle role-suffixed IDs from role-aware split.
+
+    Lane overview returns IDs like "tool:bigquery:role:warehouse_raw"
+    and build_tool_details must strip the :role: suffix, resolve platform,
+    and filter nodes by functional role.
+    """
+    graph = LineageGraph()
+
+    # Raw-zone table
+    raw_table = _make_node(
+        "raw_events", NodeType.TABLE, "bigquery",
+        PlatformDomain.WAREHOUSE,
+        database="project", schema="raw",
+        integration_id="bq_001",
+    )
+    # Analytics-zone table
+    analytics_table = _make_node(
+        "fct_orders", NodeType.TABLE, "bigquery",
+        PlatformDomain.WAREHOUSE,
+        database="project", schema="analytics",
+        integration_id="bq_001",
+    )
+    for n in [raw_table, analytics_table]:
+        graph.add_node(n)
+
+    canonicalize_graph_in_place(graph.nodes, graph.edges)
+    builder = ViewBuilder(graph, tool_nodes=[])
+
+    # Role-aware ID (what the split overview sends)
+    result_raw = builder.build_tool_details("tool:bigquery:role:warehouse_raw")
+    assert result_raw["category"] == "warehouse"
+    assert result_raw["summary"]["totalAssets"] >= 1
+    # Should filter to raw zone nodes
+    raw_names = {t["name"] for t in result_raw["groups"].get("tables", [])}
+    assert "raw_events" in raw_names
+
+    result_analytics = builder.build_tool_details("tool:bigquery:role:warehouse_analytics")
+    assert result_analytics["category"] == "warehouse"
+    assert result_analytics["summary"]["totalAssets"] >= 1
+    analytics_names = {t["name"] for t in result_analytics["groups"].get("tables", [])}
+    assert "fct_orders" in analytics_names
+
+    # Non-role ID (backward compat) — should return all nodes
+    result_all = builder.build_tool_details("tool:bigquery")
+    assert result_all["summary"]["totalAssets"] == 2

@@ -137,7 +137,7 @@ export async function POST(
       });
     }
 
-    // Build tool_nodes for view builder (include safe metadata for VCS/control-plane tools)
+    // Build tool_nodes for view builder (include safe metadata + relationship evidence)
     const toolNodes = connectedNodes.map((n) => {
       const base: Record<string, any> = {
         id: n.id,
@@ -147,22 +147,101 @@ export async function POST(
         status: n.status,
         integrationId: n.integrationId,
       };
+      const cfg = resolveNodeConfig(n);
+
       // For VCS tools, include non-secret config fields so backend can show repos/org
-      if (n.layer === 'VERSION_CONTROL') {
-        const cfg = resolveNodeConfig(n);
-        if (cfg) {
-          base.config = {
-            owner: cfg.owner || cfg.org || cfg.organization || '',
-            repo: cfg.repo || '',
-            repos: cfg.repos || cfg.repositories || [],
-            org: cfg.owner || cfg.org || cfg.organization || '',
-            branch: cfg.branch || 'main',
-            // Pass integration_stats if available (populated by driver)
-            ...(cfg.integration_stats ? { integration_stats: cfg.integration_stats } : {}),
-          };
+      if (n.layer === 'VERSION_CONTROL' && cfg) {
+        base.config = {
+          owner: cfg.owner || cfg.org || cfg.organization || '',
+          repo: cfg.repo || '',
+          repos: cfg.repos || cfg.repositories || [],
+          org: cfg.owner || cfg.org || cfg.organization || '',
+          branch: cfg.branch || 'main',
+          ...(cfg.integration_stats ? { integration_stats: cfg.integration_stats } : {}),
+        };
+      }
+
+      // Derive relationship metadata from config (evidence for CP edges)
+      const rawMeta: Record<string, any> = {};
+
+      if (n.layer === 'VERSION_CONTROL' && cfg) {
+        const repoList: any[] = cfg.repos || cfg.repositories || (cfg.repo ? [cfg.repo] : []);
+        if (repoList.length > 0) {
+          const managedTools: string[] = [];
+          const repoNames = repoList.map((r: any) =>
+            (typeof r === 'string' ? r : (r?.full_name || r?.name || '')).toLowerCase()
+          );
+          for (const otherNode of connectedNodes) {
+            if (otherNode.id === n.id) continue;
+            const otherType = otherNode.toolType?.toLowerCase() || '';
+            if (!otherType) continue;
+            // Check if other tool's config references a repo from this VCS
+            const otherCfg = resolveNodeConfig(otherNode);
+            const otherRepo = (otherCfg?.github_repo || otherCfg?.github?.repo || '').toLowerCase();
+            if (otherRepo && repoNames.some((rn: string) => rn && (
+              rn.includes(otherRepo.split('/').pop() || '___') ||
+              otherRepo.includes(rn.split('/').pop() || '___')
+            ))) {
+              managedTools.push(otherType);
+              continue;
+            }
+            // Fallback: repo name contains the tool type name
+            if (repoNames.some((rn: string) => rn.includes(otherType.replace('_', '')))) {
+              managedTools.push(otherType);
+            }
+          }
+          if (managedTools.length > 0) rawMeta.managed_repos = [...new Set(managedTools)];
         }
       }
+
+      if (n.layer === 'ORCHESTRATION' && cfg) {
+        const orchestrated: string[] = [];
+        // GitHub attachment with dbt_root or dag_directory → orchestrates transformation tools
+        if (cfg.github?.dbt_root !== undefined || cfg.github?.dag_directory !== undefined) {
+          // Find transformation tools in the pipeline
+          for (const cn of connectedNodes) {
+            if (cn.id === n.id) continue;
+            if (cn.layer === 'TRANSFORMATION' || cn.toolType?.toLowerCase().includes('dbt')) {
+              const tt = cn.toolType?.toLowerCase() || '';
+              if (tt && !orchestrated.includes(tt)) orchestrated.push(tt);
+            }
+          }
+        }
+        // dag_tasks or workflow_targets from config
+        const taskTargets = cfg.dag_tasks || cfg.workflow_targets;
+        if (Array.isArray(taskTargets)) {
+          for (const t of taskTargets) {
+            if (typeof t === 'string' && !orchestrated.includes(t.toLowerCase())) {
+              orchestrated.push(t.toLowerCase());
+            }
+          }
+        }
+        if (orchestrated.length > 0) rawMeta.orchestrated_tools = orchestrated;
+      }
+
+      if (n.layer === 'INFRASTRUCTURE' && cfg) {
+        for (const key of ['hosted_tools', 'hosted_platforms', 'managed_services', 'hosted_services']) {
+          if (cfg[key] && Array.isArray(cfg[key])) {
+            rawMeta.hosted_platforms = cfg[key];
+            break;
+          }
+        }
+      }
+
+      if (Object.keys(rawMeta).length > 0) base.raw_metadata = rawMeta;
+
       return base;
+    });
+
+    // Fetch PipelineEdge records for structural CP evidence
+    const pipelineEdges = await prisma.pipelineEdge.findMany({
+      where: {
+        OR: [
+          { sourceId: { in: connectedNodes.map((cn) => cn.id) } },
+          { targetId: { in: connectedNodes.map((cn) => cn.id) } },
+        ],
+      },
+      select: { sourceId: true, targetId: true, label: true, dataFlow: true },
     });
 
     if (toolConfigs.length === 0) {
@@ -184,6 +263,7 @@ export async function POST(
         llm_provider: llmProvider,
         llm_model: llmModel || undefined,
         tool_nodes: toolNodes,
+        pipeline_edges: pipelineEdges,
       }),
       signal: AbortSignal.timeout(600000), // 10 minute timeout for LLM extraction
     });
