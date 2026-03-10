@@ -30,6 +30,17 @@ Both are rendered from a single canonical `LineageGraph` built by the extraction
                            (per-tool)      (dedup/merge)    (type mapping)
 ```
 
+### Core Design Principle: Driver-First Metadata
+
+Every tool in the unified driver framework is a first-class citizen. **Drivers emit their own control-plane (CP) metadata** during discovery — they declare which tools they orchestrate, manage, host, or monitor. The ViewBuilder reads this metadata directly from graph nodes. No vendor-specific heuristics in the frontend or API layer.
+
+```
+Driver (discover_assets)  →  Graph Nodes (raw_metadata)  →  ViewBuilder (Step 1b aggregation)  →  CP Prober
+     ↑                                                                                              ↓
+  Config from frontend                                                              Evidence-gated CP edges
+  (e.g. managed_tools)
+```
+
 ### Key Files
 
 | Component | Path |
@@ -40,6 +51,8 @@ Both are rendered from a single canonical `LineageGraph` built by the extraction
 | Tool detail views | `components/lineage/pipeline-overview/tool-details/` |
 | VCS detail view | `components/lineage/pipeline-overview/tool-details/VersionControlDetailView.tsx` |
 | Next.js API proxy | `app/api/pipeline/[stackId]/lineage/engine/route.ts` |
+| Next.js extraction route | `app/api/pipeline/[stackId]/lineage/extract-llm/route.ts` |
+| Next.js investigate route | `app/api/pipeline/[stackId]/lineage/route.ts` |
 | FastAPI view endpoints | `scanner/api/routers/lineage.py` |
 | ViewBuilder (all views) | `scanner/lineage/engine/views.py` |
 | Platform registry | `scanner/lineage/engine/platforms.py` |
@@ -51,7 +64,9 @@ Both are rendered from a single canonical `LineageGraph` built by the extraction
 | Bridge rules | `scanner/lineage/engine/bridge.py` |
 | Graph store | `scanner/lineage/engine/store.py` |
 | Run registry | `scanner/lineage/engine/run_registry.py` |
-| Tests | `scanner/lineage/engine/tests/test_lane_overview.py` |
+| **Driver adapters** | `scanner/lineage/engine/adapters/live_*.py` |
+| Tests (lane overview) | `scanner/lineage/engine/tests/test_lane_overview.py` |
+| Tests (tool details) | `scanner/lineage/engine/tests/test_tool_details.py` |
 
 ---
 
@@ -86,18 +101,38 @@ class BaseLineageAdapter:
 
 **Adapters and what they extract:**
 
-| Adapter | Tool(s) | Nodes | Edges |
-|---------|---------|-------|-------|
-| `live_warehouse` | BigQuery, Snowflake, Postgres | Tables, views | SQL-parsed derivations, query history |
-| `live_fivetran` | Fivetran | Connectors, destination tables | Connector → table WRITES_TO |
-| `live_dbt` | dbt Core/Cloud | Models, sources, tests | DEPENDS_ON from manifest (confidence=1.0) |
-| `live_airflow` | Airflow | DAGs, tasks, table refs | DAG→task, task→table edges |
-| `live_linux` | Linux servers | Host node (canonical_type=system) | None (discovery-only) |
-| `live_elementary` | Elementary | Health enrichment | None (enrichment-only) |
-| `live_looker` | Looker | Dashboards, explores | Dashboard→explore→table |
-| `live_tableau` | Tableau | Workbooks, datasources | Workbook→datasource→table |
+| Adapter | Tool(s) | Nodes | Edges | CP Metadata |
+|---------|---------|-------|-------|-------------|
+| `live_warehouse` | BigQuery, Snowflake, Postgres | Tables, views | SQL-parsed derivations, query history | — |
+| `live_fivetran` | Fivetran | Connectors, dest tables, service node | Connector → table WRITES_TO | — |
+| `live_airbyte` | Airbyte | Connections, streams | Connection → table WRITES_TO | — |
+| `live_dbt` | dbt Core/Cloud | Models, sources, tests | DEPENDS_ON from manifest (confidence=1.0) | — |
+| `live_airflow` | Airflow | DAGs, tasks, table refs | DAG→task, task→table edges | `orchestrated_tools` (from operators, task IDs, DAG names) |
+| `live_dagster` | Dagster | Assets, schedules, sensors | Asset dependencies | `orchestrated_tools` (from `compute_kind`) |
+| `live_prefect` | Prefect | Flows, deployments | Deployment→flow, flow→table | `orchestrated_tools` (from flow names/tags) |
+| `live_linux` | Linux servers | Host node (canonical_type=system) | None (discovery-only) | `hosted_tools`, `running_services` (from config) |
+| `live_github` | GitHub | Service node (canonical_type=service) | None (discovery-only) | `managed_targets` (from `managed_tools` in config) |
+| `live_elementary` | Elementary | Monitor nodes | Monitor→table MONITORS | `monitored_tables` (from test targets) |
+| `live_looker` | Looker | Dashboards, explores | Dashboard→explore→table | — |
+| `live_tableau` | Tableau | Workbooks, datasources | Workbook→datasource→table | — |
+| `live_n8n` | n8n | Workflows, triggers | Workflow→table | — |
 
-**Infrastructure tools** (linux_server) run in discovery-only mode — they create nodes but skip lineage extraction and correlation.
+**Discovery-only tools** (infrastructure, version_control) run adapter `discover_assets()` to create graph nodes with CP metadata, but skip lineage extraction and correlation. This ensures they appear in the pipeline overview with proper evidence for CP edges.
+
+#### Driver-Emitted CP Metadata
+
+Drivers emit control-plane metadata on their graph nodes during `discover_assets()`. This metadata is the **primary source of evidence** for CP edge creation in the ViewBuilder.
+
+| Driver | Metadata Key | How Derived |
+|--------|-------------|-------------|
+| `live_airflow` | `orchestrated_tools` | Scans task operator class names for dbt/fivetran/spark patterns, task IDs for tool keywords, and DAG names for tool references |
+| `live_dagster` | `orchestrated_tools` | Checks asset `compute_kind` values (dbt, spark, etc.) |
+| `live_prefect` | `orchestrated_tools` | Scans flow names and tags for tool keywords (dbt, fivetran, etc.) |
+| `live_linux` | `hosted_tools` | Reads from `config.hosted_tools` / `config.running_services` |
+| `live_github` | `managed_targets` | Reads from `config.managed_tools` (injected by frontend — see below) |
+| `live_elementary` | `monitored_tables` | Collects distinct table names from test result queries |
+
+**GitHub `managed_tools` injection:** The GitHub driver can't discover which tools it manages on its own — that's relational knowledge (which tools received GitHub attachments). The frontend resolves this by checking which `toolConfigs` have a `github.token` or `github_repo` matching the GitHub attachment, then injects `managed_tools: ["dbt_core", "airflow"]` into GitHub's config before sending to the backend. This is the **only** piece of frontend enrichment — everything else comes from drivers.
 
 ### Step 2B — Correlation Engine
 
@@ -194,6 +229,8 @@ INGESTION → WAREHOUSE_RAW → TRANSFORMATION → WAREHOUSE_ANALYTICS → REPOR
  Fivetran      BigQuery          dbt              BigQuery            Looker
 ```
 
+**Lanes are presentation groupings, not a 1:1 mapping of functional roles.** Multiple roles may share a lane for compact layout — for example, orchestration and quality tools appear in the transformation lane, while version_control and infrastructure tools appear in the ingestion lane. Each tool's actual functional role is available in `ViewNode.metadata.functionalRole` and displayed as a role badge in the inspector panel. See Part 8 for the full role-to-lane mapping.
+
 **Algorithm (`build_lane_pipeline_overview` in `views.py`):**
 
 #### Step 1 — Discover Tools per Lane from Engine Graph
@@ -216,6 +253,21 @@ Each `tool_info` entry tracks: `platform`, `display_name`, `integration_id`, `as
 Also builds two indexes:
 - `node_to_tool: Dict[node_id → (lane, tool_id)]` — for edge traversal in Step 4
 - `tool_key_to_graph_nodes: Dict[(lane, tool_id) → List[LineageNode]]` — for enrichment in Step 3
+
+#### Step 1b — Aggregate CP Metadata from Graph Nodes
+
+Drivers emit CP-relevant metadata (`orchestrated_tools`, `managed_targets`, `hosted_tools`, etc.) directly on their graph nodes during `discover_assets()`. Step 1b aggregates these from ALL graph nodes belonging to each tool into `tool_info["raw_metadata"]`.
+
+**Aggregated keys** (defined in `_CP_META_KEYS`):
+```
+orchestrated_tools, managed_targets, managed_repos (backward compat), managed_connectors,
+triggered_tools, hosted_tools, hosted_platforms, hosted_services, managed_services,
+monitored_tools, monitored_platforms, code_targets, project_repos, repository_tools
+```
+
+Values are deduplicated across multiple nodes. For example, two Airflow DAG nodes — one with `orchestrated_tools: ["dbt"]` and one with `orchestrated_tools: ["spark"]` — produce aggregated `orchestrated_tools: ["dbt", "spark"]`.
+
+This replaces the old Step 2a approach where CP metadata was derived externally by the API layer and passed through `tool_nodes`. Drivers now own their metadata.
 
 #### Step 2 — Merge Pipeline Tool Nodes Not in Graph
 
@@ -302,43 +354,46 @@ Each `_ToolEdgeAgg` is converted to a `ViewEdge` via `_aggregate_tool_edge()`:
 
 #### Step 4d — Evidence-Gated Control-Plane Edges
 
-Tools like Airflow, GitHub, and Linux often have no graph-evidence edges because their adapters are stubs or discovery-only. CP edges are created through a **three-probe evidence gate** (`_probe_control_plane_evidence()`):
+CP edges represent tool-to-tool relationships like orchestration, code management, hosting, and monitoring. Unlike data-plane edges (which come from SQL parsing, manifests, etc.), CP edges are created through a **three-probe evidence gate** (`_probe_control_plane_evidence()`).
+
+**Evidence flows from drivers, not from external enrichment.** Each driver emits CP metadata on its graph nodes during `discover_assets()` (see Step 2A). Step 1b aggregates that metadata into `tool_info`. The prober reads it from there.
 
 ```python
 _CP_CATEGORY_PAIRS = [
     ("orchestration",   {"transformation", "ingestion"},                    JOB_ORCHESTRATION),
     ("version_control", {"transformation", "orchestration"},                CODE_OWNERSHIP),
-    ("infrastructure",  {"ingestion", "orchestration", "transformation"},   HOSTING),
+    ("infrastructure",  {"warehouse", "ingestion", "orchestration", "transformation"},   HOSTING),
     ("quality",         {"warehouse", "transformation"},                    MONITORING),
 ]
 ```
 
 For each category pair, the prober checks three evidence sources in order:
 
-1. **Metadata cross-reference** (confidence 0.7) — `raw_metadata` contains explicit tool references (e.g. `orchestrated_tools: ["dbt_core"]`, `managed_repos: ["dbt_core", "airflow"]`). Matches against target tool's normalized identity set (canonical name + aliases + integration_id).
+1. **Metadata cross-reference** (confidence 0.7) — `raw_metadata` contains explicit tool references emitted by drivers (e.g. `orchestrated_tools: ["dbt_core"]`, `managed_targets: ["dbt_core", "airflow"]`). Matches against target tool's normalized identity set (canonical name + aliases + integration_id + display name) via `_build_normalized_identity_set()`.
 
 2. **PipelineEdge structural evidence** (confidence 0.8) — User-drawn PipelineEdge records from the database connecting the two tools.
 
 3. **Pipeline co-presence fallback** (confidence 0.5) — If both tools exist in the same pipeline AND the source tool has NO explicit metadata targets. Guardrails:
    - **HOSTING**: never uses coexistence (too noisy — infrastructure needs real evidence)
-   - **JOB_ORCHESTRATION/CODE_OWNERSHIP**: only if source has no metadata-specified targets (if `orchestrated_tools` or `managed_repos` is set, those are the only targets)
+   - **JOB_ORCHESTRATION/CODE_OWNERSHIP**: only if source has no metadata-specified targets (if `orchestrated_tools` or `managed_targets` is set, those are the only targets)
    - **MONITORING**: always allows coexistence (quality tools monitor everything co-located)
 
-**Metadata enrichment** happens at two levels:
-- **Frontend** (`route.ts`): Injects `managed_tools` into GitHub config based on which tools received GitHub attachments
-- **Backend** (`_derive_cp_metadata()` in `lineage.py`): Derives `orchestrated_tools`, `managed_repos`, `hosted_platforms` from tool configs
+**Where metadata comes from:**
+- **Drivers** (primary): Each driver emits its own CP metadata during `discover_assets()`. Airflow scans operators/task IDs/DAG names for tool patterns. GitHub reads `managed_tools` from config. Linux reads `hosted_tools` from config. Elementary collects `monitored_tables` from test results.
+- **Frontend** (single exception): The frontend injects `managed_tools` into GitHub's config — this is relational knowledge (which tools received GitHub attachments) that only the frontend can resolve. No other frontend enrichment exists.
+- **Backend `_derive_cp_metadata()`**: Thin passthrough for VCS `managed_tools` and infrastructure host-matching. No heuristic derivation.
 
 **Relationship basis** (`relationshipBasis` in edge metadata):
-- `"metadata_reference"` — backed by explicit metadata cross-reference
+- `"metadata_reference"` — backed by explicit metadata cross-reference from driver
 - `"explicit_config"` — from PipelineEdge records
 - `"pipeline_coexistence"` — tools co-exist in the pipeline (weak signal)
 - `"monitoring_coexistence"` — quality tool monitors co-located data
 
 **Example** (BigQuery + dbt + Airflow + Fivetran + Linux + GitHub pipeline):
-- Airflow → dbt: `orchestrates` (metadata_reference — `orchestrated_tools: ["dbt_core"]`)
-- GitHub → dbt: `manages_code_for` (metadata_reference — `managed_tools: ["dbt_core", "airflow"]`)
+- Airflow → dbt: `orchestrates` (metadata_reference — driver emitted `orchestrated_tools: ["dbt"]` from DAG name pattern)
+- GitHub → dbt: `manages_code_for` (metadata_reference — `managed_targets: ["dbt_core", "airflow"]` from frontend-injected `managed_tools`)
 - GitHub → Airflow: `manages_code_for` (metadata_reference — same)
-- Linux: no edges (no hosting evidence available)
+- Linux: no edges (no `hosted_tools` in config, no coexistence fallback for HOSTING)
 
 #### Step 4e — Role-Aware Cross-Lane Deduplication
 
@@ -422,7 +477,7 @@ Fetched when user clicks a tool node in the control plane. Returns domain-specif
 | `reporting` | Dashboards, Explores/Sources | Dashboards with view counts; explores with connection info |
 | `infrastructure` | Services, Hosts | Running services extracted from raw_metadata; host nodes |
 | `quality` | Monitors, Status | Test monitors with pass/fail; aggregate pass rate |
-| `version_control` | Repos, Activity | Repo list from config (owner/org); connection status, sync timestamps |
+| `version_control` | Repos | Repository list from config and driver-discovered repos via API |
 
 **Response shape:**
 ```json
@@ -450,6 +505,38 @@ Fetched when user clicks a tool node in the control plane. Returns domain-specif
   "connections": {
     "upstream": [{"toolId": "tool:bigquery", "name": "BigQuery", "edgeCount": 4}],
     "downstream": [{"toolId": "tool:bigquery", "name": "BigQuery", "edgeCount": 10}]
+  }
+}
+```
+
+**Version control example** (GitHub):
+```json
+{
+  "toolId": "tool:github:gh_001",
+  "platform": "github",
+  "category": "version_control",
+  "summary": {
+    "totalAssets": 2,
+    "healthSummary": {"healthy": 0, "degraded": 0, "failing": 0, "unknown": 0},
+    "jobCount": 0,
+    "lastRunTs": null,
+    "coverageGaps": []
+  },
+  "tabs": [
+    {"key": "repos", "label": "Repositories", "count": 2}
+  ],
+  "groups": {
+    "repos": [
+      {"id": "repo:acme/data-pipelines", "name": "acme/data-pipelines", "canonicalType": "repository", "container": "acme"},
+      {"id": "repo:acme/analytics", "name": "acme/analytics", "canonicalType": "repository", "container": "acme"}
+    ]
+  },
+  "connections": {
+    "upstream": [],
+    "downstream": [
+      {"toolId": "tool:dbt_core", "name": "dbt Core", "edgeCount": 1},
+      {"toolId": "tool:airflow", "name": "Airflow", "edgeCount": 1}
+    ]
   }
 }
 ```
@@ -485,7 +572,7 @@ Response: RenderedView { nodes, edges, lanes, stats }
 
 When a user clicks a tool node in the control plane:
 
-1. **Header renders immediately** from existing `ViewNode.metadata` (health dot, name, lane badge, platform)
+1. **Header renders immediately** from existing `ViewNode.metadata` (health dot, name, lane badge, functional role badge, platform)
 2. **Detail fetch fires:** `GET ...?action=view-tool-details&id={node.id}`
 3. **Loading skeleton** shown while fetching
 4. **On success:** `<ToolDetailView>` renders domain-specific tabs
@@ -555,12 +642,56 @@ Every edge carries a confidence score (0.0–1.0) and evidence refs:
 | dbt manifest (declarative) | 1.0 |
 | API metadata (Fivetran) | 0.9 |
 | Compiled SQL (view definitions) | 0.8 |
+| CP PipelineEdge (explicit config) | 0.8 |
+| CP metadata cross-reference | 0.7 |
 | Query history (BigQuery jobs) | 0.6 |
-| Config-derived control-plane | 0.6 |
+| CP pipeline co-presence | 0.5 |
 | Bridge rules (inferred) | ≤ 0.5 |
+| CP monitoring coexistence | 0.4 |
 | Regex/pattern matching | 0.3 |
 
 The data plane colors edges by confidence: green (≥0.8), amber (0.5–0.8), red (<0.5).
+
+Confidence constants are defined in `edge_semantics.py` as `CONFIDENCE_EXPLICIT_CONFIG`, `CONFIDENCE_METADATA_XREF`, `CONFIDENCE_MONITORING_COEX`, `CONFIDENCE_PIPELINE_COEX`.
+
+### CP Metadata Key Contract
+
+The authoritative set of `raw_metadata` keys that the CP prober recognises. Adapters MUST use these exact keys. Any key not listed here is ignored by the CP prober (legacy aliases are accepted for backward compatibility).
+
+| Key | Type | Emitted By | Evidence Type |
+|-----|------|------------|---------------|
+| `orchestrated_tools` | `List[str]` | Airflow, Dagster, Prefect | `JOB_ORCHESTRATION` |
+| `managed_targets` | `List[str]` | GitHub (VCS adapters) | `CODE_OWNERSHIP` |
+| `managed_repos` | `List[str]` | GitHub (alias) | `CODE_OWNERSHIP` |
+| `hosted_tools` | `List[str]` | Linux (infra adapters) | `HOSTING` |
+| `hosted_platforms` | `List[str]` | Linux (alias) | `HOSTING` |
+| `running_services` | `List[str]` | Linux (alias) | `HOSTING` |
+| `monitored_tools` | `List[str]` | Elementary (quality) | `MONITORING` |
+| `monitored_tables` | `List[str]` | Elementary (alias) | `MONITORING` |
+
+Contract constants: `CP_META_KEYS_ORCHESTRATION`, `CP_META_KEYS_CODE_OWNERSHIP`, `CP_META_KEYS_HOSTING`, `CP_META_KEYS_MONITORING` in `edge_semantics.py`.
+
+### System Invariants
+
+1. **HOSTING edges are NEVER created from coexistence alone** — Infrastructure tools need explicit `hosted_tools`/`hosted_platforms` metadata to produce hosting edges.
+2. **ORCHESTRATION coexistence only fires when source has NO explicit targets** — If an orchestrator has `orchestrated_tools` metadata, coexistence edges to tools NOT in that list are suppressed.
+3. **Split nodes collapse when one side has zero assets** — Warehouse role-split nodes (raw + analytics) merge back to a single node if one side discovers zero datasets.
+4. **Metadata cross-reference edges have `edgeOrigin: "evidence"`** — Only user-drawn PipelineEdge records produce `"structural"` origin. Driver-emitted metadata is observed evidence.
+5. **Null containers render as "Ungrouped"** — All tool detail views use the consistent label `"Ungrouped"` for items without a container/schema.
+
+### Schema Evolution Strategy
+
+To add a new CP metadata key:
+1. Add the key to the appropriate `CP_META_KEYS_*` constant in `edge_semantics.py`
+2. Add it to the corresponding list in `_CP_EVIDENCE_KEYS` in `views.py`
+3. Emit the key from the adapter's `discover_assets()` method
+4. Add a test in `test_lane_overview.py` verifying the CP edge is created
+
+To add a new adapter type:
+1. Create `live_<type>.py` implementing `BaseLineageAdapter`
+2. Register in `create_default_registry()`
+3. Emit CP metadata using contract keys during `discover_assets()`
+4. No changes needed to the CP prober — it works off the contract keys
 
 ---
 
@@ -576,19 +707,21 @@ The data plane colors edges by confidence: green (≥0.8), amber (0.5–0.8), re
 
 5. **Atomic run publishing** — Failed extractions never update `current_run_id`, so the frontend always sees a complete graph.
 
-6. **Infrastructure is discovery-only** — Linux servers create `system` nodes (excluded from data plane) with running_services/hosted_tools metadata, visible only in the control plane Inspector Panel.
+6. **Infrastructure and VCS are discovery-only** — Linux servers and GitHub create `system`/`service` nodes (excluded from data plane) with CP metadata (`hosted_tools`, `managed_targets`), visible only in the control plane. Their drivers run `discover_assets()` but skip lineage extraction and correlation. This is controlled by `_DISCOVERY_ONLY_CATEGORIES = {INFRASTRUCTURE, VERSION_CONTROL}` in the investigator.
 
 7. **Non-fatal enrichment** — Health enrichment, LLM reconciliation, and cross-tool synthesis all fail silently without breaking the pipeline.
 
 8. **Category-driven edge semantics** — Edge labels are derived from `(src_category, tgt_category, evidence_type)` via `edge_semantics.py`, not from lane adjacency. This prevents nonsensical labels like "BigQuery orchestrates dbt". Constraint enforcement (`enforce_semantic_constraints`) downgrades invalid labels to `data_flow` (e.g. `orchestrates` must originate from an orchestration tool).
 
-9. **Config-driven control-plane edges replace lane-adjacency inference** — The old system connected disconnected tools to their nearest lane neighbors, creating false edges (Fivetran→GitHub, Airflow→BigQuery). The new system derives edges from category pairing rules (orchestration→transformation = orchestrates, version_control→transformation = manages_code_for, etc.), producing only structurally meaningful connections.
+9. **Driver-first CP metadata replaces external enrichment** — The old system derived CP metadata through fragile frontend config introspection and backend heuristics (repo-name matching, config key scanning). The new system has each driver emit its own CP metadata during `discover_assets()` — Airflow declares `orchestrated_tools` by scanning its own operators/tasks/DAG names, GitHub declares `managed_targets` from injected `managed_tools`, Linux declares `hosted_tools` from config. ViewBuilder Step 1b aggregates this metadata from graph nodes. Zero vendor-specific branching in edge creation.
 
 10. **Functional roles over platform categories** — Platform category is too coarse (Databricks is both warehouse and orchestration, BigQuery serves raw and analytics). `FunctionalRole` resolves what each node actually does using metadata, zone classification, and capability signals. This enables role-aware dedup, role-pair edge semantics, and correct lane assignment.
 
 11. **Role-aware dedup preserves warehouse topology** — Warehouse platforms with both raw and analytics datasets split into two nodes (e.g. BigQuery raw + BigQuery analytics) rather than collapsing into one. This correctly represents the data flow: ingestion→BQ(raw)→transformation→BQ(analytics)→reporting. Split decisions are controlled by `_SPLITTABLE_ROLE_PAIRS`, currently limited to `{warehouse_raw, warehouse_analytics}`.
 
-12. **Three-tier edge provenance** — Every control-plane edge carries `edgeOrigin` distinguishing evidence-backed, structural (config-derived), and inferred edges. Bypass paths (compressed job chains) are orthogonal to provenance — they appear on evidence edges because they compress real observed job chains, not invented connections.
+12. **Three-tier edge provenance** — Every control-plane edge carries `edgeOrigin` distinguishing evidence-backed (metadata cross-reference or data lineage), structural (user-drawn PipelineEdge records), and inferred (coexistence fallback) edges. Mapping defined by `BASIS_TO_EDGE_ORIGIN` in `edge_semantics.py`. Bypass paths (compressed job chains) are orthogonal to provenance.
+
+13. **Evidence-gated CP edges prevent false connections** — CP edges are never created by lane adjacency or co-location alone (except monitoring). Three probes gate every CP edge: metadata cross-reference (from driver-emitted metadata), PipelineEdge records (user-drawn), and co-presence fallback (only when no explicit targets exist, never for HOSTING). This prevents false edges like "Airflow orchestrates Fivetran" when the Airflow DAGs have no Fivetran-related operators.
 
 ---
 
@@ -696,6 +829,8 @@ More specific than platform category — captures what a node actually does in t
 | `semantic` | `reporting` |
 | `job_runtime` | `transformation` |
 
+**Functional role and visible lane are intentionally separate concepts.** The lane determines where a tool is visually placed in the pipeline layout; the functional role describes what the tool actually does. Orchestration tools (Airflow, Dagster, Prefect) render in the transformation lane for compact architecture layout, but their functional role remains `orchestration` — visible via the role badge in the inspector header. The UI shows both the lane label and the role badge so users can distinguish layout grouping from actual capability.
+
 ### Lane Assignment Precedence (`assign_lane()`)
 
 1. **Explicit `lane_override`** — `node.raw_metadata["lane_override"]` if valid `PipelineLane` value
@@ -710,9 +845,9 @@ Every tool-to-tool edge in the control plane carries an `edgeOrigin` field class
 
 | Origin | Meaning | When Set |
 |--------|---------|----------|
-| `"evidence"` | Backed by observed lineage evidence | At least one constituent graph edge has real evidence (data derivation, query history, dbt manifest) |
-| `"structural"` | Config-derived pipeline relationship | CP edges generated by category pairing rules (Step 4d) |
-| `"inferred"` | Weak matching or bridge rules | All constituent edges are bridge-sourced, unresolved, or weak-matched |
+| `"evidence"` | Backed by observed evidence | Data-plane edges with real evidence (SQL parsing, dbt manifest, query history), or CP edges backed by metadata cross-reference (driver-emitted targets like `orchestrated_tools`, `managed_targets`) |
+| `"structural"` | Explicitly declared by user | CP edges backed by PipelineEdge records (user-drawn edges in the pipeline config) |
+| `"inferred"` | Weak fallback or co-presence logic | Monitoring coexistence edges, pipeline co-presence fallback edges, bridge-sourced edges, or unresolved weak-matched associations |
 
 **Key distinction:** Bypass paths (`bypassPath`) are **not** "inferred" — they represent compressed evidence from real job chains (dataset→job→dataset). An edge with `edgeOrigin: "evidence"` can carry a `bypassPath`.
 
@@ -721,9 +856,9 @@ Every tool-to-tool edge in the control plane carries an `edgeOrigin` field class
 ### Frontend Display
 
 The Inspector Panel shows provenance as a plain-language explanation:
-- `"evidence"` → "Derived from observed lineage evidence"
-- `"structural"` → "Derived from configured pipeline relationships"
-- `"inferred"` → "Inferred from weak matching, bridge rules, or unresolved association logic"
+- `"evidence"` → "Derived from observed data lineage evidence (SQL parsing, dbt manifest, query history)"
+- `"structural"` → "Derived from explicitly declared control-plane relationships (driver metadata targets, PipelineEdge records)"
+- `"inferred"` → "Inferred from co-presence, bridge rules, or weak matching"
 
 The bypass drilldown is a separate collapsible section showing compressed job paths with job names and a summary string.
 

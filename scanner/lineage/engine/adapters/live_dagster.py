@@ -104,6 +104,26 @@ class LiveDagsterAdapter(BaseLineageAdapter):
             node = self._make_sensor_node(sensor, namespace, integration_id, now)
             nodes.append(node)
 
+        # ── CP metadata: derive orchestrated_tools from compute_kind ──
+        orchestrated: Set[str] = set()
+        for asset in assets:
+            ck = (getattr(asset, "compute_kind", None) or "").lower()
+            if ck in ("dbt", "dbt_cloud"):
+                orchestrated.add("dbt")
+            elif ck in ("spark", "pyspark"):
+                orchestrated.add("spark")
+            elif ck in ("fivetran",):
+                orchestrated.add("fivetran")
+            elif ck in ("airbyte",):
+                orchestrated.add("airbyte")
+
+        if orchestrated:
+            for node in nodes:
+                if node.raw_metadata is None:
+                    node.raw_metadata = {}
+                node.raw_metadata["orchestrated_tools"] = sorted(orchestrated)
+            logger.info("[LiveDagster] CP metadata: orchestrated_tools=%s", sorted(orchestrated))
+
         logger.info(
             f"[LiveDagster] Discovered {len(nodes)} assets "
             f"({len(assets)} assets, {len(schedules)} schedules, {len(sensors)} sensors)"

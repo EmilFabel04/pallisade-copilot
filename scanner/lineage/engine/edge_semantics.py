@@ -38,6 +38,60 @@ BASIS_MONITORING_COEXISTENCE = "monitoring_coexistence"  # Quality tool + monito
 BASIS_PIPELINE_COEXISTENCE = "pipeline_coexistence"      # Tools co-exist in the same pipeline stack
 
 # ---------------------------------------------------------------------------
+# Confidence thresholds for control-plane edge probing
+#
+# Evidence hierarchy (first match wins):
+#   1. Explicit config (user-drawn pipeline edges)    → CONFIDENCE_EXPLICIT_CONFIG
+#   2. Metadata cross-reference (adapter raw_metadata) → CONFIDENCE_METADATA_XREF
+#   3. Monitoring coexistence (quality + target)       → CONFIDENCE_MONITORING_COEX
+#   4. Pipeline coexistence (tools in same stack)      → CONFIDENCE_PIPELINE_COEX
+#
+# Invariants:
+#   - HOSTING edges are NEVER created from coexistence alone
+#   - ORCHESTRATION coexistence only fires when source has NO explicit
+#     orchestrated_tools metadata
+# ---------------------------------------------------------------------------
+
+CONFIDENCE_EXPLICIT_CONFIG = 0.8
+CONFIDENCE_METADATA_XREF = 0.7
+CONFIDENCE_MONITORING_COEX = 0.4
+CONFIDENCE_PIPELINE_COEX = 0.5
+
+# ---------------------------------------------------------------------------
+# CP metadata key contract
+#
+# Each key below is the authoritative set of raw_metadata keys that the
+# control-plane prober recognises. Adapters MUST use these exact keys.
+# Any key not listed here is ignored by the CP prober.
+#
+# Key                    | Type       | Emitted By             | Evidence Type
+# -----------------------|------------|------------------------|------------------
+# orchestrated_tools     | List[str]  | Airflow, Dagster,      | JOB_ORCHESTRATION
+#                        |            | Prefect                |
+# managed_targets        | List[str]  | GitHub (VCS adapters)  | CODE_OWNERSHIP
+# managed_repos          | List[str]  | GitHub (alias)         | CODE_OWNERSHIP
+# hosted_tools           | List[str]  | Linux (infra adapters) | HOSTING
+# hosted_platforms       | List[str]  | Linux (alias)          | HOSTING
+# running_services       | List[str]  | Linux (alias)          | HOSTING
+# monitored_tools        | List[str]  | Elementary (quality)   | MONITORING
+# monitored_tables       | List[str]  | Elementary (alias)     | MONITORING
+# ---------------------------------------------------------------------------
+
+CP_META_KEYS_ORCHESTRATION = ("orchestrated_tools",)
+CP_META_KEYS_CODE_OWNERSHIP = ("managed_targets", "managed_repos")
+CP_META_KEYS_HOSTING = ("hosted_tools", "hosted_platforms", "running_services")
+CP_META_KEYS_MONITORING = ("monitored_tools", "monitored_tables")
+
+# edgeOrigin mapping: basis → origin label for frontend display
+BASIS_TO_EDGE_ORIGIN = {
+    BASIS_ASSET_EVIDENCE: "evidence",
+    BASIS_METADATA_REFERENCE: "evidence",
+    BASIS_EXPLICIT_CONFIG: "structural",
+    BASIS_MONITORING_COEXISTENCE: "inferred",
+    BASIS_PIPELINE_COEXISTENCE: "inferred",
+}
+
+# ---------------------------------------------------------------------------
 # Category layer order (for tie-breaking direction)
 # ---------------------------------------------------------------------------
 

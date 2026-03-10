@@ -111,6 +111,20 @@ class LiveElementaryAdapter(BaseLineageAdapter):
                 },
             ))
 
+        # ── CP metadata: derive monitored_tools from tested table platforms ──
+        # Elementary monitors warehouse tables — annotate nodes so the CP
+        # prober knows which tools/platforms are being monitored.
+        monitored_tables = set()
+        for row in results:
+            tbl = row.get("table_name", "")
+            if tbl:
+                monitored_tables.add(tbl)
+        if monitored_tables:
+            for node in nodes:
+                if node.raw_metadata is None:
+                    node.raw_metadata = {}
+                node.raw_metadata["monitored_tables"] = sorted(monitored_tables)
+
         logger.info(f"[LiveElementary] Discovered {len(nodes)} monitor nodes")
         return nodes
 

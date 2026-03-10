@@ -73,6 +73,20 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         """Resolve mode: config overrides constructor default."""
         return config.get("mode") or self._mode
 
+    # Operator patterns that indicate orchestration of other tools.
+    # Matched case-insensitively against task operator_class / operator_name.
+    _ORCHESTRATED_TOOL_PATTERNS: Dict[str, List[str]] = {
+        "dbt": [
+            "dbtrun", "dbttest", "dbtseed", "dbtsnapshot", "dbtcloud",
+            "dbtoperator", "dbt_", "cosmosdbt",
+        ],
+        "fivetran": ["fivetran"],
+        "airbyte": ["airbyte"],
+        "spark": ["spark", "emroperator", "databricksrun"],
+        "great_expectations": ["greatexpectations"],
+        "soda": ["sodascan", "sodacheck"],
+    }
+
     def discover_assets(self, config: Dict[str, Any]) -> List[LineageNode]:
         """Discover DAGs, tasks, and referenced tables."""
         namespace = config.get("namespace", "airflow")
@@ -81,8 +95,65 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         hint = self.case_hint
 
         if self._effective_mode(config) == "api":
-            return self._discover_from_api(config, namespace, integration_id, hint, now)
-        return self._discover_from_static(config, namespace, integration_id, hint, now)
+            nodes = self._discover_from_api(config, namespace, integration_id, hint, now)
+        else:
+            nodes = self._discover_from_static(config, namespace, integration_id, hint, now)
+
+        # ── CP metadata: derive orchestrated_tools from task operators ──
+        self._annotate_orchestrated_tools(nodes)
+        return nodes
+
+    # Keywords to match in task IDs and DAG names (broader than operator patterns)
+    _TOOL_NAME_KEYWORDS: Dict[str, List[str]] = {
+        "dbt": ["dbt"],
+        "fivetran": ["fivetran"],
+        "airbyte": ["airbyte"],
+        "spark": ["spark"],
+        "great_expectations": ["great_expectations", "ge_validation"],
+        "soda": ["soda"],
+    }
+
+    def _annotate_orchestrated_tools(self, nodes: List[LineageNode]) -> None:
+        """Scan task operators, task IDs, and DAG names to determine which
+        tools this Airflow instance orchestrates."""
+        orchestrated: Set[str] = set()
+        for node in nodes:
+            rm = node.raw_metadata or {}
+
+            # Check 1: operator class name (e.g., DbtRunOperator)
+            operator = (rm.get("operator") or "").lower().replace("_", "")
+            if operator:
+                for tool, patterns in self._ORCHESTRATED_TOOL_PATTERNS.items():
+                    if any(p in operator for p in patterns):
+                        orchestrated.add(tool)
+
+            # Check 2: task ID or node name (e.g., "dbt_run", "run_dbt_models")
+            task_name = (node.name or "").lower()
+            for tool, keywords in self._TOOL_NAME_KEYWORDS.items():
+                if any(kw in task_name for kw in keywords):
+                    orchestrated.add(tool)
+
+            # Check 3: DAG name (e.g., "pallisade_dbt_bigquery_pipeline")
+            dag_id = (rm.get("dag_id") or "").lower()
+            if dag_id:
+                for tool, keywords in self._TOOL_NAME_KEYWORDS.items():
+                    if any(kw in dag_id for kw in keywords):
+                        orchestrated.add(tool)
+
+        if not orchestrated:
+            return
+
+        # Annotate ALL nodes with orchestrated_tools so the ViewBuilder
+        # can find it regardless of which node it inspects first.
+        for node in nodes:
+            if node.raw_metadata is None:
+                node.raw_metadata = {}
+            node.raw_metadata["orchestrated_tools"] = sorted(orchestrated)
+
+        logger.info(
+            "[LiveAirflow] CP metadata: orchestrated_tools=%s",
+            sorted(orchestrated),
+        )
 
     def extract_lineage(self, config: Dict[str, Any]) -> List[LineageEdge]:
         """Extract edges: DAG→task, task→task, task→table."""

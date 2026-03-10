@@ -16,6 +16,20 @@ import {
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
 
+// Role badges shown when functional role differs from the lane name.
+// "transformation" and "reporting" are excluded — they match their lane, so a badge is redundant.
+const ROLE_BADGE_LABELS: Record<string, string> = {
+  warehouse_raw: 'Raw',
+  warehouse_analytics: 'Analytics',
+  orchestration: 'Orchestration',
+  ingestion: 'Ingestion',
+  quality: 'Quality',
+  version_control: 'Version Control',
+  infrastructure: 'Infrastructure',
+  semantic: 'Semantic',
+  job_runtime: 'Job Runtime',
+};
+
 interface InspectorPanelProps {
   target: InspectorTarget;
   laneOverview: RenderedViewResponse | null;
@@ -47,8 +61,11 @@ function NodeInspector({
   const [fetchError, setFetchError] = useState<string | null>(null);
   const cacheRef = useRef<Map<string, ToolDetailsResponse>>(new Map());
 
-  // Clear cache when pipeline data changes (new extraction)
-  const overviewStamp = laneOverview?.stats?.opsSummary?.totalAssets ?? laneOverview?.nodes?.length ?? 0;
+  // Clear cache when pipeline data changes (new extraction).
+  // Use a composite stamp that detects real content changes, not just count matches.
+  const overviewStamp = laneOverview
+    ? `${laneOverview.nodes?.length ?? 0}:${laneOverview.edges?.length ?? 0}:${laneOverview.stats?.opsSummary?.totalAssets ?? 0}:${laneOverview.stats?.builtAt ?? ''}`
+    : '0';
   useEffect(() => {
     cacheRef.current.clear();
   }, [overviewStamp]);
@@ -112,9 +129,9 @@ function NodeInspector({
           >
             {laneLabel}
           </span>
-          {meta.functionalRole && (meta.functionalRole === 'warehouse_raw' || meta.functionalRole === 'warehouse_analytics') && (
+          {meta.functionalRole && ROLE_BADGE_LABELS[meta.functionalRole] && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium text-[var(--muted)] bg-[var(--bg-secondary)] border border-[var(--border)]">
-              {meta.functionalRole === 'warehouse_raw' ? 'Raw' : 'Analytics'}
+              {ROLE_BADGE_LABELS[meta.functionalRole]}
             </span>
           )}
           <span className="text-[11px] text-[var(--muted)] capitalize">{node.platform || 'Unknown'}</span>
@@ -149,7 +166,22 @@ function NodeInspector({
         </div>
       )}
 
-      {details && !loading && <ToolDetailView details={details} />}
+      {details && !loading && (
+        <>
+          {details.summary?.coverageGaps?.length > 0 && (
+            <div className="mb-3 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/10">
+              <p className="text-[11px] text-amber-400 font-medium">
+                {details.summary.coverageGaps.includes('no_data_extracted')
+                  ? 'No data extracted yet — run lineage extraction to populate this tool.'
+                  : details.summary.coverageGaps.includes('no_activity_data_yet')
+                  ? 'No activity data available yet.'
+                  : `Coverage gaps: ${details.summary.coverageGaps.map(g => g.replace(/_/g, ' ')).join(', ')}`}
+              </p>
+            </div>
+          )}
+          <ToolDetailView details={details} />
+        </>
+      )}
     </div>
   );
 }

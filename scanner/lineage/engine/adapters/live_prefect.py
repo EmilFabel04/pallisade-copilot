@@ -92,6 +92,31 @@ class LivePrefectAdapter(BaseLineageAdapter):
             node = self._make_deployment_node(deployment, namespace, integration_id, now)
             nodes.append(node)
 
+        # ── CP metadata: derive orchestrated_tools from flow names/tags ──
+        orchestrated: Set[str] = set()
+        _TOOL_KEYWORDS = {
+            "dbt": ["dbt"],
+            "fivetran": ["fivetran"],
+            "airbyte": ["airbyte"],
+            "spark": ["spark", "pyspark"],
+            "great_expectations": ["great_expectations", "ge_"],
+            "soda": ["soda"],
+        }
+        for flow in flows:
+            fname = (getattr(flow, "name", "") or "").lower()
+            ftags = [str(t).lower() for t in (getattr(flow, "tags", []) or [])]
+            searchable = [fname] + ftags
+            for tool, keywords in _TOOL_KEYWORDS.items():
+                if any(kw in s for kw in keywords for s in searchable):
+                    orchestrated.add(tool)
+
+        if orchestrated:
+            for node in nodes:
+                if node.raw_metadata is None:
+                    node.raw_metadata = {}
+                node.raw_metadata["orchestrated_tools"] = sorted(orchestrated)
+            logger.info("[LivePrefect] CP metadata: orchestrated_tools=%s", sorted(orchestrated))
+
         logger.info(
             f"[LivePrefect] Discovered {len(nodes)} assets "
             f"({len(flows)} flows, {len(deployments)} deployments)"

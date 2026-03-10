@@ -9,29 +9,56 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 // Resolve credentials for a node — prefers Integration table, falls back to PipelineNode.config
 function resolveNodeConfig(node: any): Record<string, any> | null {
-  // Prefer Integration table
+  let config: Record<string, any> | null = null;
+
+  // Prefer Integration table (credentials JSON blob)
   if (node.integrationId && node.integration?.credentials) {
     try {
       const creds = node.integration.credentials as any;
       if (creds.encrypted) {
-        return JSON.parse(decrypt(creds.encrypted));
+        config = JSON.parse(decrypt(creds.encrypted));
+      } else {
+        config = creds;
       }
-      return creds;
     } catch (e) {
       console.error(`[LLM-EXTRACT] Failed to decrypt integration creds for ${node.name}:`, e);
     }
   }
+
   // Legacy fallback: PipelineNode.config
-  if (!node.config) return null;
-  try {
-    if (node.config.encrypted) {
-      return JSON.parse(decrypt(node.config.encrypted));
+  if (!config && node.config) {
+    try {
+      if (node.config.encrypted) {
+        config = JSON.parse(decrypt(node.config.encrypted));
+      } else {
+        config = node.config as Record<string, any>;
+      }
+    } catch (e) {
+      console.error('[LLM-EXTRACT] Failed to decrypt config:', e);
     }
-    return node.config as Record<string, any>;
-  } catch (e) {
-    console.error('[LLM-EXTRACT] Failed to decrypt config:', e);
-    return null;
   }
+
+  if (!config) return null;
+
+  // GitHub OAuth stores token in Integration.accessToken (not in credentials JSON).
+  // Merge it into config so downstream code can find it as access_token.
+  if (node.integration?.accessToken && !config.access_token) {
+    try {
+      config.access_token = decrypt(node.integration.accessToken);
+    } catch (e) {
+      console.error(`[LLM-EXTRACT] Failed to decrypt integration accessToken for ${node.name}:`, e);
+    }
+  }
+
+  // GitHub OAuth stores owner in Integration.metadata.username
+  if (!config.owner && !config.org && node.integration?.metadata) {
+    const meta = node.integration.metadata as any;
+    if (meta.username) {
+      config.owner = meta.username;
+    }
+  }
+
+  return config;
 }
 
 // POST /api/pipeline/[stackId]/lineage/extract-llm — LLM-powered extraction with SSE
@@ -137,7 +164,45 @@ export async function POST(
       });
     }
 
-    // Build tool_nodes for view builder (include safe metadata + relationship evidence)
+    // Inject managed_tools into GitHub tool config — the frontend knows
+    // which tools received GitHub attachments (relational knowledge that
+    // drivers can't discover on their own).
+    if (githubAttachment) {
+      const managedToolTypes = toolConfigs
+        .filter(tc => {
+          if (tc.layer === 'VERSION_CONTROL') return false;
+          const cfg = tc.config || {};
+          return cfg.github?.token === githubAttachment!.token
+            || cfg.github_token === githubAttachment!.token
+            || cfg.github_repo === githubAttachment!.repo;
+        })
+        .map(tc => tc.tool_type.toLowerCase());
+
+      if (managedToolTypes.length > 0) {
+        // Collect repos explicitly referenced by managed tools
+        const managedRepos = new Set<string>();
+        for (const tc of toolConfigs) {
+          if (tc.layer === 'VERSION_CONTROL') continue;
+          const cfg = tc.config || {};
+          if (cfg.github_repo && cfg.github_repo.includes('/')) {
+            managedRepos.add(cfg.github_repo);
+          }
+        }
+
+        const ghConfig = toolConfigs.find(tc => tc.layer === 'VERSION_CONTROL');
+        if (ghConfig) {
+          ghConfig.config = {
+            ...ghConfig.config,
+            managed_tools: managedToolTypes,
+            ...(managedRepos.size > 0 ? { repos: [...managedRepos] } : {}),
+          };
+        }
+      }
+    }
+
+    // Build tool_nodes for view builder — safe metadata only.
+    // CP relationship metadata (orchestrated_tools, managed_repos, etc.)
+    // is now emitted by drivers directly on graph nodes, not derived here.
     const toolNodes = connectedNodes.map((n) => {
       const base: Record<string, any> = {
         id: n.id,
@@ -147,88 +212,20 @@ export async function POST(
         status: n.status,
         integrationId: n.integrationId,
       };
-      const cfg = resolveNodeConfig(n);
 
-      // For VCS tools, include non-secret config fields so backend can show repos/org
-      if (n.layer === 'VERSION_CONTROL' && cfg) {
+      // For VCS tools, use the enriched toolConfig (which has managed_tools + repos)
+      // rather than the raw node config, so managed repo references are included.
+      if (n.layer === 'VERSION_CONTROL') {
+        const enrichedTc = toolConfigs.find(tc => tc.layer === 'VERSION_CONTROL' && tc.config);
+        const cfg = enrichedTc?.config || resolveNodeConfig(n) || {};
         base.config = {
           owner: cfg.owner || cfg.org || cfg.organization || '',
           repo: cfg.repo || '',
           repos: cfg.repos || cfg.repositories || [],
           org: cfg.owner || cfg.org || cfg.organization || '',
           branch: cfg.branch || 'main',
-          ...(cfg.integration_stats ? { integration_stats: cfg.integration_stats } : {}),
         };
       }
-
-      // Derive relationship metadata from config (evidence for CP edges)
-      const rawMeta: Record<string, any> = {};
-
-      if (n.layer === 'VERSION_CONTROL' && cfg) {
-        const repoList: any[] = cfg.repos || cfg.repositories || (cfg.repo ? [cfg.repo] : []);
-        if (repoList.length > 0) {
-          const managedTools: string[] = [];
-          const repoNames = repoList.map((r: any) =>
-            (typeof r === 'string' ? r : (r?.full_name || r?.name || '')).toLowerCase()
-          );
-          for (const otherNode of connectedNodes) {
-            if (otherNode.id === n.id) continue;
-            const otherType = otherNode.toolType?.toLowerCase() || '';
-            if (!otherType) continue;
-            // Check if other tool's config references a repo from this VCS
-            const otherCfg = resolveNodeConfig(otherNode);
-            const otherRepo = (otherCfg?.github_repo || otherCfg?.github?.repo || '').toLowerCase();
-            if (otherRepo && repoNames.some((rn: string) => rn && (
-              rn.includes(otherRepo.split('/').pop() || '___') ||
-              otherRepo.includes(rn.split('/').pop() || '___')
-            ))) {
-              managedTools.push(otherType);
-              continue;
-            }
-            // Fallback: repo name contains the tool type name
-            if (repoNames.some((rn: string) => rn.includes(otherType.replace('_', '')))) {
-              managedTools.push(otherType);
-            }
-          }
-          if (managedTools.length > 0) rawMeta.managed_repos = [...new Set(managedTools)];
-        }
-      }
-
-      if (n.layer === 'ORCHESTRATION' && cfg) {
-        const orchestrated: string[] = [];
-        // GitHub attachment with dbt_root or dag_directory → orchestrates transformation tools
-        if (cfg.github?.dbt_root !== undefined || cfg.github?.dag_directory !== undefined) {
-          // Find transformation tools in the pipeline
-          for (const cn of connectedNodes) {
-            if (cn.id === n.id) continue;
-            if (cn.layer === 'TRANSFORMATION' || cn.toolType?.toLowerCase().includes('dbt')) {
-              const tt = cn.toolType?.toLowerCase() || '';
-              if (tt && !orchestrated.includes(tt)) orchestrated.push(tt);
-            }
-          }
-        }
-        // dag_tasks or workflow_targets from config
-        const taskTargets = cfg.dag_tasks || cfg.workflow_targets;
-        if (Array.isArray(taskTargets)) {
-          for (const t of taskTargets) {
-            if (typeof t === 'string' && !orchestrated.includes(t.toLowerCase())) {
-              orchestrated.push(t.toLowerCase());
-            }
-          }
-        }
-        if (orchestrated.length > 0) rawMeta.orchestrated_tools = orchestrated;
-      }
-
-      if (n.layer === 'INFRASTRUCTURE' && cfg) {
-        for (const key of ['hosted_tools', 'hosted_platforms', 'managed_services', 'hosted_services']) {
-          if (cfg[key] && Array.isArray(cfg[key])) {
-            rawMeta.hosted_platforms = cfg[key];
-            break;
-          }
-        }
-      }
-
-      if (Object.keys(rawMeta).length > 0) base.raw_metadata = rawMeta;
 
       return base;
     });

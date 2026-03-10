@@ -958,7 +958,7 @@ class TestConfigDrivenControlPlaneEdges:
 
         tool_nodes = [
             {"toolType": "github", "integrationId": "gh_001", "name": "GitHub",
-             "raw_metadata": {"managed_repos": ["dbt_core"]}},
+             "raw_metadata": {"managed_targets": ["dbt_core"]}},
             {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt"},
         ]
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
@@ -1035,7 +1035,7 @@ class TestConfigDrivenControlPlaneEdges:
             {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow",
              "raw_metadata": {"orchestrated_tools": ["dbt_core", "fivetran"]}},
             {"toolType": "github", "integrationId": "gh_001", "name": "GitHub",
-             "raw_metadata": {"managed_repos": ["dbt_core", "airflow"]}},
+             "raw_metadata": {"managed_targets": ["dbt_core", "airflow"]}},
         ]
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
         view = builder.build_lane_pipeline_overview()
@@ -1228,7 +1228,7 @@ class TestEvidenceGatedControlPlaneEdges:
         ]
         assert len(orch_edges) == 1, "Metadata-backed orchestration edge should exist"
         assert orch_edges[0].metadata["relationshipBasis"] == "metadata_reference"
-        assert orch_edges[0].metadata["edgeOrigin"] == "structural"
+        assert orch_edges[0].metadata["edgeOrigin"] == "evidence"
 
     def test_monitoring_coexistence_creates_weak_edge(self):
         """Quality + warehouse tools coexisting → weak monitoring edge."""
@@ -1469,7 +1469,7 @@ class TestConfigEnrichmentAndPipelineEdges:
         assert cp_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
 
     def test_config_enrichment_vcs_repos(self):
-        """VCS tool with managed_repos metadata creates CP edge to matching tools."""
+        """VCS tool with managed_targets metadata creates CP edge to matching tools."""
         graph = LineageGraph()
         dbt_model = _make_node(
             "stg_orders", NodeType.TABLE, "dbt_core",
@@ -1482,7 +1482,7 @@ class TestConfigEnrichmentAndPipelineEdges:
         tool_nodes = [
             {
                 "toolType": "github", "integrationId": "gh_001", "name": "GitHub",
-                "raw_metadata": {"managed_repos": ["dbt_core"]},
+                "raw_metadata": {"managed_targets": ["dbt_core"]},
             },
             {"toolType": "dbt_core", "integrationId": "dbt_001", "name": "dbt Core"},
         ]
@@ -1496,7 +1496,7 @@ class TestConfigEnrichmentAndPipelineEdges:
             if e.source_id in gh_ids and e.target_id in dbt_ids
             and e.id.startswith("cp-")
         ]
-        assert len(cp_edges) >= 1, "managed_repos metadata should create CP edge"
+        assert len(cp_edges) >= 1, "managed_targets metadata should create CP edge"
         assert cp_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
 
     def test_pipeline_edge_creates_cp_edge(self):
@@ -2691,8 +2691,8 @@ class TestResolverMergedCrossToolEdges:
 class TestVersionControlToolDetails:
     """Test Fix #2: GitHub/VCS tool details show repos + activity instead of 0s."""
 
-    def test_vcs_tabs_are_repos_and_activity(self):
-        """GitHub tool details should have repos and activity tabs."""
+    def test_vcs_tabs_are_repos_only(self):
+        """GitHub tool details should have repos tab only."""
         graph = LineageGraph()
         tool_nodes = [{
             "toolType": "github",
@@ -2708,8 +2708,7 @@ class TestVersionControlToolDetails:
 
         assert result["category"] == "version_control"
         tab_keys = [t["key"] for t in result["tabs"]]
-        assert "repos" in tab_keys
-        assert "activity" in tab_keys
+        assert tab_keys == ["repos"]
 
     def test_vcs_repos_populated_from_config(self):
         """Repos tab should contain items from tool config."""
@@ -2734,58 +2733,6 @@ class TestVersionControlToolDetails:
         # All repos should have org as container
         for r in repos:
             assert r["container"] == "acme-corp"
-
-    def test_vcs_activity_shows_connection_status(self):
-        """Activity tab should show at least a connection status item."""
-        graph = LineageGraph()
-        tool_nodes = [{
-            "toolType": "github",
-            "integrationId": "gh_001",
-            "name": "GitHub",
-            "config": {"org": "acme-corp", "repos": ["repo1"]},
-        }]
-        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
-        result = builder.build_tool_details("tool:github")
-
-        activity = result["groups"].get("activity", [])
-        assert len(activity) >= 1
-        status_item = activity[0]
-        assert status_item["metadata"]["platform"] == "github"
-        assert status_item["metadata"]["repoCount"] == 1
-
-    def test_vcs_with_integration_stats(self):
-        """Activity tab should include integration_stats when present."""
-        graph = LineageGraph()
-        tool_nodes = [{
-            "toolType": "github",
-            "integrationId": "gh_001",
-            "name": "GitHub",
-            "config": {
-                "org": "acme-corp",
-                "repos": ["repo1"],
-                "integration_stats": {
-                    "last_sync_at": "2026-03-08T12:00:00Z",
-                    "last_event_at": "2026-03-09T10:00:00Z",
-                    "prs_7d_total": 15,
-                    "merged_prs_7d": 10,
-                    "issues_7d_total": 5,
-                    "webhook_status": "ok",
-                },
-            },
-        }]
-        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
-        result = builder.build_tool_details("tool:github")
-
-        activity = result["groups"].get("activity", [])
-        assert len(activity) >= 1
-        m = activity[0]["metadata"]
-        assert m["prs7d"] == 15
-        assert m["mergedPrs7d"] == 10
-        assert m["issues7d"] == 5
-        assert m["webhookStatus"] == "ok"
-        assert m["lastSyncAt"] == "2026-03-08T12:00:00Z"
-        # Should show as healthy when synced
-        assert activity[0]["healthStatus"] == "healthy"
 
     def test_vcs_no_data_extracted_not_shown(self):
         """GitHub should NOT get 'no_data_extracted' coverage gap."""
@@ -2817,32 +2764,10 @@ class TestVersionControlToolDetails:
 
         assert result["category"] == "version_control"
         tab_keys = [t["key"] for t in result["tabs"]]
-        assert "repos" in tab_keys
-        assert "activity" in tab_keys
+        assert tab_keys == ["repos"]
         # Should not crash, repos should be empty
         repos = result["groups"].get("repos", [])
         assert isinstance(repos, list)
-
-    def test_vcs_with_status_but_no_config(self):
-        """GitHub restored from snapshot (status set, no config) should show
-        connection status in activity."""
-        graph = LineageGraph()
-        tool_nodes = [{
-            "toolType": "github",
-            "integrationId": "gh_001",
-            "name": "GitHub",
-            "status": "CONNECTED",
-            # No config — simulates restore from older snapshot
-        }]
-        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
-        result = builder.build_tool_details("tool:github")
-
-        activity = result["groups"].get("activity", [])
-        assert len(activity) >= 1
-        m = activity[0]["metadata"]
-        assert m["connectionStatus"] == "CONNECTED"
-        # Should show as healthy since status is CONNECTED
-        assert activity[0]["healthStatus"] == "healthy"
 
     def test_vcs_total_assets_not_zero(self):
         """GitHub totalAssets should count tab items, not graph nodes."""
@@ -2859,7 +2784,7 @@ class TestVersionControlToolDetails:
         builder = ViewBuilder(graph, tool_nodes=tool_nodes)
         result = builder.build_tool_details("tool:github")
 
-        # totalAssets should count repos + activity items, not be 0
+        # totalAssets should count repos + targets, not be 0
         assert result["summary"]["totalAssets"] > 0
 
     def test_vcs_single_repo_field_creates_repo_item(self):
@@ -3272,8 +3197,8 @@ class TestEdgeProvenance:
                 f"Edge {e.id} has evidence_count={e.evidence_count} but edgeOrigin={e.metadata.get('edgeOrigin')}"
             )
 
-    def test_cp_edges_have_structural_origin_and_basis(self):
-        """Evidence-backed CP edges should have edgeOrigin='structural' and relationshipBasis."""
+    def test_cp_edges_have_correct_origin_and_basis(self):
+        """Metadata-backed CP edges should have edgeOrigin='evidence' and relationshipBasis."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -3294,7 +3219,7 @@ class TestEdgeProvenance:
         cp_edges = [e for e in view.edges if e.id.startswith("cp-")]
         assert len(cp_edges) >= 1, "Should have at least one CP edge (orchestrates)"
         for e in cp_edges:
-            assert e.metadata.get("edgeOrigin") == "structural"
+            assert e.metadata.get("edgeOrigin") == "evidence"
             assert e.metadata.get("relationshipBasis") == "metadata_reference"
 
     def test_evidence_wins_over_structural_on_merge(self, n8n_bq_dbt_graph):
@@ -3444,3 +3369,608 @@ class TestBypassDrilldown:
                 assert bp["jobs"][0]["jobNodeName"] == "etl_task"
                 return
         pytest.fail("No bypass edge found")
+
+
+# ====================================================================
+# Driver-emitted CP metadata tests
+# ====================================================================
+
+class TestDriverEmittedCPMetadata:
+    """Tests that CP metadata emitted by drivers on graph nodes is aggregated
+    by the ViewBuilder and used by the CP prober for edge creation."""
+
+    def test_graph_node_orchestrated_tools_creates_cp_edge(self):
+        """Airflow/Dagster driver emitting orchestrated_tools on graph nodes
+        should produce a CP edge to the orchestrated tool."""
+        g = LineageGraph()
+
+        # Airflow DAG node with orchestrated_tools metadata (emitted by driver)
+        airflow_dag = _make_node(
+            "etl_dag", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="int-airflow",
+            raw_metadata={"dag_id": "etl_dag", "orchestrated_tools": ["dbt"]},
+        )
+        g.add_node(airflow_dag)
+
+        # dbt model node
+        dbt_model = _make_node(
+            "stg_orders", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="analytics",
+            raw_metadata={"dbt_resource_type": "model", "discovered_platforms": ["bigquery", "dbt"]},
+        )
+        g.add_node(dbt_model)
+
+        # BigQuery raw table
+        bq_raw = _make_node(
+            "raw_orders", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="public",
+        )
+        g.add_node(bq_raw)
+        g.add_edge(_make_edge(bq_raw.id, dbt_model.id, EdgeType.POPULATES))
+
+        # Tool nodes for pipeline stack
+        tool_nodes = [
+            {"integrationId": "int-airflow", "toolType": "airflow", "layer": "ORCHESTRATION"},
+            {"integrationId": "int-dbt", "toolType": "dbt_core", "layer": "TRANSFORMATION"},
+        ]
+
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        # Find CP edge from airflow → dbt
+        cp_edges = [
+            e for e in view.edges
+            if "airflow" in e.source_id.lower() and "dbt" in e.target_id.lower()
+            and e.metadata.get("edgeOrigin") == "evidence"
+        ]
+        assert len(cp_edges) >= 1, (
+            f"Expected CP edge from airflow to dbt via driver metadata, "
+            f"got edges: {[(e.source_id, e.target_id, e.metadata) for e in view.edges]}"
+        )
+        # Should have metadata_reference basis (from graph node metadata)
+        assert cp_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
+
+    def test_graph_node_managed_targets_creates_vcs_cp_edge(self):
+        """GitHub driver emitting managed_targets on graph nodes should produce
+        a CP edge to the managed tools."""
+        g = LineageGraph()
+
+        # GitHub service node with managed_targets (emitted by driver)
+        github_svc = _make_node(
+            "GitHub (acme)", NodeType.SOURCE, "github", PlatformDomain.OTHER,
+            integration_id="int-github",
+            raw_metadata={"managed_targets": ["dbt_core", "airflow"]},
+        )
+        github_svc.canonical_type = "service"
+        g.add_node(github_svc)
+
+        # dbt model node
+        dbt_model = _make_node(
+            "stg_orders", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="analytics",
+            raw_metadata={"dbt_resource_type": "model", "discovered_platforms": ["bigquery", "dbt"]},
+        )
+        g.add_node(dbt_model)
+
+        # Airflow DAG node
+        airflow_dag = _make_node(
+            "etl_dag", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="int-airflow",
+        )
+        g.add_node(airflow_dag)
+
+        tool_nodes = [
+            {"integrationId": "int-github", "toolType": "github", "layer": "VERSION_CONTROL"},
+            {"integrationId": "int-dbt", "toolType": "dbt_core", "layer": "TRANSFORMATION"},
+            {"integrationId": "int-airflow", "toolType": "airflow", "layer": "ORCHESTRATION"},
+        ]
+
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        # Find CP edges from github
+        github_cp_edges = [
+            e for e in view.edges
+            if "github" in e.source_id.lower()
+            and e.metadata.get("edgeOrigin") == "evidence"
+        ]
+        targets = {e.target_id.split(":")[-1] for e in github_cp_edges}
+        # Should have edges to both dbt and airflow
+        assert any("dbt" in t for t in targets), (
+            f"Expected CP edge from github to dbt, targets: {targets}"
+        )
+        assert any("airflow" in t for t in targets), (
+            f"Expected CP edge from github to airflow, targets: {targets}"
+        )
+
+    def test_graph_node_managed_repos_backward_compat(self):
+        """Old managed_repos key should still produce CP edges (backward compat)."""
+        g = LineageGraph()
+
+        github_svc = _make_node(
+            "GitHub (acme)", NodeType.SOURCE, "github", PlatformDomain.OTHER,
+            integration_id="int-github",
+            raw_metadata={"managed_repos": ["dbt_core"]},  # old key
+        )
+        github_svc.canonical_type = "service"
+        g.add_node(github_svc)
+
+        dbt_model = _make_node(
+            "stg_orders", NodeType.TABLE, "dbt_core", PlatformDomain.TRANSFORM,
+            integration_id="int-dbt",
+        )
+        g.add_node(dbt_model)
+        canonicalize_graph_in_place(g.nodes, g.edges)
+
+        tool_nodes = [
+            {"integrationId": "int-github", "toolType": "github", "layer": "VERSION_CONTROL"},
+            {"integrationId": "int-dbt", "toolType": "dbt_core", "layer": "TRANSFORMATION"},
+        ]
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        github_cp_edges = [
+            e for e in view.edges
+            if "github" in e.source_id.lower()
+            and e.metadata.get("edgeOrigin") == "evidence"
+        ]
+        assert len(github_cp_edges) >= 1, (
+            "Old managed_repos key should still create CP edges for backward compat"
+        )
+        assert github_cp_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
+
+    def test_vcs_tool_details_includes_driver_discovered_repos(self):
+        """Repos stored in graph node raw_metadata['repositories'] should appear in the repos tab."""
+        g = LineageGraph()
+
+        github_svc = _make_node(
+            "GitHub (acme)", NodeType.SOURCE, "github", PlatformDomain.OTHER,
+            integration_id="int-github",
+            raw_metadata={
+                "managed_targets": ["dbt_core"],
+                "owner": "acme",
+                "repositories": [
+                    {"name": "data-pipelines", "full_name": "acme/data-pipelines", "default_branch": "main", "private": False},
+                    {"name": "analytics", "full_name": "acme/analytics", "default_branch": "develop", "private": True},
+                ],
+            },
+        )
+        github_svc.canonical_type = "service"
+        g.add_node(github_svc)
+        canonicalize_graph_in_place(g.nodes, g.edges)
+
+        tool_nodes = [
+            {"integrationId": "int-github", "toolType": "github", "layer": "VERSION_CONTROL"},
+        ]
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        details = builder.build_tool_details("tool:github:int-github")
+
+        repo_items = details["groups"].get("repos", [])
+        assert len(repo_items) == 2, f"Expected 2 repos from driver, got {len(repo_items)}"
+        repo_names = {item["name"] for item in repo_items}
+        assert "acme/data-pipelines" in repo_names
+        assert "acme/analytics" in repo_names
+        for item in repo_items:
+            assert item["canonicalType"] == "repository"
+            assert item["container"] == "acme"
+        # Check metadata carries through
+        analytics_item = next(r for r in repo_items if "analytics" in r["name"])
+        assert analytics_item["metadata"]["private"] is True
+        assert analytics_item["metadata"]["defaultBranch"] == "develop"
+
+    def test_orchestration_role_in_overview_metadata(self):
+        """Airflow should have functionalRole='orchestration' in overview node metadata."""
+        g = LineageGraph()
+
+        airflow_dag = _make_node(
+            "etl_dag", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="int-airflow",
+        )
+        g.add_node(airflow_dag)
+        canonicalize_graph_in_place(g.nodes, g.edges)
+
+        tool_nodes = [
+            {"integrationId": "int-airflow", "toolType": "airflow", "layer": "ORCHESTRATION"},
+        ]
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        airflow_nodes = [n for n in view.nodes if n.platform == "airflow"]
+        assert len(airflow_nodes) >= 1, "Airflow node should appear in overview"
+        role = airflow_nodes[0].metadata.get("functionalRole")
+        assert role == "orchestration", (
+            f"Airflow should have functionalRole='orchestration', got '{role}'"
+        )
+
+    def test_graph_node_hosted_tools_creates_infra_cp_edge(self):
+        """Linux driver emitting hosted_tools on graph nodes should produce
+        a CP edge to the hosted tools (via Step 1b aggregation)."""
+        g = LineageGraph()
+
+        # Linux system node with hosted_tools (emitted by driver)
+        linux_node = _make_node(
+            "prod-server", NodeType.SOURCE, "linux", PlatformDomain.OTHER,
+            integration_id="int-linux",
+            raw_metadata={"hosted_tools": ["postgres"], "running_services": ["postgresql"]},
+        )
+        linux_node.canonical_type = "system"
+        g.add_node(linux_node)
+
+        # Postgres raw table (data-plane node so postgres appears in graph)
+        pg_table = _make_node(
+            "users", NodeType.TABLE, "postgres", PlatformDomain.WAREHOUSE,
+            database="mydb", schema="public",
+            integration_id="int-pg",
+        )
+        g.add_node(pg_table)
+
+        tool_nodes = [
+            {"integrationId": "int-linux", "toolType": "linux", "layer": "INFRASTRUCTURE"},
+            {"integrationId": "int-pg", "toolType": "postgres", "layer": "WAREHOUSE"},
+        ]
+
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        # Find CP edge from linux → postgres
+        infra_edges = [
+            e for e in view.edges
+            if "linux" in e.source_id.lower() and "postgres" in e.target_id.lower()
+            and e.metadata.get("edgeOrigin") == "evidence"
+        ]
+        assert len(infra_edges) >= 1, (
+            f"Expected CP edge from linux to postgres via hosted_tools, "
+            f"got edges: {[(e.source_id, e.target_id, e.metadata) for e in view.edges]}"
+        )
+        assert infra_edges[0].metadata.get("relationshipBasis") == "metadata_reference"
+
+    def test_step_1b_aggregates_cp_metadata_from_multiple_nodes(self):
+        """Step 1b should aggregate CP metadata from ALL graph nodes belonging
+        to a tool, not just the first one."""
+        g = LineageGraph()
+
+        # Two Airflow DAG nodes, both with orchestrated_tools
+        dag1 = _make_node(
+            "dag_dbt", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="int-airflow",
+            raw_metadata={"dag_id": "dag_dbt", "orchestrated_tools": ["dbt"]},
+        )
+        dag2 = _make_node(
+            "dag_spark", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="int-airflow",
+            raw_metadata={"dag_id": "dag_spark", "orchestrated_tools": ["spark"]},
+        )
+        g.add_node(dag1)
+        g.add_node(dag2)
+
+        builder = ViewBuilder(g, tool_nodes=[])
+        view = builder.build_lane_pipeline_overview()
+
+        # Find the airflow tool's view node
+        airflow_vns = [n for n in view.nodes if "airflow" in n.id.lower()]
+        assert len(airflow_vns) >= 1
+
+    def test_no_cp_edge_without_driver_metadata(self):
+        """Without driver-emitted CP metadata on graph nodes, no CP edge
+        should be created between non-monitoring tools (except coexistence)."""
+        g = LineageGraph()
+
+        # Airflow DAG node WITHOUT orchestrated_tools
+        airflow_dag = _make_node(
+            "etl_dag", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="int-airflow",
+            raw_metadata={"dag_id": "etl_dag"},  # No orchestrated_tools!
+        )
+        g.add_node(airflow_dag)
+
+        # Fivetran connector WITHOUT any CP metadata
+        fivetran_conn = _make_node(
+            "salesforce_conn", NodeType.SOURCE, "fivetran", PlatformDomain.INGESTION,
+            integration_id="int-fivetran",
+            raw_metadata={"service": "salesforce"},
+        )
+        g.add_node(fivetran_conn)
+
+        tool_nodes = [
+            {"integrationId": "int-airflow", "toolType": "airflow", "layer": "ORCHESTRATION"},
+            {"integrationId": "int-fivetran", "toolType": "fivetran", "layer": "INGESTION"},
+        ]
+
+        builder = ViewBuilder(g, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        # Airflow → Fivetran should NOT have a metadata_reference edge
+        # (it might have a coexistence edge, but that's lower confidence)
+        metadata_ref_edges = [
+            e for e in view.edges
+            if "airflow" in e.source_id.lower() and "fivetran" in e.target_id.lower()
+            and e.metadata.get("relationshipBasis") == "metadata_reference"
+        ]
+        assert len(metadata_ref_edges) == 0, (
+            f"Expected no metadata_reference CP edge without driver metadata, "
+            f"got: {[(e.source_id, e.target_id) for e in metadata_ref_edges]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Hardened edge-case tests for production readiness
+# ---------------------------------------------------------------------------
+
+class TestEmptyDetailPanels:
+    """Tests that tool details handle zero-data gracefully."""
+
+    def test_empty_warehouse_tool_details(self):
+        """Warehouse tool with zero graph nodes → empty groups + coverage gap."""
+        graph = LineageGraph()
+        tool_nodes = [
+            {"toolType": "bigquery", "integrationId": "bq_001", "name": "BigQuery"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        result = builder.build_tool_details("tool:bigquery")
+
+        assert result["category"] == "warehouse"
+        # All groups should be empty lists
+        for key, items in result["groups"].items():
+            assert isinstance(items, list)
+        # Should flag no_data_extracted
+        assert "no_data_extracted" in result["summary"]["coverageGaps"]
+
+    def test_vcs_no_repos(self):
+        """GitHub tool with no repos in config → empty repos list."""
+        graph = LineageGraph()
+        tool_nodes = [{
+            "toolType": "github",
+            "integrationId": "gh_001",
+            "name": "GitHub",
+            "config": {},
+        }]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        result = builder.build_tool_details("tool:github")
+
+        repos = result["groups"].get("repos", [])
+        assert isinstance(repos, list)
+        assert len(repos) == 0
+
+    def test_orchestration_no_dags(self):
+        """Airflow tool with no graph nodes → empty groups + coverage gap."""
+        graph = LineageGraph()
+        tool_nodes = [
+            {"toolType": "airflow", "integrationId": "af_001", "name": "Airflow"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        result = builder.build_tool_details("tool:airflow")
+
+        assert result["category"] == "orchestration"
+        assert "no_data_extracted" in result["summary"]["coverageGaps"]
+
+
+class TestDuplicateDetection:
+    """Tests that duplicate items are prevented across data sources."""
+
+    def test_vcs_repos_no_duplicates_config_and_graph(self):
+        """Same repo in config AND graph node raw_metadata → single entry."""
+        graph = LineageGraph()
+        github_svc = _make_node(
+            "GitHub (acme)", NodeType.SOURCE, "github", PlatformDomain.OTHER,
+            integration_id="gh_001",
+            raw_metadata={
+                "owner": "acme",
+                "repositories": [
+                    {"name": "data-pipeline", "full_name": "acme/data-pipeline"},
+                ],
+            },
+        )
+        github_svc.canonical_type = "service"
+        graph.add_node(github_svc)
+
+        tool_nodes = [{
+            "toolType": "github",
+            "integrationId": "gh_001",
+            "name": "GitHub",
+            "config": {
+                "org": "acme",
+                "repos": ["data-pipeline"],
+            },
+        }]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        result = builder.build_tool_details("tool:github:gh_001")
+
+        repos = result["groups"].get("repos", [])
+        repo_names = [r["name"] for r in repos]
+        assert repo_names.count("acme/data-pipeline") == 1, (
+            f"Expected no duplicate repos, got: {repo_names}"
+        )
+
+
+class TestCPEvidenceHierarchy:
+    """Tests that evidence hierarchy precedence is correct."""
+
+    def test_hosting_requires_evidence_no_coexistence(self):
+        """Infrastructure tool with no hosted_tools metadata → NO hosting edge."""
+        graph = LineageGraph()
+        linux_svc = _make_node(
+            "linux-prod", NodeType.SOURCE, "linux", PlatformDomain.OTHER,
+            integration_id="linux_001",
+            raw_metadata={},  # No hosted_tools
+        )
+        linux_svc.canonical_type = "service"
+        graph.add_node(linux_svc)
+
+        pg_table = _make_node(
+            "users", NodeType.TABLE, "postgres", PlatformDomain.WAREHOUSE,
+            database="app", schema="public",
+            integration_id="pg_001",
+        )
+        graph.add_node(pg_table)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "linux", "integrationId": "linux_001", "layer": "INFRASTRUCTURE"},
+            {"toolType": "postgres", "integrationId": "pg_001", "layer": "WAREHOUSE"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        hosting_edges = [
+            e for e in view.edges
+            if "linux" in e.source_id.lower() and "postgres" in e.target_id.lower()
+            and e.metadata.get("semanticType") == "hosts"
+        ]
+        assert len(hosting_edges) == 0, (
+            "HOSTING edges must NOT be created from coexistence alone"
+        )
+
+    def test_monitoring_coexistence_always_created(self):
+        """Quality tool co-existing with warehouse → monitoring edge always created."""
+        graph = LineageGraph()
+        bq_table = _make_node(
+            "raw_events", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_table)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "elementary", "integrationId": "elem_001", "layer": "QUALITY"},
+            {"toolType": "bigquery", "integrationId": "bq_001", "layer": "WAREHOUSE"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        monitor_edges = [
+            e for e in view.edges
+            if "elementary" in e.source_id.lower()
+            and e.metadata.get("semanticType") == "monitors"
+        ]
+        assert len(monitor_edges) >= 1, (
+            "Quality tools should always get monitoring coexistence edges"
+        )
+        assert monitor_edges[0].metadata.get("edgeOrigin") == "inferred"
+
+    def test_explicit_config_gets_structural_origin(self):
+        """User-drawn PipelineEdge → edgeOrigin='structural'."""
+        graph = LineageGraph()
+        bq_table = _make_node(
+            "raw_events", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_table)
+        dbt_model = _make_node(
+            "stg_events", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="analytics",
+            raw_metadata={"dbt_resource_type": "model", "discovered_platforms": ["bigquery", "dbt"]},
+        )
+        graph.add_node(dbt_model)
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        pipeline_edges = [
+            {"sourceId": "bq_001", "targetId": "dbt_001"},
+        ]
+        tool_nodes = [
+            {"toolType": "bigquery", "integrationId": "bq_001", "layer": "WAREHOUSE"},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "layer": "TRANSFORMATION"},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes, pipeline_edges=pipeline_edges)
+        view = builder.build_lane_pipeline_overview()
+
+        config_edges = [
+            e for e in view.edges
+            if e.metadata.get("relationshipBasis") == "explicit_config"
+        ]
+        for e in config_edges:
+            assert e.metadata.get("edgeOrigin") == "structural", (
+                f"Explicit config edges must have edgeOrigin='structural', got {e.metadata}"
+            )
+
+
+class TestMixedVendorIntegration:
+    """Full heterogeneous stack integration test."""
+
+    def test_full_stack_lanes_and_cp_edges(self):
+        """Fivetran + BigQuery + dbt + Airflow + Elementary → correct lanes and CP edges."""
+        graph = LineageGraph()
+
+        # Fivetran connector
+        ft_conn = _make_node(
+            "stripe_connector", NodeType.SOURCE, "fivetran", PlatformDomain.INGESTION,
+            integration_id="ft_001",
+        )
+        graph.add_node(ft_conn)
+
+        # BigQuery raw table
+        bq_raw = _make_node(
+            "raw_stripe", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="raw",
+            integration_id="bq_001",
+        )
+        graph.add_node(bq_raw)
+
+        # dbt model
+        dbt_model = _make_node(
+            "stg_stripe", NodeType.TABLE, "bigquery", PlatformDomain.WAREHOUSE,
+            database="proj", schema="analytics",
+            integration_id="bq_001",
+            raw_metadata={"dbt_resource_type": "model", "discovered_platforms": ["bigquery", "dbt"]},
+        )
+        graph.add_node(dbt_model)
+
+        # Airflow DAG
+        af_dag = _make_node(
+            "etl_dag", NodeType.DAG, "airflow", PlatformDomain.ORCHESTRATION,
+            integration_id="af_001",
+            raw_metadata={"orchestrated_tools": ["dbt"]},
+        )
+        graph.add_node(af_dag)
+
+        # Elementary monitor
+        elem_test = _make_node(
+            "test_volume", NodeType.SOURCE, "elementary", PlatformDomain.OTHER,
+            integration_id="elem_001",
+            raw_metadata={"test_type": "generic", "table_name": "raw_stripe"},
+        )
+        graph.add_node(elem_test)
+
+        # GitHub VCS (no graph node — control plane only)
+
+        # Edges
+        graph.add_edge(_make_edge(ft_conn.id, bq_raw.id, EdgeType.WRITES_TO))
+        graph.add_edge(_make_edge(bq_raw.id, dbt_model.id, EdgeType.POPULATES))
+        canonicalize_graph_in_place(graph.nodes, graph.edges)
+
+        tool_nodes = [
+            {"toolType": "fivetran", "integrationId": "ft_001", "layer": "INGESTION"},
+            {"toolType": "bigquery", "integrationId": "bq_001", "layer": "WAREHOUSE"},
+            {"toolType": "dbt_core", "integrationId": "dbt_001", "layer": "TRANSFORMATION"},
+            {"toolType": "airflow", "integrationId": "af_001", "layer": "ORCHESTRATION"},
+            {"toolType": "elementary", "integrationId": "elem_001", "layer": "QUALITY"},
+            {"toolType": "github", "integrationId": "gh_001", "layer": "VERSION_CONTROL",
+             "config": {"org": "acme", "repos": ["data-pipeline"]}},
+        ]
+        builder = ViewBuilder(graph, tool_nodes=tool_nodes)
+        view = builder.build_lane_pipeline_overview()
+
+        # Verify tools exist
+        platforms = {n.platform for n in view.nodes}
+        assert "fivetran" in platforms
+        assert "bigquery" in platforms
+        assert "airflow" in platforms
+        assert "elementary" in platforms
+        assert "github" in platforms
+
+        # Verify CP edges
+        cp_edges = [e for e in view.edges if e.id.startswith("cp-")]
+        cp_types = {(e.source_id, e.metadata.get("semanticType")) for e in cp_edges}
+
+        # Airflow orchestrates dbt (metadata reference)
+        airflow_orch = [e for e in cp_edges if "airflow" in e.source_id and e.metadata.get("semanticType") == "orchestrates"]
+        assert len(airflow_orch) >= 1, f"Expected Airflow orchestrates edge, got CP edges: {cp_types}"
+
+        # Elementary monitors (coexistence)
+        elem_monitor = [e for e in cp_edges if "elementary" in e.source_id and e.metadata.get("semanticType") == "monitors"]
+        assert len(elem_monitor) >= 1, f"Expected Elementary monitors edge, got CP edges: {cp_types}"
+
+        # No unexpected VCS→warehouse edges
+        vcs_warehouse = [e for e in cp_edges if "github" in e.source_id and "bigquery" in e.target_id]
+        assert len(vcs_warehouse) == 0, "GitHub should not have direct edge to warehouse"

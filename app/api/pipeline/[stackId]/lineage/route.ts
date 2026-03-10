@@ -8,29 +8,56 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 // Resolve credentials for a node — prefers Integration table, falls back to PipelineNode.config
 function resolveNodeConfig(node: any): Record<string, any> | null {
-  // Prefer Integration table
+  let config: Record<string, any> | null = null;
+
+  // Prefer Integration table (credentials JSON blob)
   if (node.integrationId && node.integration?.credentials) {
     try {
       const creds = node.integration.credentials as any;
       if (creds.encrypted) {
-        return JSON.parse(decrypt(creds.encrypted));
+        config = JSON.parse(decrypt(creds.encrypted));
+      } else {
+        config = creds;
       }
-      return creds;
     } catch (e) {
       console.error(`[LINEAGE] Failed to decrypt integration creds for ${node.name}:`, e);
     }
   }
+
   // Legacy fallback: PipelineNode.config
-  if (!node.config) return null;
-  try {
-    if (node.config.encrypted) {
-      return JSON.parse(decrypt(node.config.encrypted));
+  if (!config && node.config) {
+    try {
+      if (node.config.encrypted) {
+        config = JSON.parse(decrypt(node.config.encrypted));
+      } else {
+        config = node.config as Record<string, any>;
+      }
+    } catch (e) {
+      console.error('[LINEAGE] Failed to decrypt config:', e);
     }
-    return node.config as Record<string, any>;
-  } catch (e) {
-    console.error('[LINEAGE] Failed to decrypt config:', e);
-    return null;
   }
+
+  if (!config) return null;
+
+  // GitHub OAuth stores token in Integration.accessToken (not in credentials JSON).
+  // Merge it into config so downstream code can find it as access_token.
+  if (node.integration?.accessToken && !config.access_token) {
+    try {
+      config.access_token = decrypt(node.integration.accessToken);
+    } catch (e) {
+      console.error(`[LINEAGE] Failed to decrypt integration accessToken for ${node.name}:`, e);
+    }
+  }
+
+  // GitHub OAuth stores owner in Integration.metadata.username
+  if (!config.owner && !config.org && node.integration?.metadata) {
+    const meta = node.integration.metadata as any;
+    if (meta.username) {
+      config.owner = meta.username;
+    }
+  }
+
+  return config;
 }
 
 // POST /api/pipeline/[stackId]/lineage - Extract lineage from warehouse nodes
@@ -194,12 +221,22 @@ export async function POST(
         .map(tc => tc.tool_type.toLowerCase());
 
       if (managedToolTypes.length > 0) {
+        // Collect repos explicitly referenced by managed tools
+        const managedRepos = new Set<string>();
+        for (const tc of toolConfigs) {
+          if (tc.layer === 'VERSION_CONTROL') continue;
+          const cfg = tc.config || {};
+          if (cfg.github_repo && cfg.github_repo.includes('/')) {
+            managedRepos.add(cfg.github_repo);
+          }
+        }
+
         const ghConfig = toolConfigs.find(tc => tc.layer === 'VERSION_CONTROL');
         if (ghConfig) {
           ghConfig.config = {
             ...ghConfig.config,
             managed_tools: managedToolTypes,
-            repo: githubAttachment.repo,
+            ...(managedRepos.size > 0 ? { repos: [...managedRepos] } : {}),
           };
         }
       }

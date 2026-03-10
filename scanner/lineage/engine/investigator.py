@@ -408,10 +408,21 @@ class InvestigationContext:
     # ------- serialization -------
 
     def to_dict(self) -> Dict[str, Any]:
+        profiles = self.tool_profiles
+        succeeded = sum(1 for v in profiles.values() if v.extraction_success)
+        failed = sum(1 for v in profiles.values() if v.extraction_error)
+        total_duration = sum(v.extraction_duration_ms for v in profiles.values())
+
         return {
             "table_count": len(self.table_inventory),
             "connection_count": len(self.connections),
             "unresolved_count": len([u for u in self.unresolved if not u.resolved]),
+            "extraction_summary": {
+                "adapters_total": len(profiles),
+                "adapters_succeeded": succeeded,
+                "adapters_failed": failed,
+                "total_duration_ms": total_duration,
+            },
             "tool_profiles": {
                 k: {
                     "tool_type": v.tool_type,
@@ -424,7 +435,7 @@ class InvestigationContext:
                     "error": v.extraction_error,
                     "duration_ms": v.extraction_duration_ms,
                 }
-                for k, v in self.tool_profiles.items()
+                for k, v in profiles.items()
             },
             "connections": [
                 {
@@ -882,9 +893,9 @@ class LineageInvestigator:
                 break  # use first warehouse found
 
         # Categories that don't contribute to data lineage
-        _SKIP_CATEGORIES = {ToolCategory.VERSION_CONTROL}
-        # Infrastructure tools get discovery-only (no lineage extraction or correlation)
-        _DISCOVERY_ONLY_CATEGORIES = {ToolCategory.INFRASTRUCTURE}
+        _SKIP_CATEGORIES: set = set()  # No categories fully skipped
+        # Discovery-only: creates nodes with CP metadata but no data lineage
+        _DISCOVERY_ONLY_CATEGORIES = {ToolCategory.INFRASTRUCTURE, ToolCategory.VERSION_CONTROL}
 
         # Phase 2 — sequential extraction with correlation
         for tc in sorted_configs:

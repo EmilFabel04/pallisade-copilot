@@ -2598,47 +2598,38 @@ async def _preprocess_airflow_configs(tool_configs, logger_instance=None) -> Non
 def _derive_cp_metadata(tc_layer: str, tc_config: dict, all_tool_configs: list) -> dict:
     """Derive control-plane relationship metadata from a tool's config.
 
-    Returns a dict of evidence keys (e.g. orchestrated_tools, managed_repos)
-    to be stored as raw_metadata on the tool_node. Uses generic category-based
-    logic — no vendor-specific branching.
+    This is a thin passthrough for config-specified values. The primary CP
+    metadata is emitted by drivers directly on graph nodes. This function
+    handles the remaining relational cases:
+      - VCS managed_tools (injected by frontend)
+      - Infrastructure host-matching (cross-tool hostname comparison)
     """
+    import logging
+    _enrich_log = logging.getLogger(__name__)
+
     raw_meta: dict = {}
     layer = (tc_layer or "").upper()
 
-    if layer == "ORCHESTRATION" and tc_config:
-        orchestrated = []
-        gh = tc_config.get("github") or {}
-        if isinstance(gh, dict):
-            # GitHub attachment with dbt_root or dag_directory → orchestrates dbt/other tools
-            has_gh_link = gh.get("dbt_root") is not None or gh.get("dag_directory") is not None
-            if has_gh_link:
-                # Find transformation tools in the pipeline
-                transform_tools = [
-                    t.tool_type.lower() for t in all_tool_configs
-                    if (t.layer or "").upper() == "TRANSFORMATION"
-                    or "dbt" in t.tool_type.lower()
-                ]
-                orchestrated.extend(transform_tools)
-        for key in ("dag_tasks", "workflow_targets", "orchestrated_tools"):
-            vals = tc_config.get(key)
-            if isinstance(vals, list):
-                for v in vals:
-                    if isinstance(v, str) and v.lower() not in orchestrated:
-                        orchestrated.append(v.lower())
-        if orchestrated:
-            raw_meta["orchestrated_tools"] = orchestrated
+    if layer == "VERSION_CONTROL" and tc_config:
+        # Frontend injects managed_tools based on which tools have GitHub
+        # attachments — pass through to the driver config.
+        managed = tc_config.get("managed_tools")
+        if isinstance(managed, list) and managed:
+            raw_meta["managed_repos"] = [t.lower() for t in managed]
 
     if layer == "INFRASTRUCTURE" and tc_config:
-        hosted = []
+        # Pass through explicit hosted_tools from config (Linux driver also
+        # reads these, but this path covers non-driver code paths).
         for key in ("hosted_tools", "hosted_platforms", "managed_services", "hosted_services"):
             vals = tc_config.get(key)
             if isinstance(vals, list) and vals:
-                hosted = vals
+                raw_meta["hosted_platforms"] = vals
                 break
-        # Fallback: check if other tools' configs reference the same host
-        if not hosted:
+        # Fallback: cross-tool host matching
+        if "hosted_platforms" not in raw_meta:
             infra_host = (tc_config.get("hostname") or tc_config.get("host") or "").lower()
             if infra_host:
+                hosted = []
                 for other_tc in all_tool_configs:
                     if other_tc.tool_type.lower() == tc_config.get("_self_tool_type", ""):
                         continue
@@ -2649,92 +2640,11 @@ def _derive_cp_metadata(tc_layer: str, tc_config: dict, all_tool_configs: list) 
                     ).lower()
                     if other_host and (other_host == infra_host or infra_host in other_host or other_host in infra_host):
                         hosted.append(other_tc.tool_type.lower())
-        if hosted:
-            raw_meta["hosted_platforms"] = hosted
+                if hosted:
+                    raw_meta["hosted_platforms"] = hosted
 
-    if layer == "VERSION_CONTROL" and tc_config:
-        # Primary source: frontend tells us exactly which tools this VCS manages
-        # (based on which tools received GitHub attachments)
-        explicit_managed = tc_config.get("managed_tools")
-        if isinstance(explicit_managed, list) and explicit_managed:
-            raw_meta["managed_repos"] = [t.lower() for t in explicit_managed]
-            # Done — no need for heuristic repo matching
-            import logging
-            _enrich_log = logging.getLogger(__name__)
-            _enrich_log.info("[CP-Enrich] layer=%s → metadata=%s (from managed_tools)", layer, raw_meta)
-            return raw_meta
-
-        repos = tc_config.get("repos") or tc_config.get("repositories") or []
-        # Also include single repo if present
-        single_repo = tc_config.get("repo")
-        owner = tc_config.get("owner") or tc_config.get("org") or ""
-        if single_repo and owner:
-            full_repo = f"{owner}/{single_repo}".lower()
-            if full_repo not in [
-                (r if isinstance(r, str) else (r or {}).get("full_name", "")).lower()
-                for r in repos
-            ]:
-                repos = list(repos) + [full_repo]
-
-        managed = []
-        if repos:
-            # Normalize repo names for matching
-            repo_names = [
-                (r if isinstance(r, str) else (r or {}).get("full_name", "") or (r or {}).get("name", "")).lower()
-                for r in repos
-            ]
-            for other_tc in all_tool_configs:
-                if other_tc.tool_type.lower() == tc_config.get("_self_tool_type", ""):
-                    continue
-                other_lower = other_tc.tool_type.lower()
-                other_cfg = other_tc.config or {}
-                # Check 1: repo name contains tool type
-                if any(other_lower.replace("_", "") in rn for rn in repo_names):
-                    managed.append(other_lower)
-                    continue
-                # Check 2: other tool's config references a repo from this VCS
-                other_gh_repo = (
-                    other_cfg.get("github_repo")
-                    or (other_cfg.get("github") or {}).get("repo")
-                    or ""
-                ).lower()
-                if other_gh_repo and any(
-                    rn and (rn.endswith(other_gh_repo.split("/")[-1]) or other_gh_repo.endswith(rn.split("/")[-1]))
-                    for rn in repo_names if rn
-                ):
-                    managed.append(other_lower)
-
-        # Fallback: no repos configured, but we have an owner.
-        # Check if other tools reference repos under this VCS owner.
-        if not managed and owner:
-            owner_lower = owner.lower()
-            for other_tc in all_tool_configs:
-                if other_tc.tool_type.lower() == tc_config.get("_self_tool_type", ""):
-                    continue
-                other_lower = other_tc.tool_type.lower()
-                other_cfg = other_tc.config or {}
-                other_gh_repo = (
-                    other_cfg.get("github_repo")
-                    or (other_cfg.get("github") or {}).get("repo")
-                    or ""
-                ).lower()
-                if other_gh_repo and (
-                    other_gh_repo.startswith(f"{owner_lower}/")
-                    or f"/{owner_lower}/" in other_gh_repo
-                    or other_gh_repo == owner_lower  # attachment without specific repo
-                ):
-                    managed.append(other_lower)
-
-        if managed:
-            raw_meta["managed_repos"] = list(set(managed))
-
-    import logging
-    _enrich_log = logging.getLogger(__name__)
     if raw_meta:
         _enrich_log.info("[CP-Enrich] layer=%s → metadata=%s", layer, raw_meta)
-    else:
-        _enrich_log.info("[CP-Enrich] layer=%s — no CP metadata derived (config keys: %s)",
-                         layer, list((tc_config or {}).keys())[:10])
 
     return raw_meta
 

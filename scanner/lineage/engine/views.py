@@ -324,7 +324,12 @@ from .edge_semantics import (
     BASIS_METADATA_REFERENCE,
     BASIS_MONITORING_COEXISTENCE,
     BASIS_PIPELINE_COEXISTENCE,
+    BASIS_TO_EDGE_ORIGIN,
     CODE_OWNERSHIP,
+    CONFIDENCE_EXPLICIT_CONFIG,
+    CONFIDENCE_METADATA_XREF,
+    CONFIDENCE_MONITORING_COEX,
+    CONFIDENCE_PIPELINE_COEX,
     DATA_DERIVATION,
     HOSTING,
     INFERRED_ADJACENCY,
@@ -343,24 +348,28 @@ from .edge_semantics import (
 # and alias resolution — zero vendor-specific branching.
 # ---------------------------------------------------------------------------
 
-# Generic metadata key families per evidence type.
-# Drivers emit these keys in raw_metadata; the prober checks them against
-# the target tool's normalized canonical platform name + aliases.
+# CP metadata key families per evidence type.
+# Authoritative contract defined in edge_semantics.py (CP_META_KEYS_*).
+# Legacy aliases are kept for backward compatibility with older adapters.
 _CP_EVIDENCE_KEYS: Dict[str, List[str]] = {
     JOB_ORCHESTRATION: [
-        "orchestrated_tools", "managed_connectors", "triggered_tools",
+        "orchestrated_tools",                         # contract key
+        "managed_connectors", "triggered_tools",      # legacy aliases
         "dag_tasks", "workflow_targets",
     ],
     CODE_OWNERSHIP: [
-        "managed_repos", "code_targets", "project_repos",
+        "managed_targets", "managed_repos",           # contract keys
+        "code_targets", "project_repos",              # legacy aliases
         "repository_tools",
     ],
     HOSTING: [
-        "hosted_platforms", "hosted_tools", "managed_services",
-        "hosted_services",
+        "hosted_tools", "hosted_platforms",            # contract keys
+        "running_services",                            # contract key
+        "managed_services", "hosted_services",         # legacy aliases
     ],
     MONITORING: [
-        "monitored_tools", "monitored_platforms", "quality_targets",
+        "monitored_tools", "monitored_tables",        # contract keys
+        "monitored_platforms", "quality_targets",      # legacy aliases
     ],
 }
 
@@ -438,7 +447,7 @@ def _probe_control_plane_evidence(
                     continue
                 for val in values:
                     if isinstance(val, str) and val.lower() in tgt_identities:
-                        return (BASIS_METADATA_REFERENCE, 0.7)
+                        return (BASIS_METADATA_REFERENCE, CONFIDENCE_METADATA_XREF)
 
         # Also check tool_node-level metadata (from pipeline stack config)
         src_info = tool_info.get(src_tk, {})
@@ -458,7 +467,7 @@ def _probe_control_plane_evidence(
                 continue
             for val in values:
                 if isinstance(val, str) and val.lower() in tgt_identities:
-                    return (BASIS_METADATA_REFERENCE, 0.7)
+                    return (BASIS_METADATA_REFERENCE, CONFIDENCE_METADATA_XREF)
 
     # ── Probe 2: PipelineEdge structural evidence ──────────────────────
     # User-drawn PipelineEdge records connecting these two tools.
@@ -487,7 +496,7 @@ def _probe_control_plane_evidence(
                 or (tgt_int_id and pe_tgt == tgt_int_id)
             )
             if src_match and tgt_match:
-                return (BASIS_EXPLICIT_CONFIG, 0.8)
+                return (BASIS_EXPLICIT_CONFIG, CONFIDENCE_EXPLICIT_CONFIG)
 
     # ── Probe 3: Pipeline co-presence fallback ───────────────────────
     # If two tools from valid CP categories co-exist in the same pipeline,
@@ -500,7 +509,7 @@ def _probe_control_plane_evidence(
     #  - MONITORING: always allow (quality tools monitor everything co-located)
 
     if ev_type == MONITORING:
-        return (BASIS_MONITORING_COEXISTENCE, 0.4)
+        return (BASIS_MONITORING_COEXISTENCE, CONFIDENCE_MONITORING_COEX)
 
     if ev_type == HOSTING:
         # Infrastructure edges need explicit evidence — coexistence is too broad
@@ -530,10 +539,7 @@ def _probe_control_plane_evidence(
         # coexistence edges to tools NOT in the metadata.
         return None
 
-    return (BASIS_PIPELINE_COEXISTENCE, 0.5)
-
-    # ── No evidence found — suppress edge ─────────────────────────────
-    # (unreachable — kept for clarity)
+    return (BASIS_PIPELINE_COEXISTENCE, CONFIDENCE_PIPELINE_COEX)
 
 
 _CATEGORY_TO_LAYER: Dict[str, str] = {
@@ -1018,6 +1024,47 @@ class ViewBuilder:
                 }
             tool_info[tk]["asset_count"] += 1
 
+        # ── Step 1b: Aggregate CP metadata from graph nodes ───────────
+        # Drivers emit CP-relevant metadata (orchestrated_tools, managed_repos,
+        # hosted_tools, etc.) directly on their graph nodes. Aggregate these
+        # into tool_info so the CP prober can find them without relying on
+        # external enrichment from tool_nodes or the API layer.
+        _CP_META_KEYS = {
+            "orchestrated_tools", "managed_targets", "managed_repos",
+            "managed_connectors",
+            "triggered_tools", "hosted_tools", "hosted_platforms",
+            "hosted_services", "managed_services", "monitored_tools",
+            "monitored_platforms", "code_targets", "project_repos",
+            "repository_tools",
+        }
+        for tk, graph_nodes in tool_key_to_graph_nodes.items():
+            if tk not in tool_info:
+                continue
+            aggregated: Dict[str, List[str]] = {}
+            for gn in graph_nodes:
+                rm = gn.raw_metadata or {}
+                for key in _CP_META_KEYS:
+                    vals = rm.get(key)
+                    if not vals:
+                        continue
+                    if isinstance(vals, str):
+                        vals = [vals]
+                    if not isinstance(vals, (list, tuple)):
+                        continue
+                    if key not in aggregated:
+                        aggregated[key] = []
+                    for v in vals:
+                        if isinstance(v, str) and v not in aggregated[key]:
+                            aggregated[key].append(v)
+            if aggregated:
+                existing_rm = tool_info[tk].get("raw_metadata") or {}
+                existing_rm.update(aggregated)
+                tool_info[tk]["raw_metadata"] = existing_rm
+                logger.info(
+                    "[LanePipelineOverview] Step 1b: tool %s got CP metadata from graph: %s",
+                    tk, aggregated,
+                )
+
         # ── Step 2: Merge pipeline tool_nodes not already covered ─────
         covered_integration_ids: Set[str] = {
             info["integration_id"]
@@ -1359,6 +1406,8 @@ class ViewBuilder:
                 #  +2 if src and tgt are DIFFERENT platforms (true cross-tool)
                 #  +1 if src matches source node's primary platform
                 #  +1 if src lane matches source node's functional role
+                #  +3 if data flows left→right (src lane ≤ tgt lane)
+                #  -3 if data flows right→left (src lane > tgt lane)
                 src_primary = (src_node.platform or "").lower()
                 src_role = tool_info.get(src_tk, {}).get("functional_role", "")
                 cross_pair = None
@@ -1379,6 +1428,13 @@ class ViewBuilder:
                         # Prefer src lane matching functional role
                         if s_tk[0] == src_role:
                             score += 1
+                        # Strongly prefer forward data flow (left→right in lanes)
+                        s_lane_ord = LANE_ORDER.get(s_tk[0], 99)
+                        t_lane_ord = LANE_ORDER.get(t_tk[0], 99)
+                        if s_lane_ord <= t_lane_ord:
+                            score += 3  # forward flow — correct direction
+                        else:
+                            score -= 3  # backward flow — penalize
                         if score > best_score:
                             best_score = score
                             cross_pair = (s_tk, t_tk)
@@ -1388,11 +1444,95 @@ class ViewBuilder:
                     continue
                 src_tk, tgt_tk = cross_pair
 
-            _cross_tool += 1
-            pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
-            _add_to_agg(pair_key, edge, src_node.name, tgt_node.name,
-                        src_node.id, tgt_node.id,
-                        src_lane=src_tk[0], tgt_lane=tgt_tk[0])
+            # ── Step 4a-ii: Intermediate tool insertion ─────────────
+            # When src and tgt are in different lanes (e.g. warehouse_raw →
+            # warehouse_analytics), check if the target node was merged from
+            # a secondary platform (e.g. dbt) that maps to a tool key in a
+            # lane BETWEEN src and tgt.  If so, split the edge through that
+            # intermediate tool: src→intermediate + intermediate→tgt.
+            _split_through_intermediate = False
+            src_lane_ord = LANE_ORDER.get(src_tk[0], 99)
+            tgt_lane_ord = LANE_ORDER.get(tgt_tk[0], 99)
+
+            if src_lane_ord < tgt_lane_ord:
+                # Check target for secondary platforms (e.g. dbt-merged nodes)
+                tgt_rm = tgt_node.raw_metadata or {}
+                tgt_discovered = set(dp.lower() for dp in tgt_rm.get("discovered_platforms", []))
+                # dbt fallback
+                if (tgt_node.platform or "").lower() != "dbt" and not tgt_discovered.intersection({"dbt", "dbt_core"}):
+                    if tgt_rm.get("dbt_resource_type") in ("model", "seed", "snapshot"):
+                        tgt_discovered.add("dbt")
+                tgt_primary = (tgt_node.platform or "").lower()
+                secondary = tgt_discovered - {tgt_primary}
+
+                logger.debug(
+                    "[LanePipelineOverview] Step 4a-ii: edge %s→%s, src_tk=%s, tgt_tk=%s, "
+                    "tgt_discovered=%s, secondary=%s, _platform_to_tks keys=%s",
+                    src_node.name, tgt_node.name, src_tk, tgt_tk,
+                    tgt_discovered, secondary, list(_platform_to_tks.keys()),
+                )
+
+                # Find an intermediate tool key from secondary platforms
+                intermediate_tk = None
+                for sec_plat in sorted(secondary):
+                    for candidate_tk in _platform_to_tks.get(sec_plat, []):
+                        mid_ord = LANE_ORDER.get(candidate_tk[0], 99)
+                        logger.debug(
+                            "[LanePipelineOverview] Step 4a-ii: sec_plat=%s candidate_tk=%s mid_ord=%d "
+                            "src_lane_ord=%d tgt_lane_ord=%d",
+                            sec_plat, candidate_tk, mid_ord, src_lane_ord, tgt_lane_ord,
+                        )
+                        if src_lane_ord < mid_ord < tgt_lane_ord:
+                            intermediate_tk = candidate_tk
+                            break
+                    if not intermediate_tk:
+                        p_info = get_platform(sec_plat)
+                        if p_info:
+                            for candidate_tk in _platform_to_tks.get(p_info.name, []):
+                                mid_ord = LANE_ORDER.get(candidate_tk[0], 99)
+                                if src_lane_ord < mid_ord < tgt_lane_ord:
+                                    intermediate_tk = candidate_tk
+                                    break
+                    if intermediate_tk:
+                        break
+
+                if intermediate_tk:
+                    _split_through_intermediate = True
+                    _cross_tool += 1
+                    pk1 = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{intermediate_tk[0]}:{intermediate_tk[1]}"
+                    pk2 = f"tool:{intermediate_tk[0]}:{intermediate_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
+                    _add_to_agg(pk1, edge, src_node.name, tgt_node.name,
+                                src_node.id, tgt_node.id,
+                                src_lane=src_tk[0], tgt_lane=intermediate_tk[0])
+                    _add_to_agg(pk2, edge, src_node.name, tgt_node.name,
+                                src_node.id, tgt_node.id,
+                                src_lane=intermediate_tk[0], tgt_lane=tgt_tk[0])
+
+            if not _split_through_intermediate:
+                # Suppress direct warehouse_raw→warehouse_analytics edges
+                # for the same platform when a transformation tool exists
+                # between them.  These edges are redundant — the split edges
+                # from nodes that DO have discovered_platforms already
+                # provide raw→transform and transform→analytics connections.
+                src_plat_base = src_tk[1].split(":")[0]
+                tgt_plat_base = tgt_tk[1].split(":")[0]
+                if (src_plat_base == tgt_plat_base
+                        and src_tk[0] == PipelineLane.WAREHOUSE_RAW.value
+                        and tgt_tk[0] == PipelineLane.WAREHOUSE_ANALYTICS.value):
+                    # Check if a transformation tool exists between these lanes
+                    _has_transform = any(
+                        tk[0] == PipelineLane.TRANSFORMATION.value
+                        and info.get("asset_count", 0) > 0
+                        for tk, info in tool_info.items()
+                    )
+                    if _has_transform:
+                        continue
+
+                _cross_tool += 1
+                pair_key = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
+                _add_to_agg(pair_key, edge, src_node.name, tgt_node.name,
+                            src_node.id, tgt_node.id,
+                            src_lane=src_tk[0], tgt_lane=tgt_tk[0])
 
         logger.info(
             "[LanePipelineOverview] Step 4a: %d total edges, %d control-plane, "
@@ -1496,7 +1636,7 @@ class ViewBuilder:
         _CP_CATEGORY_PAIRS: List[Tuple[str, frozenset, str]] = [
             ("orchestration", frozenset({"transformation", "ingestion"}), JOB_ORCHESTRATION),
             ("version_control", frozenset({"transformation", "orchestration"}), CODE_OWNERSHIP),
-            ("infrastructure", frozenset({"ingestion", "orchestration", "transformation"}), HOSTING),
+            ("infrastructure", frozenset({"warehouse", "ingestion", "orchestration", "transformation"}), HOSTING),
             ("quality", frozenset({"warehouse", "transformation"}), MONITORING),
         ]
 
@@ -1544,13 +1684,9 @@ class ViewBuilder:
                             sem_type, sem_label, src_cat, tgt_cat, ev_type,
                         )
 
-                        # Determine edge origin from evidence strength
-                        if basis == BASIS_MONITORING_COEXISTENCE:
-                            edge_origin = "inferred"
-                            is_inferred = True
-                        else:
-                            edge_origin = "structural"
-                            is_inferred = False
+                        # Determine edge origin from evidence basis
+                        edge_origin = BASIS_TO_EDGE_ORIGIN.get(basis, "evidence")
+                        is_inferred = edge_origin == "inferred"
 
                         view_edges.append(ViewEdge(
                             id=f"cp-{pair_key}",
@@ -1571,6 +1707,11 @@ class ViewBuilder:
                             },
                         ))
                         _cp_count += 1
+                        logger.info(
+                            "[CP-Edge] %s --%s--> %s | basis=%s conf=%.2f origin=%s",
+                            src_vn.name, sem_type, tgt_vn.name,
+                            basis, confidence, edge_origin,
+                        )
 
         if _cp_count or _cp_suppressed:
             logger.info(
@@ -1640,6 +1781,11 @@ class ViewBuilder:
         _ROLE_DISPLAY: Dict[str, str] = {
             "warehouse_raw": "Raw",
             "warehouse_analytics": "Analytics",
+            "orchestration": "Orchestration",
+            "ingestion": "Ingestion",
+            "quality": "Quality",
+            "version_control": "Version Control",
+            "infrastructure": "Infrastructure",
         }
 
         for canonical_tool_id, group in sorted(tool_id_groups.items()):
@@ -2009,7 +2155,7 @@ class ViewBuilder:
                 n for n in tool_nodes_list
                 if resolve_functional_role(
                     n,
-                    (n.raw_metadata or {}).get("canonical_type", "dataset"),
+                    n.canonical_type or (n.raw_metadata or {}).get("canonical_type", "dataset"),
                 ) == role_filter
             ]
             if filtered:
@@ -2445,17 +2591,16 @@ class ViewBuilder:
     def _tabs_version_control(
         self, nodes: List[LineageNode], tool_node_ids: Set[str],
     ) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
-        """Version control tools: Repos + Activity from config/integration_stats.
+        """Version control tools: Repositories only.
 
-        Works with or without config on tool_nodes. When config is missing
-        (e.g. restored from older snapshot), shows connection status from
-        the tool node's status field.
+        Shows the repos whose code this VCS tool manages.
+        Works with or without config on tool_nodes.
         """
         repo_items: List[Dict[str, Any]] = []
-        activity_items: List[Dict[str, Any]] = []
+        seen_repo_ids: Set[str] = set()
 
         # VCS tools have no graph nodes (CONTROL_PLANE).
-        # Pull repo/activity data from pipeline tool_nodes config.
+        # Pull repo data from pipeline tool_nodes config.
         _VCS_PLATFORMS = {"github", "gitlab", "bitbucket"}
         for tn in self.tool_nodes:
             tn_type = (tn.get("toolType") or tn.get("tool_type") or "").lower()
@@ -2464,76 +2609,103 @@ class ViewBuilder:
 
             config = tn.get("config") or tn.get("configuration") or {}
             repos = config.get("repos") or config.get("repositories") or []
-            # Fallback: single repo field → synthesize a one-element list
-            if not repos and config.get("repo"):
-                repos = [config["repo"]]
             org = config.get("org") or config.get("organization") or config.get("owner") or ""
-            int_id = tn.get("integrationId") or tn.get("integration_id") or ""
-            name = tn.get("name") or tn_type.title()
-            status = (tn.get("status") or "").upper()
+            logger.info("[VCS-Tabs] tool_node config: org=%r, repo=%r, repos=%r", org, config.get("repo"), repos)
+            # Fallback: single repo field → synthesize a one-element list
+            # But skip if repo equals the owner (frontend fallback, not a real repo)
+            if not repos and config.get("repo"):
+                single_repo = config["repo"]
+                if single_repo != org:
+                    repos = [single_repo]
 
-            # Build repo items
+            # Build repo items (dedup as we go)
             if isinstance(repos, list):
                 for repo in repos[:50]:  # bounded
                     repo_name = repo if isinstance(repo, str) else (repo.get("name", str(repo)) if isinstance(repo, dict) else str(repo))
+                    # If repo_name already contains owner prefix, don't double it
+                    if "/" in repo_name:
+                        display = repo_name
+                        container = repo_name.split("/")[0]
+                    else:
+                        display = f"{org}/{repo_name}" if org else repo_name
+                        container = org or "Ungrouped"
+                    rid = f"repo:{display}"
+                    if rid in seen_repo_ids:
+                        continue
+                    seen_repo_ids.add(rid)
                     repo_items.append({
-                        "id": f"repo:{org}/{repo_name}" if org else f"repo:{repo_name}",
-                        "name": f"{org}/{repo_name}" if org else repo_name,
-                        "fqn": f"{org}/{repo_name}" if org else repo_name,
+                        "id": rid,
+                        "name": display,
+                        "fqn": display,
                         "canonicalType": "repository",
                         "originalType": "repository",
                         "healthStatus": "healthy",
                         "observedAt": None,
-                        "container": org,
+                        "container": container,
                         "zone": "",
                         "metadata": {},
                     })
 
-            # Activity from integration_stats (if populated by driver)
-            stats = config.get("integration_stats") or {}
+        # ── Repos from graph nodes (adapter-classified pipeline repos) ──
+        # The adapter now classifies each repo by scanning its file tree
+        # and only stores repos containing pipeline tool code.
+        # Note: `nodes` (tool_nodes_list) may be empty for VCS because
+        # the platform matching might miss the adapter's service node.
+        # Fall back to scanning ALL graph nodes for VCS platforms.
+        vcs_graph_nodes = list(nodes)
+        if not vcs_graph_nodes and self.graph:
+            for gn in self.graph.nodes.values():
+                gp = (gn.platform or "").lower()
+                if gp in _VCS_PLATFORMS:
+                    vcs_graph_nodes.append(gn)
+        logger.debug("[VCS-Tabs] Config: %d items, graph nodes: %d", len(repo_items), len(vcs_graph_nodes))
+        for n in vcs_graph_nodes:
+            rm = n.raw_metadata or {}
+            node_owner = rm.get("owner", "")
+            graph_repos = rm.get("repositories") or []
+            for r in graph_repos:
+                if not isinstance(r, dict):
+                    continue
+                r_name = r.get("name", "")
+                r_full = r.get("full_name", "")
+                display = r_full or (f"{node_owner}/{r_name}" if node_owner else r_name)
+                rid = f"repo:{display}"
+                detected = r.get("detected_tools") or []
 
-            # Determine health from stats or tool node status
-            is_connected = status in ("CONNECTED", "HEALTHY")
-            has_synced = bool(stats.get("last_sync_at") or stats.get("last_event_at"))
-            health = "healthy" if has_synced else ("healthy" if is_connected else "unknown")
+                if rid in seen_repo_ids:
+                    # Enrich existing config repo with API metadata
+                    for item in repo_items:
+                        if item["id"] == rid:
+                            item["metadata"]["defaultBranch"] = r.get("default_branch", "main")
+                            item["metadata"]["private"] = r.get("private", False)
+                            if detected:
+                                item["metadata"]["detectedTools"] = detected
+                    continue
+                if not r_name:
+                    continue
 
-            activity_items.append({
-                "id": f"vcs:status:{int_id or tn_type}",
-                "name": f"{name} connection",
-                "fqn": f"vcs:{tn_type}:{int_id}",
-                "canonicalType": "integration_status",
-                "originalType": "vcs_connection",
-                "healthStatus": health,
-                "observedAt": stats.get("last_event_at") or stats.get("last_sync_at"),
-                "container": "",
-                "zone": "",
-                "metadata": {
-                    "platform": tn_type,
-                    "org": org,
-                    "repoCount": len(repos) if isinstance(repos, list) else 0,
-                    "integrationId": int_id,
-                    "connectionStatus": status or "unknown",
-                    "lastSyncAt": stats.get("last_sync_at"),
-                    "lastEventAt": stats.get("last_event_at"),
-                    "lastErrorAt": stats.get("last_error_at"),
-                    "lastErrorMessage": stats.get("last_error_message"),
-                    "prs7d": stats.get("prs_7d_total", 0),
-                    "openPrs7d": stats.get("open_prs_7d", 0),
-                    "mergedPrs7d": stats.get("merged_prs_7d", 0),
-                    "issues7d": stats.get("issues_7d_total", 0),
-                    "webhookStatus": stats.get("webhook_status", "unknown"),
-                },
-            })
-
-        # Include any graph nodes (future adapters)
-        for n in nodes:
-            activity_items.append(self._node_to_item(n))
+                seen_repo_ids.add(rid)
+                repo_items.append({
+                    "id": rid,
+                    "name": display,
+                    "fqn": display,
+                    "canonicalType": "repository",
+                    "originalType": "repository",
+                    "healthStatus": "healthy",
+                    "observedAt": None,
+                    "container": node_owner or (display.split("/")[0] if "/" in display else "Ungrouped"),
+                    "zone": "",
+                    "metadata": {
+                        "defaultBranch": r.get("default_branch", "main"),
+                        "private": r.get("private", False),
+                        "detectedTools": detected,
+                    },
+                })
 
         tabs = [
             {"key": "repos", "label": "Repositories", "count": len(repo_items)},
-            {"key": "activity", "label": "Activity", "count": len(activity_items)},
         ]
-        groups = {"repos": repo_items, "activity": activity_items}
+        groups = {"repos": repo_items}
         return tabs, groups
 
     def _tabs_generic(

@@ -29,7 +29,7 @@ function ServicesTab({ items }: { items: ToolDetailItem[] }) {
   // Group by host (container)
   const byHost: Record<string, ToolDetailItem[]> = {};
   for (const item of items) {
-    const host = item.container || 'Unknown Host';
+    const host = item.container || 'Ungrouped';
     if (!byHost[host]) byHost[host] = [];
     byHost[host].push(item);
   }
