@@ -159,6 +159,30 @@ class SchedulerService:
         task_name = task["name"]
         logger.info(f"[Scheduler] Executing task: {task_name} ({task_id})")
 
+        # Inject stored baseline into config (mirrors run/route.ts behavior)
+        # so monitors can fall back to previous baselines when warehouse
+        # history is insufficient for z-score computation.
+        baseline_mean = task.get("baselineMean")
+        if baseline_mean is not None:
+            config = task.get("config") or {}
+            if isinstance(config, str):
+                config = json.loads(config)
+            else:
+                config = dict(config)  # shallow copy to avoid mutating cached dict
+            config["stored_baseline"] = {
+                "mean": baseline_mean,
+                "stddev": task.get("baselineStddev") or 0,
+                "count": task.get("baselineCount") or 0,
+            }
+            task["config"] = config
+            logger.info(
+                "[Scheduler] Injected stored baseline",
+                task=task_name,
+                mean=baseline_mean,
+                stddev=task.get("baselineStddev"),
+                count=task.get("baselineCount"),
+            )
+
         start_time = datetime.now(timezone.utc)
         executor = TaskExecutor()
 
@@ -256,6 +280,35 @@ class SchedulerService:
 
                 conn.commit()
 
+            # Record metric observation in the time-series baseline table
+            try:
+                from scanner.monitors.baseline_store import BaselineStore
+
+                store = BaselineStore(conn)
+                metric_value = result.get("value")
+                if metric_value is not None:
+                    monitor_type = (task.get("monitorType") or "").lower()
+                    metric_name = self._baseline_metric_name(monitor_type, task)
+                    store.record(
+                        monitor_id=task_id,
+                        metric_name=metric_name,
+                        value=float(metric_value),
+                        target_fqn=task.get("targetFqn"),
+                        details={
+                            "status": status,
+                            "monitor_type": monitor_type,
+                        },
+                    )
+                    conn.commit()
+                    logger.debug(
+                        "[Scheduler] Recorded baseline observation",
+                        task=task_name,
+                        metric=metric_name,
+                        value=metric_value,
+                    )
+            except Exception as baseline_err:
+                logger.debug(f"[Scheduler] Baseline record skipped: {baseline_err}")
+
             # Evaluate whether to send an alert (with dedup/suppression)
             from .alert_engine import AlertEngine
             alert_engine = AlertEngine()
@@ -325,6 +378,24 @@ class SchedulerService:
                     conn.commit()
             except Exception as save_err:
                 logger.error(f"[Scheduler] Failed to save error result: {save_err}")
+
+    @staticmethod
+    def _baseline_metric_name(monitor_type: str, task: Dict[str, Any]) -> str:
+        """Derive a metric name for the baseline table from monitor type."""
+        if monitor_type == "freshness":
+            return "hours_since_update"
+        if monitor_type == "volume":
+            return "row_count"
+        if monitor_type == "anomaly":
+            config = task.get("config") or {}
+            col = config.get("column", "")
+            metric = config.get("metric", "value")
+            return f"{col}.{metric}" if col else metric
+        if monitor_type == "uniqueness":
+            return "uniqueness_pct"
+        if monitor_type == "schema":
+            return "schema_change_count"
+        return "value"
 
     async def _dispatch_alert(self, task: Dict[str, Any], result: Dict[str, Any]):
         """Send alert to configured channels via the Next.js alert API."""

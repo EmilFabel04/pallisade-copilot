@@ -299,6 +299,31 @@ class TaskExecutor:
                     config["historical_stddev"] = stddev
                 logger.info("[Executor] Injected stored baseline for volume", mean=mean, stddev=stddev)
 
+        # Inject cadence gaps from MonitorBaseline for freshness monitors
+        if resolved_type == "freshness" and not config.get("cadence_gaps"):
+            try:
+                from scanner.monitors.baseline_store import BaselineStore
+                from scanner.scheduler.service import _get_connection
+
+                store_conn = _get_connection()
+                try:
+                    store = BaselineStore(store_conn)
+                    gaps = store.get_cadence_gaps(
+                        task.get("id", ""), "hours_since_update"
+                    )
+                    if gaps and len(gaps) >= 5:
+                        config["cadence_aware"] = True
+                        config["cadence_gaps"] = gaps
+                        logger.info(
+                            "[Executor] Injected cadence gaps for freshness",
+                            gap_count=len(gaps),
+                            median_gap=round(sorted(gaps)[len(gaps) // 2], 1),
+                        )
+                finally:
+                    store_conn.close()
+            except Exception as e:
+                logger.debug(f"[Executor] Could not load cadence gaps: {e}")
+
         # Create monitor instance from resolved config
         monitor = monitor_cls(config=config) if config else monitor_cls()
 

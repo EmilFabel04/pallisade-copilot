@@ -298,11 +298,18 @@ class MonitorExecutor:
 
         config["max_hours"] = max_hours
         config["_auto_configured"] = True
+
+        # Store raw gaps for cadence-aware mode (enables learning from history)
+        if len(gaps_hours) >= 5:
+            config["cadence_aware"] = True
+            config["cadence_gaps"] = [round(g, 2) for g in gaps_hours]
+
         logger.info(
             "[AutoConfig] Freshness auto-configured",
             max_hours=max_hours,
             p95_gap=round(p95_gap, 1),
             data_points=len(gaps_hours),
+            cadence_aware=config.get("cadence_aware", False),
         )
         return config
 

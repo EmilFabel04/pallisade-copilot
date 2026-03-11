@@ -2953,6 +2953,7 @@ model Monitor {
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
   runs           MonitorRun[]
+  baselines      MonitorBaseline[]
 
   @@unique([organizationId, targetFqn, monitorType])
   @@index([organizationId])
@@ -2984,6 +2985,31 @@ model MonitorRun {
   @@index([monitorId])
   @@index([startedAt])
   @@index([status])
+}
+
+model MonitorBaseline {
+  id String @id @default(cuid())
+
+  // What was measured
+  metricName  String // e.g. "row_count", "null_rate", "hours_since_update"
+  metricValue Float  // The observed metric value
+
+  // Time context
+  measuredAt DateTime @default(now())
+  dayOfWeek  Int?     // 0=Sunday..6=Saturday (for seasonality queries)
+  hourOfDay  Int?     // 0-23 (for sub-daily patterns)
+
+  // Optional context
+  targetFqn String? // Denormalized for fast queries without joining Monitor
+  details   Json?   // Extra context (e.g. { column: "email" })
+
+  // Relations
+  monitor   Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  monitorId String
+
+  @@index([monitorId, metricName, measuredAt])
+  @@index([monitorId, metricName, dayOfWeek])
+  @@index([measuredAt])
 }
 
 model CoverageSnapshot {

@@ -194,6 +194,15 @@ class FreshnessMonitor(BaseMonitor):
         )
         self.weekday_max_hours: Optional[float] = self.config.get("weekday_max_hours")
         self.weekend_max_hours: Optional[float] = self.config.get("weekend_max_hours")
+        # Cadence-aware mode: learns update frequency from history
+        self.cadence_aware: bool = self.config.get("cadence_aware", False)
+        self.cadence_multiplier: float = float(
+            self.config.get("cadence_multiplier", 2.0)
+        )
+        self.cadence_min_samples: int = int(
+            self.config.get("cadence_min_samples", 5)
+        )
+        self.cadence_gaps: Optional[List[float]] = self.config.get("cadence_gaps")
 
     @property
     def needs_column_discovery(self) -> bool:
@@ -337,6 +346,12 @@ class FreshnessMonitor(BaseMonitor):
             "business_event": "Business-event data",
         }.get(resolved_mode, "Data")
 
+        # Cadence-aware check (before static thresholds)
+        if self.cadence_aware and self.cadence_gaps and len(self.cadence_gaps) >= self.cadence_min_samples:
+            cadence_result = self._evaluate_cadence(hours, target_fqn, resolved_mode, row)
+            if cadence_result is not None:
+                return cadence_result
+
         if hours > max_h:
             status = MonitorStatus.FAIL
             message = (
@@ -375,6 +390,112 @@ class FreshnessMonitor(BaseMonitor):
                     f"Checked {resolved_mode} freshness via column "
                     f"'{self.timestamp_column}'. Last value was {hours:.1f}h ago. "
                     f"Threshold: {max_h}h (warn: {warn_h}h)."
+                ),
+            },
+        )
+
+    def _evaluate_cadence(
+        self,
+        hours: float,
+        target_fqn: str,
+        resolved_mode: str,
+        row: Dict[str, Any],
+    ) -> Optional[MonitorResult]:
+        """Evaluate freshness against learned cadence pattern.
+
+        Returns a MonitorResult if cadence is violated, None to fall through
+        to static threshold checks.
+        """
+        gaps = sorted(self.cadence_gaps)  # type: ignore[arg-type]
+        median_gap = gaps[len(gaps) // 2]
+        p95_idx = min(int(len(gaps) * 0.95), len(gaps) - 1)
+        p95_gap = gaps[p95_idx]
+        expected_max = median_gap * self.cadence_multiplier
+
+        mode_label = {
+            "ingestion": "Ingestion data",
+            "business_event": "Business-event data",
+        }.get(resolved_mode, "Data")
+
+        # Within learned cadence — pass (don't fall through to static thresholds)
+        if hours <= expected_max:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target_fqn,
+                status=MonitorStatus.PASS,
+                value=hours,
+                threshold=expected_max,
+                expected_range={"min": 0, "max": round(expected_max, 1)},
+                message=(
+                    f"{mode_label} is {hours:.1f}h old. "
+                    f"Within learned cadence of ~{median_gap:.1f}h "
+                    f"(max: {expected_max:.1f}h)."
+                ),
+                details={
+                    "timestamp_column": self.timestamp_column,
+                    "freshness_mode": resolved_mode,
+                    "hours_since_update": round(hours, 2),
+                    "cadence_aware": True,
+                    "learned_median_gap_hours": round(median_gap, 2),
+                    "learned_p95_gap_hours": round(p95_gap, 2),
+                    "cadence_multiplier": self.cadence_multiplier,
+                    "expected_max_hours": round(expected_max, 2),
+                    "cadence_samples": len(gaps),
+                    "last_value": str(row.get("last_value", "")),
+                    "total_rows": row.get("total_rows"),
+                    "explanation": (
+                        f"Cadence-aware: learned update frequency is "
+                        f"~{median_gap:.1f}h (median of {len(gaps)} gaps). "
+                        f"Current gap of {hours:.1f}h is within "
+                        f"{self.cadence_multiplier}x the median "
+                        f"({expected_max:.1f}h)."
+                    ),
+                },
+            )
+
+        # Beyond p95 * multiplier = FAIL, beyond median * multiplier = WARN
+        if hours > p95_gap * self.cadence_multiplier:
+            status = MonitorStatus.FAIL
+            message = (
+                f"{mode_label} is {hours:.1f}h old, significantly exceeding "
+                f"the learned cadence of ~{median_gap:.1f}h "
+                f"(expected max: {expected_max:.1f}h, p95 gap: {p95_gap:.1f}h)."
+            )
+        else:
+            status = MonitorStatus.WARN
+            message = (
+                f"{mode_label} is {hours:.1f}h old, exceeding the learned "
+                f"cadence of ~{median_gap:.1f}h "
+                f"(expected max: {expected_max:.1f}h)."
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target_fqn,
+            status=status,
+            value=hours,
+            threshold=expected_max,
+            expected_range={"min": 0, "max": round(expected_max, 1)},
+            message=message,
+            details={
+                "timestamp_column": self.timestamp_column,
+                "freshness_mode": resolved_mode,
+                "hours_since_update": round(hours, 2),
+                "cadence_aware": True,
+                "learned_median_gap_hours": round(median_gap, 2),
+                "learned_p95_gap_hours": round(p95_gap, 2),
+                "cadence_multiplier": self.cadence_multiplier,
+                "expected_max_hours": round(expected_max, 2),
+                "cadence_samples": len(gaps),
+                "max_hours": self.max_hours,
+                "last_value": str(row.get("last_value", "")),
+                "total_rows": row.get("total_rows"),
+                "explanation": (
+                    f"Cadence-aware detection: learned update frequency is "
+                    f"~{median_gap:.1f}h (median of {len(gaps)} gaps). "
+                    f"Current gap of {hours:.1f}h exceeds "
+                    f"{self.cadence_multiplier}x the median "
+                    f"({expected_max:.1f}h)."
                 ),
             },
         )
