@@ -403,6 +403,66 @@ class TestAirflowDedup:
         assert view.stats.get("airflowDeduped", 0) >= 1
 
 
+class TestAirflowBashCommandDetection:
+    """Airflow adapter should detect orchestrated tools from bash_command content."""
+
+    def test_parser_extracts_bash_command(self):
+        from scanner.lineage.engine.adapters.airflow_parser import parse_dag_file
+        dag_code = '''
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from datetime import datetime
+
+with DAG("dbt_pipeline", start_date=datetime(2024,1,1)) as dag:
+    deps = BashOperator(task_id="dbt_deps", bash_command="cd /dbt && dbt deps")
+    build = BashOperator(task_id="dbt_build", bash_command="cd /dbt && dbt build --full-refresh")
+    deps >> build
+'''
+        dags = parse_dag_file(dag_code, "dbt_dag.py")
+        assert len(dags) == 1
+        tasks = dags[0].tasks
+        assert "dbt_deps" in tasks
+        assert tasks["dbt_deps"].bash_command == "cd /dbt && dbt deps"
+        assert tasks["dbt_build"].bash_command == "cd /dbt && dbt build --full-refresh"
+
+    def test_adapter_detects_dbt_from_bash_command(self):
+        from scanner.lineage.engine.adapters.live_airflow import LiveAirflowAdapter
+        adapter = LiveAirflowAdapter()
+        dag_files = {
+            "dbt_dag.py": '''
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from datetime import datetime
+
+with DAG("my_pipeline", start_date=datetime(2024,1,1)) as dag:
+    run = BashOperator(task_id="run_models", bash_command="cd /app && dbt deps && dbt build")
+''',
+        }
+        nodes = adapter.discover_assets({"dag_files": dag_files, "namespace": "prod"})
+        # All nodes should have orchestrated_tools including dbt
+        dag_nodes = [n for n in nodes if n.raw_metadata and n.raw_metadata.get("orchestrated_tools")]
+        assert len(dag_nodes) > 0
+        assert "dbt" in dag_nodes[0].raw_metadata["orchestrated_tools"]
+
+    def test_adapter_no_false_positive_on_plain_bash(self):
+        from scanner.lineage.engine.adapters.live_airflow import LiveAirflowAdapter
+        adapter = LiveAirflowAdapter()
+        dag_files = {
+            "etl_dag.py": '''
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from datetime import datetime
+
+with DAG("plain_etl", start_date=datetime(2024,1,1)) as dag:
+    step = BashOperator(task_id="extract", bash_command="python /scripts/extract.py")
+''',
+        }
+        nodes = adapter.discover_assets({"dag_files": dag_files, "namespace": "prod"})
+        # No tool should be detected
+        annotated = [n for n in nodes if n.raw_metadata and n.raw_metadata.get("orchestrated_tools")]
+        assert len(annotated) == 0
+
+
 # ---- Cluster tests ----
 
 class TestClusters:

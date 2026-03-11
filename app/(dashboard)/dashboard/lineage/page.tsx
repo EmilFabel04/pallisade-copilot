@@ -45,7 +45,7 @@ import {
   CATEGORY_VISUALS,
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
-import type { InspectorTarget } from '@/components/lineage/pipeline-overview/types';
+import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -907,32 +907,61 @@ function LineagePageInner() {
       });
 
       const cpEdges: Edge[] = laneOverview.edges.map((ve) => {
-        const edgeColor = ve.evidenceCount > 0 ? '#6366F1' : '#6B7280';
+        // Use semantic edge color when available, fallback to indigo/gray
+        const semanticLabel = ve.metadata?.label?.toLowerCase?.() ?? '';
+        const semanticStyle = SEMANTIC_EDGE_STYLES[semanticLabel] ?? null;
+        const edgeColor = semanticStyle?.color
+          ?? (ve.evidenceCount > 0 ? '#6366F1' : '#6B7280');
+        const dashArray = semanticStyle?.dashArray;
+
+        const hasFlows = ve.evidenceCount > 0;
+        const label = ve.metadata?.label
+          ? `${ve.metadata.label}${hasFlows ? ` · ${ve.evidenceCount}` : ''}`
+          : hasFlows ? `${ve.evidenceCount} flows` : '';
+
         return {
           id: ve.id,
           source: ve.sourceId,
           target: ve.targetId,
           type: 'smoothstep',
-          animated: ve.evidenceCount > 0,
-          label: ve.metadata?.label
-            ? `${ve.metadata.label}${ve.evidenceCount > 0 ? ` · ${ve.evidenceCount}` : ''}`
-            : ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : '',
+          animated: hasFlows,
+          label,
+          labelStyle: {
+            fontSize: 11,
+            fontWeight: 600,
+            fill: 'var(--text)',
+          },
+          labelBgStyle: {
+            fill: 'var(--surface-raised)',
+            stroke: edgeColor,
+            strokeWidth: 1,
+            rx: 6,
+            ry: 6,
+            opacity: 0.95,
+          },
+          labelBgPadding: [6, 4] as [number, number],
           style: {
-            stroke: `${edgeColor}80`,
-            strokeWidth: ve.evidenceCount > 0
-              ? Math.min(2 + Math.log2(ve.evidenceCount + 1), 6)
+            stroke: edgeColor,
+            strokeWidth: hasFlows
+              ? Math.min(3 + Math.log2(ve.evidenceCount + 1), 7)
               : 2,
-            strokeDasharray: ve.evidenceCount > 0 ? undefined : '6,4',
+            strokeDasharray: dashArray ?? (hasFlows ? undefined : '6,4'),
           },
           markerEnd: {
             type: MarkerType.ArrowClosed,
             color: edgeColor,
+            width: 20,
+            height: 20,
           },
         };
       });
 
       if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
-      const layouted = layoutGraph(cpNodes, cpEdges, { direction: 'LR' });
+      const layouted = layoutGraph(cpNodes, cpEdges, {
+        direction: 'LR',
+        ranksep: 280,
+        nodesep: 100,
+      });
       return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
     }
 
@@ -956,25 +985,40 @@ function LineagePageInner() {
         },
       }));
 
-      const cpEdges: Edge[] = renderedOverview.edges.map((ve) => ({
-        id: ve.id,
-        source: ve.sourceId,
-        target: ve.targetId,
-        type: 'smoothstep',
-        animated: ve.evidenceCount > 0,
-        label: ve.evidenceCount > 0 ? `${ve.evidenceCount} flows` : 'connected',
-        style: {
-          stroke: ve.evidenceCount > 0 ? '#6366F180' : 'var(--text-faint)',
-          strokeWidth: ve.evidenceCount > 0
-            ? Math.min(2 + Math.log2(ve.evidenceCount + 1), 6)
-            : 2,
-          strokeDasharray: ve.evidenceCount > 0 ? undefined : '6,4',
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: ve.evidenceCount > 0 ? '#6366F1' : 'var(--text-faint)',
-        },
-      }));
+      const cpEdges: Edge[] = renderedOverview.edges.map((ve) => {
+        const semanticLabel = ve.metadata?.label?.toLowerCase?.() ?? '';
+        const semanticStyle = SEMANTIC_EDGE_STYLES[semanticLabel] ?? null;
+        const edgeColor = semanticStyle?.color
+          ?? (ve.evidenceCount > 0 ? '#6366F1' : '#6B7280');
+        const hasFlows = ve.evidenceCount > 0;
+        return {
+          id: ve.id,
+          source: ve.sourceId,
+          target: ve.targetId,
+          type: 'smoothstep',
+          animated: hasFlows,
+          label: hasFlows ? `${ve.evidenceCount} flows` : 'connected',
+          labelStyle: { fontSize: 11, fontWeight: 600, fill: 'var(--text)' },
+          labelBgStyle: {
+            fill: 'var(--surface-raised)', stroke: edgeColor,
+            strokeWidth: 1, rx: 6, ry: 6, opacity: 0.95,
+          },
+          labelBgPadding: [6, 4] as [number, number],
+          style: {
+            stroke: edgeColor,
+            strokeWidth: hasFlows
+              ? Math.min(3 + Math.log2(ve.evidenceCount + 1), 7)
+              : 2,
+            strokeDasharray: semanticStyle?.dashArray ?? (hasFlows ? undefined : '6,4'),
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: edgeColor,
+            width: 20,
+            height: 20,
+          },
+        };
+      });
 
       return { cpFlowNodes: cpNodes, cpFlowEdges: cpEdges };
     }

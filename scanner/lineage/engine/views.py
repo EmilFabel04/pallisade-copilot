@@ -81,6 +81,7 @@ class _ToolEdgeAgg:
     pair_counts: Counter           # Counter[(src_name, tgt_name)] — frequency
     asset_ids: Set[str]            # unique node IDs involved (both src + tgt)
     lane_pair_counts: Counter = field(default_factory=Counter)  # Counter[(src_lane, tgt_lane)]
+    seen_pairs: Set[tuple] = field(default_factory=set)  # deduplicate (src_nid, tgt_nid)  # Counter[(src_lane, tgt_lane)]
 
 
 # ── Evidence label normalisation ──────────────────────────────────────────
@@ -406,6 +407,7 @@ def _probe_control_plane_evidence(
     tool_info: Dict[Tuple[str, str], Dict],
     tool_key_to_graph_nodes: Dict[Tuple[str, str], List],
     pipeline_edges: Optional[List[Dict[str, Any]]] = None,
+    tgt_category: Optional[str] = None,
 ) -> Optional[Tuple[str, float]]:
     """Probe for evidence justifying a control-plane edge.
 
@@ -537,6 +539,12 @@ def _probe_control_plane_evidence(
     if _has_explicit_targets:
         # Source has metadata specifying its targets — don't create
         # coexistence edges to tools NOT in the metadata.
+        return None
+
+    # Orchestration → ingestion coexistence is too noisy: ingestion tools
+    # (Fivetran, Airbyte) have their own scheduling and are rarely
+    # orchestrated by external orchestrators without explicit config.
+    if ev_type == JOB_ORCHESTRATION and tgt_category == "ingestion":
         return None
 
     return (BASIS_PIPELINE_COEXISTENCE, CONFIDENCE_PIPELINE_COEX)
@@ -1331,6 +1339,12 @@ class ViewBuilder:
                     edges=[], pair_counts=Counter(), asset_ids=set(),
                 )
             a = tool_edge_aggs[pair_key]
+            # Deduplicate: same (src_nid, tgt_nid) pair from multiple adapters
+            # (e.g. dbt manifest + BigQuery parser) should only count once.
+            node_pair = (src_nid, tgt_nid)
+            if node_pair in a.seen_pairs:
+                return
+            a.seen_pairs.add(node_pair)
             a.edges.append(edge)
             a.pair_counts[(src_name, tgt_name)] += 1
             a.asset_ids.add(src_nid)
@@ -1525,14 +1539,15 @@ class ViewBuilder:
                 if intermediate_tk:
                     _split_through_intermediate = True
                     _cross_tool += 1
+                    # Only create the first leg (src→intermediate).
+                    # The second leg (intermediate→tgt) is already covered by
+                    # direct cross-tool edges (e.g. model→model edges resolved
+                    # as dbt→analytics).  Emitting pk2 here would double-count
+                    # the same flows that raw→dbt already shows.
                     pk1 = f"tool:{src_tk[0]}:{src_tk[1]}→tool:{intermediate_tk[0]}:{intermediate_tk[1]}"
-                    pk2 = f"tool:{intermediate_tk[0]}:{intermediate_tk[1]}→tool:{tgt_tk[0]}:{tgt_tk[1]}"
                     _add_to_agg(pk1, edge, src_node.name, tgt_node.name,
                                 src_node.id, tgt_node.id,
                                 src_lane=src_tk[0], tgt_lane=intermediate_tk[0])
-                    _add_to_agg(pk2, edge, src_node.name, tgt_node.name,
-                                src_node.id, tgt_node.id,
-                                src_lane=intermediate_tk[0], tgt_lane=tgt_tk[0])
 
             if not _split_through_intermediate:
                 # Suppress direct warehouse_raw→warehouse_analytics edges
@@ -1704,6 +1719,7 @@ class ViewBuilder:
                             src_vn, tgt_vn, ev_type,
                             tool_info, tool_key_to_graph_nodes,
                             pipeline_edges=self.pipeline_edges,
+                            tgt_category=tgt_cat,
                         )
                         if probe_result is None:
                             _cp_suppressed += 1

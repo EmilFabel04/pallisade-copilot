@@ -113,9 +113,21 @@ class LiveAirflowAdapter(BaseLineageAdapter):
         "soda": ["soda"],
     }
 
+    # CLI commands that indicate tool orchestration in bash_command strings.
+    # Matched against the full command text (lowercased).
+    _TOOL_CLI_PATTERNS: Dict[str, List[str]] = {
+        "dbt": ["dbt run", "dbt build", "dbt test", "dbt seed", "dbt snapshot",
+                "dbt deps", "dbt compile", "dbt debug", "dbt ls", "dbt parse"],
+        "fivetran": ["fivetran sync", "fivetran trigger"],
+        "airbyte": ["airbyte sync", "airbyte trigger"],
+        "spark": ["spark-submit", "pyspark"],
+        "great_expectations": ["great_expectations", "checkpoint run"],
+        "soda": ["soda scan", "soda test"],
+    }
+
     def _annotate_orchestrated_tools(self, nodes: List[LineageNode]) -> None:
-        """Scan task operators, task IDs, and DAG names to determine which
-        tools this Airflow instance orchestrates."""
+        """Scan task operators, task IDs, DAG names, and bash commands to
+        determine which tools this Airflow instance orchestrates."""
         orchestrated: Set[str] = set()
         for node in nodes:
             rm = node.raw_metadata or {}
@@ -138,6 +150,13 @@ class LiveAirflowAdapter(BaseLineageAdapter):
             if dag_id:
                 for tool, keywords in self._TOOL_NAME_KEYWORDS.items():
                     if any(kw in dag_id for kw in keywords):
+                        orchestrated.add(tool)
+
+            # Check 4: bash_command content (e.g., "dbt deps && dbt build")
+            bash_cmd = (rm.get("bash_command") or "").lower()
+            if bash_cmd:
+                for tool, cli_patterns in self._TOOL_CLI_PATTERNS.items():
+                    if any(p in bash_cmd for p in cli_patterns):
                         orchestrated.add(tool)
 
         if not orchestrated:
@@ -496,6 +515,7 @@ class LiveAirflowAdapter(BaseLineageAdapter):
                 "is_opaque": task.is_opaque,
                 "has_sql": task.sql is not None,
                 "line_number": task.line_number,
+                **({"bash_command": task.bash_command} if getattr(task, "bash_command", None) else {}),
             },
         )
 

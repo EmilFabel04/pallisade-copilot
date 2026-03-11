@@ -66,6 +66,7 @@ class ParsedTask:
     is_opaque: bool = False
     line_number: int = 0
     kwargs: Dict[str, str] = field(default_factory=dict)
+    bash_command: Optional[str] = None  # BashOperator bash_command content
 
 
 @dataclass
@@ -488,6 +489,11 @@ class _DagVisitor(ast.NodeVisitor):
                 if not dest_table and sql_dest:
                     dest_table = sql_dest
 
+        # Extract bash_command from BashOperator (for orchestrated tool detection)
+        bash_command = None
+        if resolved_class in ("BashOperator", "BashSensor"):
+            bash_command = _get_keyword_str(call, "bash_command")
+
         return ParsedTask(
             task_id=task_id,
             operator_class=resolved_class,
@@ -496,6 +502,7 @@ class _DagVisitor(ast.NodeVisitor):
             source_tables=list(dict.fromkeys(source_tables)),  # dedup
             is_opaque=is_opaque,
             line_number=call.lineno,
+            bash_command=bash_command,
         )
 
     def _extract_dest_from_bq_config(self, config_ast: ast.Dict) -> Optional[str]:

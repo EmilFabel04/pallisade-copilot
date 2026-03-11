@@ -151,7 +151,10 @@ function NodeInspector({
               setFetchError(null);
               setLoading(true);
               fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-tool-details&id=${encodeURIComponent(node.id)}`)
-                .then(res => res.json())
+                .then(res => {
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  return res.json();
+                })
                 .then((data: ToolDetailsResponse) => {
                   if (data.error) setFetchError(data.error);
                   else { setDetails(data); cacheRef.current.set(node.id, data); }

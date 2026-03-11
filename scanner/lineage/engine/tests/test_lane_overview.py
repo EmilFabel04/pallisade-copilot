@@ -1116,8 +1116,8 @@ class TestEvidenceGatedControlPlaneEdges:
     data, never as logic conditionals.
     """
 
-    def test_cp_edge_between_orchestration_and_ingestion_via_coexistence(self):
-        """Orchestration + ingestion tools in same pipeline → weak coexistence edge."""
+    def test_cp_edge_between_orchestration_and_ingestion_suppressed(self):
+        """Orchestration + ingestion coexistence is suppressed (ingestion tools self-schedule)."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -1141,8 +1141,7 @@ class TestEvidenceGatedControlPlaneEdges:
             if (e.source_id in af_ids and e.target_id in ft_ids)
             or (e.source_id in ft_ids and e.target_id in af_ids)
         ]
-        assert len(cross_edges) >= 1, "Co-existing tools should produce coexistence edge"
-        assert cross_edges[0].metadata["relationshipBasis"] == "pipeline_coexistence"
+        assert len(cross_edges) == 0, "Orchestration→ingestion coexistence should be suppressed"
 
     def test_cp_edge_between_vcs_and_transformation_via_coexistence(self):
         """VCS + transformation tools in same pipeline → weak coexistence edge."""
@@ -1262,8 +1261,8 @@ class TestEvidenceGatedControlPlaneEdges:
             assert me.metadata["edgeOrigin"] == "inferred"
             assert me.confidence <= 0.4
 
-    def test_coexistence_applied_to_orchestration_with_lower_confidence(self):
-        """Orchestration + ingestion without metadata → coexistence edge with low confidence."""
+    def test_coexistence_suppressed_for_orchestration_to_ingestion(self):
+        """Orchestration + ingestion without metadata → no coexistence edge."""
         graph = LineageGraph()
         bq_svc = _make_node(
             "raw_table", NodeType.TABLE, "bigquery",
@@ -1287,9 +1286,7 @@ class TestEvidenceGatedControlPlaneEdges:
             if (e.source_id in pf_ids and e.target_id in ab_ids)
             or (e.source_id in ab_ids and e.target_id in pf_ids)
         ]
-        assert len(cross_edges) >= 1, "Coexistence should create orchestration edge"
-        assert cross_edges[0].metadata["relationshipBasis"] == "pipeline_coexistence"
-        assert cross_edges[0].confidence <= 0.5
+        assert len(cross_edges) == 0, "Orchestration→ingestion coexistence should be suppressed"
 
     def test_every_cp_edge_has_relationship_basis(self):
         """Every CP edge must carry a relationshipBasis in metadata."""

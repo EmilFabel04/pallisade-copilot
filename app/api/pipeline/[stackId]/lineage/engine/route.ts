@@ -136,12 +136,12 @@ export async function GET(
 
     // For view actions: if engine returned empty (no graph in memory after restart),
     // try restoring from the DB snapshot and retry once.
-    // Only check responses that actually return a `nodes` field (pipeline-overview, data-plane, etc.).
-    // Tool-details responses use tabs/groups instead, so skip them.
+    // Triggers on: (a) empty nodes array, or (b) "No graph loaded" error from tool-details.
     const isViewAction = action.startsWith('view-') || action === 'stats';
     const hasNodeField = data && 'nodes' in data;
     const isEmpty = hasNodeField && (!data.nodes || (Array.isArray(data.nodes) && data.nodes.length === 0));
-    if (isViewAction && isEmpty) {
+    const isNoGraphError = data?.error === 'No graph loaded';
+    if (isViewAction && (isEmpty || isNoGraphError)) {
       const organizationId = (session.user as any).organizationId;
       if (organizationId) {
         const snapshot = await prisma.lineageSnapshot.findFirst({
