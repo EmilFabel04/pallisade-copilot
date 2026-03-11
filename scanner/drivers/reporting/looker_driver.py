@@ -17,8 +17,8 @@ class LookerDriver(IntegrationDriver):
 
     def validate_config(self, config: Dict[str, Any]) -> ConfigValidation:
         errors = []
-        if not config.get("base_url") and not config.get("baseUrl"):
-            errors.append("base_url is required")
+        if not config.get("base_url") and not config.get("baseUrl") and not config.get("host"):
+            errors.append("base_url or host is required")
         if not config.get("client_id") and not config.get("clientId"):
             errors.append("client_id is required")
         if not config.get("client_secret") and not config.get("clientSecret"):

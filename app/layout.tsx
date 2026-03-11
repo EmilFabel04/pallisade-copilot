@@ -24,7 +24,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           {children}
         </ThemeProvider>
         <Toaster
-          position="bottom-right"
+          position="top-right"
+          closeButton
           toastOptions={{
             style: {
               background: 'var(--card)',

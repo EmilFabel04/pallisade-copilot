@@ -691,6 +691,40 @@ class ToolRegistry:
         ))
 
         # ==========================================
+        # REPORTING TOOLS (Metabase)
+        # ==========================================
+
+        self._register(Tool(
+            name="get_metabase_dashboard_status",
+            description="Get Metabase dashboard status including card count, broken cards, and last update time. Use to check dashboard health.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("dashboard_id", "integer", "The dashboard ID"),
+            ],
+            required_integrations={"METABASE"},
+        ))
+
+        self._register(Tool(
+            name="get_metabase_card_info",
+            description="Get Metabase card (saved question) details: query type, database, display type, performance metrics, and errors. Use to diagnose slow or broken questions.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("card_id", "integer", "The card/question ID"),
+            ],
+            required_integrations={"METABASE"},
+        ))
+
+        self._register(Tool(
+            name="get_metabase_database_status",
+            description="Get Metabase database connection status including sync state, engine type, and configuration. Use to check if Metabase can reach its data sources.",
+            category=ToolCategory.REPORTING,
+            parameters=[
+                ToolParameter("database_id", "integer", "The database ID (optional, omit for all databases)", required=False),
+            ],
+            required_integrations={"METABASE"},
+        ))
+
+        # ==========================================
         # STORAGE TOOLS (S3, GCS, ADLS)
         # ==========================================
 

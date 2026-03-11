@@ -545,23 +545,64 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
   return NextResponse.json({ connectors: [], tables: [] });
 }
 
-// Get reporting tool data (Looker, Tableau, etc.)
+// Get reporting tool data (Looker, Tableau, Power BI, Metabase)
 async function getReportingData(node: any, credentials: Record<string, any>) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
-  const dashboards = [
-    { name: 'Executive Summary', views: 1245, lastViewed: '2 hours ago' },
-    { name: 'Sales Dashboard', views: 892, lastViewed: '30 min ago' },
-    { name: 'Marketing Analytics', views: 567, lastViewed: '1 day ago' },
-  ];
+  if (!isConnected) {
+    return NextResponse.json({
+      dashboards: [],
+      datasources: [],
+      tables: [],
+      connected: false,
+      source: 'disconnected',
+      message: `Node status is ${node.status}. Test the connection first.`,
+    });
+  }
 
-  return NextResponse.json({
-    tables: [],
-    models: [],
-    connectors: [],
-    dashboards,
-    source: 'demo',
-    connected: isConnected,
-  });
+  try {
+    const response = await fetch(`${SCANNER_API_URL}/api/v1/reporting/metadata`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool_type: node.toolType,
+        connection_config: credentials,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      return NextResponse.json({
+        dashboards: data.dashboards || [],
+        datasources: data.datasources || [],
+        tables: [],
+        source: 'live',
+        connected: true,
+        tool_type: data.tool_type,
+      });
+    }
+
+    // Scanner returned an error — return it with empty-but-valid shape
+    return NextResponse.json({
+      dashboards: [],
+      datasources: [],
+      tables: [],
+      source: 'error',
+      connected: isConnected,
+      error: data.error || 'Unknown scanner error',
+    });
+  } catch (err: any) {
+    console.log(`[REPORTING] Scanner not available for ${node.toolType}: ${err.message}`);
+    return NextResponse.json({
+      dashboards: [],
+      datasources: [],
+      tables: [],
+      source: 'error',
+      connected: isConnected,
+      error: `Scanner unavailable: ${err.message}`,
+    });
+  }
 }

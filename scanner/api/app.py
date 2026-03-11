@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
     register_all_drivers()
 
     # Register Routers
-    from .routers import health_router, database_router, lineage_router, coverage_router, server_router
+    from .routers import health_router, database_router, lineage_router, coverage_router, server_router, reporting_router
     from .routers.copilot import router as copilot_router
     from .routers.dbt import router as dbt_router
     from .routers.schedule import router as schedule_router
@@ -111,6 +111,9 @@ def create_app() -> FastAPI:
 
     # Integration Drivers API
     app.include_router(drivers_router, prefix="/api/v1", tags=["Drivers"])
+
+    # Reporting/BI Metadata API
+    app.include_router(reporting_router, prefix="/api/v1", tags=["Reporting"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

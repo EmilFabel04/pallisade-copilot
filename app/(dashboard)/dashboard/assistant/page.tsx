@@ -1262,28 +1262,21 @@ function AssistantPageInner() {
 
         {/* Main Chat Area */}
         <div className="flex-1 flex flex-col min-w-0 relative">
-          {/* Compact Header */}
-          <div className="flex items-center justify-between py-2 px-4 border-b border-[var(--subtle-border)]">
-            <div className="flex items-center gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowHistory(!showHistory)}
-                    className="p-1.5 h-8 w-8"
-                  >
-                    {Icons.menu}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{showHistory ? 'Hide history' : 'Show history'}</TooltipContent>
-              </Tooltip>
-              <Avatar className="w-7 h-7">
-                <AvatarImage src="/pallisade_scoutt.svg" alt="Scout" />
-                <AvatarFallback className="text-xs">AI</AvatarFallback>
-              </Avatar>
-              <h1 className="text-sm font-semibold">Pallisade Scout</h1>
-            </div>
+          {/* Compact Toolbar */}
+          <div className="flex items-center justify-between py-1 px-3 border-b border-[var(--subtle-border)]">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowHistory(!showHistory)}
+                  className="p-1.5 h-7 w-7"
+                >
+                  {Icons.menu}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{showHistory ? 'Hide history' : 'Show history'}</TooltipContent>
+            </Tooltip>
 
             {/* Sources */}
             <Button
@@ -1291,7 +1284,7 @@ function AssistantPageInner() {
               size="sm"
               onClick={() => setShowSources(!showSources)}
               className={cn(
-                'gap-1.5 px-2.5 h-8 text-xs',
+                'gap-1.5 px-2.5 h-7 text-xs',
                 showSources && 'bg-[var(--hover-bg)]'
               )}
             >

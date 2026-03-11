@@ -705,7 +705,14 @@ class ToolExecutor:
                     from integrations.looker import LookerClient
                 except ImportError:
                     from scanner.integrations.looker import LookerClient
-                return LookerClient(integration.config)
+                config = integration.config
+                return LookerClient(
+                    host=config.get("host", config.get("base_url", "")),
+                    client_id=config.get("client_id", ""),
+                    client_secret=config.get("client_secret", ""),
+                    port=config.get("port", 19999),
+                    verify_ssl=config.get("verify_ssl", True),
+                )
 
             elif integration_type == "REDSHIFT":
                 try:
@@ -726,14 +733,39 @@ class ToolExecutor:
                     from integrations.tableau import TableauClient
                 except ImportError:
                     from scanner.integrations.tableau import TableauClient
-                return TableauClient(integration.config)
+                config = integration.config
+                return TableauClient(
+                    server=config.get("server", config.get("server_url", "")),
+                    token_name=config.get("token_name", ""),
+                    token_secret=config.get("token_secret", config.get("token_value", "")),
+                    site_id=config.get("site_id", ""),
+                )
 
             elif integration_type == "POWERBI":
                 try:
                     from integrations.powerbi import PowerBIClient
                 except ImportError:
                     from scanner.integrations.powerbi import PowerBIClient
-                return PowerBIClient(integration.config)
+                config = integration.config
+                return PowerBIClient(
+                    tenant_id=config.get("tenant_id", ""),
+                    client_id=config.get("client_id", ""),
+                    client_secret=config.get("client_secret", ""),
+                    use_admin_api=config.get("use_admin_api", True),
+                )
+
+            elif integration_type == "METABASE":
+                try:
+                    from integrations.metabase import MetabaseClient
+                except ImportError:
+                    from scanner.integrations.metabase import MetabaseClient
+                config = integration.config
+                return MetabaseClient(
+                    host=config.get("host", ""),
+                    username=config.get("username"),
+                    password=config.get("password"),
+                    api_key=config.get("api_key"),
+                )
 
             elif integration_type == "AMAZON_S3":
                 try:
@@ -2860,6 +2892,466 @@ class ToolExecutor:
                     "has_content": model.get("has_content"),
                     "project_name": model.get("project_name"),
                     "validation": validation
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # TABLEAU TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_tableau_workbook_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Tableau workbook status."""
+        workbook_name = args["workbook_name"]
+
+        tableau = self._adapters.get("TABLEAU")
+        if not tableau:
+            return ToolResult(
+                success=False,
+                error="Tableau adapter is not connected. Use search_knowledge_base with a query about this Tableau topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find workbook by name (or treat as ID)
+            workbooks = tableau.get_all_workbooks()
+            workbook = next(
+                (w for w in workbooks if w.get("name", "").lower() == workbook_name.lower() or w.get("id") == workbook_name),
+                None
+            )
+            if not workbook:
+                available = [w.get("name") for w in workbooks[:20]]
+                return ToolResult(success=False, error=f"Workbook not found: {workbook_name}. Available: {available}")
+
+            workbook_id = workbook["id"]
+
+            # Get full details, connections, and views
+            connections = tableau.get_workbook_connections(workbook_id)
+            views = tableau.get_views_for_workbook(workbook_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "workbook_id": workbook_id,
+                    "name": workbook.get("name"),
+                    "project": workbook.get("project", {}).get("name") if isinstance(workbook.get("project"), dict) else workbook.get("project"),
+                    "owner": workbook.get("owner", {}).get("name") if isinstance(workbook.get("owner"), dict) else workbook.get("owner"),
+                    "created_at": workbook.get("createdAt"),
+                    "updated_at": workbook.get("updatedAt"),
+                    "view_count": len(views),
+                    "views": [{"name": v.get("name"), "id": v.get("id")} for v in views],
+                    "connections": [
+                        {
+                            "type": c.get("type"),
+                            "server": c.get("serverAddress"),
+                            "database": c.get("serverPort"),
+                        }
+                        for c in connections
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_tableau_datasource_info(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Tableau datasource info."""
+        datasource_name = args["datasource_name"]
+
+        tableau = self._adapters.get("TABLEAU")
+        if not tableau:
+            return ToolResult(
+                success=False,
+                error="Tableau adapter is not connected. Use search_knowledge_base with a query about this Tableau topic to provide expert guidance instead."
+            )
+
+        try:
+            datasources = tableau.get_all_datasources()
+            ds = next(
+                (d for d in datasources if d.get("name", "").lower() == datasource_name.lower() or d.get("id") == datasource_name),
+                None
+            )
+            if not ds:
+                available = [d.get("name") for d in datasources[:20]]
+                return ToolResult(success=False, error=f"Datasource not found: {datasource_name}. Available: {available}")
+
+            datasource_id = ds["id"]
+            detail = tableau.get_datasource(datasource_id)
+            ds_data = detail.get("datasource", detail) if isinstance(detail, dict) else detail
+
+            return ToolResult(
+                success=True,
+                data={
+                    "datasource_id": datasource_id,
+                    "name": ds.get("name"),
+                    "project": ds.get("project", {}).get("name") if isinstance(ds.get("project"), dict) else ds.get("project"),
+                    "owner": ds.get("owner", {}).get("name") if isinstance(ds.get("owner"), dict) else ds.get("owner"),
+                    "content_url": ds.get("contentUrl"),
+                    "type": ds.get("type"),
+                    "created_at": ds.get("createdAt"),
+                    "updated_at": ds.get("updatedAt"),
+                    "has_extracts": ds_data.get("hasExtracts", ds.get("hasExtracts")),
+                    "is_certified": ds.get("isCertified", False),
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_tableau_refresh_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Tableau extract refresh history."""
+        datasource_name = args.get("datasource_name")
+        limit = args.get("limit", 10)
+
+        tableau = self._adapters.get("TABLEAU")
+        if not tableau:
+            return ToolResult(
+                success=False,
+                error="Tableau adapter is not connected. Use search_knowledge_base with a query about this Tableau topic to provide expert guidance instead."
+            )
+
+        try:
+            jobs = tableau.get_background_jobs(job_type="extractRefresh")
+
+            # Filter by datasource name if provided
+            if datasource_name:
+                jobs = [
+                    j for j in jobs
+                    if datasource_name.lower() in (j.get("title", "") or "").lower()
+                    or datasource_name.lower() in (j.get("name", "") or "").lower()
+                ]
+
+            jobs = jobs[:limit]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "datasource_filter": datasource_name,
+                    "total_jobs": len(jobs),
+                    "history": [
+                        {
+                            "job_id": j.get("id"),
+                            "status": j.get("status"),
+                            "created_at": j.get("createdAt"),
+                            "started_at": j.get("startedAt"),
+                            "ended_at": j.get("endedAt"),
+                            "title": j.get("title"),
+                            "job_type": j.get("type"),
+                        }
+                        for j in jobs
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # POWER BI TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_powerbi_dataset_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Power BI dataset status."""
+        dataset_name = args["dataset_name"]
+
+        powerbi = self._adapters.get("POWERBI")
+        if not powerbi:
+            return ToolResult(
+                success=False,
+                error="Power BI adapter is not connected. Use search_knowledge_base with a query about this Power BI topic to provide expert guidance instead."
+            )
+
+        try:
+            # Search across workspaces for the dataset
+            workspaces = powerbi.get_workspaces()
+            found_dataset = None
+            found_workspace = None
+
+            for ws in workspaces:
+                ws_id = ws.get("id")
+                datasets = powerbi.get_datasets_in_workspace(ws_id)
+                match = next(
+                    (d for d in datasets if d.get("name", "").lower() == dataset_name.lower() or d.get("id") == dataset_name),
+                    None
+                )
+                if match:
+                    found_dataset = match
+                    found_workspace = ws
+                    break
+
+            if not found_dataset:
+                return ToolResult(success=False, error=f"Dataset not found: {dataset_name}")
+
+            ws_id = found_workspace["id"]
+            ds_id = found_dataset["id"]
+
+            # Get datasources and latest refresh
+            datasources = powerbi.get_dataset_datasources(ws_id, ds_id)
+            refresh_history = powerbi.get_dataset_refresh_history(ws_id, ds_id, top=1)
+            latest_refresh = refresh_history[0] if refresh_history else None
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dataset_id": ds_id,
+                    "name": found_dataset.get("name"),
+                    "workspace": found_workspace.get("name"),
+                    "workspace_id": ws_id,
+                    "configured_by": found_dataset.get("configuredBy"),
+                    "is_refreshable": found_dataset.get("isRefreshable"),
+                    "is_effective_identity_required": found_dataset.get("isEffectiveIdentityRequired"),
+                    "last_refresh": {
+                        "status": latest_refresh.get("status"),
+                        "start_time": latest_refresh.get("startTime"),
+                        "end_time": latest_refresh.get("endTime"),
+                    } if latest_refresh else None,
+                    "datasources": [
+                        {
+                            "type": ds.get("datasourceType"),
+                            "server": ds.get("connectionDetails", {}).get("server"),
+                            "database": ds.get("connectionDetails", {}).get("database"),
+                        }
+                        for ds in datasources
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_powerbi_refresh_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Power BI dataset refresh history."""
+        dataset_name = args["dataset_name"]
+        limit = args.get("limit", 10)
+
+        powerbi = self._adapters.get("POWERBI")
+        if not powerbi:
+            return ToolResult(
+                success=False,
+                error="Power BI adapter is not connected. Use search_knowledge_base with a query about this Power BI topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find the dataset
+            workspaces = powerbi.get_workspaces()
+            found_dataset = None
+            found_workspace = None
+
+            for ws in workspaces:
+                ws_id = ws.get("id")
+                datasets = powerbi.get_datasets_in_workspace(ws_id)
+                match = next(
+                    (d for d in datasets if d.get("name", "").lower() == dataset_name.lower() or d.get("id") == dataset_name),
+                    None
+                )
+                if match:
+                    found_dataset = match
+                    found_workspace = ws
+                    break
+
+            if not found_dataset:
+                return ToolResult(success=False, error=f"Dataset not found: {dataset_name}")
+
+            ws_id = found_workspace["id"]
+            ds_id = found_dataset["id"]
+
+            refresh_history = powerbi.get_dataset_refresh_history(ws_id, ds_id, top=limit)
+            schedule = powerbi.get_dataset_refresh_schedule(ws_id, ds_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dataset_name": found_dataset.get("name"),
+                    "workspace": found_workspace.get("name"),
+                    "schedule": {
+                        "enabled": schedule.get("enabled"),
+                        "days": schedule.get("days"),
+                        "times": schedule.get("times"),
+                        "timezone": schedule.get("localTimeZoneId"),
+                    } if schedule else None,
+                    "history": [
+                        {
+                            "status": r.get("status"),
+                            "start_time": r.get("startTime"),
+                            "end_time": r.get("endTime"),
+                            "refresh_type": r.get("refreshType"),
+                            "request_id": r.get("requestId"),
+                        }
+                        for r in refresh_history
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_powerbi_gateway_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Power BI gateway status."""
+        gateway_name = args.get("gateway_name")
+
+        powerbi = self._adapters.get("POWERBI")
+        if not powerbi:
+            return ToolResult(
+                success=False,
+                error="Power BI adapter is not connected. Use search_knowledge_base with a query about this Power BI topic to provide expert guidance instead."
+            )
+
+        try:
+            gateways = powerbi.get_gateways()
+
+            if gateway_name:
+                gateways = [
+                    g for g in gateways
+                    if g.get("name", "").lower() == gateway_name.lower() or g.get("id") == gateway_name
+                ]
+                if not gateways:
+                    return ToolResult(success=False, error=f"Gateway not found: {gateway_name}")
+
+            results = []
+            for gw in gateways:
+                gw_id = gw.get("id")
+                datasources = powerbi.get_gateway_datasources(gw_id)
+                results.append({
+                    "gateway_id": gw_id,
+                    "name": gw.get("name"),
+                    "type": gw.get("type"),
+                    "public_key": gw.get("publicKey", {}).get("exponent") if gw.get("publicKey") else None,
+                    "datasource_count": len(datasources),
+                    "datasources": [
+                        {
+                            "id": ds.get("id"),
+                            "name": ds.get("datasourceName"),
+                            "type": ds.get("datasourceType"),
+                            "status": ds.get("connectionDetails", {}).get("status") if ds.get("connectionDetails") else None,
+                        }
+                        for ds in datasources
+                    ],
+                })
+
+            return ToolResult(
+                success=True,
+                data={"gateways": results} if len(results) != 1 else results[0]
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # METABASE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_metabase_dashboard_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Metabase dashboard status."""
+        dashboard_id = args["dashboard_id"]
+
+        metabase = self._adapters.get("METABASE")
+        if not metabase:
+            return ToolResult(
+                success=False,
+                error="Metabase adapter is not connected. Use search_knowledge_base with a query about this Metabase topic to provide expert guidance instead."
+            )
+
+        try:
+            dashboard = metabase.get_dashboard(int(dashboard_id))
+            if not dashboard:
+                return ToolResult(success=False, error=f"Dashboard not found: {dashboard_id}")
+
+            # Extract cards and identify broken ones
+            dashcards = dashboard.get("dashcards", dashboard.get("ordered_cards", []))
+            cards = [dc.get("card", {}) for dc in dashcards if dc.get("card")]
+            broken_cards = [
+                {"id": c.get("id"), "name": c.get("name"), "error": c.get("last_error")}
+                for c in cards if c.get("last_error")
+            ]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dashboard_id": dashboard.get("id"),
+                    "name": dashboard.get("name"),
+                    "description": dashboard.get("description"),
+                    "collection": dashboard.get("collection", {}).get("name") if dashboard.get("collection") else None,
+                    "creator": dashboard.get("creator", {}).get("common_name") if dashboard.get("creator") else None,
+                    "created_at": dashboard.get("created_at"),
+                    "updated_at": dashboard.get("updated_at"),
+                    "card_count": len(cards),
+                    "filter_count": len(dashboard.get("parameters", [])),
+                    "broken_cards": broken_cards,
+                    "is_healthy": len(broken_cards) == 0,
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_metabase_card_info(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Metabase card (saved question) info."""
+        card_id = args["card_id"]
+
+        metabase = self._adapters.get("METABASE")
+        if not metabase:
+            return ToolResult(
+                success=False,
+                error="Metabase adapter is not connected. Use search_knowledge_base with a query about this Metabase topic to provide expert guidance instead."
+            )
+
+        try:
+            card = metabase.get_card(int(card_id))
+            if not card:
+                return ToolResult(success=False, error=f"Card not found: {card_id}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "card_id": card.get("id"),
+                    "name": card.get("name"),
+                    "description": card.get("description"),
+                    "collection": card.get("collection", {}).get("name") if card.get("collection") else None,
+                    "database_id": card.get("database_id"),
+                    "query_type": card.get("query_type"),
+                    "display": card.get("display"),
+                    "created_at": card.get("created_at"),
+                    "updated_at": card.get("updated_at"),
+                    "average_query_time": card.get("average_query_time"),
+                    "cache_ttl": card.get("cache_ttl"),
+                    "last_query_start": card.get("last_query_start"),
+                    "archived": card.get("archived", False),
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_metabase_database_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Metabase database connection status."""
+        database_id = args.get("database_id")
+
+        metabase = self._adapters.get("METABASE")
+        if not metabase:
+            return ToolResult(
+                success=False,
+                error="Metabase adapter is not connected. Use search_knowledge_base with a query about this Metabase topic to provide expert guidance instead."
+            )
+
+        try:
+            if database_id:
+                db = metabase.get_database(int(database_id))
+                if not db:
+                    return ToolResult(success=False, error=f"Database not found: {database_id}")
+                databases = [db]
+            else:
+                result = metabase.get_databases()
+                databases = result if isinstance(result, list) else result.get("data", [result])
+
+            return ToolResult(
+                success=True,
+                data={
+                    "databases": [
+                        {
+                            "id": db.get("id"),
+                            "name": db.get("name"),
+                            "engine": db.get("engine"),
+                            "host": db.get("details", {}).get("host") if db.get("details") else None,
+                            "initial_sync_status": db.get("initial_sync_status"),
+                            "auto_run_queries": db.get("auto_run_queries"),
+                            "cache_ttl": db.get("cache_ttl"),
+                            "created_at": db.get("created_at"),
+                            "updated_at": db.get("updated_at"),
+                        }
+                        for db in databases
+                    ],
                 }
             )
         except Exception as e:

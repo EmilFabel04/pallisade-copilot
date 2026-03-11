@@ -30,8 +30,8 @@ const TOOL_CAPABILITIES: Record<string, SourceCapability[]> = {
   // Reporting
   looker: ['Metadata', 'Lineage'],
   tableau: ['Metadata', 'Lineage'],
-  powerbi: ['Metadata'],
-  metabase: ['Metadata'],
+  powerbi: ['Metadata', 'Lineage'],
+  metabase: ['Metadata', 'Lineage'],
 
   // Observability
   elementary: ['Logs', 'Metadata'],

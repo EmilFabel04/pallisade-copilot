@@ -100,6 +100,12 @@ export function mapCredentialFields(
     delete config.host;
   }
 
+  // base_url -> host (Looker — LookerClient expects 'host')
+  if (t === 'LOOKER' && config.base_url && !config.host) {
+    config.host = config.base_url;
+    delete config.base_url;
+  }
+
   return config;
 }
 
