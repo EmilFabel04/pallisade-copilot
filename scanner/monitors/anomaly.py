@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
-from .stats import score_anomaly
+from .stats import score_anomaly, build_confidence_info
 
 
 # Default minimum absolute change by metric type.
@@ -403,6 +403,12 @@ class AnomalyMonitor(BaseMonitor):
                 "pct_change": score.pct_change,
                 "direction": score.direction,
                 "explanation": score.explanation,
+                "confidence_info": build_confidence_info(
+                    confidence_pct=score.confidence_pct,
+                    baseline_count=score.baseline_count,
+                    evaluation_mode="seasonal_dow" if self.seasonality == "day_of_week" else "statistical",
+                    downgraded=score.is_anomaly and score.confidence_pct < 50,
+                ),
             },
         )
 

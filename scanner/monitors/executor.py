@@ -22,6 +22,7 @@ from .volume import VolumeMonitor
 from .schema import SchemaMonitor
 from .anomaly import AnomalyMonitor
 from .referential import ReferentialIntegrityMonitor
+from .uniqueness import UniquenessMonitor
 from .explainer import enrich_result
 from .infrastructure import INFRA_MONITOR_TYPES, INFRA_MONITOR_REGISTRY
 
@@ -37,6 +38,7 @@ MONITOR_REGISTRY: Dict[str, type] = {
     "schema_change": SchemaMonitor,
     "anomaly": AnomalyMonitor,
     "referential": ReferentialIntegrityMonitor,
+    "uniqueness": UniquenessMonitor,
 }
 
 # Map UI-only monitor types to real backend implementations.
@@ -46,7 +48,7 @@ MAX_MULTI_COLUMNS = 50
 
 MONITOR_ROUTING: Dict[str, tuple] = {
     "null_rate": ("anomaly", {"metric": "null_rate", "column": "*"}),
-    "uniqueness": ("anomaly", {"metric": "distinct_rate", "column": "*"}),
+    # "uniqueness" is now a first-class monitor in MONITOR_REGISTRY
     "distribution": ("anomaly", {"metric": "avg", "column": "*"}),
 }
 
@@ -383,8 +385,6 @@ class MonitorExecutor:
         stddev = math.sqrt(variance) if variance > 0 else 0
 
         # Prefer z-score baseline over min/max thresholds.
-        # VolumeMonitor._evaluate_simple() checks historical_mean/historical_stddev
-        # first, making this the default anomaly detection mode.
         config["historical_mean"] = mean
         config["historical_stddev"] = stddev
         config["time_bucket_column"] = ts_col
@@ -395,12 +395,43 @@ class MonitorExecutor:
             config["min_rows"] = max(0, int(mean * 0.5))
             config["max_rows"] = int(mean * 2)
 
+        # Table-type auto-detection: detect full-refresh vs append-only
+        # by comparing recent rows to total rows
+        if not config.get("volume_mode") or config.get("volume_mode") == "auto":
+            try:
+                total_sql = (
+                    f"SELECT COUNT(*) AS total FROM {fqn}"
+                )
+                total_rows_result = self.query_func(total_sql)
+                total_rows = int(total_rows_result[0].get("total", 0)) if total_rows_result else 0
+
+                if total_rows > 0:
+                    recent_rows = sum(counts)
+                    ratio = recent_rows / total_rows
+
+                    if ratio > 0.8:
+                        detected_mode = "total"
+                        reason = f"{ratio:.0%} of rows in last 30 days — likely full-refresh table"
+                        confidence = "high" if ratio > 0.95 else "medium"
+                    else:
+                        detected_mode = "period"
+                        reason = f"{ratio:.0%} of rows in last 30 days — likely append-only table"
+                        confidence = "high" if ratio < 0.3 else "medium"
+
+                    config["_detected_volume_mode"] = detected_mode
+                    config["_detection_reason"] = reason
+                    config["_detection_confidence"] = confidence
+                    config["volume_mode"] = detected_mode
+            except Exception:
+                pass  # Skip auto-detection on failure
+
         logger.info(
             "[AutoConfig] Volume auto-configured (baseline mode)",
             mean=round(mean, 0),
             stddev=round(stddev, 0),
             data_points=len(counts),
             has_min_max=stddev == 0,
+            detected_mode=config.get("_detected_volume_mode"),
         )
         return config
 

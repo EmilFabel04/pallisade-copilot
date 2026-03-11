@@ -280,31 +280,24 @@ class SchedulerService:
 
                 conn.commit()
 
-            # Record metric observation in the time-series baseline table
+            # Record metric observations in the time-series baseline table
             try:
                 from scanner.monitors.baseline_store import BaselineStore
 
                 store = BaselineStore(conn)
-                metric_value = result.get("value")
-                if metric_value is not None:
-                    monitor_type = (task.get("monitorType") or "").lower()
-                    metric_name = self._baseline_metric_name(monitor_type, task)
-                    store.record(
+                monitor_type = (task.get("monitorType") or "").lower()
+                metrics = self._extract_baseline_metrics(monitor_type, task, result)
+                if metrics:
+                    store.record_batch(
                         monitor_id=task_id,
-                        metric_name=metric_name,
-                        value=float(metric_value),
+                        metrics=metrics,
                         target_fqn=task.get("targetFqn"),
-                        details={
-                            "status": status,
-                            "monitor_type": monitor_type,
-                        },
                     )
                     conn.commit()
                     logger.debug(
-                        "[Scheduler] Recorded baseline observation",
+                        "[Scheduler] Recorded baseline observations",
                         task=task_name,
-                        metric=metric_name,
-                        value=metric_value,
+                        count=len(metrics),
                     )
             except Exception as baseline_err:
                 logger.debug(f"[Scheduler] Baseline record skipped: {baseline_err}")
@@ -396,6 +389,66 @@ class SchedulerService:
         if monitor_type == "schema":
             return "schema_change_count"
         return "value"
+
+    @staticmethod
+    def _extract_baseline_metrics(
+        monitor_type: str, task: Dict[str, Any], result: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Extract multiple metric observations from a monitor result.
+
+        Returns a list of dicts with ``metric_name``, ``value``, and
+        optionally ``details``.  This replaces the old single-metric
+        recording so that we capture richer time-series data (e.g.
+        both row_count and row_count_delta for volume, or multiple
+        anomaly sub-metrics).
+        """
+        metrics: List[Dict[str, Any]] = []
+        details = result.get("details") or {}
+        primary_value = result.get("value")
+        status = result.get("status", "")
+
+        base_details = {
+            "status": status,
+            "monitor_type": monitor_type,
+        }
+
+        # Always record the primary metric if present
+        if primary_value is not None:
+            config = task.get("config") or {}
+            if isinstance(config, str):
+                import json as _json
+                config = _json.loads(config)
+
+            if monitor_type == "freshness":
+                metrics.append({"metric_name": "hours_since_update", "value": float(primary_value), "details": base_details})
+            elif monitor_type == "volume":
+                metrics.append({"metric_name": "row_count", "value": float(primary_value), "details": base_details})
+                # Also record delta if available
+                delta = details.get("row_count_delta") or details.get("delta")
+                if delta is not None:
+                    metrics.append({"metric_name": "row_count_delta", "value": float(delta), "details": base_details})
+            elif monitor_type == "anomaly":
+                col = config.get("column", "")
+                metric = config.get("metric", "value")
+                name = f"{col}.{metric}" if col else metric
+                metrics.append({"metric_name": name, "value": float(primary_value), "details": base_details})
+            elif monitor_type == "uniqueness":
+                metrics.append({"metric_name": "uniqueness_pct", "value": float(primary_value), "details": base_details})
+                # Record distinct_count if available
+                distinct = details.get("distinct_count")
+                if distinct is not None:
+                    metrics.append({"metric_name": "distinct_count", "value": float(distinct), "details": base_details})
+            elif monitor_type == "schema_change":
+                metrics.append({"metric_name": "schema_change_count", "value": float(primary_value), "details": base_details})
+            elif monitor_type == "referential":
+                metrics.append({"metric_name": "orphan_count", "value": float(primary_value), "details": base_details})
+                orphan_pct = details.get("orphan_pct")
+                if orphan_pct is not None:
+                    metrics.append({"metric_name": "orphan_pct", "value": float(orphan_pct), "details": base_details})
+            else:
+                metrics.append({"metric_name": "value", "value": float(primary_value), "details": base_details})
+
+        return metrics
 
     async def _dispatch_alert(self, task: Dict[str, Any], result: Dict[str, Any]):
         """Send alert to configured channels via the Next.js alert API."""

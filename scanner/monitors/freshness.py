@@ -18,6 +18,7 @@ import structlog
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
+from .stats import baseline_confidence, build_confidence_info
 
 logger = structlog.get_logger()
 
@@ -61,34 +62,6 @@ def _classify_column_mode(column_name: str) -> str:
     return "business_event"
 
 
-def _pick_best_column(
-    columns: List[str], preferred_mode: Optional[str] = None
-) -> Optional[str]:
-    """Pick the best timestamp column from a list of available columns.
-
-    If preferred_mode is set ("ingestion" or "business_event"), prefer
-    columns matching that mode. Otherwise, use the default priority list.
-    """
-    if not columns:
-        return None
-
-    lower_map = {c.lower(): c for c in columns}
-
-    if preferred_mode == "ingestion":
-        priority = _INGESTION_COLUMNS + _BUSINESS_EVENT_COLUMNS
-    elif preferred_mode == "business_event":
-        priority = _BUSINESS_EVENT_COLUMNS + _INGESTION_COLUMNS
-    else:
-        priority = _TIMESTAMP_COLUMN_PRIORITY
-
-    for candidate in priority:
-        if candidate in lower_map:
-            return lower_map[candidate]
-
-    # No priority match — return the first timestamp column found
-    return columns[0]
-
-
 def build_discovery_query(
     database: str,
     schema: str,
@@ -117,6 +90,169 @@ def build_discovery_query(
     )
 
 
+def _score_candidate(
+    column_name: str,
+    preferred_mode: Optional[str] = None,
+    non_null_rate: Optional[float] = None,
+    max_value: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Score a single timestamp candidate column.
+
+    Returns a dict with column_name, mode, score (0-100), and reasoning.
+    Score components:
+    - Name priority (0-50): how well the name matches known conventions
+    - Non-null rate (0-30): percentage of non-null values (higher = better)
+    - Recency (0-20): how recent the MAX value is
+    """
+    lower = column_name.lower()
+    mode = _classify_column_mode(column_name)
+    reasons: List[str] = []
+
+    # Name priority score (0-50)
+    if preferred_mode == "ingestion":
+        priority = _INGESTION_COLUMNS + _BUSINESS_EVENT_COLUMNS
+    elif preferred_mode == "business_event":
+        priority = _BUSINESS_EVENT_COLUMNS + _INGESTION_COLUMNS
+    else:
+        priority = _TIMESTAMP_COLUMN_PRIORITY
+
+    name_score = 0.0
+    for idx, known in enumerate(priority):
+        if lower == known:
+            # Higher position in list → higher score
+            name_score = 50.0 * (1.0 - idx / max(len(priority), 1))
+            reasons.append(f"Known {mode} column (rank {idx + 1}/{len(priority)})")
+            break
+    if name_score == 0:
+        # Unknown column name — give partial credit for containing time-related words
+        time_keywords = {"time", "date", "timestamp", "created", "updated", "at"}
+        if any(kw in lower for kw in time_keywords):
+            name_score = 10.0
+            reasons.append("Contains time-related keyword")
+        else:
+            reasons.append("Unknown timestamp column name")
+
+    # Non-null rate score (0-30)
+    null_score = 0.0
+    if non_null_rate is not None:
+        null_score = 30.0 * non_null_rate
+        if non_null_rate >= 0.99:
+            reasons.append(f"Excellent non-null rate ({non_null_rate:.1%})")
+        elif non_null_rate >= 0.9:
+            reasons.append(f"Good non-null rate ({non_null_rate:.1%})")
+        else:
+            reasons.append(f"Low non-null rate ({non_null_rate:.1%})")
+    else:
+        null_score = 15.0  # assume decent if unknown
+
+    # Recency score (0-20)
+    recency_score = 10.0  # default if unknown
+    if max_value:
+        try:
+            from datetime import datetime as _dt
+            max_dt = _dt.fromisoformat(str(max_value).replace("Z", "+00:00"))
+            if max_dt.tzinfo is None:
+                max_dt = max_dt.replace(tzinfo=timezone.utc)
+            hours_ago = (datetime.now(timezone.utc) - max_dt).total_seconds() / 3600
+            if hours_ago <= 24:
+                recency_score = 20.0
+                reasons.append("Updated within last 24h")
+            elif hours_ago <= 168:
+                recency_score = 15.0
+                reasons.append(f"Updated {hours_ago:.0f}h ago")
+            elif hours_ago <= 720:
+                recency_score = 8.0
+                reasons.append(f"Updated {hours_ago / 24:.0f} days ago")
+            else:
+                recency_score = 2.0
+                reasons.append(f"Stale — last value {hours_ago / 24:.0f} days ago")
+        except (ValueError, TypeError):
+            pass
+
+    total_score = round(name_score + null_score + recency_score, 1)
+
+    return {
+        "column_name": column_name,
+        "mode": mode,
+        "score": total_score,
+        "name_score": round(name_score, 1),
+        "null_score": round(null_score, 1),
+        "recency_score": round(recency_score, 1),
+        "reasons": reasons,
+    }
+
+
+def discover_timestamp_candidates(
+    query_func: Callable,
+    database: str,
+    schema: str,
+    table: str,
+    dialect: str = "postgres",
+    preferred_mode: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Discover and rank all timestamp columns in a table.
+
+    Returns a list of scored candidates sorted by score (highest first).
+    Each candidate dict has: column_name, mode, score, reasons.
+    """
+    sql = build_discovery_query(database, schema, table, dialect)
+    try:
+        rows = query_func(sql)
+    except Exception as e:
+        logger.warning(f"[Freshness] Discovery query failed: {e}")
+        return []
+
+    column_names = [r.get("column_name") for r in rows if r.get("column_name")]
+    if not column_names:
+        return []
+
+    fqn = f"{database}.{schema}.{table}" if database else f"{schema}.{table}"
+    if dialect == "bigquery":
+        fqn = f"`{database}.{schema}.{table}`"
+
+    candidates = []
+    for col in column_names:
+        non_null_rate = None
+        max_value = None
+
+        # Try to get stats for each column (non-null rate + MAX)
+        try:
+            if dialect == "bigquery":
+                stats_sql = (
+                    f"SELECT "
+                    f"COUNTIF({col} IS NOT NULL) / COUNT(*) AS non_null_rate, "
+                    f"CAST(MAX({col}) AS STRING) AS max_value "
+                    f"FROM {fqn}"
+                )
+            else:
+                stats_sql = (
+                    f"SELECT "
+                    f"CAST(SUM(CASE WHEN {col} IS NOT NULL THEN 1 ELSE 0 END) AS FLOAT) "
+                    f"/ NULLIF(COUNT(*), 0) AS non_null_rate, "
+                    f"CAST(MAX({col}) AS VARCHAR) AS max_value "
+                    f"FROM {fqn}"
+                )
+            stats_rows = query_func(stats_sql)
+            if stats_rows:
+                r = stats_rows[0]
+                if r.get("non_null_rate") is not None:
+                    non_null_rate = float(r["non_null_rate"])
+                max_value = r.get("max_value")
+        except Exception:
+            pass  # Score without stats
+
+        scored = _score_candidate(
+            col,
+            preferred_mode=preferred_mode,
+            non_null_rate=non_null_rate,
+            max_value=max_value,
+        )
+        candidates.append(scored)
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    return candidates
+
+
 def discover_timestamp_column(
     query_func: Callable,
     database: str,
@@ -124,31 +260,40 @@ def discover_timestamp_column(
     table: str,
     dialect: str = "postgres",
     preferred_mode: Optional[str] = None,
-) -> Optional[str]:
-    """Run a discovery query and return the best timestamp column name."""
-    sql = build_discovery_query(database, schema, table, dialect)
-    try:
-        rows = query_func(sql)
-        column_names = [r.get("column_name") for r in rows if r.get("column_name")]
-        best = _pick_best_column(column_names, preferred_mode)
-        if best:
-            mode = _classify_column_mode(best)
-            logger.info(
-                "[Freshness] Auto-detected timestamp column",
-                column=best,
-                mode=mode,
-                candidates=column_names,
-                table=f"{database}.{schema}.{table}",
-            )
-        else:
-            logger.warning(
-                "[Freshness] No timestamp columns found",
-                table=f"{database}.{schema}.{table}",
-            )
-        return best
-    except Exception as e:
-        logger.warning(f"[Freshness] Discovery query failed: {e}")
+    return_candidates: bool = False,
+) -> Any:
+    """Run a discovery query and return the best timestamp column name.
+
+    When return_candidates=True, returns a tuple of (best_column, all_candidates)
+    so callers can store runner-up columns for transparency.
+    """
+    candidates = discover_timestamp_candidates(
+        query_func, database, schema, table, dialect, preferred_mode
+    )
+
+    if not candidates:
+        logger.warning(
+            "[Freshness] No timestamp columns found",
+            table=f"{database}.{schema}.{table}",
+        )
+        if return_candidates:
+            return None, []
         return None
+
+    best = candidates[0]["column_name"]
+    mode = candidates[0]["mode"]
+    logger.info(
+        "[Freshness] Auto-detected timestamp column",
+        column=best,
+        mode=mode,
+        score=candidates[0]["score"],
+        candidates=[c["column_name"] for c in candidates],
+        table=f"{database}.{schema}.{table}",
+    )
+
+    if return_candidates:
+        return best, candidates
+    return best
 
 
 class FreshnessMonitor(BaseMonitor):
@@ -444,11 +589,16 @@ class FreshnessMonitor(BaseMonitor):
                     "last_value": str(row.get("last_value", "")),
                     "total_rows": row.get("total_rows"),
                     "explanation": (
-                        f"Cadence-aware: learned update frequency is "
-                        f"~{median_gap:.1f}h (median of {len(gaps)} gaps). "
+                        f"Cadence-aware: expected update every "
+                        f"~{median_gap:.1f}h (based on {len(gaps)} measurements). "
                         f"Current gap of {hours:.1f}h is within "
                         f"{self.cadence_multiplier}x the median "
                         f"({expected_max:.1f}h)."
+                    ),
+                    "confidence_info": build_confidence_info(
+                        confidence_pct=baseline_confidence(len(gaps)),
+                        baseline_count=len(gaps),
+                        evaluation_mode="cadence",
                     ),
                 },
             )
@@ -491,11 +641,16 @@ class FreshnessMonitor(BaseMonitor):
                 "last_value": str(row.get("last_value", "")),
                 "total_rows": row.get("total_rows"),
                 "explanation": (
-                    f"Cadence-aware detection: learned update frequency is "
-                    f"~{median_gap:.1f}h (median of {len(gaps)} gaps). "
+                    f"Cadence-aware: expected update every "
+                    f"~{median_gap:.1f}h (based on {len(gaps)} measurements). "
                     f"Current gap of {hours:.1f}h exceeds "
                     f"{self.cadence_multiplier}x the median "
                     f"({expected_max:.1f}h)."
+                ),
+                "confidence_info": build_confidence_info(
+                    confidence_pct=baseline_confidence(len(gaps)),
+                    baseline_count=len(gaps),
+                    evaluation_mode="cadence",
                 ),
             },
         )

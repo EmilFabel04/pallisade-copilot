@@ -176,6 +176,84 @@ def _discover_all_columns(
         return []
 
 
+# Column-type → recommended metric presets
+_STRING_METRICS = ["null_rate", "distinct_count"]
+_NUMERIC_METRICS = ["null_rate", "avg", "min", "max", "zero_rate"]
+_DATETIME_METRICS = ["null_rate", "min", "max"]
+
+# Type classification sets
+_NUMERIC_TYPES = {
+    "integer", "bigint", "smallint", "int", "int64", "float64", "numeric",
+    "bignumeric", "decimal", "real", "double precision", "float", "float4",
+    "float8", "double", "number", "tinyint", "byteint",
+}
+_DATETIME_TYPES = {
+    "date", "datetime", "timestamp", "timestamptz",
+    "timestamp with time zone", "timestamp without time zone",
+    "timestamp_ltz", "timestamp_ntz", "timestamp_tz",
+}
+
+
+def _discover_columns_with_types(
+    query_func, database: str, schema: str, table: str, dialect: str
+) -> list[tuple[str, str]]:
+    """Discover columns with their data types.
+
+    Returns list of (column_name, data_type) tuples.
+    Excludes complex types (STRUCT, ARRAY, JSON, etc.).
+    """
+    if dialect == "bigquery":
+        exclude = "'STRUCT', 'ARRAY', 'GEOGRAPHY', 'JSON', 'RECORD'"
+        sql = (
+            f"SELECT column_name, data_type FROM `{database}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+            f"WHERE table_name = '{table}' AND data_type NOT IN ({exclude}) "
+            f"ORDER BY ordinal_position"
+        )
+    elif dialect == "snowflake":
+        exclude = "'VARIANT', 'OBJECT', 'ARRAY'"
+        sql = (
+            f"SELECT COLUMN_NAME, DATA_TYPE FROM {database}.INFORMATION_SCHEMA.COLUMNS "
+            f"WHERE TABLE_SCHEMA = '{schema.upper()}' AND TABLE_NAME = '{table.upper()}' "
+            f"AND DATA_TYPE NOT IN ({exclude}) ORDER BY ORDINAL_POSITION"
+        )
+    else:
+        exclude = "'json', 'jsonb', 'xml', 'point', 'polygon', 'line'"
+        sql = (
+            f"SELECT column_name, data_type FROM information_schema.columns "
+            f"WHERE table_schema = '{schema}' AND table_name = '{table}' "
+            f"AND data_type NOT IN ({exclude}) ORDER BY ordinal_position"
+        )
+
+    try:
+        rows = query_func(sql)
+        result = []
+        for row in rows:
+            name = row.get("column_name") or row.get("COLUMN_NAME", "")
+            dtype = (row.get("data_type") or row.get("DATA_TYPE", "")).lower()
+            if name:
+                result.append((name, dtype))
+        return result
+    except Exception as e:
+        logger.warning(f"[Executor] Failed to discover columns with types: {e}")
+        return []
+
+
+def _metrics_for_type(data_type: str) -> list[str]:
+    """Return the recommended metric presets for a given column data type."""
+    dt = data_type.lower().strip()
+    # Strip precision/length
+    paren = dt.find("(")
+    if paren > 0:
+        dt = dt[:paren].strip()
+
+    if dt in _NUMERIC_TYPES:
+        return _NUMERIC_METRICS
+    if dt in _DATETIME_TYPES:
+        return _DATETIME_METRICS
+    # Default: string/boolean/other
+    return _STRING_METRICS
+
+
 class TaskExecutor:
     """Executes a scheduled task (structured monitor or LLM prompt)."""
 
@@ -404,6 +482,16 @@ class TaskExecutor:
                     executor, config, database, schema, table, sql_dialect
                 )
 
+            # Multi-column uniqueness: if column is "*", discover all columns
+            # and run uniqueness check on each one.
+            if (
+                resolved_type == "uniqueness"
+                and getattr(monitor, "column", "") == "*"
+            ):
+                return self._run_multi_column_uniqueness(
+                    executor, config, database, schema, table, sql_dialect
+                )
+
             result: MonitorResult = executor.run_monitor(
                 monitor, database, schema, table
             )
@@ -567,35 +655,58 @@ class TaskExecutor:
         from scanner.monitors.executor import MAX_MULTI_COLUMNS
 
         metric = config.get("metric", "avg")
+        use_type_presets = config.get("type_aware_presets", True)
 
-        if metric in AnomalyMonitor.ALL_COLUMN_METRICS:
-            columns = _discover_all_columns(
-                executor.query_func, database, schema, table, dialect
-            )
-        else:
-            columns = _discover_numeric_columns(
-                executor.query_func, database, schema, table, dialect
-            )
+        # Discover columns with types for smarter metric selection
+        columns_with_types = _discover_columns_with_types(
+            executor.query_func, database, schema, table, dialect
+        )
 
-        # Enforce column limit
-        columns = columns[:MAX_MULTI_COLUMNS]
+        if not columns_with_types:
+            # Fallback to old discovery
+            if metric in AnomalyMonitor.ALL_COLUMN_METRICS:
+                columns = _discover_all_columns(
+                    executor.query_func, database, schema, table, dialect
+                )
+            else:
+                columns = _discover_numeric_columns(
+                    executor.query_func, database, schema, table, dialect
+                )
+            columns_with_types = [(c, "unknown") for c in columns]
 
-        if not columns:
+        columns_with_types = columns_with_types[:MAX_MULTI_COLUMNS]
+
+        if not columns_with_types:
             return {
                 "status": "WARN",
                 "message": f"No suitable columns found in {database}.{schema}.{table} for metric '{metric}'",
             }
 
         logger.info(
-            f"[Executor] Multi-column anomaly: checking {len(columns)} columns",
-            columns=columns,
+            f"[Executor] Multi-column anomaly: checking {len(columns_with_types)} columns",
+            columns=[c[0] for c in columns_with_types],
             metric=metric,
+            type_aware=use_type_presets,
         )
         per_column: list[dict] = []
         anomalies: list[str] = []
 
-        for col in columns:
-            col_config = {**config, "column": col, "metric": metric}
+        # Build (column, metrics_to_run) pairs
+        col_metric_pairs: list[tuple[str, str]] = []
+        for col_name, col_type in columns_with_types:
+            if use_type_presets and metric in ("avg", "null_rate", "distinct_rate"):
+                # Use type-aware presets: run multiple metrics per column
+                for m in _metrics_for_type(col_type):
+                    # Skip numeric-only metrics on non-numeric columns
+                    if m in AnomalyMonitor.NUMERIC_ONLY_METRICS and col_type not in _NUMERIC_TYPES:
+                        continue
+                    col_metric_pairs.append((col_name, m))
+            else:
+                # Single metric mode (user explicitly chose a metric)
+                col_metric_pairs.append((col_name, metric))
+
+        for col, col_metric in col_metric_pairs:
+            col_config = {**config, "column": col, "metric": col_metric}
             col_monitor = AnomalyMonitor(config=col_config)
 
             try:
@@ -615,17 +726,88 @@ class TaskExecutor:
                 })
 
         # Aggregate status: FAIL if any anomaly, PASS if all pass
+        n_cols = len(columns_with_types)
+        n_checks = len(col_metric_pairs)
         if anomalies:
             return {
                 "status": "FAIL",
-                "message": f"Anomalies detected in {len(anomalies)}/{len(columns)} columns: {'; '.join(anomalies[:5])}",
-                "details": {"columns_checked": len(columns), "anomalies": len(anomalies), "per_column": per_column},
+                "message": f"Anomalies detected in {len(anomalies)}/{n_checks} checks across {n_cols} columns: {'; '.join(anomalies[:5])}",
+                "details": {"columns_checked": n_cols, "checks_run": n_checks, "anomalies": len(anomalies), "per_column": per_column},
             }
 
         return {
             "status": "PASS",
-            "message": f"All {len(columns)} numeric columns within normal range ({metric})",
-            "details": {"columns_checked": len(columns), "anomalies": 0, "per_column": per_column},
+            "message": f"All {n_checks} checks across {n_cols} columns within normal range",
+            "details": {"columns_checked": n_cols, "checks_run": n_checks, "anomalies": 0, "per_column": per_column},
+        }
+
+    def _run_multi_column_uniqueness(
+        self,
+        executor: "MonitorExecutor",
+        config: Dict[str, Any],
+        database: str,
+        schema: str,
+        table: str,
+        dialect: str,
+    ) -> Dict[str, Any]:
+        """Discover columns and run uniqueness check on each one.
+
+        Returns an aggregated result with per-column details.
+        """
+        from scanner.monitors.uniqueness import UniquenessMonitor
+        from scanner.monitors.base import MonitorStatus
+        from scanner.monitors.executor import MAX_MULTI_COLUMNS
+
+        columns = _discover_all_columns(
+            executor.query_func, database, schema, table, dialect
+        )
+        columns = columns[:MAX_MULTI_COLUMNS]
+
+        if not columns:
+            return {
+                "status": "WARN",
+                "message": f"No columns found in {database}.{schema}.{table} for uniqueness check",
+            }
+
+        logger.info(
+            f"[Executor] Multi-column uniqueness: checking {len(columns)} columns",
+            columns=columns,
+        )
+        per_column: list[dict] = []
+        issues: list[str] = []
+
+        for col in columns:
+            col_config = {**config, "column": col}
+            col_monitor = UniquenessMonitor(config=col_config)
+
+            try:
+                result = executor.run_monitor(col_monitor, database, schema, table)
+                entry = result.to_dict()
+                entry["column"] = col
+                per_column.append(entry)
+
+                if result.status == MonitorStatus.FAIL:
+                    issues.append(f"{col}: {result.message}")
+            except Exception as e:
+                logger.warning(f"[Executor] Uniqueness check for column {col} failed: {e}")
+                per_column.append({
+                    "column": col,
+                    "status": "ERROR",
+                    "message": str(e),
+                })
+
+        n_cols = len(columns)
+        if issues:
+            return {
+                "status": "FAIL",
+                "message": f"Uniqueness issues in {len(issues)}/{n_cols} columns: {'; '.join(issues[:5])}",
+                "details": {"columns_checked": n_cols, "issues": len(issues), "per_column": per_column},
+            }
+
+        return {
+            "status": "PASS",
+            "message": f"All {n_cols} columns have expected uniqueness levels",
+            "details": {"columns_checked": n_cols, "issues": 0, "per_column": per_column},
         }
 
     async def _execute_infrastructure(

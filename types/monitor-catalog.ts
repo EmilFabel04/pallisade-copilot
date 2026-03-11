@@ -152,14 +152,23 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
   {
     key: 'UNIQUENESS',
     label: 'Uniqueness',
-    description: 'Detects drops in column uniqueness',
+    description: 'Detects drops in column uniqueness (key degradation)',
     category: 'warehouse',
     required_integrations: WAREHOUSE_TOOL_TYPES,
     target_selector_type: 'fqn',
     executor_type: 'warehouse_sql',
     supports_baselines: true,
     auto_configurable: true,
-    config_schema: [],
+    config_schema: [
+      {
+        key: 'column',
+        label: 'Column',
+        type: 'text',
+        placeholder: 'Leave blank to check all columns',
+        help_text: 'Specific column to monitor, or leave blank to auto-discover all columns.',
+        advanced: true,
+      },
+    ],
   },
   {
     key: 'DISTRIBUTION',

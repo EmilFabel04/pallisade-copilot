@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .base import MonitorResult, MonitorStatus
+from .stats import score_anomaly, build_confidence_info
 
 import structlog
 
@@ -171,6 +172,8 @@ class ServerHealthMonitor:
         self.max_cpu: float = float(self.config.get("max_cpu", 90))
         self.max_memory: float = float(self.config.get("max_memory", 90))
         self.max_disk: float = float(self.config.get("max_disk", 85))
+        self.historical_cpu: Optional[List[float]] = self.config.get("historical_cpu")
+        self.historical_memory: Optional[List[float]] = self.config.get("historical_memory")
 
     def execute(self, server_adapter: Any) -> MonitorResult:
         """Check system health on the remote server."""
@@ -216,6 +219,52 @@ class ServerHealthMonitor:
                     f"({disk.available_gb:.1f}GB free)"
                 )
 
+        # Baseline-aware anomaly detection (complements hard thresholds)
+        anomaly_notes: List[str] = []
+        anomaly_details: Dict[str, Any] = {}
+        if self.historical_cpu and len(self.historical_cpu) >= 3:
+            cpu_score = score_anomaly(
+                current=health.cpu_percent,
+                baseline=self.historical_cpu,
+                threshold=3.0,
+                min_effect_size=5.0,
+            )
+            anomaly_details["cpu_anomaly"] = {
+                "z_score": cpu_score.z_score,
+                "baseline_mean": cpu_score.baseline_mean,
+                "is_anomaly": cpu_score.is_anomaly,
+                "confidence_pct": cpu_score.confidence_pct,
+            }
+            if cpu_score.is_anomaly and cpu_score.direction == "above":
+                anomaly_notes.append(
+                    f"CPU {health.cpu_percent:.1f}% is anomalously high "
+                    f"(baseline mean: {cpu_score.baseline_mean:.1f}%, "
+                    f"z-score: {cpu_score.z_score:.2f})"
+                )
+
+        if self.historical_memory and len(self.historical_memory) >= 3:
+            mem_score = score_anomaly(
+                current=health.memory_percent,
+                baseline=self.historical_memory,
+                threshold=3.0,
+                min_effect_size=5.0,
+            )
+            anomaly_details["memory_anomaly"] = {
+                "z_score": mem_score.z_score,
+                "baseline_mean": mem_score.baseline_mean,
+                "is_anomaly": mem_score.is_anomaly,
+                "confidence_pct": mem_score.confidence_pct,
+            }
+            if mem_score.is_anomaly and mem_score.direction == "above":
+                anomaly_notes.append(
+                    f"Memory {health.memory_percent:.1f}% is anomalously high "
+                    f"(baseline mean: {mem_score.baseline_mean:.1f}%, "
+                    f"z-score: {mem_score.z_score:.2f})"
+                )
+
+        # Anomaly notes become warnings (hard thresholds always win)
+        warnings.extend(anomaly_notes)
+
         details: Dict[str, Any] = {
             "hostname": health.hostname,
             "os": health.os_info,
@@ -235,6 +284,7 @@ class ServerHealthMonitor:
                 }
                 for d in health.disk_usage
             ],
+            **anomaly_details,
         }
 
         if issues:

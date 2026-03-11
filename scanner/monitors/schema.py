@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
+from .stats import column_name_similarity
 
 
 # Severity levels (ordered from highest to lowest)
@@ -131,6 +132,9 @@ class SchemaMonitor(BaseMonitor):
         self.fail_on_removed = self.config.get("fail_on_column_removed", True)
         self.fail_on_type_change = self.config.get("fail_on_type_change", True)
         self.min_severity: Optional[str] = self.config.get("min_severity")
+        self.rename_similarity_threshold: float = float(
+            self.config.get("rename_similarity_threshold", 0.6)
+        )
 
     def build_query(
         self,
@@ -253,6 +257,41 @@ class SchemaMonitor(BaseMonitor):
                 "severity": severity,
             })
 
+        # Detect suspected renames: one-to-one best-match between
+        # added and removed columns with compatible types.
+        added_names = sorted(current_names - baseline_names)
+        removed_names = sorted(baseline_names - current_names)
+        if added_names and removed_names:
+            # Build candidate pairs (removed, added) with compatible types
+            candidates = []
+            for rm in removed_names:
+                rm_type = baseline[rm]["data_type"]
+                for ad in added_names:
+                    ad_type = current_columns[ad]["data_type"]
+                    if rm_type != ad_type:
+                        continue
+                    sim = column_name_similarity(rm, ad)
+                    if sim >= self.rename_similarity_threshold:
+                        candidates.append((sim, rm, ad))
+
+            # Greedy one-to-one matching: highest similarity first
+            candidates.sort(reverse=True, key=lambda x: x[0])
+            used_removed: set = set()
+            used_added: set = set()
+            for sim, rm, ad in candidates:
+                if rm in used_removed or ad in used_added:
+                    continue
+                used_removed.add(rm)
+                used_added.add(ad)
+                changes.append({
+                    "change_type": "suspected_rename",
+                    "old_column": rm,
+                    "new_column": ad,
+                    "data_type": baseline[rm]["data_type"],
+                    "similarity": round(sim, 3),
+                    "severity": SEVERITY_LOW,
+                })
+
         # Detect type changes on existing columns.
         for col in sorted(baseline_names & current_names):
             old_type = baseline[col]["data_type"]
@@ -352,6 +391,8 @@ class SchemaMonitor(BaseMonitor):
             summary_parts.append(f"{by_type['type_changed']} type change(s)")
         if by_type.get("nullable_changed"):
             summary_parts.append(f"{by_type['nullable_changed']} nullable change(s)")
+        if by_type.get("suspected_rename"):
+            summary_parts.append(f"{by_type['suspected_rename']} suspected rename(s)")
 
         # Count by severity for explanation
         severity_counts: Dict[str, int] = {}

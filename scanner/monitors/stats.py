@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -389,6 +389,84 @@ def detrend_linear(values: List[float]) -> List[float]:
     intercept = y_mean - slope * x_mean
 
     return [v - (intercept + slope * i) for i, v in enumerate(values)]
+
+
+def levenshtein_distance(a: str, b: str) -> int:
+    """Compute the Levenshtein edit distance between two strings."""
+    if len(a) < len(b):
+        return levenshtein_distance(b, a)
+    if len(b) == 0:
+        return len(a)
+
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            cost = 0 if ca == cb else 1
+            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
+        prev = curr
+    return prev[-1]
+
+
+def column_name_similarity(a: str, b: str) -> float:
+    """Normalized similarity between two column names.
+
+    Combines edit distance with prefix/suffix overlap for better
+    matching of columns like ``user_id`` vs ``userid`` or
+    ``created_at`` vs ``updated_at``.
+
+    Returns a float in [0, 1] where 1.0 is identical.
+    """
+    a_lower = a.lower().strip()
+    b_lower = b.lower().strip()
+    if a_lower == b_lower:
+        return 1.0
+    if not a_lower or not b_lower:
+        return 0.0
+
+    max_len = max(len(a_lower), len(b_lower))
+    edit_dist = levenshtein_distance(a_lower, b_lower)
+    edit_sim = 1.0 - (edit_dist / max_len)
+
+    # Prefix overlap bonus
+    prefix_len = 0
+    for ca, cb in zip(a_lower, b_lower):
+        if ca == cb:
+            prefix_len += 1
+        else:
+            break
+    prefix_sim = prefix_len / max_len
+
+    # Suffix overlap bonus
+    suffix_len = 0
+    for ca, cb in zip(reversed(a_lower), reversed(b_lower)):
+        if ca == cb:
+            suffix_len += 1
+        else:
+            break
+    suffix_sim = suffix_len / max_len
+
+    # Weighted combination: edit distance dominant, prefix/suffix as bonus
+    return min(1.0, edit_sim * 0.6 + prefix_sim * 0.2 + suffix_sim * 0.2)
+
+
+def build_confidence_info(
+    confidence_pct: int,
+    baseline_count: int,
+    evaluation_mode: str,
+    downgraded: bool = False,
+) -> Dict[str, Any]:
+    """Build a standardized confidence info dict for monitor results.
+
+    All baseline-aware monitors should include this in their result
+    details under the ``confidence_info`` key for consistent reporting.
+    """
+    return {
+        "confidence_pct": confidence_pct,
+        "baseline_count": baseline_count,
+        "evaluation_mode": evaluation_mode,
+        "downgraded": downgraded,
+    }
 
 
 def format_number(value: float) -> str:

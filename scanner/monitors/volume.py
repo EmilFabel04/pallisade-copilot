@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
-from .stats import score_anomaly, detrend_linear
+from .stats import score_anomaly, detrend_linear, build_confidence_info
 
 
 class VolumeMonitor(BaseMonitor):
@@ -78,6 +78,9 @@ class VolumeMonitor(BaseMonitor):
             int(self.config.get("lookback_days", 30)),
             self.max_scan_days,
         )
+        self.seasonality: Optional[str] = self.config.get("seasonality")  # "day_of_week" or None
+        self.time_bucket_interval: str = self.config.get("time_bucket_interval", "1 day")  # "1 day" or "1 hour" (opt-in)
+        self.partition_column: Optional[str] = self.config.get("partition_column")
 
     def build_query(
         self,
@@ -89,33 +92,56 @@ class VolumeMonitor(BaseMonitor):
         fqn = self._fqn(database, schema, table)
 
         if self.time_bucket_column:
-            # Time-series volume: count rows per day for the lookback window.
             col = self.time_bucket_column
+            is_hourly = self.time_bucket_interval == "1 hour"
 
             if dialect == "bigquery":
-                # Double-cast via TIMESTAMP so STRING/TIMESTAMP columns
-                # can be compared against DATE without type mismatch.
-                ts_date = f"CAST(CAST({col} AS TIMESTAMP) AS DATE)"
+                if is_hourly:
+                    bucket_expr = f"TIMESTAMP_TRUNC(CAST({col} AS TIMESTAMP), HOUR)"
+                    bucket_alias = "bucket_ts"
+                else:
+                    bucket_expr = f"CAST(CAST({col} AS TIMESTAMP) AS DATE)"
+                    bucket_alias = "bucket_date"
                 sql = (
                     f"SELECT "
-                    f"{ts_date} AS bucket_date, "
+                    f"{bucket_expr} AS {bucket_alias}, "
                     f"COUNT(*) AS row_count "
                     f"FROM {fqn} "
-                    f"WHERE {ts_date} >= DATE_SUB(CURRENT_DATE(), "
+                    f"WHERE {bucket_expr} >= "
+                    f"{'TIMESTAMP' if is_hourly else 'DATE'}_SUB("
+                    f"{'CURRENT_TIMESTAMP()' if is_hourly else 'CURRENT_DATE()'}, "
                     f"INTERVAL {self.lookback_days} DAY) "
-                    f"GROUP BY bucket_date "
-                    f"ORDER BY bucket_date"
+                    f"GROUP BY {bucket_alias} "
+                    f"ORDER BY {bucket_alias}"
                 )
                 return sql
 
+            if is_hourly:
+                bucket_expr = f"DATE_TRUNC('hour', {col})"
+                bucket_alias = "bucket_ts"
+            else:
+                bucket_expr = f"CAST({col} AS DATE)"
+                bucket_alias = "bucket_date"
+
             sql = (
                 f"SELECT "
-                f"CAST({col} AS DATE) AS bucket_date, "
+                f"{bucket_expr} AS {bucket_alias}, "
                 f"COUNT(*) AS row_count "
                 f"FROM {fqn} "
                 f"WHERE {col} >= CURRENT_DATE - INTERVAL '{self.lookback_days} days' "
-                f"GROUP BY CAST({col} AS DATE) "
-                f"ORDER BY bucket_date"
+                f"GROUP BY {bucket_expr} "
+                f"ORDER BY {bucket_alias}"
+            )
+        elif self.partition_column:
+            # Partition-aware: count per partition value
+            pcol = self.partition_column
+            if dialect == "bigquery" and pcol.upper() in ("_PARTITIONTIME", "_PARTITIONDATE"):
+                pcol = "_PARTITIONDATE"
+            sql = (
+                f"SELECT {pcol} AS partition_value, COUNT(*) AS row_count "
+                f"FROM {fqn} "
+                f"GROUP BY {pcol} "
+                f"ORDER BY {pcol}"
             )
         else:
             # Simple total row count.
@@ -138,6 +164,8 @@ class VolumeMonitor(BaseMonitor):
 
         if self.time_bucket_column:
             return self._evaluate_time_series(query_results, target_fqn)
+        elif self.partition_column and any("partition_value" in r for r in query_results):
+            return self._evaluate_partitioned(query_results, target_fqn)
         else:
             return self._evaluate_simple(query_results, target_fqn)
 
@@ -246,6 +274,42 @@ class VolumeMonitor(BaseMonitor):
         latest = counts[-1]
         baseline = counts[:-1]
 
+        # Weekday seasonality: filter baseline to same day-of-week as latest bucket
+        seasonal_filtered = False
+        if self.seasonality == "day_of_week" and len(query_results) >= 3:
+            latest_row = query_results[-1]
+            # Support both bucket_date (daily) and bucket_ts (hourly)
+            bucket_val = latest_row.get("bucket_date") or latest_row.get("bucket_ts")
+            if bucket_val is not None:
+                try:
+                    from datetime import datetime as _dt
+                    if isinstance(bucket_val, str):
+                        bucket_val = _dt.fromisoformat(bucket_val)
+                    if isinstance(bucket_val, _dt):
+                        target_dow = bucket_val.weekday()
+                    else:
+                        target_dow = bucket_val.weekday()  # date object
+
+                    dow_baseline = []
+                    for r in query_results[:-1]:
+                        bd = r.get("bucket_date") or r.get("bucket_ts")
+                        if bd is None:
+                            continue
+                        if isinstance(bd, str):
+                            bd = _dt.fromisoformat(bd)
+                        if isinstance(bd, _dt):
+                            row_dow = bd.weekday()
+                        else:
+                            row_dow = bd.weekday()
+                        if row_dow == target_dow:
+                            dow_baseline.append(int(r.get("row_count", 0)))
+
+                    if len(dow_baseline) >= 3:
+                        baseline = dow_baseline
+                        seasonal_filtered = True
+                except (ValueError, TypeError, AttributeError):
+                    pass  # Fall back to full baseline
+
         # Zero-row detection on latest bucket
         if latest == 0 and any(c > 0 for c in baseline):
             baseline_avg = sum(baseline) / len(baseline)
@@ -336,6 +400,7 @@ class VolumeMonitor(BaseMonitor):
 
         # Build result details
         raw_mean = sum(baseline) / len(baseline)
+        eval_mode = "seasonal_dow" if seasonal_filtered else "time_series"
         details: Dict[str, Any] = {
             "z_score": score.z_score,
             "mad_score": score.mad_score,
@@ -348,7 +413,14 @@ class VolumeMonitor(BaseMonitor):
             "threshold_used": score.threshold_used,
             "direction": score.direction,
             "detrended": self.detrend,
+            "seasonal_filtered": seasonal_filtered,
             "explanation": score.explanation,
+            "confidence_info": build_confidence_info(
+                confidence_pct=score.confidence_pct,
+                baseline_count=score.baseline_count,
+                evaluation_mode=eval_mode,
+                downgraded=score.is_anomaly and score.confidence_pct < 50,
+            ),
         }
 
         if score.is_anomaly:
@@ -391,6 +463,70 @@ class VolumeMonitor(BaseMonitor):
                 f"Daily volume {latest:,} is within expected range "
                 f"(baseline mean: {raw_mean:,.0f}, "
                 f"{score.method_used}: {score.z_score:.2f})."
+            ),
+            details=details,
+        )
+
+    def _evaluate_partitioned(
+        self,
+        query_results: List[Dict[str, Any]],
+        target_fqn: str,
+    ) -> MonitorResult:
+        """Evaluate per-partition row counts. Returns worst status across partitions."""
+        partition_issues: List[Dict[str, Any]] = []
+        worst_status = MonitorStatus.PASS
+        total_rows = 0
+
+        for r in query_results:
+            pval = r.get("partition_value", "unknown")
+            count = int(r.get("row_count", 0))
+            total_rows += count
+
+            issue: Optional[Dict[str, Any]] = None
+            if count == 0 and self.min_rows != 0:
+                issue = {"partition": str(pval), "row_count": count, "reason": "empty partition"}
+                worst_status = MonitorStatus.FAIL
+            elif self.min_rows is not None and count < self.min_rows:
+                issue = {"partition": str(pval), "row_count": count, "reason": f"below min_rows ({self.min_rows})"}
+                worst_status = MonitorStatus.FAIL
+            elif self.max_rows is not None and count > self.max_rows:
+                issue = {"partition": str(pval), "row_count": count, "reason": f"above max_rows ({self.max_rows})"}
+                worst_status = MonitorStatus.FAIL
+
+            if issue:
+                partition_issues.append(issue)
+
+        details: Dict[str, Any] = {
+            "partition_column": self.partition_column,
+            "partition_count": len(query_results),
+            "total_rows": total_rows,
+            "partition_issues": partition_issues,
+        }
+
+        if partition_issues:
+            issue_summary = "; ".join(
+                f"{p['partition']}: {p['reason']} ({p['row_count']:,} rows)"
+                for p in partition_issues[:5]
+            )
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target_fqn,
+                status=worst_status,
+                value=float(total_rows),
+                message=(
+                    f"{len(partition_issues)} partition issue(s): {issue_summary}"
+                ),
+                details=details,
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target_fqn,
+            status=MonitorStatus.PASS,
+            value=float(total_rows),
+            message=(
+                f"All {len(query_results)} partitions within expected range "
+                f"(total: {total_rows:,} rows)."
             ),
             details=details,
         )

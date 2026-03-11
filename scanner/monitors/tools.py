@@ -961,6 +961,92 @@ class DbtSourceFreshnessMonitor:
 
 
 # =============================================================================
+# Cross-cutting: Consecutive failure, Recovery, SLA breach
+# =============================================================================
+
+
+def enrich_tool_result(
+    result: MonitorResult,
+    config: Dict[str, Any],
+) -> MonitorResult:
+    """Post-process a tool monitor result with streak/recovery/SLA logic.
+
+    Config keys consumed:
+        recent_statuses : list[str]
+            Last N run statuses (newest first), e.g. ["FAIL","FAIL","PASS"].
+            Injected by the scheduler from BaselineStore.get_recent_statuses().
+        consecutive_fail_escalate : int
+            Number of consecutive failures before escalation (default: 3).
+        first_failure_at : str | None
+            ISO timestamp of the first failure in the current streak.
+            Set by the scheduler on first FAIL, cleared on PASS.
+    """
+    recent_statuses: List[str] = config.get("recent_statuses") or []
+    escalate_threshold: int = int(config.get("consecutive_fail_escalate", 3))
+    first_failure_at: Optional[str] = config.get("first_failure_at")
+
+    if not recent_statuses:
+        return result
+
+    current_status = result.status.value.upper()
+    details = dict(result.details) if result.details else {}
+    message = result.message
+
+    # Count leading failures in recent history (before this run)
+    streak = 0
+    for s in recent_statuses:
+        if s.upper() in ("FAIL", "ERROR"):
+            streak += 1
+        else:
+            break
+
+    details["failure_streak"] = streak
+
+    # 7A: Consecutive-failure escalation
+    if current_status in ("FAIL", "ERROR") and streak >= escalate_threshold:
+        total_streak = streak + 1  # including current
+        details["escalated"] = True
+        details["consecutive_failures"] = total_streak
+        message = f"ESCALATED: {total_streak} consecutive failures. {message}"
+
+    # 7B: Recovery detection
+    if current_status == "PASS" and streak > 0:
+        details["recovery"] = True
+        details["recovered_after"] = streak
+        message = f"RECOVERED after {streak} failure(s). {message}"
+
+    # 7C: SLA breach duration
+    if current_status in ("FAIL", "ERROR") and first_failure_at:
+        try:
+            first_fail_dt = datetime.fromisoformat(
+                first_failure_at.replace("Z", "+00:00")
+            )
+            breach_hours = (
+                datetime.now(timezone.utc) - first_fail_dt
+            ).total_seconds() / 3600
+            details["breach_hours"] = round(breach_hours, 1)
+            details["first_failure_at"] = first_failure_at
+            message = f"{message} ({breach_hours:.1f}h in breach)"
+        except (ValueError, TypeError):
+            pass
+
+    return MonitorResult(
+        monitor_type=result.monitor_type,
+        target_fqn=result.target_fqn,
+        status=result.status,
+        value=result.value,
+        threshold=result.threshold,
+        expected_range=result.expected_range,
+        message=message,
+        details=details,
+        executed_at=result.executed_at,
+        duration_ms=result.duration_ms,
+        sql_executed=result.sql_executed,
+        raw_status=result.raw_status,
+    )
+
+
+# =============================================================================
 # Registry
 # =============================================================================
 

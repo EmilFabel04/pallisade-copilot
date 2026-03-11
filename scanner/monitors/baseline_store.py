@@ -93,38 +93,86 @@ class BaselineStore:
         metric_name: str,
         days: int = 90,
         day_of_week: Optional[int] = None,
+        hour_of_day: Optional[int] = None,
     ) -> List[float]:
         """Retrieve historical values for a monitor+metric.
 
         Returns values ordered chronologically (oldest first).
-        If day_of_week is set, filters to only that DOW (0=Sun..6=Sat).
+        Optional filters: day_of_week (0=Sun..6=Sat), hour_of_day (0-23).
+        """
+        conditions = [
+            '"monitorId" = %s',
+            '"metricName" = %s',
+            "\"measuredAt\" >= NOW() - INTERVAL '%s days'",
+        ]
+        params: list = [monitor_id, metric_name, days]
+
+        if day_of_week is not None:
+            conditions.append('"dayOfWeek" = %s')
+            params.append(day_of_week)
+        if hour_of_day is not None:
+            conditions.append('"hourOfDay" = %s')
+            params.append(hour_of_day)
+
+        where = " AND ".join(conditions)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT "metricValue"
+                FROM "MonitorBaseline"
+                WHERE {where}
+                ORDER BY "measuredAt" ASC
+                """,
+                tuple(params),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+    def get_history_with_timestamps(
+        self,
+        monitor_id: str,
+        metric_name: str,
+        days: int = 90,
+    ) -> List[tuple]:
+        """Retrieve (value, timestamp) pairs ordered chronologically.
+
+        Useful for trend analysis where the caller needs time ordering.
+        Returns List[Tuple[float, datetime]].
         """
         with self._conn.cursor() as cur:
-            if day_of_week is not None:
-                cur.execute(
-                    """
-                    SELECT "metricValue"
-                    FROM "MonitorBaseline"
-                    WHERE "monitorId" = %s
-                      AND "metricName" = %s
-                      AND "measuredAt" >= NOW() - INTERVAL '%s days'
-                      AND "dayOfWeek" = %s
-                    ORDER BY "measuredAt" ASC
-                    """,
-                    (monitor_id, metric_name, days, day_of_week),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT "metricValue"
-                    FROM "MonitorBaseline"
-                    WHERE "monitorId" = %s
-                      AND "metricName" = %s
-                      AND "measuredAt" >= NOW() - INTERVAL '%s days'
-                    ORDER BY "measuredAt" ASC
-                    """,
-                    (monitor_id, metric_name, days),
-                )
+            cur.execute(
+                """
+                SELECT "metricValue", "measuredAt"
+                FROM "MonitorBaseline"
+                WHERE "monitorId" = %s
+                  AND "metricName" = %s
+                  AND "measuredAt" >= NOW() - INTERVAL '%s days'
+                ORDER BY "measuredAt" ASC
+                """,
+                (monitor_id, metric_name, days),
+            )
+            return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def get_recent_statuses(
+        self,
+        monitor_id: str,
+        limit: int = 10,
+    ) -> List[str]:
+        """Return the last N run statuses for a monitor (newest first).
+
+        Queries MonitorRun table, not MonitorBaseline.
+        Used for consecutive-failure detection and recovery events.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status
+                FROM "MonitorRun"
+                WHERE "monitorId" = %s
+                ORDER BY "startedAt" DESC
+                LIMIT %s
+                """,
+                (monitor_id, limit),
+            )
             return [row[0] for row in cur.fetchall()]
 
     def get_cadence_gaps(
