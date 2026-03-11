@@ -1,663 +1,433 @@
-# Structured Monitors
+# Structured Monitors Guide
 
-This document describes how every structured monitor type works in the Pallisade scheduled tasks system — what they check, how they're configured, how they auto-tune, and what results they produce.
+Pallisade's scheduled monitors continuously watch your data pipeline for problems. Instead of waiting for a stakeholder to notice bad data, monitors run on a schedule you define and alert you when something looks off.
 
----
+Each monitor targets a specific part of your stack — a warehouse table, an ingestion connector, an orchestration DAG, a dbt job, or a server. When a monitor runs, it produces one of these statuses:
 
-## Overview
-
-Scheduled tasks have two modes:
-
-- **Structured monitors** — SQL-based or SSH-based checks that run automatically against a connected integration. This document covers these.
-- **Prompt-based tasks** — Free-form LLM analysis using natural language. Not covered here.
-
-### Status values
-
-Every monitor run produces one of these statuses:
-
-| Status | Meaning |
-|--------|---------|
-| `PASS` | All checks passed |
-| `WARN` | Warning threshold exceeded but not critical |
-| `FAIL` | Critical threshold exceeded or anomaly detected |
-| `ERROR` | Query failed, column missing, invalid config, or connection issue |
-| `SKIPPED` | Insufficient data to run a meaningful check |
-
-### Source files
-
-| File | Purpose |
-|------|---------|
-| `scanner/monitors/base.py` | `BaseMonitor`, `MonitorResult`, `MonitorStatus` |
-| `scanner/monitors/freshness.py` | `FreshnessMonitor` |
-| `scanner/monitors/volume.py` | `VolumeMonitor` |
-| `scanner/monitors/anomaly.py` | `AnomalyMonitor` |
-| `scanner/monitors/schema.py` | `SchemaMonitor` |
-| `scanner/monitors/infrastructure.py` | `CertificateMonitor`, `ServerHealthMonitor`, `LogMonitor` |
-| `scanner/monitors/executor.py` | `MonitorExecutor`, registry, auto-configuration, routing |
-| `scanner/scheduler/executor.py` | `TaskExecutor` — orchestrates execution, LLM validation |
-| `scanner/scheduler/service.py` | `SchedulerService` — cron loop, result persistence, alerting |
-
----
-
-## SQL-Based Monitors
-
-These monitors generate SQL, execute it against a connected warehouse (BigQuery, Snowflake, Postgres, Redshift), and evaluate the results. SQL is written in a generic Postgres-compatible dialect and transpiled to the target warehouse via `sqlglot`.
-
----
-
-### 1. Freshness
-
-**Purpose:** Detect when a table hasn't been updated recently.
-
-**How it works:** Queries `MAX(timestamp_column)` and computes how many hours ago the last row was written.
-
-#### Config
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `timestamp_column` | string | auto-detected | Column to check. If blank, auto-discovered from INFORMATION_SCHEMA. |
-| `max_hours` | float | 24 | SLA threshold — hours before FAIL. |
-| `warn_hours` | float | max_hours * 0.75 | Warning threshold — hours before WARN. |
-
-#### Auto-detection: timestamp column
-
-When no `timestamp_column` is provided, the system queries `INFORMATION_SCHEMA.COLUMNS` for all timestamp/datetime/date columns and picks the best match using this priority list (highest priority first):
-
-1. `_partitiontime` (BigQuery load time)
-2. `loaded_at`, `_loaded_at`
-3. `ingested_at`, `_ingested_at`
-4. `_etl_loaded_at`
-5. `_fivetran_synced` (Fivetran)
-6. `_airbyte_extracted_at` (Airbyte)
-7. `created_at`, `created`, `inserted_at`
-8. `updated_at`, `modified_at`
-9. `timestamp`, `event_time`, `event_timestamp`
-
-If none match the priority list, the first timestamp column found is used.
-
-#### Auto-configuration: SLA threshold
-
-When no `max_hours` is provided, the system queries the last 30 days of daily `MAX(timestamp_column)` values, computes the gaps between consecutive days, and:
-
-1. Calculates the P95 gap (in hours)
-2. Sets `max_hours = ceil(P95 * 1.5)`
-3. Clamps the result to the range [1h, 168h] (1 hour to 1 week)
-
-#### Status logic
-
-| Condition | Status |
-|-----------|--------|
-| hours_since_update ≤ warn_hours | PASS |
-| warn_hours < hours_since_update ≤ max_hours | WARN |
-| hours_since_update > max_hours | FAIL |
-| Table is empty (0 rows) | SKIPPED |
-| User-specified column has all NULLs | ERROR |
-| Auto-detected column has all NULLs | SKIPPED |
-
-#### Generated SQL (BigQuery example)
-
-```sql
-SELECT
-  MAX(timestamp_col) AS last_value,
-  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), CAST(MAX(timestamp_col) AS TIMESTAMP), SECOND) / 3600.0 AS hours_since_update,
-  COUNT(*) AS total_rows
-FROM `project.dataset.table`
-WHERE timestamp_col IS NOT NULL
-```
-
-#### Result details
-
-```json
-{
-  "timestamp_column": "_fivetran_synced",
-  "last_value": "2025-02-19T07:30:00Z",
-  "total_rows": 1000000,
-  "warn_hours": 18.0
-}
-```
-
----
-
-### 2. Volume
-
-**Purpose:** Detect anomalous row count changes — sudden drops or spikes.
-
-**How it works:** Either counts total rows (simple mode) or counts rows per day over a lookback window (time-series mode), then applies threshold or Z-score analysis.
-
-#### Config
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `min_rows` | int | null | Minimum acceptable row count (simple mode). |
-| `max_rows` | int | null | Maximum acceptable row count (simple mode). |
-| `anomaly_threshold` | float | 3.0 | Z-score threshold for anomaly detection. |
-| `historical_mean` | float | null | Pre-computed baseline mean for Z-score. |
-| `historical_stddev` | float | null | Pre-computed baseline stddev for Z-score. |
-| `time_bucket_column` | string | null | Column to bucket by day (enables time-series mode). |
-| `lookback_days` | int | 30 | Days of history to analyze in time-series mode. Clamped to `max_scan_days`. |
-| `max_scan_days` | int | 90 | Upper bound for `lookback_days` to prevent unbounded scans. |
-| `min_abs_delta` | int | 10 | Minimum absolute change to trigger WARN when stddev=0 (constant volume). |
-| `min_rel_delta` | float | 0.01 | Minimum relative change (fraction) to trigger WARN when stddev=0. |
-
-#### Two modes
-
-**Simple mode** (no `time_bucket_column`): Runs `SELECT COUNT(*) FROM table`. Checks against `min_rows`/`max_rows` thresholds. If `historical_mean`/`historical_stddev` are provided, also applies Z-score analysis.
-
-**Time-series mode** (with `time_bucket_column`): Runs `SELECT date, COUNT(*) GROUP BY date` for the lookback window. Uses all days except the most recent as the baseline, computes Z-score for the latest day's count.
-
-#### Auto-configuration
-
-When neither `min_rows` nor `max_rows` is provided:
-
-1. Auto-discovers a timestamp column (same priority list as freshness)
-2. Queries daily row counts for the last 30 days
-3. Computes mean and stddev
-4. Sets `min_rows = max(0, mean - 3σ)` and `max_rows = mean + 3σ`
-5. Also sets `time_bucket_column` to the discovered timestamp column
-
-#### Status logic (time-series mode)
-
-| Condition | Status |
-|-----------|--------|
-| < 3 data points in lookback window | SKIPPED |
-| Constant volume and delta ≥ min_abs_delta AND ≥ min_rel_delta | WARN |
-| Constant volume and delta below thresholds | PASS |
-| \|z_score\| > anomaly_threshold | FAIL |
-| Within expected range | PASS |
-
-#### Status logic (simple mode)
-
-| Condition | Status |
-|-----------|--------|
-| Z-score exceeds threshold (if baseline provided) | FAIL |
-| Row count < min_rows | FAIL |
-| Row count > max_rows | FAIL |
-| Within range | PASS |
-
----
-
-### 3. Anomaly
-
-**Purpose:** Statistical Z-score anomaly detection on any column metric.
-
-**How it works:** Computes a metric (e.g., null rate, average, distinct count) per day over a lookback window, uses all prior days as the baseline, and flags the most recent value if its Z-score exceeds the threshold.
-
-#### Config
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `column` | string | "" | Target column. Use `"*"` to auto-discover columns (all columns for null_rate/distinct_rate, numeric only for avg/min/max/etc.). |
-| `metric` | string | "row_count" (no column) or "avg" (with column) | Metric to track. See table below. |
-| `anomaly_threshold` | float | 3.0 | Z-score threshold. |
-| `seasonality` | string | null | Set to `"day_of_week"` to compare only same-weekday baselines. |
-| `lookback_days` | int | 30 | Days of history for baseline. |
-| `timestamp_column` | string | null | Column for time bucketing. Without this, takes a single snapshot. |
-| `historical_values` | float[] | null | Pre-computed baseline values (overrides warehouse query). |
-
-#### Available metrics
-
-**Column-level** (requires a `column`):
-
-| Metric | SQL expression |
+| Status | What it means |
 |--------|---------------|
-| `null_rate` | `SUM(CASE WHEN col IS NULL THEN 1 ELSE 0 END) / COUNT(*)` |
-| `distinct_count` | `COUNT(DISTINCT col)` |
-| `distinct_rate` | `COUNT(DISTINCT col) / COUNT(*)` |
-| `min` | `MIN(CAST(col AS FLOAT))` |
-| `max` | `MAX(CAST(col AS FLOAT))` |
-| `avg` | `AVG(CAST(col AS FLOAT))` |
-| `sum` | `SUM(CAST(col AS FLOAT))` |
-| `stddev` | `STDDEV(CAST(col AS FLOAT))` |
-| `zero_rate` | `SUM(CASE WHEN col = 0 THEN 1 ELSE 0 END) / COUNT(*)` |
+| **PASS** | Everything looks good |
+| **WARN** | Something is slightly off but not critical yet |
+| **FAIL** | A threshold was breached or an anomaly was detected |
+| **ERROR** | The check itself couldn't run (bad config, connection issue, etc.) |
+| **SKIPPED** | Not enough data to produce a meaningful result |
 
-**Table-level** (no column needed):
-
-| Metric | SQL expression |
-|--------|---------------|
-| `row_count` | `COUNT(*)` |
-
-#### Seasonality
-
-When `seasonality: "day_of_week"` is set, the baseline is filtered to only include data points from the same weekday as the current value. This prevents false positives for tables with strong weekly patterns (e.g., lower weekend volume).
-
-Requires at least 3 same-weekday data points for the Z-score to activate.
-
-#### Adaptive lookback
-
-If the initial query (default 30 days) returns fewer than 3 data points, the system automatically retries with shorter windows:
-
-1. 25 days
-2. 20 days
-3. 14 days
-4. 7 days
-
-All lookbacks are bounded — the system never falls back to scanning all available data (unbounded). If no retry produces ≥ 3 data points, the monitor reports the current value as a "baseline observation" (PASS) and notes that anomaly detection isn't ready yet.
-
-#### Confidence scaling
-
-The confidence of the Z-score analysis depends on how much baseline data is available:
-
-| Baseline days | Confidence |
-|---------------|------------|
-| ≥ 30 | 100% |
-| 20–29 | 85% |
-| 14–19 | 75% |
-| 7–13 | 60% |
-| 3–6 | 40% |
-| < 3 | 0% (observation mode) |
-
-Confidence is reported in the result details and appended to the message when below 100%.
-
-#### Multi-column mode
-
-When `column: "*"`, the system:
-
-1. Determines which columns to discover based on the metric:
-   - **All-column metrics** (`null_rate`, `distinct_count`, `distinct_rate`): discovers ALL columns except complex types (STRUCT, ARRAY, JSON, GEOGRAPHY, RECORD, VARIANT, OBJECT)
-   - **Numeric-only metrics** (`avg`, `min`, `max`, `sum`, `stddev`, `zero_rate`): discovers only numeric columns (INT, FLOAT, NUMERIC, etc.)
-2. Caps the column list at `MAX_MULTI_COLUMNS` (50) to prevent excessive queries
-3. Runs the specified metric on each column independently
-4. Returns FAIL if any column is anomalous
-5. Reports per-column results in `details.per_column`
-
-#### Status logic
-
-| Condition | Status |
-|-----------|--------|
-| \|z_score\| > anomaly_threshold | FAIL |
-| stddev = 0 and current ≠ mean | FAIL |
-| < 3 baseline data points | PASS (observation mode) |
-| Within expected range | PASS |
-
-#### Result details
-
-```json
-{
-  "column": "revenue",
-  "metric": "avg",
-  "z_score": 4.23,
-  "baseline_mean": 150.42,
-  "baseline_stddev": 12.8,
-  "baseline_count": 29,
-  "seasonality": null,
-  "confidence_pct": 100
-}
-```
+Alerts go out to your configured channels (email, Slack, webhook) when a monitor produces a status you care about.
 
 ---
 
-### 4. Schema Change
+## Data Quality Monitors
 
-**Purpose:** Detect column additions, removals, and data type changes.
+These monitors check the actual data sitting in your warehouse (BigQuery, Snowflake, Postgres, Redshift, etc.). You point them at a table and they do the rest.
 
-**How it works:** Queries `INFORMATION_SCHEMA.COLUMNS` for the current schema and compares it against a stored baseline.
+---
 
-#### Config
+### Freshness
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `baseline_columns` | array | null | Expected column definitions. Each entry has `column_name`, `data_type`, and optionally `is_nullable`. |
-| `fail_on_column_added` | bool | false | Whether new columns trigger FAIL (otherwise WARN). |
-| `fail_on_column_removed` | bool | true | Whether missing columns trigger FAIL. |
-| `fail_on_type_change` | bool | true | Whether data type changes trigger FAIL. |
+**What it watches:** When your table was last updated.
 
-#### First-run behavior
+**Why it matters:** Stale data means dashboards and models show outdated information. If your `orders` table normally refreshes every hour but hasn't been updated in 12 hours, something upstream is broken.
 
-When no `baseline_columns` is provided (first run), the monitor captures the current schema and returns PASS with `is_baseline_run: true` in the details. The captured schema becomes the baseline for subsequent runs.
+**How it works:** Looks at the most recent timestamp in your table. If the gap between that timestamp and now exceeds your threshold, you get an alert. The system auto-detects the right timestamp column (like `_fivetran_synced`, `created_at`, or `updated_at`) and can auto-compute a reasonable threshold from your table's historical update patterns.
 
-#### Change detection
+**Example alert:** "Orders table hasn't been updated in 8 hours (SLA: 6 hours)"
 
-The monitor detects three types of changes:
+**Settings you can tweak:**
+- Which timestamp column to use (auto-detected by default)
+- Maximum hours before alerting (auto-computed from your table's history by default)
 
-| Change type | Description |
-|-------------|-------------|
-| `column_added` | Column exists in current schema but not in baseline |
-| `column_removed` | Column exists in baseline but not in current schema |
-| `type_changed` | Column exists in both but data type differs |
+---
 
-All comparisons are case-insensitive and use **dialect-aware type normalization** to prevent false positives across warehouses. For example, `INT64` (BigQuery) and `integer` (Postgres) are treated as the same type. Length/precision is stripped (e.g., `varchar(255)` → `varchar`). Key normalizations include:
+### Volume
 
-- `INT64`, `int`, `int4` → `integer`
-- `FLOAT64`, `float8`, `double precision` → `double`
-- `STRING` → `text`
-- `character varying` → `varchar`
-- `NUMBER` → `numeric`
-- `timestamp with time zone`, `TIMESTAMP_LTZ`, `TIMESTAMP_TZ` → `timestamptz`
+**What it watches:** How many rows are in your table, compared to what's normal.
 
-#### Status logic
+**Why it matters:** A sudden drop in rows might mean data was accidentally deleted. A spike could mean duplicates are being inserted. Either way, downstream numbers will be wrong.
 
-| Condition | Status |
-|-----------|--------|
-| No baseline (first run) | PASS (captures baseline) |
-| No changes detected | PASS |
-| Changes detected, none configured to fail | WARN |
-| Changes detected, at least one configured to fail | FAIL |
+**How it works:** Learns your table's normal row count range over time. If today's count is significantly higher or lower than expected, you get an alert. Uses statistical analysis to automatically determine what "normal" looks like.
 
-#### Result details
+**Example alert:** "Orders table has 12,000 rows today — expected range is 45,000-55,000"
 
-```json
-{
-  "changes": [
-    { "change_type": "column_removed", "column": "old_field", "old_type": "varchar" },
-    { "change_type": "column_added", "column": "new_field", "new_type": "bigint" },
-    { "change_type": "type_changed", "column": "amount", "old_type": "integer", "new_type": "bigint" }
-  ],
-  "change_count": 3,
-  "baseline_column_count": 12,
-  "current_column_count": 12
-}
-```
+**Settings you can tweak:**
+- Min/max expected rows (auto-computed from historical patterns by default)
+
+---
+
+### Schema Change
+
+**What it watches:** The structure of your table — column names and data types.
+
+**Why it matters:** If a source system renames `user_id` to `customer_id` or changes a column type, everything downstream that references the old name or type will break.
+
+**How it works:** Takes a snapshot of your table's columns on the first run, then compares against that snapshot on every subsequent run. Reports exactly which columns were added, removed, or had their type changed.
+
+**Example alert:** "Schema changed: column 'old_status' removed, column 'status_v2' added"
+
+**Settings:** None needed — fully automatic.
+
+---
+
+### Null Rate
+
+**What it watches:** The percentage of null (empty) values in each column of your table.
+
+**Why it matters:** A column that's normally 100% filled suddenly having 30% nulls is a clear sign something went wrong in the loading process.
+
+**How it works:** Automatically checks every column and learns what the normal null rate looks like over time. Uses anomaly detection to spot unexpected spikes. No configuration needed — it discovers columns and learns baselines on its own.
+
+**Example alert:** "Anomaly in user_id null rate: 5% today vs. baseline of 0.1%"
+
+**Settings:** Fully automatic.
+
+---
+
+### Uniqueness
+
+**What it watches:** Whether columns that should be unique (like IDs or email addresses) actually are.
+
+**Why it matters:** Duplicate primary keys usually mean a join is producing extra rows or deduplication was skipped. This silently inflates metrics without anyone noticing.
+
+**How it works:** Checks the ratio of unique values to total values for each column. Uses anomaly detection to spot when uniqueness drops below normal levels.
+
+**Example alert:** "Uniqueness drop in order_id: 92% unique today vs. baseline of 99.9%"
+
+**Settings:** Fully automatic.
+
+---
+
+### Distribution
+
+**What it watches:** The statistical distribution (averages) of numeric columns in your table.
+
+**Why it matters:** If the average order value suddenly doubles, or a rating column shifts from mostly 4-5 stars to mostly 1-2 stars, that's worth investigating even if row counts look fine.
+
+**How it works:** Computes averages for numeric columns and uses anomaly detection to spot significant deviations from historical norms.
+
+**Example alert:** "Average revenue shifted from $150 to $340 — z-score 4.2"
+
+**Settings:** Fully automatic.
+
+---
+
+### Custom SQL
+
+**What it watches:** Whatever you want — you write the SQL query.
+
+**Why it matters:** Sometimes you need business-specific checks like "are there orders dated in the future?" or "does every customer have at least one address?"
+
+**How it works:** You write a SQL query that returns a single number. The monitor runs it on schedule and evaluates the result.
+
+**Example alert:** "Custom check returned 47 (threshold: 0) — 47 orders have future dates"
+
+**Settings:**
+- Your SQL query (required — must return a single number)
+
+---
+
+### Anomaly
+
+**What it watches:** Any metric you choose (row count, average, sum, null rate, distinct count) across your table's columns.
+
+**Why it matters:** This is the catch-all monitor. It watches for anything statistically unusual without requiring you to define specific rules upfront.
+
+**How it works:** Uses z-score analysis — basically, it measures how far today's value is from what's been "normal" historically. It builds confidence over time: after 3 days of data, it starts watching at 40% confidence. After 30+ days, it's fully confident. The default sensitivity threshold is 3.0 standard deviations, but you can adjust this.
+
+**Example alert:** "Row count anomaly: 5,200 today vs. baseline mean of 48,000 (z-score: -8.9)"
+
+**Settings you can tweak:**
+- Which metric to track (row count, average, sum, null rate, or distinct count)
+- Sensitivity threshold (default: 3.0 — higher = less sensitive)
+- How many days of history to use (default: 30)
+- Timestamp column (auto-detected)
+
+---
+
+### Referential Integrity
+
+**What it watches:** Whether foreign key values in one table actually exist in the parent table.
+
+**Why it matters:** Orphaned records (like an order referencing a customer that doesn't exist) cause join failures, broken reports, and data inconsistencies.
+
+**How it works:** Checks that every value in the child column has a matching value in the parent column. Any orphans trigger an alert.
+
+**Example alert:** "142 orders reference customer_ids that don't exist in the customers table"
+
+**Settings:**
+- Parent table (required)
+- Child column / foreign key (required)
+- Parent column / primary key (required)
+
+---
+
+## Ingestion Monitors
+
+These monitors check your data ingestion tools (Fivetran, Airbyte) through their APIs. They make sure data is actually flowing into your warehouse on schedule.
+
+---
+
+### Sync Lag
+
+**What it watches:** How long it's been since a connector last synced successfully.
+
+**Why it matters:** If your Fivetran connector is supposed to sync every hour but hasn't in 6 hours, your warehouse data is falling behind and dashboards are stale.
+
+**How it works:** Checks the connector's last successful sync time and compares it to the expected frequency. The threshold can be auto-computed from the connector's own schedule.
+
+**Example alert:** "Connector 'stripe_payments' last synced 4h ago (max lag: 2h)"
+
+**Settings:**
+- Connector ID (required)
+- Max lag in minutes (auto-computed from sync frequency by default)
+
+---
+
+### Failed Syncs
+
+**What it watches:** Whether a connector has had recent sync failures.
+
+**Why it matters:** A single failure might be a blip, but multiple failures usually mean something real — expired credentials, API rate limits, or source system changes.
+
+**How it works:** Checks the connector's sync history for failures within a lookback window.
+
+**Example alert:** "Connector 'hubspot_contacts' had 3 sync failures in the last 24 hours"
+
+**Settings:**
+- Connector ID (required)
+- How far back to look (default: 24 hours)
+
+---
+
+### Schema Drift (Connector)
+
+**What it watches:** Whether the source schema seen by your connector has changed.
+
+**Why it matters:** When a source system adds or removes fields, your pipeline might start loading unexpected data or missing important columns — often without any error.
+
+**How it works:** Compares the connector's current schema against its previous snapshot and reports any differences.
+
+**Example alert:** "Connector 'salesforce' schema changed: 2 columns added, 1 removed"
+
+**Settings:**
+- Connector ID (required)
+
+---
+
+## Orchestration Monitors
+
+These monitors check your workflow orchestration tools (Airflow, Dagster) to make sure your pipelines are running on time and succeeding.
+
+---
+
+### DAG Last Run
+
+**What it watches:** When a DAG (pipeline) last ran and whether it succeeded.
+
+**Why it matters:** If your daily ETL pipeline hasn't run in 2 days, all downstream data is stale. If the last run failed, data might be incomplete or incorrect.
+
+**How it works:** Checks both the status (success/failure) and the timestamp (how long ago) of the most recent run. Alerts on either a failure or staleness.
+
+**Example alert:** "DAG 'etl_daily' last successful run was 52 hours ago (threshold: 26h)"
+
+**Settings:**
+- DAG ID (required)
+- Max hours since last success (auto-computed from the DAG's schedule by default)
+
+---
+
+### DAG Schedule Lag
+
+**What it watches:** The delay between when a DAG was supposed to run and when it actually started.
+
+**Why it matters:** Growing schedule lag means your orchestrator is overloaded. A pipeline scheduled for midnight that doesn't start until 3am pushes everything downstream later and later.
+
+**How it works:** Compares scheduled execution time to actual start time. Alerts when the gap exceeds your threshold.
+
+**Example alert:** "DAG 'etl_daily' is running 45 minutes behind schedule (threshold: 30m)"
+
+**Settings:**
+- DAG ID (required)
+- Max lag in minutes (default: 30)
+
+---
+
+### Task Failure Rate
+
+**What it watches:** What percentage of individual tasks within a DAG are failing.
+
+**Why it matters:** Even if a DAG technically "succeeds," individual task failures can mean partial data loads. A 15% task failure rate on your ETL DAG means 15% of your tables might have issues.
+
+**How it works:** Looks at all task runs within a DAG over a time window and calculates the failure percentage.
+
+**Example alert:** "DAG 'etl_daily' task failure rate is 18% in the last 24h (threshold: 10%)"
+
+**Settings:**
+- DAG ID (required)
+- Max failure percentage (default: 10%)
+- How far back to look (default: 24 hours)
+
+---
+
+## Transformation Monitors
+
+These monitors check your dbt (data build tool) jobs to make sure transformations are running, passing tests, and staying fresh.
+
+---
+
+### Test Failures
+
+**What it watches:** Whether any dbt tests failed in the latest run.
+
+**Why it matters:** dbt tests are your assertions about data quality — things like "this column should never be null" or "every order must have a customer." Failures mean your transformed data doesn't meet its own quality contracts.
+
+**How it works:** Checks the latest run of a dbt Cloud job for test failures and reports which tests failed.
+
+**Example alert:** "3 dbt tests failed in job 'daily_transforms': not_null_orders_customer_id, unique_users_email, ..."
+
+**Settings:**
+- dbt Cloud Job ID (required)
+- Whether to treat warnings as failures (default: no)
+
+---
+
+### Model Freshness
+
+**What it watches:** When a dbt model (transformed table) was last built.
+
+**Why it matters:** If dbt models aren't rebuilding on schedule, dashboards and reports show stale data.
+
+**How it works:** Checks when the specified dbt job last completed a successful run. Alerts if it's been too long.
+
+**Example alert:** "dbt job 'daily_transforms' last ran 36 hours ago (threshold: 24h)"
+
+**Settings:**
+- dbt Cloud Job ID (required)
+- Max hours since last run (default: 24)
+
+---
+
+### Source Freshness
+
+**What it watches:** Whether dbt's own source freshness checks are passing.
+
+**Why it matters:** dbt can verify that its source tables (the raw data it transforms) are fresh enough. If sources are stale, building models on top of them just produces nicely-formatted outdated data.
+
+**How it works:** Checks dbt's source freshness results from the latest run and alerts when sources are failing their SLAs.
+
+**Example alert:** "2 dbt sources failing freshness SLA in job 'daily_transforms'"
+
+**Settings:**
+- dbt Cloud Job ID (required)
 
 ---
 
 ## Infrastructure Monitors
 
-These monitors connect via SSH to a Linux server integration and do **not** use SQL. They check system-level health.
+These monitors connect to your servers via SSH to check system-level health. They don't touch your data — they watch the machines that run your pipeline.
 
 ---
 
-### 5. Certificate
+### Certificate
 
-**Purpose:** Monitor TLS/SSL certificate expiry and detect missing client certificates (mutual TLS).
+**What it watches:** SSL/TLS certificate expiration dates.
 
-#### Config
+**Why it matters:** An expired certificate takes down HTTPS endpoints, API connections, and secure data transfers. Getting a 30-day warning gives you time to renew without an outage.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `cert_paths` | string[] | auto-discover | Specific certificate file paths to check. |
-| `warn_days` | int | 30 | Days before expiry to trigger WARN. |
-| `fail_days` | int | 7 | Days before expiry to trigger FAIL. |
+**How it works:** Checks certificate files on the server and reports how many days until they expire. Auto-discovers common certificate locations if you don't specify paths.
 
-#### Status logic
+**Example alert:** "Certificate at /etc/ssl/certs/server.pem expires in 5 days"
 
-| Condition | Status |
-|-----------|--------|
-| Any cert expired or expires within `fail_days` | FAIL |
-| Server cert found but no matching client cert (mutual TLS) | FAIL |
-| Any cert expires within `warn_days` | WARN |
-| All certs valid with ≥ `warn_days` until expiry | PASS |
-
-#### Result details
-
-```json
-{
-  "certs_checked": 3,
-  "issues": ["server cert found but no matching client cert"],
-  "warnings": [],
-  "certificates": [
-    {
-      "path": "/etc/ssl/certs/server.pem",
-      "subject": "CN=myserver.example.com",
-      "issuer": "CN=Let's Encrypt Authority X3",
-      "not_after": "2025-06-15T00:00:00Z",
-      "days_until_expiry": 116,
-      "has_client_cert": true
-    }
-  ]
-}
-```
+**Settings:**
+- Certificate file paths (auto-discovered by default)
+- Warning threshold (default: 30 days before expiry)
+- Failure threshold (default: 7 days before expiry)
 
 ---
 
-### 6. Server Health
+### Server Health
 
-**Purpose:** Monitor CPU, memory, and disk usage.
+**What it watches:** CPU usage, memory usage, and disk space.
 
-#### Config
+**Why it matters:** A server at 95% disk capacity will crash when it runs out of space. High CPU or memory degrades performance and causes pipeline failures.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `max_cpu` | float | 90.0 | CPU usage % threshold for FAIL. |
-| `max_memory` | float | 90.0 | Memory usage % threshold for FAIL. |
-| `max_disk` | float | 85.0 | Disk usage % threshold for FAIL. |
+**How it works:** Checks resource utilization and alerts when any metric exceeds its threshold. Fully automatic — no configuration needed.
 
-#### Status logic
+**Example alert:** "Disk usage at 92% on / (threshold: 85%)"
 
-WARN triggers at 80% of the threshold (e.g., CPU at 72% when threshold is 90%).
-
-| Condition | Status |
-|-----------|--------|
-| Any metric exceeds its threshold | FAIL |
-| Any metric exceeds 80% of its threshold | WARN |
-| All metrics within limits | PASS |
-
-#### Result details
-
-```json
-{
-  "hostname": "prod-server-01",
-  "os": "Ubuntu 22.04.3 LTS",
-  "cpu_percent": 45.2,
-  "memory_percent": 68.1,
-  "memory_total_gb": 32.0,
-  "memory_used_gb": 21.8,
-  "load_avg": [1.25, 1.10, 0.98],
-  "uptime_seconds": 2592000,
-  "disk_usage": [
-    {
-      "mount": "/",
-      "percent": 55.3,
-      "total_gb": 500.0,
-      "used_gb": 276.5,
-      "available_gb": 223.5
-    }
-  ]
-}
-```
+**Settings:** None required — uses sensible defaults (CPU: 90%, memory: 90%, disk: 85%).
 
 ---
 
-### 7. Log Analysis
+### Log Analysis
 
-**Purpose:** Scan server log files for error patterns.
+**What it watches:** Server log files for error patterns.
 
-#### Config
+**Why it matters:** Errors in logs often signal problems before they become visible in your data. Catching "connection refused" or "out of memory" early lets you fix issues before pipelines fail.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `log_paths` | string[] | required | Log file paths to scan (e.g., `["/var/log/app.log"]`). |
-| `error_patterns` | string[] | `["ERROR", "FATAL", "CRITICAL"]` | Regex patterns to match against log lines. |
-| `max_errors` | int | 10 | Error count threshold for FAIL. |
-| `lookback_lines` | int | 1000 | Number of lines to tail from each file. |
+**How it works:** Scans the specified log files for patterns like ERROR, FATAL, and CRITICAL. Reports the count and a sample of matching lines.
 
-#### Status logic
+**Example alert:** "7 errors found in /var/log/app.log (threshold: 10) — sample: 'ERROR: Connection timeout to database'"
 
-| Condition | Status |
-|-----------|--------|
-| total_errors > max_errors | FAIL |
-| total_errors > max_errors / 2 | WARN |
-| total_errors ≤ max_errors / 2 | PASS |
-| No log_paths configured | ERROR |
-
-#### Result details
-
-```json
-{
-  "total_errors": 7,
-  "files_checked": 2,
-  "per_file": [
-    { "path": "/var/log/app.log", "error_count": 5, "lines_checked": 1000 },
-    { "path": "/var/log/worker.log", "error_count": 2, "lines_checked": 1000 }
-  ],
-  "sample_errors": [
-    "[/var/log/app.log] 2025-02-19 ERROR: Connection timeout to database",
-    "[/var/log/app.log] 2025-02-19 CRITICAL: Out of memory"
-  ],
-  "patterns": ["ERROR", "FATAL", "CRITICAL"]
-}
-```
+**Settings:**
+- Log file paths (required)
+- Error patterns to search for (default: ERROR, FATAL, CRITICAL)
 
 ---
 
-## UI Routing Aliases
+## How It All Fits Together
 
-The frontend exposes three convenience monitor types that route to the Anomaly monitor backend with pre-set configurations:
+### Execution methods
 
-| UI type | Routes to | Default config |
-|---------|-----------|---------------|
-| `null_rate` | `anomaly` | `metric: "null_rate", column: "*"` |
-| `uniqueness` | `anomaly` | `metric: "distinct_rate", column: "*"` |
-| `distribution` | `anomaly` | `metric: "avg", column: "*"` |
+Monitors use three different methods depending on what they're checking:
 
-All three use `column: "*"` which triggers multi-column mode. For `null_rate` and `uniqueness`, **all** columns (including strings) are checked. For `distribution` (metric=avg), only numeric columns are checked.
+- **Warehouse SQL** — Connects to your data warehouse and runs queries. Used by all Data Quality monitors. Queries are automatically translated to work with your specific warehouse (BigQuery syntax is different from Snowflake, etc.).
 
-Defined in `scanner/monitors/executor.py` as `MONITOR_ROUTING`.
+- **Tool API** — Calls the APIs of your connected tools (Fivetran, Airbyte, Airflow, Dagster, dbt Cloud). Used by Ingestion, Orchestration, and Transformation monitors.
 
----
+- **SSH** — Connects to servers over SSH to run system commands. Used by Infrastructure monitors.
 
-## Execution Flow
+### Smart defaults
 
-When a scheduled task runs, here's what happens step by step:
+Many monitors auto-configure themselves:
+- **Freshness** auto-detects which column to check and computes a reasonable SLA from your table's history
+- **Volume** learns your table's normal row count range over time
+- **Null Rate, Uniqueness, Distribution** auto-discover columns and learn what "normal" looks like
+- **Schema Change** takes a baseline snapshot on the first run
 
-### 1. Scheduler detects due task
+You can always override these defaults with manual settings if the auto-detection doesn't match your needs.
 
-`SchedulerService` runs a background loop every 60 seconds. It queries for monitors where `enabled = true AND nextRunAt <= now()`, taking up to 50 due tasks per iteration.
+### Anomaly detection
 
-### 2. Resolve monitor type
+Several monitors (Null Rate, Uniqueness, Distribution, Volume, Anomaly) use statistical anomaly detection instead of fixed thresholds:
 
-`MonitorExecutor.resolve_monitor_type()` applies routing (e.g., `null_rate` → `anomaly` with `metric: "null_rate", column: "*"`). The resolved type and merged config are passed forward.
+1. **Baseline building** — Each run records the metric value, building a picture of "normal" over time
+2. **Z-score analysis** — Measures how far today's value is from the historical average, in terms of standard deviations
+3. **Confidence scaling** — The system starts cautious (40% confidence after 3 days) and becomes fully confident after 30+ days of data
+4. **Adaptive lookback** — Automatically adjusts how much history to consider
 
-### 3. Parse target FQN
+### Alerting
 
-The `target_fqn` (e.g., `raw.orders` or `project.raw.orders`) is split into database, schema, and table. Two-part FQNs infer the database from the integration config.
+When a monitor produces a status you care about (default: FAIL, WARN, ERROR), alerts go out to your configured channels:
 
-### 4. Auto-configure
+- **Email** — Sends details about what failed and why
+- **Slack** — Posts a summary to a channel
+- **Webhook** — Sends a JSON payload to any URL you configure
 
-`MonitorExecutor.auto_configure()` fills in missing config by querying the warehouse:
-
-- **Freshness**: discovers timestamp column, computes P95 gap → sets `max_hours`
-- **Volume**: discovers timestamp column, computes daily count stats → sets `min_rows`/`max_rows`
-- Other types: no auto-configuration needed
-
-Auto-configuration never overwrites user-provided values.
-
-### 5. Build and execute SQL
-
-The monitor's `build_query()` generates SQL, which is transpiled to the target dialect via `sqlglot`. The query is executed against the warehouse via the adapter's `execute_query()`.
-
-### 6. Evaluate results
-
-The monitor's `evaluate()` interprets the query results and produces a `MonitorResult` with status, value, threshold, message, and details.
-
-### 7. Adaptive retry (anomaly only)
-
-If an anomaly monitor reports "not enough data" (< 3 data points), the executor retries with bounded shorter lookback windows: 25 → 20 → 14 → 7 days. The system never falls back to unbounded scans.
-
-### 8. LLM validation (optional)
-
-When a monitor returns FAIL or WARN, the system can optionally send the result to an LLM for validation. The LLM reviews the context (monitor type, value, threshold, z-score, baseline stats, confidence) and can suggest adjustments. However, the following constraints are enforced:
-
-- **Never upgrade PASS → FAIL** — the LLM cannot escalate a passing result
-- **Downgrade only when data is uncertain** — FAIL → WARN or WARN → PASS is only allowed when `confidence_pct < 60` or `baseline_count < 7`
-- **Always track both statuses** — `raw_status` (pre-LLM) and `final_status` (post-LLM) are both persisted alongside the `llm_reason`
-
-The original result is preserved in `raw_status` and the LLM assessment is appended to `details.llm_validation`.
-
-### 9. Save result
-
-A `MonitorRun` record is created with the status, value, threshold, message, details, SQL executed, and timing. The `Monitor` record is updated with `lastRunAt`, `lastStatus`, `nextRunAt` (next cron tick), and baseline stats (mean, stddev, count) if available in the result details.
-
-### 10. Dispatch alerts
-
-If the result status matches the monitor's `alertOnStatus` configuration, an alert is sent to the configured channels (Slack, Teams, PagerDuty, etc.) via the `/api/schedule/alert` endpoint. Alerts use `final_status` (post-LLM) when available.
+Each monitor can have its own alert channels, so critical monitors can page on-call while informational ones just post to Slack.
 
 ---
 
-## Baseline Persistence
+## Source Files Reference
 
-Monitors that compute statistical baselines (anomaly, volume) persist their baseline stats in the `Monitor` database record:
-
-| Field | Description |
-|-------|-------------|
-| `baselineMean` | Mean of the metric across the baseline window |
-| `baselineStddev` | Standard deviation of the baseline |
-| `baselineCount` | Number of data points in the baseline |
-
-These values are saved after each run (extracted from `result.details`) and injected as `stored_baseline` into the monitor config on the next run. This allows monitors to maintain continuity even if the warehouse data changes or is unavailable.
-
-For anomaly monitors with stored baselines, the values are reconstructed as:
-- If stddev > 0: `[mean - σ, mean, mean + σ]` repeated to match the count
-- If stddev = 0: `[mean]` repeated to match the count
-
----
-
-## Walkthrough: Freshness Monitor
-
-```
-User creates task:
-  name: "Orders Freshness Check"
-  monitorType: "freshness"
-  targetFqn: "raw.orders"
-  config: {}  (empty — auto-configure everything)
-  schedule: "0 8 * * *"  (daily at 8am)
-  integrationId: "<bigquery-id>"
-
-Scheduler triggers at 8:00 AM:
-
-1. Parse FQN → database: "<project>", schema: "raw", table: "orders"
-
-2. Auto-configure:
-   a. discover_timestamp_column() queries INFORMATION_SCHEMA
-   b. Finds: [created_at, updated_at, _fivetran_synced]
-   c. Picks _fivetran_synced (priority rank 6, highest match)
-   d. Queries daily MAX(_fivetran_synced) for last 30 days
-   e. Computes inter-day gaps: [2h, 1.5h, 3h, 2h, ...]
-   f. P95 gap = 4h → max_hours = ceil(4 * 1.5) = 6
-   g. Config becomes: {timestamp_column: "_fivetran_synced", max_hours: 6}
-
-3. Build query:
-   SELECT MAX(_fivetran_synced) AS last_value,
-          TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), CAST(MAX(_fivetran_synced) AS TIMESTAMP), SECOND) / 3600.0 AS hours_since_update,
-          COUNT(*) AS total_rows
-   FROM `project.raw.orders`
-   WHERE _fivetran_synced IS NOT NULL
-
-4. Execute → {last_value: "2025-02-19T07:30:00Z", hours_since_update: 0.5, total_rows: 1000000}
-
-5. Evaluate:
-   hours = 0.5
-   warn_hours = 6 * 0.75 = 4.5
-   0.5 ≤ 4.5 → PASS
-   message: "Data is 0.5h old. Within the 6h SLA."
-
-6. Save MonitorRun, update next run to tomorrow 8am
-```
-
----
-
-## Walkthrough: Multi-Column Anomaly (Null Rate)
-
-```
-User creates task:
-  monitorType: "null_rate"  (UI alias)
-  targetFqn: "analytics.user_events"
-  config: {}
-
-Execution:
-
-1. Resolve: "null_rate" → ("anomaly", {metric: "null_rate", column: "*"})
-
-2. Multi-column mode activates (null_rate → ALL columns, not just numeric):
-   a. Query INFORMATION_SCHEMA for all columns (excluding complex types like STRUCT/ARRAY/JSON)
-   b. Finds: [user_id, event_count, revenue, page_views, event_name, source]
-   c. Capped at 50 columns max
-
-3. For each column, run anomaly monitor independently:
-
-   Column: user_id
-   - Query: SELECT date, SUM(CASE WHEN user_id IS NULL THEN 1 ELSE 0 END) / COUNT(*) AS metric_value
-            FROM analytics.user_events WHERE date >= CURRENT_DATE - 30 GROUP BY date
-   - Results: 30 daily null rates, latest = 0.05
-   - Baseline (29 days): mean = 0.001, stddev = 0.0005
-   - Z-score: (0.05 - 0.001) / 0.0005 = 98.0 → FAIL
-
-   Column: event_count → Z-score = 0.3 → PASS
-   Column: revenue → Z-score = -1.2 → PASS
-   Column: page_views → Z-score = 0.8 → PASS
-   Column: event_name (string!) → Z-score = 0.1 → PASS
-   Column: source (string!) → Z-score = 0.2 → PASS
-
-4. Aggregate: 1 of 6 columns anomalous → overall FAIL
-   Message: "Anomalies detected in 1/6 columns: user_id null_rate is anomalous (z=98.0)"
-   Details: { columns_checked: 6, anomalies: 1, per_column: [...] }
-```
+| File | What it does |
+|------|-------------|
+| `types/monitor-catalog.ts` | All 23 monitor definitions, config fields, categories |
+| `scanner/monitors/base.py` | Base classes and result types |
+| `scanner/monitors/freshness.py` | Freshness monitor implementation |
+| `scanner/monitors/volume.py` | Volume monitor implementation |
+| `scanner/monitors/anomaly.py` | Anomaly detection engine (also handles null rate, uniqueness, distribution) |
+| `scanner/monitors/schema.py` | Schema change detection |
+| `scanner/monitors/infrastructure.py` | Certificate, server health, and log analysis monitors |
+| `scanner/monitors/executor.py` | Monitor routing, auto-configuration, SQL execution |
+| `scanner/scheduler/executor.py` | Task orchestration and LLM validation |
+| `scanner/scheduler/service.py` | Cron scheduling loop, result persistence, alerting |
+| `components/schedule/MonitorConfigForm.tsx` | Dynamic UI form rendered from catalog |

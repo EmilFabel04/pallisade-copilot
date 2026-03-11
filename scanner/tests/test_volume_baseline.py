@@ -107,32 +107,119 @@ class TestVolumeAutoConfigBaseline:
 
 
 class TestVolumeMonitorBaselineEvaluation:
-    """Test that VolumeMonitor correctly evaluates with baseline stats."""
+    """Test that VolumeMonitor correctly evaluates daily volume via time-series."""
 
-    def test_pass_within_range(self):
+    def test_simple_pass_total_count(self):
+        """Simple mode (no time_bucket_column) should only check min/max thresholds,
+        NOT compare total count against daily historical_mean/stddev."""
         monitor = VolumeMonitor(config={
             "historical_mean": 100.0,
             "historical_stddev": 10.0,
+            # No time_bucket_column → simple mode
         })
 
-        # Simulate query result: current count = 105 (within 1σ of mean)
+        # Total row count = 50000 — way above daily mean of 100, but that's
+        # fine because simple mode doesn't compare totals vs daily stats.
         result = monitor.evaluate(
-            [{"row_count": 105}],
+            [{"row_count": 50000}],
             "db.schema.table",
         )
 
         assert result.status == MonitorStatus.PASS
 
-    def test_fail_outside_range(self):
+    def test_time_series_pass_within_range(self):
+        """Time-series mode compares latest daily volume against baseline days."""
+        monitor = VolumeMonitor(config={
+            "time_bucket_column": "created_at",
+        })
+
+        # 10 days of daily counts, latest (105) is within normal range
+        daily_rows = [
+            {"bucket_date": f"2025-01-{i+1:02d}", "row_count": count}
+            for i, count in enumerate([100, 110, 105, 95, 102, 98, 107, 103, 99, 105])
+        ]
+        result = monitor.evaluate(daily_rows, "db.schema.table")
+
+        assert result.status == MonitorStatus.PASS
+
+    def test_time_series_fail_anomalous_drop(self):
+        """Time-series mode should detect anomalous daily volume drops."""
+        monitor = VolumeMonitor(config={
+            "time_bucket_column": "created_at",
+        })
+
+        # 9 normal days ~100, then latest day = 0
+        daily_rows = [
+            {"bucket_date": f"2025-01-{i+1:02d}", "row_count": count}
+            for i, count in enumerate([100, 110, 105, 95, 102, 98, 107, 103, 99, 0])
+        ]
+        result = monitor.evaluate(daily_rows, "db.schema.table")
+
+        assert result.status == MonitorStatus.FAIL
+
+    def test_time_series_daily_max_threshold(self):
+        """min_rows/max_rows should apply as daily thresholds in time-series mode."""
+        monitor = VolumeMonitor(config={
+            "time_bucket_column": "created_at",
+            "max_rows": 200,
+        })
+
+        # 9 normal days ~100, then latest day = 300 (exceeds max of 200)
+        daily_rows = [
+            {"bucket_date": f"2025-01-{i+1:02d}", "row_count": count}
+            for i, count in enumerate([100, 110, 105, 95, 102, 98, 107, 103, 99, 300])
+        ]
+        result = monitor.evaluate(daily_rows, "db.schema.table")
+
+        assert result.status == MonitorStatus.FAIL
+        assert "300" in result.message
+        assert "200" in result.message
+        assert "rows/day" in result.message
+
+    def test_time_series_daily_min_threshold(self):
+        """min_rows should apply as daily threshold in time-series mode."""
+        monitor = VolumeMonitor(config={
+            "time_bucket_column": "created_at",
+            "min_rows": 50,
+        })
+
+        # 9 normal days ~100, then latest day = 20 (below min of 50)
+        daily_rows = [
+            {"bucket_date": f"2025-01-{i+1:02d}", "row_count": count}
+            for i, count in enumerate([100, 110, 105, 95, 102, 98, 107, 103, 99, 20])
+        ]
+        result = monitor.evaluate(daily_rows, "db.schema.table")
+
+        assert result.status == MonitorStatus.FAIL
+        assert "20" in result.message
+        assert "50" in result.message
+
+    def test_time_series_within_daily_thresholds(self):
+        """Daily volume within min/max should PASS."""
+        monitor = VolumeMonitor(config={
+            "time_bucket_column": "created_at",
+            "min_rows": 50,
+            "max_rows": 200,
+        })
+
+        daily_rows = [
+            {"bucket_date": f"2025-01-{i+1:02d}", "row_count": count}
+            for i, count in enumerate([100, 110, 105, 95, 102, 98, 107, 103, 99, 105])
+        ]
+        result = monitor.evaluate(daily_rows, "db.schema.table")
+
+        assert result.status == MonitorStatus.PASS
+
+    def test_simple_zero_rows_fails(self):
+        """Simple mode should FAIL on zero rows regardless of other config."""
         monitor = VolumeMonitor(config={
             "historical_mean": 100.0,
             "historical_stddev": 5.0,
         })
 
-        # Simulate query result: current count = 0 (>3σ from mean)
         result = monitor.evaluate(
             [{"row_count": 0}],
             "db.schema.table",
         )
 
-        assert result.status in (MonitorStatus.FAIL, MonitorStatus.WARN)
+        assert result.status == MonitorStatus.FAIL

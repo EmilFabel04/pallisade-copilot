@@ -121,9 +121,10 @@ class SchedulerService:
                 cur.execute(
                     """
                     SELECT id, name, "taskMode", prompt, "monitorType",
-                           "targetFqn", config, "alertChannels", "alertConfig",
-                           "alertOnStatus", timezone, "integrationId",
-                           "organizationId"
+                           "targetFqn", config, schedule, "alertChannels",
+                           "alertConfig", "alertOnStatus", timezone,
+                           "integrationId", "organizationId",
+                           "baselineMean", "baselineStddev", "baselineCount"
                     FROM "Monitor"
                     WHERE enabled = true
                       AND "nextRunAt" IS NOT NULL
@@ -196,38 +197,92 @@ class SchedulerService:
                     ),
                 )
 
-                # Update Monitor: lastRunAt, lastStatus, nextRunAt
+                # Update Monitor: lastRunAt, lastStatus, nextRunAt + baseline
                 next_run = _compute_next_run(
                     task.get("schedule", "0 * * * *"),
                     task.get("timezone", "UTC"),
                 )
 
-                cur.execute(
-                    """
-                    UPDATE "Monitor"
-                    SET "lastRunAt" = %s,
-                        "lastStatus" = %s,
-                        "nextRunAt" = %s,
-                        "updatedAt" = %s
-                    WHERE id = %s
-                    """,
-                    (
-                        end_time,
-                        status,
-                        next_run,
-                        end_time,
-                        task_id,
-                    ),
-                )
+                # Extract baseline stats from result details if available
+                details = result.get("details") or {}
+                baseline_mean = details.get("baseline_mean")
+                baseline_stddev = details.get("baseline_stddev")
+                baseline_count = details.get("baseline_count") or details.get("data_points")
+
+                if baseline_mean is not None:
+                    cur.execute(
+                        """
+                        UPDATE "Monitor"
+                        SET "lastRunAt" = %s,
+                            "lastStatus" = %s,
+                            "nextRunAt" = %s,
+                            "updatedAt" = %s,
+                            "baselineMean" = %s,
+                            "baselineStddev" = %s,
+                            "baselineCount" = %s,
+                            "baselineUpdatedAt" = %s
+                        WHERE id = %s
+                        """,
+                        (
+                            end_time,
+                            status,
+                            next_run,
+                            end_time,
+                            baseline_mean,
+                            baseline_stddev,
+                            baseline_count,
+                            end_time,
+                            task_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE "Monitor"
+                        SET "lastRunAt" = %s,
+                            "lastStatus" = %s,
+                            "nextRunAt" = %s,
+                            "updatedAt" = %s
+                        WHERE id = %s
+                        """,
+                        (
+                            end_time,
+                            status,
+                            next_run,
+                            end_time,
+                            task_id,
+                        ),
+                    )
 
                 conn.commit()
 
-            # Check if we need to send alerts (alertOnStatus uses uppercase)
-            alert_on = task.get("alertOnStatus") or []
-            alert_channels = task.get("alertChannels") or []
+            # Evaluate whether to send an alert (with dedup/suppression)
+            from .alert_engine import AlertEngine
+            alert_engine = AlertEngine()
+            decision = alert_engine.evaluate(task, result)
 
-            if status in alert_on and alert_channels:
+            if decision.should_alert:
                 await self._dispatch_alert(task, result)
+                # Update alert tracking fields
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE "Monitor"
+                            SET "lastAlertStatus" = %s,
+                                "lastAlertAt" = %s
+                            WHERE id = %s
+                            """,
+                            (status, end_time, task_id),
+                        )
+                        conn.commit()
+                except Exception:
+                    pass  # Alert tracking update is best-effort
+            elif decision.suppressed:
+                logger.info(
+                    f"[Scheduler] Alert suppressed: {task_name}",
+                    reason=decision.reason,
+                )
 
             logger.info(
                 f"[Scheduler] Task completed: {task_name}",

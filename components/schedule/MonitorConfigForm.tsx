@@ -360,7 +360,7 @@ export function MonitorConfigForm({
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                  Min expected rows
+                  Min expected rows / day
                 </label>
                 <input
                   type="number"
@@ -374,7 +374,7 @@ export function MonitorConfigForm({
               </div>
               <div>
                 <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                  Max expected rows
+                  Max expected rows / day
                 </label>
                 <input
                   type="number"

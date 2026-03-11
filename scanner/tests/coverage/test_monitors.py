@@ -97,29 +97,34 @@ class TestVolumeMonitor:
         assert result.status == MonitorStatus.FAIL
 
     def test_zscore_anomaly(self):
+        """Daily volume anomaly detection via time-series buckets."""
         monitor = VolumeMonitor({
-            "historical_mean": 1000,
-            "historical_stddev": 50,
+            "time_bucket_column": "created_at",
             "anomaly_threshold": 3.0,
         })
-        # 1200 is 4 stddevs above mean.
-        result = monitor.evaluate(
-            [{"row_count": 1200}],
-            "db.schema.table",
-        )
+        # Baseline: ~1000 rows/day, then spike to 1200 (4σ with stddev ~3)
+        rows = [
+            {"bucket_date": f"2025-01-{d:02d}", "row_count": 1000 + (d % 3)}
+            for d in range(1, 11)
+        ]
+        rows.append({"bucket_date": "2025-01-11", "row_count": 5000})
+        result = monitor.evaluate(rows, "db.schema.table")
         assert result.status == MonitorStatus.FAIL
         assert "anomalous" in result.message.lower()
 
     def test_zscore_normal(self):
+        """Daily volume within normal range via time-series buckets."""
         monitor = VolumeMonitor({
-            "historical_mean": 1000,
-            "historical_stddev": 50,
+            "time_bucket_column": "created_at",
             "anomaly_threshold": 3.0,
         })
-        result = monitor.evaluate(
-            [{"row_count": 1050}],
-            "db.schema.table",
-        )
+        rows = [
+            {"bucket_date": f"2025-01-{d:02d}", "row_count": 1000 + d * 2}
+            for d in range(1, 11)
+        ]
+        # Latest value (1020) is well within normal range
+        rows.append({"bucket_date": "2025-01-11", "row_count": 1010})
+        result = monitor.evaluate(rows, "db.schema.table")
         assert result.status == MonitorStatus.PASS
 
     def test_time_series_anomaly(self):

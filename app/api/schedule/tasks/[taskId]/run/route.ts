@@ -157,27 +157,52 @@ export async function POST(
     // For infrastructure monitors, resolve server connection config
     if (isInfra) {
       const serverNodeId = taskConfig.serverNodeId;
+      console.log(`[Schedule] Infra monitor: serverNodeId=${serverNodeId}, integrationId=${task.integrationId}`);
 
-      const serverStack = await prisma.pipelineStack.findFirst({
-        where: { organizationId },
-        include: {
-          nodes: {
-            where: {
-              toolType: 'linux_server',
-              ...(serverNodeId ? { id: serverNodeId } : {}),
+      // 1. Direct lookup by serverNodeId (most reliable)
+      if (serverNodeId) {
+        const directNode = await prisma.pipelineNode.findFirst({
+          where: { id: serverNodeId },
+          select: { id: true, name: true, toolType: true, config: true },
+        });
+        if (directNode) {
+          integrationConfig = resolveNodeConfig(directNode);
+          console.log(`[Schedule] Resolved server by nodeId: ${directNode.name} (${directNode.toolType})`);
+        }
+      }
+
+      // 2. Try integrationId → find the node linked to that integration
+      if (!integrationConfig && task.integrationId) {
+        const linkedNode = await prisma.pipelineNode.findFirst({
+          where: { integrationId: task.integrationId, toolType: 'linux_server' },
+          select: { id: true, name: true, toolType: true, config: true },
+        });
+        if (linkedNode) {
+          integrationConfig = resolveNodeConfig(linkedNode);
+          console.log(`[Schedule] Resolved server by integrationId: ${linkedNode.name}`);
+        }
+      }
+
+      // 3. Fallback: find any linux_server in the org's pipeline stack
+      if (!integrationConfig) {
+        const serverStack = await prisma.pipelineStack.findFirst({
+          where: { organizationId },
+          include: {
+            nodes: {
+              where: { toolType: 'linux_server' },
+              select: { id: true, name: true, toolType: true, config: true },
+              take: 1,
             },
-            select: { id: true, name: true, toolType: true, config: true },
-            take: 1,
           },
-        },
-      });
+        });
 
-      const serverNode = serverStack?.nodes[0];
-      if (serverNode) {
-        integrationConfig = resolveNodeConfig(serverNode);
-        console.log(`[Schedule] Resolved server: ${serverNode.name}`);
-      } else {
-        console.warn('[Schedule] No linux_server node found for infra monitor');
+        const serverNode = serverStack?.nodes[0];
+        if (serverNode) {
+          integrationConfig = resolveNodeConfig(serverNode);
+          console.log(`[Schedule] Resolved server from stack: ${serverNode.name}`);
+        } else {
+          console.warn('[Schedule] No linux_server node found for infra monitor');
+        }
       }
     }
 
@@ -303,6 +328,8 @@ export async function POST(
         monitor_type: task.monitorType,
         target_fqn: task.targetFqn,
         config: monitorConfig,
+        integration_id: task.integrationId,
+        organization_id: organizationId,
         integration_config: integrationConfig,
       }),
     });

@@ -1,20 +1,37 @@
 """
 Statistical anomaly monitor.
 
-Implements Z-score anomaly detection for arbitrary column metrics —
+Implements anomaly detection for arbitrary column metrics —
 null rates, distinct counts, min/max values, distribution statistics.
 Supports seasonality via day-of-week bucketing.
 
-This is the tech-agnostic equivalent of Elementary's anomaly detection
-tests, but works against any warehouse Pallisade can connect to.
+Uses the shared StatEngine for robust z-score/MAD scoring,
+confidence scaling, adaptive thresholds, and min-effect-size filtering.
 """
 
 from __future__ import annotations
 
-import math
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
+from .stats import score_anomaly
+
+
+# Default minimum absolute change by metric type.
+# Rate metrics (0-1 scale) need a larger floor to avoid noise.
+# Count metrics use 0 (any statistically significant change matters).
+_DEFAULT_MIN_EFFECT_SIZE: Dict[str, float] = {
+    "null_rate": 0.01,
+    "distinct_rate": 0.01,
+    "zero_rate": 0.01,
+    "distinct_count": 0,
+    "min": 0,
+    "max": 0,
+    "avg": 0,
+    "sum": 0,
+    "stddev": 0,
+    "row_count": 0,
+}
 
 
 class AnomalyMonitor(BaseMonitor):
@@ -27,9 +44,15 @@ class AnomalyMonitor(BaseMonitor):
         metric : str
             Metric to track. One of: "null_rate", "distinct_count",
             "distinct_rate", "min", "max", "avg", "sum", "stddev",
-            "zero_rate".
+            "zero_rate", "row_count".
         anomaly_threshold : float
             Z-score threshold (default: 3.0).
+        min_effect_size : float | None
+            Minimum absolute change to trigger anomaly. Prevents alerts
+            on statistically significant but practically irrelevant changes.
+            Default depends on metric type (0.01 for rates, 0 for counts).
+        detection_method : str
+            "auto" (default), "zscore", "mad", or "pct_change".
         seasonality : str | None
             Seasonality mode. "day_of_week" to compute baselines
             per weekday (default: None).
@@ -38,7 +61,7 @@ class AnomalyMonitor(BaseMonitor):
         timestamp_column : str | None
             Column for time bucketing (default: None = single snapshot).
         historical_values : list[float] | None
-            Pre-computed historical metric values for Z-score baseline.
+            Pre-computed historical metric values for baseline.
     """
 
     monitor_type = "anomaly"
@@ -84,6 +107,13 @@ class AnomalyMonitor(BaseMonitor):
         self.anomaly_threshold: float = float(
             self.config.get("anomaly_threshold", 3.0)
         )
+        self.min_effect_size: float = float(
+            self.config.get(
+                "min_effect_size",
+                _DEFAULT_MIN_EFFECT_SIZE.get(self.metric, 0),
+            )
+        )
+        self.detection_method: str = self.config.get("detection_method", "auto")
         self.seasonality: Optional[str] = self.config.get("seasonality")
         self.lookback_days: int = int(self.config.get("lookback_days", 30))
         self.timestamp_column: Optional[str] = self.config.get("timestamp_column")
@@ -193,7 +223,7 @@ class AnomalyMonitor(BaseMonitor):
                     status=MonitorStatus.ERROR,
                     message="Could not extract current metric value.",
                 )
-            return self._zscore_evaluate(
+            return self._stat_evaluate(
                 current_value, self.historical_values, target_fqn
             )
 
@@ -223,10 +253,10 @@ class AnomalyMonitor(BaseMonitor):
                     if len(seasonal_baseline) >= 3:
                         baseline = seasonal_baseline
 
-                return self._zscore_evaluate(current, baseline, target_fqn)
+                return self._stat_evaluate(current, baseline, target_fqn)
 
-        # Not enough data for Z-score — report the current value as a
-        # baseline observation instead of skipping entirely.
+        # Not enough data for anomaly detection — report the current value
+        # as a baseline observation instead of skipping entirely.
         current_value = self._extract_current_value(query_results)
         label = f"{self.column}.{self.metric}" if self.column else self.metric
         n = len(query_results)
@@ -258,7 +288,7 @@ class AnomalyMonitor(BaseMonitor):
                 message=(
                     f"{label}: current value is {current_value:.4f}. "
                     f"Anomaly detection is not ready yet — have {n} data "
-                    f"point{'s' if n != 1 else ''}, need ≥ 3. {hint}"
+                    f"point{'s' if n != 1 else ''}, need >= 3. {hint}"
                 ),
                 details={
                     "data_points": n,
@@ -289,104 +319,90 @@ class AnomalyMonitor(BaseMonitor):
             },
         )
 
-    @staticmethod
-    def _baseline_confidence(baseline_count: int, ideal: int = 30) -> int:
-        """Confidence percentage based on available baseline vs ideal.
-
-        With fewer data points the Z-score baseline is less
-        representative, so we report a reduced confidence level.
-        """
-        if baseline_count >= ideal:
-            return 100
-        if baseline_count >= 20:
-            return 85
-        if baseline_count >= 14:
-            return 75
-        if baseline_count >= 7:
-            return 60
-        if baseline_count >= 3:
-            return 40
-        return 0
-
-    def _zscore_evaluate(
+    def _stat_evaluate(
         self,
         current: float,
         baseline: List[float],
         target_fqn: str,
     ) -> MonitorResult:
-        mean = sum(baseline) / len(baseline)
-        variance = sum((x - mean) ** 2 for x in baseline) / len(baseline)
-        stddev = math.sqrt(variance) if variance > 0 else 0.0
-
-        if stddev == 0:
-            is_anomaly = current != mean
-            z_score = float("inf") if is_anomaly else 0.0
-        else:
-            z_score = (current - mean) / stddev
-            is_anomaly = abs(z_score) > self.anomaly_threshold
+        """Evaluate using the shared StatEngine."""
+        score = score_anomaly(
+            current=current,
+            baseline=baseline,
+            threshold=self.anomaly_threshold,
+            min_effect_size=self.min_effect_size,
+            method=self.detection_method,
+        )
 
         label = f"{self.column}.{self.metric}" if self.column else self.metric
-        baseline_count = len(baseline)
-        confidence_pct = self._baseline_confidence(baseline_count)
 
-        # Build confidence note when baseline is shorter than ideal
-        confidence_note = ""
-        if confidence_pct < 100:
-            confidence_note = (
-                f" Based on {baseline_count} days of data "
-                f"(ideal: 30). Confidence: ~{confidence_pct}%."
-            )
-
-        if is_anomaly:
-            direction = "above" if z_score > 0 else "below"
-            return MonitorResult(
-                monitor_type=self.monitor_type,
-                target_fqn=target_fqn,
-                status=MonitorStatus.FAIL,
-                value=current,
-                threshold=self.anomaly_threshold,
-                expected_range={
-                    "min": mean - self.anomaly_threshold * stddev,
-                    "max": mean + self.anomaly_threshold * stddev,
+        # Confidence-based auto-downgrade: low-confidence anomalies
+        # become WARN instead of FAIL
+        if score.is_anomaly:
+            status = MonitorStatus.FAIL
+            if score.confidence_pct < 50:
+                status = MonitorStatus.WARN
+            expected_range = (
+                {
+                    "min": round(
+                        score.baseline_mean
+                        - score.threshold_used * score.baseline_stddev,
+                        4,
+                    ),
+                    "max": round(
+                        score.baseline_mean
+                        + score.threshold_used * score.baseline_stddev,
+                        4,
+                    ),
                 }
-                if stddev > 0
-                else {"min": mean, "max": mean},
-                message=(
-                    f"Anomaly detected on {label}: "
-                    f"value {current:.4f} is {direction} expected range "
-                    f"(z-score: {z_score:.2f}, mean: {mean:.4f})."
-                    f"{confidence_note}"
-                ),
-                details={
-                    "column": self.column,
-                    "metric": self.metric,
-                    "z_score": round(z_score, 4),
-                    "baseline_mean": round(mean, 4),
-                    "baseline_stddev": round(stddev, 4),
-                    "baseline_count": baseline_count,
-                    "seasonality": self.seasonality,
-                    "confidence_pct": confidence_pct,
-                },
+                if score.baseline_stddev > 0
+                else {"min": score.baseline_mean, "max": score.baseline_mean}
+            )
+            message = (
+                f"Anomaly detected on {label}: "
+                f"value {current:.4f} is {score.direction} expected range "
+                f"({score.method_used}: {score.z_score:.2f}, "
+                f"mean: {score.baseline_mean:.4f}, "
+                f"{score.baseline_count} points, "
+                f"{score.confidence_pct}% confidence)."
+            )
+        else:
+            status = MonitorStatus.PASS
+            expected_range = None
+            message = (
+                f"{label}: value {current:.4f} is within expected range "
+                f"({score.method_used}: {score.z_score:.2f}, "
+                f"mean: {score.baseline_mean:.4f}, "
+                f"{score.baseline_count} points)."
             )
 
         return MonitorResult(
             monitor_type=self.monitor_type,
             target_fqn=target_fqn,
-            status=MonitorStatus.PASS,
+            status=status,
             value=current,
-            message=(
-                f"{label}: value {current:.4f} is within expected range "
-                f"(z-score: {z_score:.2f}, mean: {mean:.4f})."
-                f"{confidence_note}"
-            ),
+            threshold=score.threshold_used,
+            expected_range=expected_range,
+            message=message,
             details={
                 "column": self.column,
                 "metric": self.metric,
-                "z_score": round(z_score, 4),
-                "baseline_mean": round(mean, 4),
-                "baseline_stddev": round(stddev, 4),
-                "baseline_count": baseline_count,
-                "confidence_pct": confidence_pct,
+                "z_score": score.z_score,
+                "mad_score": score.mad_score,
+                "baseline_mean": score.baseline_mean,
+                "baseline_median": score.baseline_median,
+                "baseline_stddev": score.baseline_stddev,
+                "baseline_mad": score.baseline_mad,
+                "baseline_count": score.baseline_count,
+                "seasonality": self.seasonality,
+                "confidence_pct": score.confidence_pct,
+                "method_used": score.method_used,
+                "threshold_used": score.threshold_used,
+                "min_effect_size": self.min_effect_size,
+                "absolute_change": score.absolute_change,
+                "pct_change": score.pct_change,
+                "direction": score.direction,
+                "explanation": score.explanation,
             },
         )
 

@@ -324,6 +324,7 @@ export default function SchedulePage() {
           onUpdate={handleUpdateTask}
           editTask={editingTask}
           integrations={integrations}
+          stackId={selectedPipeline?.id}
         />
       </div>
     );

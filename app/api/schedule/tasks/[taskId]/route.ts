@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { computeNextRun } from '@/lib/cron';
 
 // GET /api/schedule/tasks/[taskId] - Get task detail
 export async function GET(
@@ -75,6 +76,15 @@ export async function PATCH(
     for (const field of allowedFields) {
       if (body[field] !== undefined) {
         data[field] = body[field];
+      }
+    }
+
+    // Recompute nextRunAt when schedule or timezone changes
+    if (data.schedule || data.timezone) {
+      const cronExpr = data.schedule || existing.schedule;
+      const tz = data.timezone || existing.timezone || 'UTC';
+      if (cronExpr) {
+        data.nextRunAt = computeNextRun(cronExpr, tz);
       }
     }
 

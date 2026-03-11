@@ -361,23 +361,25 @@ export async function POST(request: NextRequest) {
         nodeIdMap.set(node.id, created.id);
       }
 
-      // Create edges if nodes were provided
+      // Create edges if nodes were provided (deduplicated)
       if (nodes.length > 0 && edges.length > 0) {
-
-        // Create edges with mapped IDs
-        await Promise.all(
-          edges.map((edge: any) =>
-            prisma.pipelineEdge.create({
-              data: {
-                sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
-                targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
-                label: edge.label,
-                dataFlow: edge.dataFlow,
-                stackId: stack.id,
-              },
-            })
-          )
-        );
+        const seenKeys = new Set<string>();
+        for (const edge of edges) {
+          const srcId = nodeIdMap.get(edge.sourceId) || edge.sourceId;
+          const tgtId = nodeIdMap.get(edge.targetId) || edge.targetId;
+          const key = `${srcId}::${tgtId}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          await prisma.pipelineEdge.create({
+            data: {
+              sourceId: srcId,
+              targetId: tgtId,
+              label: edge.label,
+              dataFlow: edge.dataFlow,
+              stackId: stack.id,
+            },
+          });
+        }
       }
 
       return NextResponse.json({ stack: { id: stack.id, name: stack.name }, success: true });
@@ -479,20 +481,29 @@ export async function POST(request: NextRequest) {
         where: { stackId: id },
       });
 
-      // Create edges with mapped IDs
-      await Promise.all(
-        edges.map((edge: any) =>
-          prisma.pipelineEdge.create({
-            data: {
-              sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
-              targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
-              label: edge.label,
-              dataFlow: edge.dataFlow,
-              stackId: id,
-            },
-          })
-        )
-      );
+      // Deduplicate edges by (sourceId, targetId) to avoid unique constraint violations
+      const seenEdgeKeys = new Set<string>();
+      const dedupedEdges = edges.filter((edge: any) => {
+        const srcId = nodeIdMap.get(edge.sourceId) || edge.sourceId;
+        const tgtId = nodeIdMap.get(edge.targetId) || edge.targetId;
+        const key = `${srcId}::${tgtId}`;
+        if (seenEdgeKeys.has(key)) return false;
+        seenEdgeKeys.add(key);
+        return true;
+      });
+
+      // Create edges sequentially to avoid race conditions with unique constraint
+      for (const edge of dedupedEdges) {
+        await prisma.pipelineEdge.create({
+          data: {
+            sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
+            targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
+            label: edge.label,
+            dataFlow: edge.dataFlow,
+            stackId: id,
+          },
+        });
+      }
 
       return NextResponse.json({ id, success: true });
     }

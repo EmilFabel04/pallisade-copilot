@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { computeNextRun } from '@/lib/cron';
 
 // GET /api/schedule/tasks - List all scheduled tasks
 export async function GET(request: NextRequest) {
@@ -94,14 +95,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Compute next run time
-    let nextRunAt: Date | null = null;
-    try {
-      // Simple cron next-run computation (delegate to backend later if needed)
-      nextRunAt = new Date(Date.now() + 60_000); // Default: run in 1 minute
-    } catch {
-      // Will be computed by the scheduler
-    }
+    // Compute next run time from cron expression
+    const nextRunAt = computeNextRun(schedule, timezone);
 
     // For infrastructure monitors, the integrationId is a PipelineNode ID — store in config.
     // For tool monitors, store integrationId as toolNodeId in config.

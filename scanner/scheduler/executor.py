@@ -318,6 +318,29 @@ class TaskExecutor:
         dialect = _detect_dialect(integration_type)
         logger.info(f"[Executor] Using dialect={dialect}, type={integration_type}")
 
+        # Enforce dataset/schema visibility: if the integration restricts
+        # which datasets are accessible, block monitors targeting other datasets.
+        allowed_datasets = integration_config.get("datasets") or integration_config.get("schemas") or []
+        if isinstance(allowed_datasets, str):
+            allowed_datasets = [allowed_datasets]
+        if allowed_datasets:
+            # schema == dataset for BigQuery, schema for others
+            allowed_lower = [d.lower() for d in allowed_datasets]
+            if schema.lower() not in allowed_lower:
+                logger.warning(
+                    "[Executor] Target dataset not in allowed list",
+                    target_schema=schema,
+                    allowed=allowed_datasets,
+                )
+                return {
+                    "status": "ERROR",
+                    "message": (
+                        f"Dataset '{schema}' is not in the configured dataset list "
+                        f"({', '.join(allowed_datasets)}). Update the monitor target "
+                        f"or add '{schema}' to the warehouse integration config."
+                    ),
+                }
+
         try:
             query_func, sql_dialect = _get_query_func(integration_config, dialect)
             executor = MonitorExecutor(query_func=query_func, dialect=sql_dialect)
@@ -592,9 +615,15 @@ class TaskExecutor:
         from scanner.monitors.executor import MonitorExecutor
 
         # Get server connection config from the integration
-        integration_config = task.get("integrationConfig") or await self._get_server_config(
-            task.get("integrationId"), task.get("organizationId")
-        )
+        integration_config = task.get("integrationConfig")
+        if not integration_config:
+            # Try serverNodeId from task config (PipelineNode ID)
+            server_node_id = config.get("serverNodeId")
+            integration_config = await self._get_server_config(
+                task.get("integrationId"),
+                task.get("organizationId"),
+                server_node_id=server_node_id,
+            )
 
         if not integration_config:
             return {
@@ -881,10 +910,13 @@ class TaskExecutor:
             return None
 
     async def _get_server_config(
-        self, integration_id: Optional[str], organization_id: Optional[str] = None
+        self,
+        integration_id: Optional[str],
+        organization_id: Optional[str] = None,
+        server_node_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetch server connection config from a LINUX_SERVER pipeline node."""
-        if not integration_id and not organization_id:
+        if not integration_id and not organization_id and not server_node_id:
             return None
 
         try:
@@ -893,7 +925,21 @@ class TaskExecutor:
             conn = _get_connection()
             try:
                 with conn.cursor() as cur:
-                    if integration_id:
+                    if server_node_id:
+                        # Direct lookup by PipelineNode ID (from config.serverNodeId)
+                        # Don't filter by status — user explicitly linked this node
+                        cur.execute(
+                            """
+                            SELECT pn.id, pn.name, pn."toolType",
+                                   i.credentials AS int_creds, pn.config
+                            FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE pn.id = %s
+                            LIMIT 1
+                            """,
+                            (server_node_id,),
+                        )
+                    elif integration_id:
                         cur.execute(
                             """
                             SELECT pn.id, pn.name, pn."toolType",

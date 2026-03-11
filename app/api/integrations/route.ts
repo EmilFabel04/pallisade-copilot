@@ -90,6 +90,7 @@ export async function GET(request: NextRequest) {
         updatedAt: true,
         stackId: true,
         config: true,
+        integrationId: true,
         integration: {
           select: {
             tokenExpiry: true,
@@ -118,36 +119,140 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Map pipeline nodes to integration-like format for backwards compatibility
-    const pipelineAsIntegrations = pipelineNodes.map(node => ({
-      id: node.id,
-      name: node.name,
-      type: mapToolTypeToIntegrationType(node.toolType),
-      status: mapPipelineStatus(node.status),
-      connectionInfo: `Pipeline: ${node.layer.toLowerCase()}`,
-      lastSyncAt: null,
-      lastTestAt: node.lastTestedAt,
-      lastError: node.lastError,
-      healthScore: node.healthScore,
-      scanCount: null,
-      lastScanAt: node.lastScanAt,
-      config: (node as any).integration?.config || (node as any).config || null,
-      tokenExpiry: (node as any).integration?.tokenExpiry || null,
-      lastExtractedAt: (node as any).integration?.lastExtractedAt || null,
-      lastLineageExtractedAt: (node as any).integration?.lastLineageExtractedAt || null,
-      lastSchemaExtractedAt: (node as any).integration?.lastSchemaExtractedAt || null,
-      lastLogsExtractedAt: (node as any).integration?.lastLogsExtractedAt || null,
-      sourceContract: (node as any).integration?.sourceContract || null,
-      createdAt: node.createdAt,
-      updatedAt: node.updatedAt,
-      // Extra fields to identify source
-      source: 'pipeline' as const,
-      layer: node.layer,
-      stackId: node.stackId,
-      findingsCount: node.findingsCount,
-      criticalCount: (node as any).criticalCount || 0,
-      highCount: (node as any).highCount || 0,
-    }));
+    // ── Enrich with monitor health + scan extraction data ──
+
+    // Batch-fetch monitor statuses for all linked integrations
+    const allIntegrationIds = [
+      ...pipelineNodes.map(n => n.integrationId).filter(Boolean) as string[],
+      ...legacyIntegrations.map(i => i.id),
+    ];
+
+    const [monitors, latestScans] = await Promise.all([
+      allIntegrationIds.length > 0
+        ? prisma.monitor.findMany({
+            where: {
+              organizationId: user.organizationId,
+              integrationId: { in: allIntegrationIds },
+              enabled: true,
+              lastRunAt: { not: null },
+            },
+            select: {
+              integrationId: true,
+              lastRunAt: true,
+              lastStatus: true,
+            },
+          })
+        : Promise.resolve([]),
+      // Latest completed scan per stack
+      (() => {
+        const stackIds = [...new Set(pipelineNodes.map(n => n.stackId))];
+        return stackIds.length > 0
+          ? prisma.pipelineScan.findMany({
+              where: { stackId: { in: stackIds }, status: 'COMPLETED' },
+              orderBy: { completedAt: 'desc' },
+              distinct: ['stackId'],
+              select: { stackId: true, completedAt: true, healthScore: true },
+            })
+          : Promise.resolve([]);
+      })(),
+    ]);
+
+    // Build monitor health lookup: integrationId → { health, latestRunAt }
+    const monitorMap = new Map<string, { health: number; latestRunAt: string }>();
+    const monitorGrouped = new Map<string, Array<{ lastStatus: string | null; lastRunAt: Date }>>();
+    for (const m of monitors) {
+      if (!m.integrationId) continue;
+      if (!monitorGrouped.has(m.integrationId)) monitorGrouped.set(m.integrationId, []);
+      monitorGrouped.get(m.integrationId)!.push({ lastStatus: m.lastStatus, lastRunAt: m.lastRunAt! });
+    }
+    for (const [intId, mons] of monitorGrouped) {
+      let score = 0;
+      let latestRun = new Date(0);
+      for (const m of mons) {
+        switch (m.lastStatus) {
+          case 'PASS': score += 100; break;
+          case 'WARN': score += 60; break;
+          case 'FAIL': score += 20; break;
+          case 'ERROR': score += 0; break;
+          default: score += 50;
+        }
+        if (m.lastRunAt > latestRun) latestRun = m.lastRunAt;
+      }
+      monitorMap.set(intId, {
+        health: Math.round(score / mons.length),
+        latestRunAt: latestRun.toISOString(),
+      });
+    }
+
+    // Build scan lookup: stackId → { completedAt, healthScore }
+    const scanMap = new Map<string, { completedAt: string; healthScore: number | null }>();
+    for (const s of latestScans) {
+      if (s.completedAt) {
+        scanMap.set(s.stackId, {
+          completedAt: s.completedAt.toISOString(),
+          healthScore: s.healthScore,
+        });
+      }
+    }
+
+    // Map pipeline nodes to integration-like format with enriched health/extraction
+    const pipelineAsIntegrations = pipelineNodes.map(node => {
+      const intId = node.integrationId;
+      const monitorData = intId ? monitorMap.get(intId) : null;
+      const scanData = scanMap.get(node.stackId);
+
+      // Health fallback chain: node scan → monitors → stack scan → findings-derived
+      const healthScore = node.healthScore
+        ?? monitorData?.health
+        ?? scanData?.healthScore
+        ?? deriveFindingsHealth(node.findingsCount, node.criticalCount, node.highCount);
+
+      // Extraction fallback: integration → node scan → stack scan
+      const integ = (node as any).integration;
+      const lastExtractedAt = integ?.lastExtractedAt
+        ?? node.lastScanAt?.toISOString()
+        ?? scanData?.completedAt
+        ?? null;
+
+      // Last tested fallback: node → monitor latest run
+      const lastTestedAt = node.lastTestedAt
+        ?? (monitorData ? new Date(monitorData.latestRunAt) : null);
+
+      // Schema extraction fallback: integration → node scan
+      const lastSchemaExtractedAt = integ?.lastSchemaExtractedAt
+        ?? node.lastScanAt?.toISOString()
+        ?? null;
+
+      return {
+        id: node.id,
+        name: node.name,
+        type: mapToolTypeToIntegrationType(node.toolType),
+        status: mapPipelineStatus(node.status),
+        connectionInfo: `Pipeline: ${node.layer.toLowerCase()}`,
+        lastSyncAt: null,
+        lastTestAt: lastTestedAt,
+        lastError: node.lastError,
+        healthScore,
+        scanCount: null,
+        lastScanAt: node.lastScanAt,
+        config: integ?.config || (node as any).config || null,
+        tokenExpiry: integ?.tokenExpiry || null,
+        lastExtractedAt,
+        lastLineageExtractedAt: integ?.lastLineageExtractedAt || null,
+        lastSchemaExtractedAt,
+        lastLogsExtractedAt: integ?.lastLogsExtractedAt || null,
+        sourceContract: integ?.sourceContract || null,
+        createdAt: node.createdAt,
+        updatedAt: node.updatedAt,
+        // Extra fields to identify source
+        source: 'pipeline' as const,
+        layer: node.layer,
+        stackId: node.stackId,
+        findingsCount: node.findingsCount,
+        criticalCount: node.criticalCount || 0,
+        highCount: node.highCount || 0,
+      };
+    });
 
     // Combine both sources, with Pipeline nodes first.
     // Deduplicate: if a PipelineNode exists for a type, skip the legacy Integration
@@ -155,11 +260,19 @@ export async function GET(request: NextRequest) {
     const pipelineTypes = new Set(pipelineAsIntegrations.map(p => p.type));
     const dedupedLegacy = legacyIntegrations
       .filter(i => !pipelineTypes.has(i.type))
-      .map(i => ({
-        ...i,
-        source: 'legacy' as const,
-        managedByPipeline: (i.pipelineNodes?.length || 0) > 0,
-      }));
+      .map(i => {
+        // Enrich legacy integrations with monitor health if their own healthScore is null
+        const monitorData = monitorMap.get(i.id);
+        const enrichedHealthScore = i.healthScore ?? monitorData?.health ?? null;
+        const enrichedLastTestAt = i.lastTestAt ?? (monitorData ? new Date(monitorData.latestRunAt) : null);
+        return {
+          ...i,
+          healthScore: enrichedHealthScore,
+          lastTestAt: enrichedLastTestAt,
+          source: 'legacy' as const,
+          managedByPipeline: (i.pipelineNodes?.length || 0) > 0,
+        };
+      });
     const allIntegrations = [...pipelineAsIntegrations, ...dedupedLegacy];
 
     // Fetch pipeline contract if stackId provided, for effective contract resolution
@@ -218,6 +331,12 @@ export async function GET(request: NextRequest) {
     console.error('Error fetching integrations:', error);
     return NextResponse.json({ error: 'Failed to fetch integrations' }, { status: 500 });
   }
+}
+
+// Derive health score from findings when no other health data is available
+function deriveFindingsHealth(findings: number, critical: number, high: number): number | null {
+  if (findings === 0 && critical === 0 && high === 0) return null;
+  return Math.max(0, 100 - (critical * 20) - (high * 10));
 }
 
 // Map pipeline tool types to integration types

@@ -3,10 +3,17 @@ Freshness monitor.
 
 Checks how recently a table was updated by examining a timestamp column
 or warehouse metadata. Works across any SQL warehouse.
+
+Supports two freshness modes:
+- "ingestion": Checks when data was last loaded (ETL timestamps)
+- "business_event": Checks when the latest business event occurred
+
+Supports cadence-aware thresholds with separate weekday/weekend SLAs.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import structlog
 from typing import Any, Callable, Dict, List, Optional
 
@@ -14,9 +21,9 @@ from .base import BaseMonitor, MonitorResult, MonitorStatus
 
 logger = structlog.get_logger()
 
-# Priority order for auto-detecting the freshness column.
-# Lower index = higher priority.  Matched case-insensitively.
-_TIMESTAMP_COLUMN_PRIORITY = [
+
+# Ingestion timestamp columns — indicate when data was loaded/synced.
+_INGESTION_COLUMNS = [
     "_partitiontime",       # BigQuery partition pseudo-column (load time)
     "loaded_at",
     "_loaded_at",
@@ -25,6 +32,10 @@ _TIMESTAMP_COLUMN_PRIORITY = [
     "_etl_loaded_at",
     "_fivetran_synced",     # Fivetran sync timestamp
     "_airbyte_extracted_at",  # Airbyte extraction timestamp
+]
+
+# Business-event timestamp columns — indicate when the event happened.
+_BUSINESS_EVENT_COLUMNS = [
     "created_at",
     "created",
     "inserted_at",
@@ -33,21 +44,44 @@ _TIMESTAMP_COLUMN_PRIORITY = [
     "timestamp",
     "event_time",
     "event_timestamp",
+    "occurred_at",
+    "transaction_date",
 ]
 
+# Combined priority list (ingestion first, then business-event).
+_TIMESTAMP_COLUMN_PRIORITY = _INGESTION_COLUMNS + _BUSINESS_EVENT_COLUMNS
 
-def _pick_best_column(columns: List[str]) -> Optional[str]:
+
+def _classify_column_mode(column_name: str) -> str:
+    """Classify a timestamp column as ingestion or business_event."""
+    lower = column_name.lower()
+    for ingestion_col in _INGESTION_COLUMNS:
+        if lower == ingestion_col:
+            return "ingestion"
+    return "business_event"
+
+
+def _pick_best_column(
+    columns: List[str], preferred_mode: Optional[str] = None
+) -> Optional[str]:
     """Pick the best timestamp column from a list of available columns.
 
-    Returns the highest-priority match, or the first column if none match
-    the priority list.
+    If preferred_mode is set ("ingestion" or "business_event"), prefer
+    columns matching that mode. Otherwise, use the default priority list.
     """
     if not columns:
         return None
 
     lower_map = {c.lower(): c for c in columns}
 
-    for candidate in _TIMESTAMP_COLUMN_PRIORITY:
+    if preferred_mode == "ingestion":
+        priority = _INGESTION_COLUMNS + _BUSINESS_EVENT_COLUMNS
+    elif preferred_mode == "business_event":
+        priority = _BUSINESS_EVENT_COLUMNS + _INGESTION_COLUMNS
+    else:
+        priority = _TIMESTAMP_COLUMN_PRIORITY
+
+    for candidate in priority:
         if candidate in lower_map:
             return lower_map[candidate]
 
@@ -89,17 +123,20 @@ def discover_timestamp_column(
     schema: str,
     table: str,
     dialect: str = "postgres",
+    preferred_mode: Optional[str] = None,
 ) -> Optional[str]:
     """Run a discovery query and return the best timestamp column name."""
     sql = build_discovery_query(database, schema, table, dialect)
     try:
         rows = query_func(sql)
         column_names = [r.get("column_name") for r in rows if r.get("column_name")]
-        best = _pick_best_column(column_names)
+        best = _pick_best_column(column_names, preferred_mode)
         if best:
+            mode = _classify_column_mode(best)
             logger.info(
                 "[Freshness] Auto-detected timestamp column",
                 column=best,
+                mode=mode,
                 candidates=column_names,
                 table=f"{database}.{schema}.{table}",
             )
@@ -127,10 +164,18 @@ class FreshnessMonitor(BaseMonitor):
         timestamp_column : str | None
             Column to check for recency.  When omitted, the executor
             auto-discovers the best timestamp column from the table schema.
+        freshness_mode : str
+            "ingestion" (check when data was loaded), "business_event"
+            (check when event occurred), or "auto" (detect from column name).
+            Default: "auto".
         max_hours : float
             Maximum acceptable age in hours (default: 24).
         warn_hours : float
             Warning threshold in hours (default: max_hours * 0.75).
+        weekday_max_hours : float | None
+            Max hours for weekdays (Mon-Fri). Overrides max_hours on weekdays.
+        weekend_max_hours : float | None
+            Max hours for weekends (Sat-Sun). Overrides max_hours on weekends.
     """
 
     monitor_type = "freshness"
@@ -142,14 +187,45 @@ class FreshnessMonitor(BaseMonitor):
         self.timestamp_column: str = (
             self.config.get("timestamp_column") or ""
         )
+        self.freshness_mode: str = self.config.get("freshness_mode", "auto")
         self.max_hours: float = float(self.config.get("max_hours", 24))
         self.warn_hours: float = float(
             self.config.get("warn_hours", self.max_hours * 0.75)
         )
+        self.weekday_max_hours: Optional[float] = self.config.get("weekday_max_hours")
+        self.weekend_max_hours: Optional[float] = self.config.get("weekend_max_hours")
 
     @property
     def needs_column_discovery(self) -> bool:
         return not self.timestamp_column
+
+    def _effective_thresholds(self) -> tuple[float, float]:
+        """Return (max_hours, warn_hours) based on current day of week.
+
+        If weekday/weekend overrides are set, use them. Otherwise,
+        fall back to the base max_hours/warn_hours.
+        """
+        now = datetime.now(timezone.utc)
+        is_weekend = now.weekday() >= 5  # Saturday=5, Sunday=6
+
+        if is_weekend and self.weekend_max_hours is not None:
+            max_h = self.weekend_max_hours
+        elif not is_weekend and self.weekday_max_hours is not None:
+            max_h = self.weekday_max_hours
+        else:
+            max_h = self.max_hours
+
+        # Warn at 75% of effective max
+        warn_h = max_h * 0.75
+        return max_h, warn_h
+
+    def _resolved_mode(self) -> str:
+        """Resolve freshness mode from config or column name."""
+        if self.freshness_mode != "auto":
+            return self.freshness_mode
+        if self.timestamp_column:
+            return _classify_column_mode(self.timestamp_column)
+        return "auto"
 
     def build_query(
         self,
@@ -204,6 +280,7 @@ class FreshnessMonitor(BaseMonitor):
         row = query_results[0]
         total_rows = row.get("total_rows", 0)
         hours = row.get("hours_since_update")
+        resolved_mode = self._resolved_mode()
 
         if hours is None:
             if not total_rows:
@@ -215,6 +292,7 @@ class FreshnessMonitor(BaseMonitor):
                     message="Table is empty — no rows to check freshness against.",
                     details={
                         "timestamp_column": self.timestamp_column,
+                        "freshness_mode": resolved_mode,
                         "total_rows": 0,
                     },
                 )
@@ -230,6 +308,7 @@ class FreshnessMonitor(BaseMonitor):
                     ),
                     details={
                         "timestamp_column": self.timestamp_column,
+                        "freshness_mode": resolved_mode,
                         "total_rows": total_rows,
                     },
                 )
@@ -244,41 +323,58 @@ class FreshnessMonitor(BaseMonitor):
                     ),
                     details={
                         "timestamp_column": self.timestamp_column,
+                        "freshness_mode": resolved_mode,
                         "total_rows": total_rows,
                         "auto_detected": True,
                     },
                 )
 
         hours = float(hours)
+        max_h, warn_h = self._effective_thresholds()
 
-        if hours > self.max_hours:
+        mode_label = {
+            "ingestion": "Ingestion data",
+            "business_event": "Business-event data",
+        }.get(resolved_mode, "Data")
+
+        if hours > max_h:
             status = MonitorStatus.FAIL
             message = (
-                f"Data is {hours:.1f}h old, exceeding the "
-                f"{self.max_hours}h freshness SLA."
+                f"{mode_label} is {hours:.1f}h old, exceeding the "
+                f"{max_h}h freshness SLA."
             )
-        elif hours > self.warn_hours:
+        elif hours > warn_h:
             status = MonitorStatus.WARN
             message = (
-                f"Data is {hours:.1f}h old, approaching the "
-                f"{self.max_hours}h freshness SLA."
+                f"{mode_label} is {hours:.1f}h old, approaching the "
+                f"{max_h}h freshness SLA."
             )
         else:
             status = MonitorStatus.PASS
-            message = f"Data is {hours:.1f}h old. Within the {self.max_hours}h SLA."
+            message = f"{mode_label} is {hours:.1f}h old. Within the {max_h}h SLA."
 
         return MonitorResult(
             monitor_type=self.monitor_type,
             target_fqn=target_fqn,
             status=status,
             value=hours,
-            threshold=self.max_hours,
-            expected_range={"min": 0, "max": self.max_hours},
+            threshold=max_h,
+            expected_range={"min": 0, "max": max_h},
             message=message,
             details={
                 "timestamp_column": self.timestamp_column,
+                "freshness_mode": resolved_mode,
+                "hours_since_update": round(hours, 2),
+                "max_hours": max_h,
+                "warn_hours": warn_h,
                 "last_value": str(row.get("last_value", "")),
                 "total_rows": row.get("total_rows"),
-                "warn_hours": self.warn_hours,
+                "weekday_max_hours": self.weekday_max_hours,
+                "weekend_max_hours": self.weekend_max_hours,
+                "explanation": (
+                    f"Checked {resolved_mode} freshness via column "
+                    f"'{self.timestamp_column}'. Last value was {hours:.1f}h ago. "
+                    f"Threshold: {max_h}h (warn: {warn_h}h)."
+                ),
             },
         )

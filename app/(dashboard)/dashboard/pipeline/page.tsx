@@ -161,6 +161,7 @@ export default function PipelinePage() {
   const searchParams = useSearchParams();
   const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
   const lastPipelineIdRef = useRef<string | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [stack, setStack] = useState<PipelineStack>({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
@@ -230,15 +231,23 @@ export default function PipelinePage() {
 
   // ─── Actions ──────────────────────────────────────────────
   const savePipeline = useCallback(async (nextStack: PipelineStack, silent = false) => {
+    // Wait for any in-flight save to finish before starting a new one
+    if (saveInFlightRef.current) {
+      try { await saveInFlightRef.current; } catch { /* ignore */ }
+    }
     setSaving(true);
-    try {
-      const res = await fetch('/api/pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nextStack) });
-      if (!res.ok) throw new Error('save failed');
-      const data = await res.json();
-      setStack((prev) => ({ ...nextStack, id: data.stack?.id || data.id || prev.id }));
-      if (!silent) toast.success('Pipeline saved');
-    } catch { toast.error('Failed to save pipeline'); }
-    finally { setSaving(false); }
+    const doSave = async () => {
+      try {
+        const res = await fetch('/api/pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nextStack) });
+        if (!res.ok) throw new Error('save failed');
+        const data = await res.json();
+        setStack((prev) => ({ ...nextStack, id: data.stack?.id || data.id || prev.id }));
+        if (!silent) toast.success('Pipeline saved');
+      } catch { toast.error('Failed to save pipeline'); }
+      finally { setSaving(false); saveInFlightRef.current = null; }
+    };
+    saveInFlightRef.current = doSave();
+    return saveInFlightRef.current;
   }, []);
 
   const fetchIntegrations = useCallback(async () => {

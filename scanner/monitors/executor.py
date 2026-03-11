@@ -21,6 +21,8 @@ from .freshness import FreshnessMonitor
 from .volume import VolumeMonitor
 from .schema import SchemaMonitor
 from .anomaly import AnomalyMonitor
+from .referential import ReferentialIntegrityMonitor
+from .explainer import enrich_result
 from .infrastructure import INFRA_MONITOR_TYPES, INFRA_MONITOR_REGISTRY
 
 
@@ -34,6 +36,7 @@ MONITOR_REGISTRY: Dict[str, type] = {
     "volume": VolumeMonitor,
     "schema_change": SchemaMonitor,
     "anomaly": AnomalyMonitor,
+    "referential": ReferentialIntegrityMonitor,
 }
 
 # Map UI-only monitor types to real backend implementations.
@@ -109,6 +112,13 @@ class MonitorExecutor:
 
         result.executed_at = datetime.now(timezone.utc)
         result.duration_ms = int((time.monotonic() - start) * 1000)
+
+        # Enrich with structured explanation
+        try:
+            enrich_result(result)
+        except Exception:
+            pass  # Explanation enrichment is best-effort
+
         return result
 
     def _retry_anomaly_adaptive(
@@ -187,10 +197,18 @@ class MonitorExecutor:
                 config = self._auto_config_freshness(
                     database, schema, table, config
                 )
-            elif resolved_type == "volume" and not config.get("min_rows") and not config.get("max_rows") and not config.get("historical_mean"):
-                config = self._auto_config_volume(
-                    database, schema, table, config
-                )
+            elif resolved_type == "volume":
+                # Always discover timestamp column so daily bucketing works,
+                # even when user has set min_rows/max_rows thresholds.
+                if not config.get("time_bucket_column"):
+                    config = self._auto_discover_volume_timestamp(
+                        database, schema, table, config
+                    )
+                # Only auto-compute baselines if user hasn't set thresholds
+                if not config.get("min_rows") and not config.get("max_rows") and not config.get("historical_mean"):
+                    config = self._auto_config_volume(
+                        database, schema, table, config
+                    )
         except Exception as e:
             logger.warning(
                 "[AutoConfig] Failed, using defaults",
@@ -286,6 +304,27 @@ class MonitorExecutor:
             p95_gap=round(p95_gap, 1),
             data_points=len(gaps_hours),
         )
+        return config
+
+    def _auto_discover_volume_timestamp(
+        self,
+        database: str,
+        schema: str,
+        table: str,
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Discover a timestamp column for daily volume bucketing."""
+        from .freshness import discover_timestamp_column
+
+        ts_col = discover_timestamp_column(
+            self.query_func, database, schema, table, self.dialect
+        )
+        if ts_col:
+            config["time_bucket_column"] = ts_col
+            logger.info(
+                "[AutoConfig] Volume timestamp column discovered",
+                column=ts_col,
+            )
         return config
 
     def _auto_config_volume(

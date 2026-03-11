@@ -35,6 +35,7 @@ class ExecuteTaskRequest(BaseModel):
     target_fqn: Optional[str] = Field(None, description="database.schema.table")
     config: Optional[Dict[str, Any]] = Field(None, description="Monitor config")
     integration_id: Optional[str] = Field(None, description="Warehouse integration ID")
+    organization_id: Optional[str] = Field(None, description="Organization ID (fallback for integration lookup)")
     integration_config: Optional[Dict[str, Any]] = Field(
         None, description="Pre-fetched integration config (avoids DB lookup)"
     )
@@ -92,6 +93,7 @@ async def execute_task(request: ExecuteTaskRequest):
         "targetFqn": request.target_fqn,
         "config": request.config,
         "integrationId": request.integration_id,
+        "organizationId": request.organization_id,
         "integrationConfig": request.integration_config,
     }
 

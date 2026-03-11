@@ -4,6 +4,13 @@ Schema change monitor.
 Detects column additions, deletions, type changes, and ordering changes
 by comparing the current INFORMATION_SCHEMA against a stored baseline.
 Works across any SQL warehouse.
+
+Each schema change is classified by severity:
+- CRITICAL: PK/FK column removed or type changed
+- HIGH: Non-nullable column removed, narrowing type change
+- MEDIUM: Column added with NOT NULL, type widening
+- LOW: Nullable column added, nullable change
+- INFO: Ordering change only
 """
 
 from __future__ import annotations
@@ -13,15 +20,47 @@ from typing import Any, Dict, List, Optional
 from .base import BaseMonitor, MonitorResult, MonitorStatus
 
 
+# Severity levels (ordered from highest to lowest)
+SEVERITY_CRITICAL = "critical"
+SEVERITY_HIGH = "high"
+SEVERITY_MEDIUM = "medium"
+SEVERITY_LOW = "low"
+SEVERITY_INFO = "info"
+
+_SEVERITY_ORDER = {
+    SEVERITY_CRITICAL: 5,
+    SEVERITY_HIGH: 4,
+    SEVERITY_MEDIUM: 3,
+    SEVERITY_LOW: 2,
+    SEVERITY_INFO: 1,
+}
+
+# Types that are "wider" than others (widening is safer than narrowing)
+_TYPE_WIDTH: Dict[str, int] = {
+    "smallint": 1,
+    "integer": 2,
+    "bigint": 3,
+    "real": 4,
+    "double": 5,
+    "numeric": 6,
+    "text": 10,
+    "varchar": 9,
+}
+
+
 class SchemaMonitor(BaseMonitor):
     """
     Monitors schema changes by querying INFORMATION_SCHEMA.COLUMNS
     and comparing against a known baseline.
 
+    Each change is classified by severity based on column importance
+    (PK/FK status, nullability) and change type.
+
     Config keys:
         baseline_columns : list[dict] | None
             Expected column definitions. Each dict should have
-            "column_name", "data_type", and optionally "is_nullable".
+            "column_name", "data_type", and optionally "is_nullable",
+            "is_primary_key", "is_foreign_key".
             If None, the monitor only reports the current schema
             (first-run mode).
         fail_on_column_added : bool
@@ -30,6 +69,10 @@ class SchemaMonitor(BaseMonitor):
             Fail if columns are missing (default: True).
         fail_on_type_change : bool
             Fail if a column's data type changed (default: True).
+        min_severity : str
+            Minimum severity to trigger a failure.
+            One of: "critical", "high", "medium", "low", "info".
+            Default: None (use the boolean flags above).
     """
 
     monitor_type = "schema_change"
@@ -87,6 +130,7 @@ class SchemaMonitor(BaseMonitor):
         self.fail_on_added = self.config.get("fail_on_column_added", False)
         self.fail_on_removed = self.config.get("fail_on_column_removed", True)
         self.fail_on_type_change = self.config.get("fail_on_type_change", True)
+        self.min_severity: Optional[str] = self.config.get("min_severity")
 
     def build_query(
         self,
@@ -95,11 +139,7 @@ class SchemaMonitor(BaseMonitor):
         table: str,
         dialect: str = "postgres",
     ) -> str:
-        # INFORMATION_SCHEMA query — works on Postgres, Snowflake, BigQuery,
-        # Redshift, SQL Server, etc. with minor dialect differences handled
-        # by sqlglot transpilation.
         if dialect == "bigquery":
-            # BigQuery uses dataset.INFORMATION_SCHEMA.COLUMNS.
             sql = (
                 f"SELECT "
                 f"column_name, data_type, is_nullable, ordinal_position "
@@ -160,10 +200,15 @@ class SchemaMonitor(BaseMonitor):
             )
 
         # Build baseline lookup.
+        # Preserve None for is_nullable when not explicitly set in the
+        # baseline — this avoids false nullable-change detections when
+        # the baseline was established without nullable info.
         baseline = {
             col["column_name"].lower(): {
                 "data_type": self._normalize_type(col.get("data_type", "")),
-                "is_nullable": col.get("is_nullable", "YES"),
+                "is_nullable": col.get("is_nullable"),  # None if not set
+                "is_primary_key": col.get("is_primary_key", False),
+                "is_foreign_key": col.get("is_foreign_key", False),
             }
             for col in self.baseline_columns
         }
@@ -173,31 +218,86 @@ class SchemaMonitor(BaseMonitor):
         current_names = set(current_columns.keys())
 
         # Detect added columns.
-        for added in current_names - baseline_names:
+        for added in sorted(current_names - baseline_names):
+            is_not_null = current_columns[added].get("is_nullable", "YES").upper() == "NO"
+            severity = SEVERITY_MEDIUM if is_not_null else SEVERITY_LOW
             changes.append({
                 "change_type": "column_added",
                 "column": added,
                 "new_type": current_columns[added]["data_type"],
+                "is_nullable": current_columns[added].get("is_nullable", "YES"),
+                "severity": severity,
             })
 
         # Detect removed columns.
-        for removed in baseline_names - current_names:
+        for removed in sorted(baseline_names - current_names):
+            col_info = baseline[removed]
+            is_pk = col_info.get("is_primary_key", False)
+            is_fk = col_info.get("is_foreign_key", False)
+            nullable_val = col_info.get("is_nullable")
+            is_not_null = nullable_val.upper() == "NO" if nullable_val else False
+
+            if is_pk or is_fk:
+                severity = SEVERITY_CRITICAL
+            elif is_not_null:
+                severity = SEVERITY_HIGH
+            else:
+                severity = SEVERITY_MEDIUM
+
             changes.append({
                 "change_type": "column_removed",
                 "column": removed,
-                "old_type": baseline[removed]["data_type"],
+                "old_type": col_info["data_type"],
+                "is_primary_key": is_pk,
+                "is_foreign_key": is_fk,
+                "severity": severity,
             })
 
         # Detect type changes on existing columns.
-        for col in baseline_names & current_names:
+        for col in sorted(baseline_names & current_names):
             old_type = baseline[col]["data_type"]
             new_type = current_columns[col]["data_type"]
             if old_type != new_type:
+                is_pk = baseline[col].get("is_primary_key", False)
+                is_fk = baseline[col].get("is_foreign_key", False)
+
+                if is_pk or is_fk:
+                    severity = SEVERITY_CRITICAL
+                else:
+                    severity = _classify_type_change_severity(old_type, new_type)
+
                 changes.append({
                     "change_type": "type_changed",
                     "column": col,
                     "old_type": old_type,
                     "new_type": new_type,
+                    "is_primary_key": is_pk,
+                    "is_foreign_key": is_fk,
+                    "severity": severity,
+                })
+
+            # Detect nullable changes (only if baseline explicitly has is_nullable)
+            old_nullable_raw = baseline[col].get("is_nullable")
+            new_nullable_raw = current_columns[col].get("is_nullable")
+            if old_nullable_raw and new_nullable_raw:
+                old_nullable = old_nullable_raw.upper()
+                new_nullable = new_nullable_raw.upper()
+            else:
+                old_nullable = None
+                new_nullable = None
+            if old_nullable and new_nullable and old_nullable != new_nullable:
+                if new_nullable == "YES":
+                    # Column became nullable — could affect NOT NULL constraints
+                    severity = SEVERITY_MEDIUM
+                else:
+                    # Column became NOT NULL — stricter, usually intentional
+                    severity = SEVERITY_LOW
+                changes.append({
+                    "change_type": "nullable_changed",
+                    "column": col,
+                    "old_nullable": old_nullable,
+                    "new_nullable": new_nullable,
+                    "severity": severity,
                 })
 
         if not changes:
@@ -206,41 +306,94 @@ class SchemaMonitor(BaseMonitor):
                 target_fqn=target_fqn,
                 status=MonitorStatus.PASS,
                 message="Schema matches baseline. No changes detected.",
-                details={"column_count": len(current_columns)},
+                details={
+                    "column_count": len(current_columns),
+                    "explanation": "No schema changes detected vs baseline.",
+                },
             )
 
-        # Determine severity.
-        has_removed = any(c["change_type"] == "column_removed" for c in changes)
-        has_type_change = any(c["change_type"] == "type_changed" for c in changes)
-        has_added = any(c["change_type"] == "column_added" for c in changes)
+        # Determine overall severity (highest among all changes)
+        max_severity = max(
+            changes, key=lambda c: _SEVERITY_ORDER.get(c.get("severity", SEVERITY_INFO), 0)
+        ).get("severity", SEVERITY_INFO)
 
-        should_fail = (
-            (has_removed and self.fail_on_removed)
-            or (has_type_change and self.fail_on_type_change)
-            or (has_added and self.fail_on_added)
-        )
+        # Determine status based on severity or legacy boolean flags
+        if self.min_severity:
+            # New severity-based evaluation
+            should_fail = (
+                _SEVERITY_ORDER.get(max_severity, 0)
+                >= _SEVERITY_ORDER.get(self.min_severity, 0)
+            )
+        else:
+            # Legacy boolean flag evaluation
+            has_removed = any(c["change_type"] == "column_removed" for c in changes)
+            has_type_change = any(c["change_type"] == "type_changed" for c in changes)
+            has_added = any(c["change_type"] == "column_added" for c in changes)
+
+            should_fail = (
+                (has_removed and self.fail_on_removed)
+                or (has_type_change and self.fail_on_type_change)
+                or (has_added and self.fail_on_added)
+            )
 
         status = MonitorStatus.FAIL if should_fail else MonitorStatus.WARN
+
+        # Build summary
         summary_parts = []
-        if has_removed:
-            count = sum(1 for c in changes if c["change_type"] == "column_removed")
-            summary_parts.append(f"{count} column(s) removed")
-        if has_added:
-            count = sum(1 for c in changes if c["change_type"] == "column_added")
-            summary_parts.append(f"{count} column(s) added")
-        if has_type_change:
-            count = sum(1 for c in changes if c["change_type"] == "type_changed")
-            summary_parts.append(f"{count} type change(s)")
+        by_type: Dict[str, int] = {}
+        for c in changes:
+            ct = c["change_type"]
+            by_type[ct] = by_type.get(ct, 0) + 1
+        if by_type.get("column_removed"):
+            summary_parts.append(f"{by_type['column_removed']} column(s) removed")
+        if by_type.get("column_added"):
+            summary_parts.append(f"{by_type['column_added']} column(s) added")
+        if by_type.get("type_changed"):
+            summary_parts.append(f"{by_type['type_changed']} type change(s)")
+        if by_type.get("nullable_changed"):
+            summary_parts.append(f"{by_type['nullable_changed']} nullable change(s)")
+
+        # Count by severity for explanation
+        severity_counts: Dict[str, int] = {}
+        for c in changes:
+            sev = c.get("severity", SEVERITY_INFO)
+            severity_counts[sev] = severity_counts.get(sev, 0) + 1
 
         return MonitorResult(
             monitor_type=self.monitor_type,
             target_fqn=target_fqn,
             status=status,
-            message=f"Schema changes detected: {', '.join(summary_parts)}.",
+            message=f"Schema changes detected: {', '.join(summary_parts)}. Max severity: {max_severity}.",
             details={
                 "changes": changes,
                 "change_count": len(changes),
+                "max_severity": max_severity,
+                "severity_counts": severity_counts,
                 "baseline_column_count": len(baseline),
                 "current_column_count": len(current_columns),
+                "explanation": (
+                    f"{len(changes)} schema change(s) detected. "
+                    f"Highest severity: {max_severity}. "
+                    f"Breakdown: {', '.join(f'{v} {k}' for k, v in severity_counts.items())}."
+                ),
             },
         )
+
+
+def _classify_type_change_severity(old_type: str, new_type: str) -> str:
+    """Classify the severity of a type change.
+
+    Type widening (int → bigint) is lower severity than
+    type narrowing (bigint → int) which risks data loss.
+    """
+    old_width = _TYPE_WIDTH.get(old_type)
+    new_width = _TYPE_WIDTH.get(new_type)
+
+    if old_width is not None and new_width is not None:
+        if new_width >= old_width:
+            return SEVERITY_LOW  # Widening — safe
+        else:
+            return SEVERITY_HIGH  # Narrowing — data loss risk
+
+    # Unknown type mapping — default to medium
+    return SEVERITY_MEDIUM

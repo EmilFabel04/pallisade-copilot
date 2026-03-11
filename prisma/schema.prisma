@@ -2932,10 +2932,12 @@ model Monitor {
   description    String?   // Human-readable description
 
   // Alert configuration
-  alertChannels  String[]  // ["slack", "email", "pagerduty"]
-  alertConfig    Json?     // Channel-specific config overrides
-  alertOnStatus  String[]  // ["FAIL", "WARN", "ERROR"] — which statuses trigger alerts
-  timezone       String?   @default("UTC")
+  alertChannels   String[]  // ["slack", "email", "pagerduty"]
+  alertConfig     Json?     // Channel-specific config overrides
+  alertOnStatus   String[]  // ["FAIL", "WARN", "ERROR"] — which statuses trigger alerts
+  lastAlertStatus String?   // Last status that triggered an alert (for dedup)
+  lastAlertAt     DateTime? // When the last alert was sent (for suppression window)
+  timezone        String?   @default("UTC")
 
   // Metadata
   createdBy  String?
