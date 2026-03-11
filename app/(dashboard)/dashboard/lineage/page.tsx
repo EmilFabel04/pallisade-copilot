@@ -715,11 +715,69 @@ function LineagePageInner() {
     }));
   }, [lineageData?.nodes, renderedView?.nodes]);
 
+  // Aggregate monitor statuses per integration AND per layer for pipeline overview
+  // Keyed by integrationId (for monitors with one) and by layer (for infra monitors without)
+  const monitorsByKey = useMemo(() => {
+    const map = new Map<string, { total: number; passing: number; warning: number; failing: number; error: number }>();
+
+    // Monitor type → pipeline layer mapping for monitors without an integrationId
+    const MONITOR_TYPE_TO_LAYER: Record<string, string> = {
+      // Infrastructure
+      SERVER_HEALTH: 'INFRASTRUCTURE',
+      CERTIFICATE: 'INFRASTRUCTURE',
+      LOG_ANALYSIS: 'INFRASTRUCTURE',
+      // Ingestion
+      FAILED_SYNCS: 'INGESTION',
+      SYNC_LAG: 'INGESTION',
+      CONNECTOR_SCHEMA_DRIFT: 'INGESTION',
+      // Orchestration
+      DAG_LAST_RUN: 'ORCHESTRATION',
+      DAG_SCHEDULE_LAG: 'ORCHESTRATION',
+      TASK_FAILURE_RATE: 'ORCHESTRATION',
+      // Transformation
+      DBT_TEST_FAILURES: 'TRANSFORMATION',
+      DBT_MODEL_FRESHNESS: 'TRANSFORMATION',
+      DBT_SOURCE_FRESHNESS: 'TRANSFORMATION',
+    };
+
+    function addToMap(key: string, status: string | null) {
+      const existing = map.get(key) || { total: 0, passing: 0, warning: 0, failing: 0, error: 0 };
+      existing.total += 1;
+      if (status === 'PASS') existing.passing += 1;
+      else if (status === 'WARN') existing.warning += 1;
+      else if (status === 'FAIL') existing.failing += 1;
+      else if (status === 'ERROR') existing.error += 1;
+      map.set(key, existing);
+    }
+
+    for (const m of lineageData?.allMonitors || []) {
+      // Key by integrationId (backend resolves config.serverNodeId/toolNodeId → integrationId)
+      if (m.integrationId) {
+        addToMap(m.integrationId, m.lastStatus);
+      }
+      // Key by pipeline layer as fallback (infra nodes without integrationId)
+      if (!m.integrationId && m.monitorType) {
+        const layer = MONITOR_TYPE_TO_LAYER[m.monitorType];
+        if (layer) {
+          addToMap(`layer:${layer}`, m.lastStatus);
+        }
+      }
+    }
+    return map;
+  }, [lineageData?.allMonitors]);
+
   // Build React Flow nodes and edges
   // Uses pre-positioned rendered view when available, falls back to Dagre
   const { flowNodes, flowEdges } = useMemo(() => {
     // Rendered view path: use backend-computed positions
     if (renderedView && renderedView.nodes.length > 0) {
+      // Build lookup from unified nodes for enrichment (monitor status, issues, etc.)
+      const unifiedByEngineId = new Map<string, UnifiedLineageNode>();
+      for (const n of lineageData?.nodes || []) {
+        unifiedByEngineId.set(n.id, n);
+        if (n.id.startsWith('lineage-')) unifiedByEngineId.set(n.id.slice(8), n);
+      }
+
       // Filter by inferred toggle and exclude orchestration nodes from data plane
       const visibleViewNodes = renderedView.nodes.filter(
         (n) =>
@@ -730,37 +788,47 @@ function LineagePageInner() {
       );
       const visibleIds = new Set(visibleViewNodes.map((n) => n.id));
 
-      const nodes: Node[] = visibleViewNodes.map((vn) => ({
-        id: vn.id,
-        type: vn.canonicalType === 'service' ? 'toolNode' : 'dataAssetNode',
-        position: { x: vn.x, y: vn.y },
-        targetPosition: Position.Left,
-        sourcePosition: Position.Right,
-        data: {
-          name: vn.name,
-          fullName: vn.metadata?.fqn || vn.name,
-          category: _viewNodeToCategory(vn),
-          layer: vn.layer as any,
-          toolType: vn.platform,
-          database: vn.metadata?.database,
-          schema: vn.metadata?.schema,
-          tableName: vn.name,
-          nodeType: vn.originalType,
-          criticality: vn.metadata?.criticality,
-          rowCount: vn.metadata?.rowCount,
-          upstreamCount: vn.metadata?.upstreamCount,
-          downstreamCount: vn.metadata?.downstreamCount,
-          healthStatus: vn.metadata?.healthStatus,
-          owner: vn.metadata?.owner,
-          tags: vn.metadata?.tags,
-          platforms: vn.metadata?.platforms,
-          columnCount: vn.metadata?.columnCount,
-          materialization: vn.metadata?.materialization,
-          // Visual flags
-          isInferred: vn.inferred,
-          isOverlay: vn.inferred,
-        },
-      }));
+      const nodes: Node[] = visibleViewNodes.map((vn) => {
+        const unified = unifiedByEngineId.get(vn.id);
+        return {
+          id: vn.id,
+          type: vn.canonicalType === 'service' ? 'toolNode' : 'dataAssetNode',
+          position: { x: vn.x, y: vn.y },
+          targetPosition: Position.Left,
+          sourcePosition: Position.Right,
+          data: {
+            name: vn.name,
+            fullName: vn.metadata?.fqn || vn.name,
+            category: _viewNodeToCategory(vn),
+            layer: vn.layer as any,
+            toolType: vn.platform,
+            database: vn.metadata?.database,
+            schema: vn.metadata?.schema,
+            tableName: vn.name,
+            nodeType: vn.originalType,
+            criticality: vn.metadata?.criticality,
+            rowCount: vn.metadata?.rowCount,
+            upstreamCount: vn.metadata?.upstreamCount,
+            downstreamCount: vn.metadata?.downstreamCount,
+            healthStatus: vn.metadata?.healthStatus,
+            owner: vn.metadata?.owner,
+            tags: vn.metadata?.tags,
+            platforms: vn.metadata?.platforms,
+            columnCount: vn.metadata?.columnCount,
+            materialization: vn.metadata?.materialization,
+            // Enriched from unified data (monitor status, issues)
+            issues: unified?.issues,
+            monitorStatus: unified?.monitorStatus,
+            hasUpstreamFailure: unified?.hasUpstreamFailure,
+            freshnessStatus: unified?.freshnessStatus,
+            freshnessHours: unified?.freshnessHours,
+            lastUpdated: unified?.lastUpdated,
+            // Visual flags
+            isInferred: vn.inferred,
+            isOverlay: vn.inferred,
+          },
+        };
+      });
 
       const edges: Edge[] = renderedView.edges
         .filter(
@@ -833,6 +901,8 @@ function LineagePageInner() {
         freshnessStatus: node.freshnessStatus,
         freshnessHours: node.freshnessHours,
         issues: node.issues,
+        monitorStatus: node.monitorStatus,
+        hasUpstreamFailure: node.hasUpstreamFailure,
         owner: node.owner,
         tags: node.tags,
         platforms: node.platforms,
@@ -878,7 +948,7 @@ function LineagePageInner() {
 
     const layouted = layoutGraph(nodes, edges, { direction: 'LR' });
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges, filters, renderedView]);
+  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView]);
 
   // Build control plane flow nodes/edges
   // Uses rendered overview positions when available, falls back to Dagre
@@ -900,6 +970,10 @@ function LineagePageInner() {
             healthSummary: vn.metadata?.healthSummary,
             jobCount: vn.metadata?.jobCount,
             coverageGaps: vn.metadata?.coverageGaps,
+            monitorSummary: (() => {
+              const byIntegration = vn.metadata?.integrationId ? monitorsByKey.get(vn.metadata.integrationId) : undefined;
+              return byIntegration || monitorsByKey.get(`layer:${vn.layer}`) || undefined;
+            })(),
             isControlPlane: true,
             domainColor: layerColor,
           },
@@ -980,6 +1054,10 @@ function LineagePageInner() {
           toolType: vn.platform || vn.originalType,
           assetCount: vn.metadata?.assetCount,
           healthSummary: vn.metadata?.healthSummary,
+          monitorSummary: (() => {
+            const byIntegration = vn.metadata?.integrationId ? monitorsByKey.get(vn.metadata.integrationId) : undefined;
+            return byIntegration || monitorsByKey.get(`layer:${vn.layer}`) || undefined;
+          })(),
           isControlPlane: true,
           domainColor: LAYER_COLORS[vn.layer as PipelineLayer] || '#6366F1',
         },
@@ -1037,6 +1115,17 @@ function LineagePageInner() {
         toolType: n.toolType,
         assetCount: n.assetCount,
         healthSummary: n.healthSummary,
+        monitorSummary: (() => {
+          const byIntegration = n.integrationId ? monitorsByKey.get(n.integrationId) : undefined;
+          // Reverse lookup: platformDomain → layer for fallback
+          const domainToLayer: Record<string, string> = {
+            ingestion: 'INGESTION', warehouse: 'WAREHOUSE', transform: 'TRANSFORMATION',
+            orchestration: 'ORCHESTRATION', bi: 'REPORTING', version_control: 'VERSION_CONTROL',
+            infrastructure: 'INFRASTRUCTURE', storage: 'STORAGE',
+          };
+          const layer = domainToLayer[n.platformDomain] || '';
+          return byIntegration || monitorsByKey.get(`layer:${layer}`) || undefined;
+        })(),
         isControlPlane: true,
         domainColor: LAYER_COLORS['WAREHOUSE'] || '#6366F1',
       },
@@ -1065,7 +1154,7 @@ function LineagePageInner() {
     if (cpNodes.length === 0) return { cpFlowNodes: [], cpFlowEdges: [] };
     const layouted = layoutGraph(cpNodes, cpEdges, { direction: 'LR' });
     return { cpFlowNodes: layouted.nodes, cpFlowEdges: layouted.edges };
-  }, [controlPlaneData, renderedOverview, laneOverview]);
+  }, [controlPlaneData, renderedOverview, laneOverview, monitorsByKey]);
 
   // Pick the right flow data based on active tab
   const activeFlowNodes = activeTab === 'control-plane' ? cpFlowNodes : flowNodes;

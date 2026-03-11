@@ -134,6 +134,24 @@ export interface DataAssetIssues {
   byType: Record<string, number>;  // e.g., { freshness: 2, quality: 1 }
 }
 
+// Monitor status summary for data assets
+export interface MonitorStatusSummary {
+  total: number;
+  passing: number;
+  warning: number;
+  failing: number;
+  error: number;
+  worstStatus: 'PASS' | 'WARN' | 'FAIL' | 'ERROR' | 'NONE';
+  monitors: Array<{
+    id: string;
+    name: string;
+    monitorType: string;
+    lastStatus: string | null;
+    lastRunAt: string | null;
+    lastMessage?: string;
+  }>;
+}
+
 // A node in the unified lineage graph
 export interface UnifiedLineageNode {
   id: string;
@@ -165,6 +183,8 @@ export interface UnifiedLineageNode {
   freshnessStatus?: 'fresh' | 'stale' | 'unknown';  // Computed freshness
   freshnessHours?: number;        // Hours since last update
   issues?: DataAssetIssues;       // Issue summary
+  monitorStatus?: MonitorStatusSummary;  // Aggregate monitor health
+  hasUpstreamFailure?: boolean;          // An ancestor has FAIL/ERROR monitors
 
   // Orchestration context (for DAG/task nodes or cross-linked assets)
   runSummary?: RunSummary;
@@ -287,6 +307,17 @@ export interface UnifiedLineageResponse {
   availableTools: string[];
   lastExtracted?: string;
   engineStats?: EngineCoverageStats;  // Present when engine graph is available
+  // All enabled monitors for this org (used by pipeline overview for tool-level aggregation)
+  allMonitors?: Array<{
+    id: string;
+    name: string;
+    monitorType: string | null;
+    targetFqn: string | null;
+    lastStatus: string | null;
+    lastRunAt: string | null;
+    lastMessage?: string;
+    integrationId: string | null;
+  }>;
 }
 
 // Category-to-layer mapping

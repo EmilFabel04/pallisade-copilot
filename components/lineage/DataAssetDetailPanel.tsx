@@ -245,6 +245,7 @@ export function DataAssetDetailPanel({
   useEffect(() => {
     setShowAllUpstream(false);
     setShowAllDownstream(false);
+    setShowAllMonitors(false);
     setBlastRadius(null);
   }, [node.id]);
 
@@ -356,6 +357,8 @@ export function DataAssetDetailPanel({
   );
 
   const VISIBLE_LIMIT = 6;
+  const MONITOR_VISIBLE_LIMIT = 5;
+  const [showAllMonitors, setShowAllMonitors] = useState(false);
 
   const hasIssues = node.issues && node.issues.total > 0;
   const hasCritical = node.issues && node.issues.critical > 0;
@@ -494,6 +497,105 @@ export function DataAssetDetailPanel({
               <CheckCircle className="w-4 h-4 text-emerald-400" />
               <span className="text-[12px] text-emerald-400 font-medium">No open issues</span>
             </div>
+          </div>
+        )}
+
+        {/* Upstream failure banner */}
+        {node.hasUpstreamFailure && (
+          <div className="px-2 py-1.5 rounded bg-red-500/10 border border-red-500/20 flex items-center gap-2">
+            <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            <span className="text-[11px] text-red-300">An upstream dependency has a failing monitor</span>
+          </div>
+        )}
+
+        {/* Monitors Section */}
+        {node.monitorStatus && node.monitorStatus.total > 0 && (
+          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Monitors</span>
+              <div className="flex items-center gap-1.5">
+                {node.monitorStatus.failing > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium bg-red-500/20 text-red-300 rounded">
+                    {node.monitorStatus.failing} failing
+                  </span>
+                )}
+                {node.monitorStatus.error > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium bg-red-500/20 text-red-300 rounded">
+                    {node.monitorStatus.error} error
+                  </span>
+                )}
+                {node.monitorStatus.warning > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/20 text-amber-300 rounded">
+                    {node.monitorStatus.warning} warn
+                  </span>
+                )}
+                {node.monitorStatus.passing > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/20 text-emerald-300 rounded">
+                    {node.monitorStatus.passing} pass
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {(showAllMonitors
+                ? node.monitorStatus.monitors
+                : node.monitorStatus.monitors.slice(0, MONITOR_VISIBLE_LIMIT)
+              ).map((m) => {
+                const statusColor = m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR'
+                  ? '#EF4444'
+                  : m.lastStatus === 'WARN'
+                  ? '#F59E0B'
+                  : m.lastStatus === 'PASS'
+                  ? '#10B981'
+                  : '#6B7280';
+                const lastEval = m.lastRunAt
+                  ? (() => {
+                      const hoursAgo = Math.round((Date.now() - new Date(m.lastRunAt).getTime()) / (1000 * 60 * 60));
+                      if (hoursAgo < 1) return 'Just now';
+                      if (hoursAgo < 24) return `${hoursAgo}h ago`;
+                      return `${Math.round(hoursAgo / 24)}d ago`;
+                    })()
+                  : 'Never';
+                return (
+                  <a
+                    key={m.id}
+                    href={`/dashboard/schedule?monitor=${m.id}`}
+                    className="block p-2 rounded-lg bg-[var(--overlay-faint)] hover:bg-[var(--hover-bg)] border border-[var(--border-faint)] hover:border-[var(--subtle-border)] transition-all"
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: statusColor }}
+                      />
+                      <span className="text-[12px] text-[var(--text)] truncate flex-1" title={m.name}>
+                        {m.name}
+                      </span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)] shrink-0 uppercase">
+                        {m.monitorType}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-[10px] text-[var(--muted)]">
+                        Last evaluated {lastEval}
+                      </span>
+                    </div>
+                    {m.lastMessage && (
+                      <p className="text-[10px] text-[var(--text-faint)] mt-1 truncate" title={m.lastMessage}>
+                        {m.lastMessage}
+                      </p>
+                    )}
+                  </a>
+                );
+              })}
+            </div>
+            {!showAllMonitors && node.monitorStatus.monitors.length > MONITOR_VISIBLE_LIMIT && (
+              <button
+                onClick={() => setShowAllMonitors(true)}
+                className="w-full text-center text-[11px] text-[var(--muted)] hover:text-[var(--text-tertiary)] py-1.5 mt-1.5 transition-colors"
+              >
+                Show all {node.monitorStatus.monitors.length} monitors
+              </button>
+            )}
           </div>
         )}
 

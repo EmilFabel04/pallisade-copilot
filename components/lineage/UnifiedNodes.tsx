@@ -27,7 +27,7 @@ import {
   FileBarChart,
 } from 'lucide-react';
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
-import { CATEGORY_VISUALS, CATEGORY_LAYER_MAP, type UnifiedNodeCategory } from './types';
+import { CATEGORY_VISUALS, CATEGORY_LAYER_MAP, type UnifiedNodeCategory, type MonitorStatusSummary } from './types';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 
 // Map platform names to layer colors for multi-platform badges / split indicators
@@ -68,6 +68,8 @@ interface ToolNodeData {
   healthSummary?: { healthy: number; degraded: number; failing: number; unknown: number };
   jobCount?: number;
   coverageGaps?: string[];
+  // Aggregated monitor status across all child data assets
+  monitorSummary?: { total: number; passing: number; warning: number; failing: number; error: number };
 }
 
 interface DataAssetIssues {
@@ -105,6 +107,9 @@ interface DataAssetNodeData {
   // Enrichment indicators
   columnCount?: number;
   materialization?: string;
+  // Monitor status
+  monitorStatus?: MonitorStatusSummary;
+  hasUpstreamFailure?: boolean;
   // Overlay mode (orchestration overlay on data tab)
   isOverlay?: boolean;
   // Inferred node (bridge node from investigator)
@@ -288,6 +293,41 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
           </div>
         )}
 
+        {/* Monitor summary bar */}
+        {data.monitorSummary && data.monitorSummary.total > 0 && (() => {
+          const ms = data.monitorSummary;
+          const monTotal = ms.total;
+          return (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
+                <span>Monitors</span>
+                <div className="flex items-center gap-1">
+                  {ms.failing + ms.error > 0 && (
+                    <span className="text-red-400 font-medium">{ms.failing + ms.error} fail</span>
+                  )}
+                  {ms.warning > 0 && (
+                    <span className="text-amber-400 font-medium">{ms.warning} warn</span>
+                  )}
+                  {ms.failing + ms.error === 0 && ms.warning === 0 && (
+                    <span className="text-emerald-400 font-medium">{ms.passing}/{monTotal}</span>
+                  )}
+                </div>
+              </div>
+              <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden flex">
+                {ms.passing > 0 && (
+                  <div className="h-full bg-emerald-400" style={{ width: `${(ms.passing / monTotal) * 100}%` }} />
+                )}
+                {ms.warning > 0 && (
+                  <div className="h-full bg-amber-400" style={{ width: `${(ms.warning / monTotal) * 100}%` }} />
+                )}
+                {(ms.failing + ms.error) > 0 && (
+                  <div className="h-full bg-red-400" style={{ width: `${((ms.failing + ms.error) / monTotal) * 100}%` }} />
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
         <Handle
           type="source"
           position={Position.Right}
@@ -433,12 +473,14 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   const hasCritical = data.issues && data.issues.critical > 0;
   const hasHigh = data.issues && data.issues.high > 0;
   const isStale = data.freshnessStatus === 'stale';
+  const monitorFailing = data.monitorStatus?.worstStatus === 'FAIL' || data.monitorStatus?.worstStatus === 'ERROR';
+  const monitorWarning = data.monitorStatus?.worstStatus === 'WARN';
 
   // Determine border color based on health, then platform
   let borderColor = primaryColor;
-  if (hasCritical) {
+  if (hasCritical || monitorFailing) {
     borderColor = '#EF4444'; // red
-  } else if (hasHigh || isStale) {
+  } else if (hasHigh || isStale || monitorWarning) {
     borderColor = '#F59E0B'; // amber
   }
 
@@ -516,8 +558,38 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
                 <AlertCircle className="w-3 h-3 text-amber-400" />
               </div>
             )}
-            {!hasIssues && !isStale && data.freshnessStatus !== 'unknown' && (
+            {!hasIssues && !isStale && !data.monitorStatus && data.freshnessStatus !== 'unknown' && (
               <CheckCircle className="w-3 h-3 text-emerald-400" />
+            )}
+            {/* Monitor status dot */}
+            {data.monitorStatus && (
+              <div
+                className="flex items-center"
+                title={[
+                  data.monitorStatus.failing > 0 && `${data.monitorStatus.failing} failing`,
+                  data.monitorStatus.error > 0 && `${data.monitorStatus.error} error`,
+                  data.monitorStatus.warning > 0 && `${data.monitorStatus.warning} warning`,
+                  data.monitorStatus.passing > 0 && `${data.monitorStatus.passing} passing`,
+                ].filter(Boolean).join(', ')}
+              >
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    monitorFailing ? 'ring-1 ring-red-400/50' :
+                    monitorWarning ? 'ring-1 ring-amber-400/50' : ''
+                  }`}
+                  style={{
+                    backgroundColor: monitorFailing ? '#EF4444' :
+                      monitorWarning ? '#F59E0B' :
+                      data.monitorStatus.worstStatus === 'PASS' ? '#10B981' : '#6B7280',
+                  }}
+                />
+              </div>
+            )}
+            {/* Upstream failure indicator */}
+            {data.hasUpstreamFailure && !monitorFailing && (
+              <div title="Upstream monitor failure">
+                <AlertCircle className="w-3 h-3 text-red-300/50" />
+              </div>
             )}
           </div>
         </div>

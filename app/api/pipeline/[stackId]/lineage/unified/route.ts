@@ -9,6 +9,7 @@ import type {
   UnifiedNodeCategory,
   UnifiedLineageResponse,
   LinePlane,
+  MonitorStatusSummary,
 } from '@/components/lineage/types';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
@@ -116,6 +117,7 @@ async function fetchEngineStats(stackId: string) {
 function engineNodeToUnified(
   eNode: any,
   findingsByFqn: Map<string, any[]>,
+  monitorSummaryFn?: (fqn: string) => MonitorStatusSummary | undefined,
 ): UnifiedLineageNode {
   const nodeType = eNode.node_type?.toLowerCase() || 'table';
   let category: UnifiedNodeCategory = 'table';
@@ -235,6 +237,7 @@ function engineNodeToUnified(
     owner: eNode.owner || undefined,
     tags: eNode.tags || undefined,
     issues: issuesSummary,
+    monitorStatus: monitorSummaryFn && eNode.fqn ? monitorSummaryFn(eNode.fqn) : undefined,
     // Multi-platform provenance & enriched data
     platforms: eNode.raw_metadata?.discovered_platforms ||
               (eNode.platform ? [eNode.platform] : undefined),
@@ -402,6 +405,78 @@ export async function GET(
       findingsByFqn.set(finding.table, existing);
     }
 
+    // Fetch ALL enabled monitors (including infra monitors with null targetFqn)
+    const monitors = await prisma.monitor.findMany({
+      where: { organizationId, enabled: true },
+      select: {
+        id: true, name: true, monitorType: true, targetFqn: true,
+        lastStatus: true, lastRunAt: true, integrationId: true, config: true,
+        runs: { take: 1, orderBy: { startedAt: 'desc' }, select: { message: true } },
+      },
+    });
+
+    // Index monitors by FQN for fast matching
+    const monitorsByFqn = new Map<string, typeof monitors>();
+    const monitorsByTwoPart = new Map<string, (typeof monitors)[]>();
+
+    for (const m of monitors) {
+      if (!m.targetFqn) continue;
+      const norm = m.targetFqn.toLowerCase();
+      const existing = monitorsByFqn.get(norm) || [];
+      existing.push(m);
+      monitorsByFqn.set(norm, existing);
+      // 2-part alias index for 3-part FQNs
+      const parts = norm.split('.');
+      if (parts.length === 3) {
+        const twoPart = `${parts[1]}.${parts[2]}`;
+        const bucket = monitorsByTwoPart.get(twoPart) || [];
+        bucket.push(existing);
+        monitorsByTwoPart.set(twoPart, bucket);
+      }
+    }
+
+    // Safe FQN matching: exact → strip prefix → reverse only if unambiguous
+    function matchMonitors(fqn: string): typeof monitors {
+      const norm = fqn.toLowerCase();
+      const exact = monitorsByFqn.get(norm);
+      if (exact) return exact;
+      const parts = norm.split('.');
+      if (parts.length === 3) {
+        const twoPart = `${parts[1]}.${parts[2]}`;
+        const match = monitorsByFqn.get(twoPart);
+        if (match) return match;
+      }
+      if (parts.length === 2) {
+        const candidates = monitorsByTwoPart.get(norm);
+        if (candidates && candidates.length === 1) return candidates[0];
+      }
+      return [];
+    }
+
+    const STATUS_SEVERITY: Record<string, number> = { ERROR: 5, FAIL: 4, WARN: 3, PASS: 2 };
+
+    function buildMonitorSummary(fqn: string): MonitorStatusSummary | undefined {
+      const matched = matchMonitors(fqn);
+      if (matched.length === 0) return undefined;
+      return {
+        total: matched.length,
+        passing: matched.filter(m => m.lastStatus === 'PASS').length,
+        warning: matched.filter(m => m.lastStatus === 'WARN').length,
+        failing: matched.filter(m => m.lastStatus === 'FAIL').length,
+        error: matched.filter(m => m.lastStatus === 'ERROR').length,
+        worstStatus: matched.reduce((worst, m) => {
+          const s = m.lastStatus;
+          if (!s || !(s in STATUS_SEVERITY)) return worst;
+          return (STATUS_SEVERITY[s] || 0) > (STATUS_SEVERITY[worst] || 0) ? s as any : worst;
+        }, 'NONE' as MonitorStatusSummary['worstStatus']),
+        monitors: matched.map(m => ({
+          id: m.id, name: m.name, monitorType: m.monitorType || 'unknown',
+          lastStatus: m.lastStatus as string | null, lastRunAt: m.lastRunAt?.toISOString() || null,
+          lastMessage: m.runs[0]?.message ?? undefined,
+        })),
+      };
+    }
+
     // Get latest snapshot for timestamp
     const latestSnapshot = await prisma.lineageSnapshot.findFirst({
       where: {
@@ -550,7 +625,7 @@ export async function GET(
           continue;
         }
 
-        const unified = engineNodeToUnified(eNode, findingsByFqn);
+        const unified = engineNodeToUnified(eNode, findingsByFqn, buildMonitorSummary);
         engineIdToUnifiedId.set(eNode.id, unified.id);
 
         // Primary: read integration_id from engine node directly
@@ -659,6 +734,7 @@ export async function GET(
           freshnessStatus,
           freshnessHours,
           issues: issuesSummary,
+          monitorStatus: buildMonitorSummary(lNode.name),
         };
       });
 
@@ -869,6 +945,37 @@ export async function GET(
       return true;
     });
 
+    // BFS downstream propagation: mark nodes downstream of FAIL/ERROR monitors
+    const failingNodeIds = new Set<string>();
+    for (const node of allNodes) {
+      const ws = node.monitorStatus?.worstStatus;
+      if (ws === 'FAIL' || ws === 'ERROR') failingNodeIds.add(node.id);
+    }
+    if (failingNodeIds.size > 0) {
+      const downAdj = new Map<string, string[]>();
+      for (const edge of allEdges) {
+        if (edge.edgeType === 'pipeline_flow') continue;
+        const targets = downAdj.get(edge.source) || [];
+        targets.push(edge.target);
+        downAdj.set(edge.source, targets);
+      }
+      const upstreamFailure = new Set<string>();
+      const queue = [...failingNodeIds];
+      const visited = new Set<string>();
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        for (const ds of (downAdj.get(id) || [])) {
+          if (!failingNodeIds.has(ds)) upstreamFailure.add(ds);
+          queue.push(ds);
+        }
+      }
+      for (const node of allNodes) {
+        if (upstreamFailure.has(node.id)) node.hasUpstreamFailure = true;
+      }
+    }
+
     // Compute stats
     const stats = {
       totalNodes: allNodes.length,
@@ -908,6 +1015,31 @@ export async function GET(
       availableTools,
       lastExtracted: latestSnapshot?.createdAt?.toISOString() ?? undefined,
       engineStats,
+      allMonitors: monitors.map(m => {
+        // For infra/tool monitors, integrationId is null but config stores the PipelineNode ID.
+        // Resolve it to the PipelineNode's integrationId so the frontend can match by integration.
+        let resolvedIntegrationId = m.integrationId || null;
+        if (!resolvedIntegrationId) {
+          const cfg = (m.config && typeof m.config === 'object') ? m.config as Record<string, any> : {};
+          const pipelineNodeId = cfg.serverNodeId || cfg.toolNodeId || cfg.nodeId;
+          if (pipelineNodeId) {
+            const pipelineNode = stack.nodes.find(n => n.id === pipelineNodeId);
+            if (pipelineNode?.integrationId) {
+              resolvedIntegrationId = pipelineNode.integrationId;
+            }
+          }
+        }
+        return {
+          id: m.id,
+          name: m.name,
+          monitorType: m.monitorType || null,
+          targetFqn: m.targetFqn || null,
+          lastStatus: m.lastStatus as string | null,
+          lastRunAt: m.lastRunAt?.toISOString() || null,
+          lastMessage: m.runs[0]?.message ?? undefined,
+          integrationId: resolvedIntegrationId,
+        };
+      }),
     };
 
     return NextResponse.json(response);
