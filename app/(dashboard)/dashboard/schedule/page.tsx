@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
+import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import { Button } from '@/components/ui/button';
 import { TaskCard } from '@/components/schedule/TaskCard';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
@@ -46,7 +47,7 @@ export default function SchedulePage() {
       const params = new URLSearchParams();
       if (filter !== 'all') params.set('status', filter);
       params.set('stackId', selectedPipeline.id);
-      const res = await fetch(`/api/schedule/tasks?${params.toString()}`);
+      const res = await cachedFetch(`/api/schedule/tasks?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setTasks(data.tasks || []);
@@ -71,7 +72,7 @@ export default function SchedulePage() {
 
     const fetchIntegrations = async () => {
       try {
-        const res = await fetch(`/api/pipeline/nodes?stackId=${selectedPipeline.id}`);
+        const res = await cachedFetch(`/api/pipeline/nodes?stackId=${selectedPipeline.id}`);
         if (res.ok) {
           const data = await res.json();
           const nodes = data.nodes || [];
@@ -101,7 +102,7 @@ export default function SchedulePage() {
     const fetchRuns = async () => {
       setRunsLoading(true);
       try {
-        const res = await fetch(`/api/schedule/tasks/${selectedTask.id}/runs`);
+        const res = await cachedFetch(`/api/schedule/tasks/${selectedTask.id}/runs`);
         if (res.ok) {
           const data = await res.json();
           setTaskRuns(data.runs || []);
@@ -141,6 +142,7 @@ export default function SchedulePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
       });
+      invalidateCache('/api/schedule');
       setTasks((prev) =>
         prev.map((t) => (t.id === taskId ? { ...t, enabled } : t))
       );
@@ -176,6 +178,7 @@ export default function SchedulePage() {
   const handleDeleteTask = async (taskId: string) => {
     try {
       await fetch(`/api/schedule/tasks/${taskId}`, { method: 'DELETE' });
+      invalidateCache('/api/schedule');
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
       if (selectedTask?.id === taskId) {
         setSelectedTask(null);

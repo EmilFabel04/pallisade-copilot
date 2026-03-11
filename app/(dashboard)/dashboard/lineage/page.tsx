@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { cachedFetch } from '@/lib/fetch-cache';
 import ReactFlow, {
   Node,
   Edge,
@@ -184,7 +185,7 @@ function LineagePageInner() {
       // Try rendered data-plane view first (pre-positioned, canonical types)
       let usedRenderedView = false;
       try {
-        const viewRes = await fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-data-plane`);
+        const viewRes = await cachedFetch(`/api/pipeline/${stackId}/lineage/engine?action=view-data-plane`);
         if (fetchVersionRef.current !== thisVersion) return;
         if (viewRes.ok) {
           const viewData: RenderedViewResponse = await viewRes.json();
@@ -200,7 +201,7 @@ function LineagePageInner() {
       }
 
       // Always fetch unified data (for detail panels, filters, and fallback)
-      const res = await fetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`);
+      const res = await cachedFetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`);
       if (fetchVersionRef.current !== thisVersion) return;
 
       if (res.ok) {
@@ -241,7 +242,7 @@ function LineagePageInner() {
     try {
       // Try lane-based pipeline overview first (swimlane: n8n → BQ raw → dbt → analytics)
       try {
-        const laneRes = await fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-lane-pipeline-overview`);
+        const laneRes = await cachedFetch(`/api/pipeline/${stackId}/lineage/engine?action=view-lane-pipeline-overview`);
         if (laneRes.ok) {
           const laneData: RenderedViewResponse = await laneRes.json();
           if (laneData.nodes && laneData.nodes.length > 0) {
@@ -257,7 +258,7 @@ function LineagePageInner() {
 
       // Try rendered pipeline overview (tool clusters)
       try {
-        const viewRes = await fetch(`/api/pipeline/${stackId}/lineage/engine?action=view-pipeline-overview`);
+        const viewRes = await cachedFetch(`/api/pipeline/${stackId}/lineage/engine?action=view-pipeline-overview`);
         if (viewRes.ok) {
           const viewData: RenderedViewResponse = await viewRes.json();
           if (viewData.nodes && viewData.nodes.length > 0) {
@@ -297,8 +298,8 @@ function LineagePageInner() {
 
       // Fetch engine control plane data and pipeline stack in parallel
       const [engineRes, stackRes] = await Promise.all([
-        fetch(`/api/pipeline/${stackId}/lineage/engine?action=control-plane-overview`).catch(() => null),
-        fetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`).catch(() => null),
+        cachedFetch(`/api/pipeline/${stackId}/lineage/engine?action=control-plane-overview`).catch(() => null),
+        cachedFetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`).catch(() => null),
       ]);
 
       const engineData: ControlPlaneOverviewResponse | null = engineRes?.ok

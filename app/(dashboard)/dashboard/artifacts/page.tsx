@@ -6,6 +6,7 @@ import { ArtifactType } from '@prisma/client';
 import { ArtifactFilters, ArtifactList } from '@/components/artifacts';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
+import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 
 interface Artifact {
   id: string;
@@ -43,7 +44,7 @@ export default function ArtifactsPage() {
       if (selectedType) params.set('type', selectedType);
       if (showPinnedOnly) params.set('pinned', 'true');
 
-      const response = await fetch(`/api/artifacts?${params.toString()}`);
+      const response = await cachedFetch(`/api/artifacts?${params.toString()}`);
       if (!response.ok) throw new Error('Failed to fetch artifacts');
 
       const data = await response.json();
@@ -73,6 +74,7 @@ export default function ArtifactsPage() {
 
     if (!response.ok) throw new Error('Failed to delete artifact');
 
+    invalidateCache('/api/artifacts');
     setArtifacts((prev) => prev.filter((a) => a.id !== id));
   };
 

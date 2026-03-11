@@ -3,6 +3,7 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { useTheme } from '@/contexts/ThemeContext';
+import { cachedFetch } from '@/lib/fetch-cache';
 import { Settings as SettingsIcon, Plug, Bell, Key, CreditCard, MessageSquare, ClipboardList, Link, AlertTriangle, User, SlidersHorizontal } from 'lucide-react';
 
 interface OAuthIntegration {
@@ -51,7 +52,7 @@ export default function SettingsPage() {
   const fetchSlackConfig = async () => {
     setSlackLoading(true);
     try {
-      const res = await fetch('/api/integrations/slack');
+      const res = await cachedFetch('/api/integrations/slack');
       if (res.ok) {
         const data = await res.json();
         setSlackConfig(data);
@@ -92,7 +93,7 @@ export default function SettingsPage() {
   const fetchIntegrations = async () => {
     setLoadingIntegrations(true);
     try {
-      const res = await fetch('/api/integrations');
+      const res = await cachedFetch('/api/integrations');
       if (res.ok) {
         const data = await res.json();
         // Filter to only OAuth integrations (not pipeline nodes)
@@ -284,7 +285,7 @@ export default function SettingsPage() {
 
             {loadingIntegrations ? (
               <div className="flex items-center justify-center py-8">
-                <div className="w-6 h-6 red-spinner" />
+                <div className="w-8 h-8 red-spinner" />
               </div>
             ) : oauthIntegrations.length === 0 ? (
               <div className="text-center py-8">

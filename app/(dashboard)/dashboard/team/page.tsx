@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { cachedFetch } from '@/lib/fetch-cache';
 import {
   Users,
   UserPlus,
@@ -169,7 +170,7 @@ export default function TeamPage() {
       setError(null);
 
       // Fetch team members
-      const teamRes = await fetch('/api/team');
+      const teamRes = await cachedFetch('/api/team');
       if (teamRes.ok) {
         const teamData = await teamRes.json();
         setMembers(teamData.members || []);
@@ -185,7 +186,7 @@ export default function TeamPage() {
       }
 
       // Fetch pipelines
-      const pipelinesRes = await fetch('/api/pipeline');
+      const pipelinesRes = await cachedFetch('/api/pipeline');
       if (pipelinesRes.ok) {
         const pipelinesData = await pipelinesRes.json();
         setPipelines(pipelinesData.stacks || []);
@@ -410,10 +411,7 @@ export default function TeamPage() {
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto flex items-center justify-center min-h-[400px]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 red-spinner" />
-          <p className="text-sm text-[var(--muted)]">Loading team data...</p>
-        </div>
+        <div className="w-8 h-8 red-spinner" />
       </div>
     );
   }

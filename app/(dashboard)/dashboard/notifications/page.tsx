@@ -2,6 +2,7 @@
 
 import { useSession } from 'next-auth/react';
 import { useState, useEffect, useCallback } from 'react';
+import { cachedFetch } from '@/lib/fetch-cache';
 import { NotificationCard, type NotificationItem } from '@/components/notifications/NotificationCard';
 import {
   NotificationFilters,
@@ -37,7 +38,7 @@ export default function NotificationsPage() {
         if (cursor) params.set('cursor', cursor);
         if (cursorId) params.set('cursorId', cursorId);
 
-        const res = await fetch(`/api/notifications?${params.toString()}`);
+        const res = await cachedFetch(`/api/notifications?${params.toString()}`);
         const data = await res.json();
 
         if (append) {

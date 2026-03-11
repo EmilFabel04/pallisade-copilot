@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { cn } from '@/lib/utils';
+import { cachedFetch } from '@/lib/fetch-cache';
 import {
   MessageSquare,
   Database,
@@ -188,8 +189,8 @@ export default function DashboardPage() {
       try {
         // Fetch pipeline and chat sessions in parallel (optimized with excludeConfigs and no stacks list)
         const [pipelineRes, chatsRes] = await Promise.all([
-          fetch(`/api/pipeline?stackId=${selectedPipelineId}&excludeConfigs=true&includeStacksList=false`),
-          fetch(`/api/copilot/sessions?limit=6&pipelineStackId=${selectedPipelineId}`),
+          cachedFetch(`/api/pipeline?stackId=${selectedPipelineId}&excludeConfigs=true&includeStacksList=false`),
+          cachedFetch(`/api/copilot/sessions?limit=6&pipelineStackId=${selectedPipelineId}`),
         ]);
 
         if (pipelineRes.ok) {
@@ -286,7 +287,7 @@ export default function DashboardPage() {
 
           if (connectedWarehouse && selectedPipelineId) {
             try {
-              const tablesRes = await fetch(`/api/pipeline/${selectedPipelineId}/nodes/${connectedWarehouse.id}/tables`);
+              const tablesRes = await cachedFetch(`/api/pipeline/${selectedPipelineId}/nodes/${connectedWarehouse.id}/tables`);
               if (tablesRes.ok) {
                 const tablesData = await tablesRes.json();
                 const tableCount = tablesData.tables?.length || 0;
@@ -339,10 +340,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto flex items-center justify-center min-h-[400px]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-10 h-10 red-spinner" />
-          <p className="text-sm text-[var(--muted)]">Loading dashboard...</p>
-        </div>
+        <div className="w-8 h-8 red-spinner" />
       </div>
     );
   }

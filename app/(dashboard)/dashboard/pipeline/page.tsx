@@ -6,6 +6,7 @@ import { Check, ChevronDown, CircleAlert, CircleDashed, GitBranch, Loader2, Penc
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
+import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
 import { IntegrationConfigModal } from '@/components/pipeline/IntegrationConfigModal';
 import {
@@ -242,6 +243,8 @@ export default function PipelinePage() {
         if (!res.ok) throw new Error('save failed');
         const data = await res.json();
         setStack((prev) => ({ ...nextStack, id: data.stack?.id || data.id || prev.id }));
+        invalidateCache('/api/pipeline');
+        invalidateCache('/api/integrations');
         if (!silent) toast.success('Pipeline saved');
       } catch { toast.error('Failed to save pipeline'); }
       finally { setSaving(false); saveInFlightRef.current = null; }
@@ -253,7 +256,7 @@ export default function PipelinePage() {
   const fetchIntegrations = useCallback(async () => {
     if (!selectedPipelineId) return;
     try {
-      const res = await fetch(`/api/integrations?stackId=${selectedPipelineId}`);
+      const res = await cachedFetch(`/api/integrations?stackId=${selectedPipelineId}`);
       if (!res.ok) return;
       const data = await res.json();
       setIntegrationRecords((data.integrations || []).map((row: any) => ({
@@ -320,7 +323,7 @@ export default function PipelinePage() {
       setExpandedConnector(null);
       try {
         const [pipelineRes] = await Promise.all([
-          fetch(`/api/pipeline?stackId=${selectedPipelineId}`),
+          cachedFetch(`/api/pipeline?stackId=${selectedPipelineId}`),
           fetchIntegrations(),
         ]);
         if (pipelineRes.ok) {
@@ -488,10 +491,7 @@ export default function PipelinePage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[520px]">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-[var(--accent-2)]" />
-          <span className="text-sm text-[var(--muted)]">Loading pipeline...</span>
-        </div>
+        <div className="w-8 h-8 red-spinner" />
       </div>
     );
   }

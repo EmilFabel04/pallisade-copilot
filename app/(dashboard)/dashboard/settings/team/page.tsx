@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { cachedFetch } from '@/lib/fetch-cache';
 import {
   Users,
   UserPlus,
@@ -130,7 +131,7 @@ export default function TeamSettingsPage() {
   const fetchTeamData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/team');
+      const res = await cachedFetch('/api/team');
       if (!res.ok) throw new Error('Failed to fetch team data');
       const data = await res.json();
       setTeamData(data);
@@ -236,11 +237,8 @@ export default function TeamSettingsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-400">
-          <RefreshCw className="w-5 h-5 animate-spin" />
-          <span>Loading team...</span>
-        </div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="w-8 h-8 red-spinner" />
       </div>
     );
   }
