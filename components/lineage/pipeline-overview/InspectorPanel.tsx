@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { RenderedViewResponse, ViewNode, ViewEdge, PipelineLaneName } from '../types';
 import { LANE_COLORS, LANE_LABELS } from '../types';
 import { LAYER_COLORS, LAYER_LABELS, type PipelineLayer } from '@/components/pipeline/types';
@@ -30,10 +30,22 @@ const ROLE_BADGE_LABELS: Record<string, string> = {
   job_runtime: 'Job Runtime',
 };
 
+type MonitorInfo = {
+  id: string;
+  name: string;
+  monitorType: string | null;
+  targetFqn: string | null;
+  lastStatus: string | null;
+  lastRunAt: string | null;
+  lastMessage?: string;
+  integrationId: string | null;
+};
+
 interface InspectorPanelProps {
   target: InspectorTarget;
   laneOverview: RenderedViewResponse | null;
   stackId: string | null;
+  allMonitors?: MonitorInfo[];
   onClose: () => void;
 }
 
@@ -44,16 +56,41 @@ function NodeInspector({
   node,
   laneOverview,
   stackId,
+  allMonitors,
 }: {
   node: ViewNode;
   laneOverview: RenderedViewResponse | null;
   stackId: string | null;
+  allMonitors?: MonitorInfo[];
 }) {
   const meta = getToolMeta(node);
   const health = getOverallHealth(meta.healthSummary);
   const healthColor = HEALTH_COLORS[health];
   const laneColor = LAYER_COLORS[node.layer as PipelineLayer] || LANE_COLORS[meta.lane as PipelineLaneName] || '#6366F1';
   const laneLabel = LAYER_LABELS[node.layer as PipelineLayer] || LANE_LABELS[meta.lane as PipelineLaneName] || meta.lane;
+
+  // Resolve monitors for this tool node
+  const MONITOR_TYPE_TO_LAYER: Record<string, string> = {
+    SERVER_HEALTH: 'INFRASTRUCTURE', CERTIFICATE: 'INFRASTRUCTURE', LOG_ANALYSIS: 'INFRASTRUCTURE',
+    FAILED_SYNCS: 'INGESTION', SYNC_LAG: 'INGESTION', CONNECTOR_SCHEMA_DRIFT: 'INGESTION',
+    DAG_LAST_RUN: 'ORCHESTRATION', DAG_SCHEDULE_LAG: 'ORCHESTRATION', TASK_FAILURE_RATE: 'ORCHESTRATION',
+    DBT_TEST_FAILURES: 'TRANSFORMATION', DBT_MODEL_FRESHNESS: 'TRANSFORMATION', DBT_SOURCE_FRESHNESS: 'TRANSFORMATION',
+  };
+
+  const nodeMonitors = useMemo(() => {
+    if (!allMonitors?.length) return [];
+    const integrationId = node.metadata?.integrationId as string | undefined;
+    return allMonitors.filter(m => {
+      // Match by integrationId
+      if (integrationId && m.integrationId === integrationId) return true;
+      // Match by layer for monitors without integrationId
+      if (!m.integrationId && m.monitorType) {
+        const monLayer = MONITOR_TYPE_TO_LAYER[m.monitorType];
+        if (monLayer && monLayer === node.layer) return true;
+      }
+      return false;
+    });
+  }, [allMonitors, node.id, node.layer, node.metadata?.integrationId]);
 
   // Fetch tool details on-demand
   const [details, setDetails] = useState<ToolDetailsResponse | null>(null);
@@ -182,7 +219,7 @@ function NodeInspector({
               </p>
             </div>
           )}
-          <ToolDetailView details={details} />
+          <ToolDetailView details={details} monitors={nodeMonitors} />
         </>
       )}
     </div>
@@ -410,6 +447,7 @@ export function InspectorPanel({
   target,
   laneOverview,
   stackId,
+  allMonitors,
   onClose,
 }: InspectorPanelProps) {
   if (!target) return null;
@@ -433,7 +471,7 @@ export function InspectorPanel({
 
       {/* Content */}
       {target.kind === 'node' ? (
-        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} />
+        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} />
       ) : (
         <EdgeInspector edge={target.edge} laneOverview={laneOverview} />
       )}

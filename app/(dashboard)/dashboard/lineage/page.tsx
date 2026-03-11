@@ -449,10 +449,10 @@ function LineagePageInner() {
       setLlmEdgeCount(0);
     }
     if (stackId) {
+      // Always fetch unified lineage (provides allMonitors for pipeline overview tool cards)
+      fetchLineage();
       if (activeTab === 'control-plane') {
         fetchControlPlane();
-      } else {
-        fetchLineage();
       }
     }
   }, [stackId, activeTab, fetchLineage, fetchControlPlane]);
@@ -1622,6 +1622,7 @@ function LineagePageInner() {
             target={pipelineInspectorTarget}
             laneOverview={laneOverview}
             stackId={stackId}
+            allMonitors={lineageData?.allMonitors}
             onClose={() => setPipelineInspectorTarget(null)}
           />
         )}
