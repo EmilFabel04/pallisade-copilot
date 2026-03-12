@@ -285,33 +285,49 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       try {
         let results: Array<{ id: string; name: string; fqn: string }> = [];
 
+        // Only show data-asset node types that appear on the visual lineage canvas.
+        // Engine search returns node_type/platform_domain; Prisma returns nodeType.
+        const VISIBLE_SEARCH_TYPES = new Set(['table', 'view', 'materialized_view', 'source', 'model']);
+
         // Try engine search first (in-memory graph)
         if (stackId) {
           const engineRes = await fetch(
-            `/api/pipeline/${stackId}/lineage/engine?action=search&q=${encodeURIComponent(query)}&limit=10`
+            `/api/pipeline/${stackId}/lineage/engine?action=search&q=${encodeURIComponent(query)}&limit=20`
           );
           if (engineRes.ok) {
             const data = await engineRes.json();
-            results = (data.results || []).map((r: any) => ({
-              id: r.id,
-              name: r.name,
-              fqn: r.fqn || r.name,
-            }));
+            results = (data.results || [])
+              .filter((r: any) => {
+                const nt = (r.node_type || '').toLowerCase();
+                return !nt || VISIBLE_SEARCH_TYPES.has(nt);
+              })
+              .slice(0, 10)
+              .map((r: any) => ({
+                id: r.id,
+                name: r.name,
+                fqn: r.fqn || r.name,
+              }));
           }
         }
 
         // Fall back to Prisma search if engine returned nothing
         if (results.length === 0) {
           const dbRes = await fetch(
-            `/api/lineage/search?q=${encodeURIComponent(query)}&limit=10`
+            `/api/lineage/search?q=${encodeURIComponent(query)}&limit=20`
           );
           if (dbRes.ok) {
             const data = await dbRes.json();
-            results = (data.results || []).map((r: any) => ({
-              id: r.id,
-              name: r.name,
-              fqn: r.fqn || r.name,
-            }));
+            results = (data.results || [])
+              .filter((r: any) => {
+                const nt = (r.nodeType || '').toLowerCase();
+                return !nt || VISIBLE_SEARCH_TYPES.has(nt);
+              })
+              .slice(0, 10)
+              .map((r: any) => ({
+                id: r.id,
+                name: r.name,
+                fqn: r.fqn || r.name,
+              }));
           }
         }
 
@@ -364,74 +380,69 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
     return 'FRESHNESS';
   };
 
-  // Bundle: fetch full upstream flow (data assets + tools) for the selected anchor
+  // DESIGN RULE: Bundle/watch creation launched from the data-lineage surface
+  // must use the same upstream visibility semantics as that surface.
+  // We restrict BFS to DATA-plane edges only (via plane=data) and post-filter
+  // to match the ViewBuilder's data-plane view which only includes 'dataset'
+  // and 'semantic' canonical types. The unified route maps plane=data to
+  // "data,cross" (BI→table edges use CROSS plane), and the canonical type
+  // whitelist prevents orchestration nodes from leaking through.
+  // Future bundle/watch templates can opt into non-data-plane nodes later.
+
+  // Visibility filter matching the ViewBuilder data-plane view (views.py:2840-2843).
+  // The visual lineage canvas only renders nodes with canonical_type 'dataset' or
+  // 'semantic'. Everything else (system, service, job — including connectors like
+  // Fivetran/Postgres, orchestration DAGs/tasks, infrastructure nodes) is excluded.
+  const DATA_PLANE_CANONICAL_TYPES = new Set(['dataset', 'semantic']);
+
+  const isVisibleInDataLineage = (node: any): boolean => {
+    const canonicalType = (node.canonical_type || '').toLowerCase();
+    return DATA_PLANE_CANONICAL_TYPES.has(canonicalType);
+  };
+
+  // Bundle: fetch visible upstream data assets for the selected anchor
   const fetchUpstreamNodes = async (nodeId: string, nodeFqn: string) => {
     if (stackId) {
       try {
-        // Step 1: Get upstream data assets
+        // Fetch upstream via DATA+CROSS plane edges — matches the unified route's
+        // "data,cross" mapping. CROSS is needed for BI→table edges.
+        // The canonical type whitelist below prevents orchestration nodes from
+        // leaking through CROSS edges.
         const upstreamRes = await fetch(
-          `/api/pipeline/${stackId}/lineage/engine?action=upstream&id=${encodeURIComponent(nodeId)}&depth=5`
+          `/api/pipeline/${stackId}/lineage/engine?action=upstream&id=${encodeURIComponent(nodeId)}&depth=5&plane=data,cross`
         );
         if (!upstreamRes.ok) throw new Error('upstream failed');
         const upstreamData = await upstreamRes.json();
         const upstreamNodes: any[] = upstreamData.upstream || [];
 
-        // Step 2: For anchor + each upstream node, fetch cross-links to discover tools
-        const allNodeIds = [nodeId, ...upstreamNodes.map((n: any) => n.id)];
-        const toolNodes = new Map<string, any>(); // dedup by id
+        // Post-filter: only include nodes visible in the data-lineage surface.
+        // The ViewBuilder data-plane view only shows 'dataset' and 'semantic'
+        // canonical types — this excludes connectors, DAGs, tasks, services, etc.
+        const visibleNodes = upstreamNodes.filter(isVisibleInDataLineage);
 
-        // Batch cross-link fetches (limit concurrency to 5)
-        const batchSize = 5;
-        for (let i = 0; i < allNodeIds.length; i += batchSize) {
-          const batch = allNodeIds.slice(i, i + batchSize);
-          const crossResults = await Promise.all(
-            batch.map((nid) =>
-              fetch(`/api/pipeline/${stackId}/lineage/engine?action=cross-links&id=${encodeURIComponent(nid)}`)
-                .then((r) => (r.ok ? r.json() : null))
-                .catch(() => null)
-            )
-          );
-          for (const result of crossResults) {
-            if (!result?.connected_nodes) continue;
-            for (const toolNode of result.connected_nodes) {
-              if (!toolNodes.has(toolNode.id)) {
-                toolNodes.set(toolNode.id, toolNode);
-              }
+        // FQN-based dedup: Airflow/Fivetran adapters create table reference nodes
+        // that duplicate real warehouse nodes. The visual lineage merges these by
+        // FQN — we do the same here, preferring non-tool-platform nodes.
+        const DEDUP_PLATFORMS = new Set(['airflow', 'fivetran']);
+        const fqnToNode = new Map<string, any>();
+        for (const n of visibleNodes) {
+          const fqn = n.fqn || n.name || n.id;
+          const existing = fqnToNode.get(fqn);
+          if (!existing) {
+            fqnToNode.set(fqn, n);
+          } else {
+            // Prefer the non-tool-platform node (warehouse node over Airflow ref)
+            const existingPlatform = (existing.platform || '').toLowerCase();
+            const nPlatform = (n.platform || '').toLowerCase();
+            if (DEDUP_PLATFORMS.has(existingPlatform) && !DEDUP_PLATFORMS.has(nPlatform)) {
+              fqnToNode.set(fqn, n);
             }
           }
         }
 
-        // Step 3: Combine data assets + tool nodes, assign smart defaults
-        const seen = new Set<string>();
         const monitors: Array<{ name: string; monitorType: string; targetFqn: string; config: Record<string, any> }> = [];
-
-        // Add upstream data assets first
-        for (const n of upstreamNodes) {
-          const fqn = n.fqn || n.name || n.id;
-          if (seen.has(fqn)) continue;
-          seen.add(fqn);
+        for (const [fqn, n] of fqnToNode) {
           const monType = getDefaultMonitorType(n);
-          const shortName = fqn.split('.').pop() || fqn;
-          monitors.push({
-            name: `${monType.toLowerCase().replace(/_/g, ' ')} — ${shortName}`,
-            monitorType: monType,
-            targetFqn: fqn,
-            config: {},
-          });
-        }
-
-        // Add tool/orchestration nodes — only if user has a matching integration connected
-        const connectedPlatforms = new Set(
-          integrations.map((i) => i.type.toLowerCase().replace('_cloud', '').replace('_', ''))
-        );
-        for (const [, toolNode] of toolNodes) {
-          const toolPlatform = (toolNode.platform || '').toLowerCase();
-          // Skip tool nodes whose platform doesn't match any connected integration
-          if (toolPlatform && !connectedPlatforms.has(toolPlatform)) continue;
-          const fqn = toolNode.fqn || toolNode.name || toolNode.id;
-          if (seen.has(fqn)) continue;
-          seen.add(fqn);
-          const monType = getDefaultMonitorType(toolNode);
           const shortName = fqn.split('.').pop() || fqn;
           monitors.push({
             name: `${monType.toLowerCase().replace(/_/g, ' ')} — ${shortName}`,
@@ -448,15 +459,28 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       } catch {}
     }
 
-    // Fallback: fetch upstream from Prisma lineage edges (data assets only)
+    // Fallback: fetch upstream from Prisma lineage edges.
+    // Apply same visibility rule: only data asset node types that appear on the
+    // visual lineage canvas (tables, views, models, sources).
+    const VISIBLE_NODE_TYPES = new Set(['table', 'view', 'materialized_view', 'source', 'model']);
     try {
       const res = await fetch(`/api/lineage/upstream?fqn=${encodeURIComponent(nodeFqn)}&limit=20`);
       if (res.ok) {
         const data = await res.json();
-        const nodes = data.nodes || [];
+        const allNodes = data.nodes || [];
+        const nodes = allNodes.filter((n: any) => {
+          const nt = (n.nodeType || '').toLowerCase();
+          return !nt || VISIBLE_NODE_TYPES.has(nt);
+        });
         if (nodes.length > 0) {
+          const seen = new Set<string>();
           setBundleMonitors(
-            nodes.map((n: any) => {
+            nodes.filter((n: any) => {
+              const fqn = n.fqn || n.name;
+              if (seen.has(fqn)) return false;
+              seen.add(fqn);
+              return true;
+            }).map((n: any) => {
               const fqn = n.fqn || n.name;
               const shortName = fqn.split('.').pop() || fqn;
               return {

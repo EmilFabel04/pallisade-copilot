@@ -1288,6 +1288,7 @@ async def engine_upstream(
     domain: Optional[str] = Query(None),
     kind: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    plane: Optional[str] = Query(None, description="Edge plane filter: data,control,cross"),
     stack_id: Optional[str] = Query(None),
 ):
     """Get upstream lineage for an asset with filtering."""
@@ -1295,7 +1296,7 @@ async def engine_upstream(
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
-    filters = _parse_filters(level, system, domain, kind, min_confidence)
+    filters = _parse_filters(level, system, domain, kind, min_confidence, plane=plane)
     nodes = store.get_upstream(asset_id, depth=depth, filters=filters)
     return {"asset_id": asset_id, "upstream": [_node_to_engine_response(n).dict() for n in nodes]}
 
@@ -1354,10 +1355,41 @@ async def engine_recommend_monitors(
 
     node = store.graph.nodes.get(asset_id)
     if not node:
-        raise HTTPException(status_code=404, detail=f"Node {asset_id} not found in graph.")
+        # Return empty recommendations instead of 404 to prevent frontend retry spam.
+        # The node may exist in Prisma but not in the engine graph (ID mismatch
+        # between unified lineage IDs and engine graph IDs).
+        return {
+            "asset_id": asset_id,
+            "asset_name": "",
+            "asset_type": "unknown",
+            "platform_domain": "unknown",
+            "is_bi_node": False,
+            "recommendations": [],
+            "bundles": [],
+        }
 
-    # Get upstream nodes
-    upstream_nodes = store.get_upstream(asset_id, depth=depth)
+    # Get upstream nodes scoped to the visual data-lineage surface.
+    # The unified route maps plane=data to "data,cross" at the engine layer
+    # (unified/route.ts:371), so both DATA and CROSS edges are visible.
+    # BI→table edges use CROSS plane, so we must include it.
+    # The canonical type whitelist (dataset + semantic) prevents orchestration
+    # nodes (reached via CROSS edges) from leaking into bundle candidates.
+    try:
+        from lineage.engine.store import Filters
+        from lineage.graph import LinePlane
+        from lineage.engine.canonical import map_node_type, CanonicalNodeType
+    except ImportError:
+        from scanner.lineage.engine.store import Filters
+        from scanner.lineage.graph import LinePlane
+        from scanner.lineage.engine.canonical import map_node_type, CanonicalNodeType
+
+    _DATA_PLANE_TYPES = {CanonicalNodeType.DATASET.value, CanonicalNodeType.SEMANTIC.value}
+    data_filters = Filters(planes={LinePlane.DATA, LinePlane.CROSS})
+    raw_upstream = store.get_upstream(asset_id, depth=depth, filters=data_filters)
+    upstream_nodes = [
+        n for n in raw_upstream
+        if (n.canonical_type or map_node_type(n).value) in _DATA_PLANE_TYPES
+    ]
 
     # Parse existing monitor FQNs for dedup
     existing_set = set()

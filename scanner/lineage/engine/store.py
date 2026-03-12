@@ -251,7 +251,8 @@ class GraphStore:
         """Get upstream nodes with optional filtering."""
         if not self.graph:
             return []
-        raw = self.graph.get_upstream(asset_id, depth=depth)
+        planes = filters.planes if filters else None
+        raw = self.graph.get_upstream(asset_id, depth=depth, planes=planes)
         return self._filter_nodes(raw, filters)
 
     def get_downstream(
@@ -260,7 +261,8 @@ class GraphStore:
         """Get downstream nodes with optional filtering."""
         if not self.graph:
             return []
-        raw = self.graph.get_downstream(asset_id, depth=depth)
+        planes = filters.planes if filters else None
+        raw = self.graph.get_downstream(asset_id, depth=depth, planes=planes)
         return self._filter_nodes(raw, filters)
 
     def blast_radius(

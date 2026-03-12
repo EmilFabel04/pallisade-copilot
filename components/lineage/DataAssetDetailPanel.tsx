@@ -657,12 +657,15 @@ export function DataAssetDetailPanel({
             fetch(`/api/pipeline/${stackId}/lineage/engine?action=recommend-monitors&id=${encodeURIComponent(engineId)}&depth=3${existingFqns ? `&existing_fqns=${encodeURIComponent(existingFqns)}` : ''}`)
               .then((res) => res.ok ? res.json() : null)
               .then((data) => {
-                if (data) {
-                  setRecommendations(data.recommendations || []);
-                  setBundles(data.bundles || []);
-                }
+                // Always set to array (even empty) to prevent retry loops on failure
+                setRecommendations(data?.recommendations || []);
+                setBundles(data?.bundles || []);
               })
-              .catch(() => {})
+              .catch(() => {
+                // Set empty arrays to prevent retry loops
+                setRecommendations([]);
+                setBundles([]);
+              })
               .finally(() => setRecsLoading(false));
           };
 
@@ -789,10 +792,12 @@ export function DataAssetDetailPanel({
                 )}
 
                 {/* Empty state */}
-                {!recsLoading && recommendations && recommendations.length === 0 && (
+                {!recsLoading && recommendations && recommendations.length === 0 && bundles.length === 0 && (
                   <div className="py-3 text-center">
                     <p className="text-[11px] text-[var(--muted)]">
-                      No upstream data dependencies found for this {nodeTypeLabel}.
+                      {totalUpstream > 0
+                        ? `All monitors already configured for this ${nodeTypeLabel}.`
+                        : `No upstream data dependencies found for this ${nodeTypeLabel}.`}
                     </p>
                   </div>
                 )}

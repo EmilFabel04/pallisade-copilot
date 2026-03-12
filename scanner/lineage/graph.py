@@ -444,6 +444,10 @@ class LineageGraph:
         }
         self._by_plane: Dict[LinePlane, Set[str]] = {}  # edge_id sets by plane
 
+        # Per-plane adjacency for plane-scoped BFS (e.g. DATA-only upstream traversal)
+        self._upstream_by_plane: Dict[LinePlane, Dict[str, Set[str]]] = {}
+        self._downstream_by_plane: Dict[LinePlane, Dict[str, Set[str]]] = {}
+
         # Metadata
         self.built_at: Optional[datetime] = None
         self.source_counts: Dict[str, int] = {}  # How many edges from each source
@@ -519,75 +523,107 @@ class LineageGraph:
         if edge.plane not in self._by_plane:
             self._by_plane[edge.plane] = set()
         self._by_plane[edge.plane].add(edge.id)
+
+        # Per-plane adjacency for plane-scoped BFS
+        self._upstream_by_plane.setdefault(edge.plane, {}).setdefault(edge.target_id, set()).add(edge.source_id)
+        self._downstream_by_plane.setdefault(edge.plane, {}).setdefault(edge.source_id, set()).add(edge.target_id)
     
-    def get_upstream(self, node_id: str, depth: int = -1) -> List[LineageNode]:
+    def _get_plane_scoped_upstream(self, node_id: str, planes: Set[LinePlane]) -> Set[str]:
+        """Return upstream neighbor IDs reachable via edges in the given planes."""
+        result: Set[str] = set()
+        for plane in planes:
+            plane_adj = self._upstream_by_plane.get(plane, {})
+            result.update(plane_adj.get(node_id, set()))
+        return result
+
+    def _get_plane_scoped_downstream(self, node_id: str, planes: Set[LinePlane]) -> Set[str]:
+        """Return downstream neighbor IDs reachable via edges in the given planes."""
+        result: Set[str] = set()
+        for plane in planes:
+            plane_adj = self._downstream_by_plane.get(plane, {})
+            result.update(plane_adj.get(node_id, set()))
+        return result
+
+    def get_upstream(self, node_id: str, depth: int = -1, planes: Optional[Set[LinePlane]] = None) -> List[LineageNode]:
         """
         Get all upstream nodes (dependencies).
-        
+
         Args:
             node_id: The node to find upstream for
             depth: How many levels deep (-1 for all)
-        
+            planes: If provided, only traverse edges in these planes.
+                    None means traverse all edges (backward compatible).
+
         Returns:
             List of upstream nodes
         """
         if node_id not in self.nodes:
             return []
-        
+
         result = []
         visited = set()
         queue = [(node_id, 0)]
-        
+
         while queue:
             current_id, current_depth = queue.pop(0)
-            
+
             if current_id in visited:
                 continue
             visited.add(current_id)
-            
+
             if current_id != node_id:
                 result.append(self.nodes[current_id])
-            
+
             if depth == -1 or current_depth < depth:
-                for upstream_id in self._upstream.get(current_id, set()):
+                if planes is not None:
+                    neighbors = self._get_plane_scoped_upstream(current_id, planes)
+                else:
+                    neighbors = self._upstream.get(current_id, set())
+                for upstream_id in neighbors:
                     if upstream_id not in visited:
                         queue.append((upstream_id, current_depth + 1))
-        
+
         return result
     
-    def get_downstream(self, node_id: str, depth: int = -1) -> List[LineageNode]:
+    def get_downstream(self, node_id: str, depth: int = -1, planes: Optional[Set[LinePlane]] = None) -> List[LineageNode]:
         """
         Get all downstream nodes (dependents).
-        
+
         Args:
             node_id: The node to find downstream for
             depth: How many levels deep (-1 for all)
-        
+            planes: If provided, only traverse edges in these planes.
+                    None means traverse all edges (backward compatible).
+
         Returns:
             List of downstream nodes
         """
         if node_id not in self.nodes:
             return []
-        
+
         result = []
         visited = set()
         queue = [(node_id, 0)]
-        
+
         while queue:
             current_id, current_depth = queue.pop(0)
-            
+
             if current_id in visited:
                 continue
             visited.add(current_id)
-            
+
             if current_id != node_id:
                 result.append(self.nodes[current_id])
-            
+
             if depth == -1 or current_depth < depth:
-                for downstream_id in self._downstream.get(current_id, set()):
+                if planes is not None:
+                    neighbors = self._get_plane_scoped_downstream(current_id, planes)
+                else:
+                    neighbors = self._downstream.get(current_id, set())
+                for downstream_id in neighbors:
                     if downstream_id not in visited:
                         queue.append((downstream_id, current_depth + 1))
-        
+
         return result
     
     def get_direct_upstream(self, node_id: str) -> List[LineageNode]:
