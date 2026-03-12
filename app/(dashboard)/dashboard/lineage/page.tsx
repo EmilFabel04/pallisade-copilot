@@ -47,6 +47,7 @@ import {
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
+import { CreateTaskModal, type MonitorPrefillData } from '@/components/schedule/CreateTaskModal';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -163,6 +164,14 @@ function LineagePageInner() {
 
   // Pipeline Overview inspector state
   const [pipelineInspectorTarget, setPipelineInspectorTarget] = useState<InspectorTarget>(null);
+
+  // Monitor creation modal state
+  const [monitorModalOpen, setMonitorModalOpen] = useState(false);
+  const [monitorPrefill, setMonitorPrefill] = useState<MonitorPrefillData | null>(null);
+  const handleCreateMonitor = useCallback((prefill: MonitorPrefillData) => {
+    setMonitorPrefill(prefill);
+    setMonitorModalOpen(true);
+  }, []);
 
   // LLM extraction state
   const [llmExtracting, setLlmExtracting] = useState(false);
@@ -1625,6 +1634,7 @@ function LineagePageInner() {
             stackId={stackId}
             allMonitors={lineageData?.allMonitors}
             onClose={() => setPipelineInspectorTarget(null)}
+            onCreateMonitor={handleCreateMonitor}
           />
         )}
 
@@ -2022,10 +2032,30 @@ function LineagePageInner() {
               stackId={stackId || ''}
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}
+              onCreateMonitor={handleCreateMonitor}
             />
           )
         )}
       </div>
+
+      {/* Monitor creation modal (opened from lineage node recommendations) */}
+      <CreateTaskModal
+        open={monitorModalOpen}
+        onClose={() => { setMonitorModalOpen(false); setMonitorPrefill(null); }}
+        onSubmit={async (task) => {
+          try {
+            await fetch('/api/schedule/tasks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(task),
+            });
+          } catch {}
+          setMonitorModalOpen(false);
+          setMonitorPrefill(null);
+        }}
+        prefillData={monitorPrefill}
+        stackId={stackId || undefined}
+      />
     </div>
   );
 }

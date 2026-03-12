@@ -42,7 +42,7 @@ export async function GET(
     // Build query params to forward (always include stack_id for pipeline isolation)
     const forwardParams = new URLSearchParams();
     forwardParams.set('stack_id', stackId);
-    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane', 'direction', 'limit']) {
+    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane', 'direction', 'limit', 'existing_fqns']) {
       const val = searchParams.get(key);
       if (val) forwardParams.set(key, val);
     }
@@ -64,6 +64,10 @@ export async function GET(
       case 'blast-radius':
         if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
         endpoint = `/api/v1/lineage/engine/blast-radius/${encodeURIComponent(assetId)}${qs}`;
+        break;
+      case 'recommend-monitors':
+        if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
+        endpoint = `/api/v1/lineage/engine/recommend-monitors/${encodeURIComponent(assetId)}${qs}`;
         break;
       case 'explain-edge':
         if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });

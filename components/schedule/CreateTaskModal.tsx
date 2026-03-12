@@ -30,17 +30,26 @@ interface IntegrationNode {
   hasLiveConnection: boolean;
 }
 
+export interface MonitorPrefillData {
+  name: string;
+  monitorType: string;
+  targetFqn?: string;
+  config?: Record<string, any>;
+  integrationId?: string;
+}
+
 interface CreateTaskModalProps {
   open: boolean;
   onClose: () => void;
   onSubmit: (task: any) => void;
   onUpdate?: (taskId: string, task: any) => void;
   editTask?: ScheduledTask | null;
+  prefillData?: MonitorPrefillData | null;
   integrations?: Array<{ id: string; name: string; type: string }>;
   stackId?: string;
 }
 
-export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, integrations = [], stackId }: CreateTaskModalProps) {
+export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, prefillData, integrations = [], stackId }: CreateTaskModalProps) {
   const [step, setStep] = useState(1);
   const isEditing = !!editTask;
 
@@ -84,7 +93,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
       });
   }, [open, stackId]);
 
-  // Pre-fill form when editing an existing task
+  // Pre-fill form when editing an existing task or from recommendation prefill
   useEffect(() => {
     if (editTask) {
       setName(editTask.name);
@@ -98,6 +107,19 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
       setAlertChannels(editTask.alertChannels || []);
       setAlertOnStatus(editTask.alertOnStatus || ['FAIL', 'WARN', 'ERROR']);
       setIntegrationId(editTask.integrationId || '');
+      setStep(1);
+    } else if (prefillData && open) {
+      setName(prefillData.name);
+      setTaskMode('structured');
+      setPrompt('');
+      setMonitorType(prefillData.monitorType);
+      setTargetFqn(prefillData.targetFqn || '');
+      setConfig(prefillData.config || {});
+      setSchedule('0 8 * * *');
+      setTimezone('UTC');
+      setAlertChannels([]);
+      setAlertOnStatus(['FAIL', 'WARN', 'ERROR']);
+      setIntegrationId(prefillData.integrationId || '');
       setStep(1);
     } else if (open) {
       setName('');
@@ -113,7 +135,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, i
       setIntegrationId('');
       setStep(1);
     }
-  }, [editTask, open]);
+  }, [editTask, prefillData, open]);
 
   // Fetch connected channel status when modal opens
   useEffect(() => {

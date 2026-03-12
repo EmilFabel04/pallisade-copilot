@@ -1340,6 +1340,48 @@ async def engine_blast_radius(
     return store.blast_radius(asset_id, filters=filters)
 
 
+@router.get("/lineage/engine/recommend-monitors/{asset_id}")
+async def engine_recommend_monitors(
+    asset_id: str,
+    depth: int = Query(3, ge=1, le=10),
+    existing_fqns: Optional[str] = Query(None, description="Comma-separated MONITOR_KEY:fqn strings for dedup"),
+    stack_id: Optional[str] = Query(None),
+):
+    """Recommend monitors for a lineage node based on its type and upstream context."""
+    store = _get_engine_store(stack_id)
+    if not store.graph:
+        raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
+
+    node = store.graph.nodes.get(asset_id)
+    if not node:
+        raise HTTPException(status_code=404, detail=f"Node {asset_id} not found in graph.")
+
+    # Get upstream nodes
+    upstream_nodes = store.get_upstream(asset_id, depth=depth)
+
+    # Parse existing monitor FQNs for dedup
+    existing_set = set()
+    if existing_fqns:
+        existing_set = {fqn.strip() for fqn in existing_fqns.split(",") if fqn.strip()}
+
+    try:
+        from scanner.monitors.recommender import recommend_for_node, get_bundles
+    except ImportError:
+        from monitors.recommender import recommend_for_node, get_bundles
+
+    recommendations = recommend_for_node(node, upstream_nodes=upstream_nodes, existing_monitor_fqns=existing_set)
+    bundles = get_bundles(node, upstream_nodes=upstream_nodes, existing_monitor_fqns=existing_set)
+
+    return {
+        "asset_id": asset_id,
+        "asset_name": node.name,
+        "asset_type": node.node_type.value,
+        "platform_domain": node.platform_domain.value,
+        "recommendations": [r.to_dict() for r in recommendations],
+        "bundles": [b.to_dict() for b in bundles],
+    }
+
+
 @router.get("/lineage/engine/explain-edge/{edge_id}")
 async def engine_explain_edge(edge_id: str, stack_id: Optional[str] = Query(None)):
     """Show evidence and reasoning for a specific edge."""

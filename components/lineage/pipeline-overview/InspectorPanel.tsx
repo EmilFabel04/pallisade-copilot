@@ -15,6 +15,7 @@ import {
 } from './types';
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
+import type { MonitorPrefillData } from '@/components/schedule/CreateTaskModal';
 
 // Role badges shown when functional role differs from the lane name.
 // "transformation" and "reporting" are excluded — they match their lane, so a badge is redundant.
@@ -47,6 +48,7 @@ interface InspectorPanelProps {
   stackId: string | null;
   allMonitors?: MonitorInfo[];
   onClose: () => void;
+  onCreateMonitor?: (prefill: MonitorPrefillData) => void;
 }
 
 
@@ -57,11 +59,13 @@ function NodeInspector({
   laneOverview,
   stackId,
   allMonitors,
+  onCreateMonitor,
 }: {
   node: ViewNode;
   laneOverview: RenderedViewResponse | null;
   stackId: string | null;
   allMonitors?: MonitorInfo[];
+  onCreateMonitor?: (prefill: MonitorPrefillData) => void;
 }) {
   const meta = getToolMeta(node);
   const health = getOverallHealth(meta.healthSummary);
@@ -174,6 +178,52 @@ function NodeInspector({
           <span className="text-[11px] text-[var(--muted)] capitalize">{node.platform || 'Unknown'}</span>
         </div>
       </div>
+
+      {/* Monitor this tool */}
+      {onCreateMonitor && (() => {
+        const platform = (node.platform || '').toLowerCase();
+        const layer = (node.layer || '').toUpperCase();
+        const toolName = node.name || platform;
+
+        // Deterministic monitor suggestions per tool type
+        const suggestions: Array<{ key: string; label: string }> = [];
+        if (['fivetran', 'airbyte', 'stitch', 'hevo', 'meltano'].some(t => platform.includes(t)) || layer === 'INGESTION') {
+          suggestions.push({ key: 'SYNC_LAG', label: 'Sync Lag' });
+          suggestions.push({ key: 'FAILED_SYNCS', label: 'Failed Syncs' });
+        } else if (['airflow', 'dagster', 'prefect', 'n8n', 'argo'].some(t => platform.includes(t)) || layer === 'ORCHESTRATION') {
+          suggestions.push({ key: 'DAG_LAST_RUN', label: 'DAG Last Run' });
+          suggestions.push({ key: 'DAG_SCHEDULE_LAG', label: 'Schedule Lag' });
+        } else if (['dbt', 'dbt_cloud', 'dbt_core'].some(t => platform.includes(t)) || layer === 'TRANSFORMATION') {
+          suggestions.push({ key: 'DBT_TEST_FAILURES', label: 'Test Failures' });
+          suggestions.push({ key: 'DBT_MODEL_FRESHNESS', label: 'Model Freshness' });
+        }
+
+        if (suggestions.length === 0) return null;
+
+        return (
+          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            <div className="text-[10px] text-[var(--muted)] uppercase tracking-wide mb-2">Monitor This Tool</div>
+            <div className="space-y-1.5">
+              {suggestions.map(s => (
+                <button
+                  key={s.key}
+                  onClick={() => onCreateMonitor({
+                    name: `${s.label} — ${toolName}`,
+                    monitorType: s.key,
+                    integrationId: (node.metadata?.integrationId as string) || undefined,
+                  })}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg bg-blue-500/8 border border-blue-500/15 hover:bg-blue-500/15 transition-all text-[11px] text-blue-300 hover:text-blue-200 flex items-center gap-2"
+                >
+                  <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Detail content */}
       {loading && <LoadingState />}
@@ -449,6 +499,7 @@ export function InspectorPanel({
   stackId,
   allMonitors,
   onClose,
+  onCreateMonitor,
 }: InspectorPanelProps) {
   if (!target) return null;
 
@@ -471,7 +522,7 @@ export function InspectorPanel({
 
       {/* Content */}
       {target.kind === 'node' ? (
-        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} />
+        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} onCreateMonitor={onCreateMonitor} />
       ) : (
         <EdgeInspector edge={target.edge} laneOverview={laneOverview} />
       )}
