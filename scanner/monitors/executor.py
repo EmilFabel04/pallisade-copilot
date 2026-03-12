@@ -25,6 +25,7 @@ from .referential import ReferentialIntegrityMonitor
 from .uniqueness import UniquenessMonitor
 from .explainer import enrich_result
 from .infrastructure import INFRA_MONITOR_TYPES, INFRA_MONITOR_REGISTRY
+from .bi import BI_MONITOR_TYPES, BI_MONITOR_REGISTRY
 
 
 # Type alias for a warehouse query function.
@@ -514,6 +515,58 @@ class MonitorExecutor:
                 target_fqn=server_adapter._config.get("host", "unknown"),
                 status=MonitorStatus.ERROR,
                 message=f"Infrastructure monitor failed: {exc}",
+            )
+
+        result.executed_at = datetime.now(timezone.utc)
+        result.duration_ms = int((time.monotonic() - start) * 1000)
+        return result
+
+    @staticmethod
+    def execute_bi_monitor(
+        monitor_type: str,
+        config: Dict[str, Any],
+        bi_client: Any,
+        engine_store: Any = None,
+        monitor_history_func: Any = None,
+    ) -> MonitorResult:
+        """Execute a BI/reporting monitor using a BI platform adapter.
+
+        Returns a MonitorResult from the BI monitor.
+        """
+        key = monitor_type.lower()
+        if key not in BI_MONITOR_TYPES:
+            return MonitorResult(
+                monitor_type=key,
+                target_fqn="unknown",
+                status=MonitorStatus.ERROR,
+                message=f"Unknown BI monitor type: {monitor_type}",
+            )
+
+        monitor_cls = BI_MONITOR_REGISTRY[key]
+        monitor = monitor_cls(config)
+
+        start = time.monotonic()
+        try:
+            # Different monitors accept different kwargs
+            if key == "bi_upstream_break_risk":
+                result = monitor.execute(
+                    bi_client=bi_client,
+                    engine_store=engine_store,
+                    monitor_history_func=monitor_history_func,
+                )
+            elif key == "bi_freshness_proxy":
+                result = monitor.execute(
+                    bi_client=bi_client,
+                    engine_store=engine_store,
+                )
+            else:
+                result = monitor.execute(bi_client)
+        except Exception as exc:
+            result = MonitorResult(
+                monitor_type=key,
+                target_fqn=f"bi:{config.get('asset_id', 'unknown')}",
+                status=MonitorStatus.ERROR,
+                message=f"BI monitor failed: {exc}",
             )
 
         result.executed_at = datetime.now(timezone.utc)

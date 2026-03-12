@@ -6,7 +6,7 @@ Extracts lineage from connected warehouses and returns a graph.
 
 from typing import Dict, Any, List, Optional, Set
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 router = APIRouter()
@@ -3150,3 +3150,116 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Health Watch Scope ──────────────────────────────────────────────────────
+
+@router.post("/lineage/engine/watches/scope")
+async def engine_watch_scope(
+    request: Request,
+    stack_id: Optional[str] = Query(None),
+):
+    """Preview the scope for a health watch before creation.
+
+    Body JSON:
+        anchor_id: str — engine node ID
+        watch_type: str — pipeline_health | dashboard_shield | source_guard | model_quality | custom_watch
+        scope_config: dict (optional) — overrides for maxDepth / maxNodes / maxMonitors / domainFilters
+        existing_fqns: list[str] (optional) — "KEY:fqn" strings for dedup marking
+    """
+    store = _get_engine_store(stack_id)
+    if not store.graph:
+        raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
+
+    body = await request.json()
+    anchor_id = body.get("anchor_id")
+    watch_type = body.get("watch_type")
+    scope_config = body.get("scope_config")
+    existing_fqns = set(body.get("existing_fqns", []))
+
+    if not anchor_id:
+        raise HTTPException(status_code=400, detail="anchor_id is required")
+    if not watch_type:
+        raise HTTPException(status_code=400, detail="watch_type is required")
+
+    try:
+        from scanner.monitors.scope import build_watch_scope, infer_watch_type
+    except ImportError:
+        from monitors.scope import build_watch_scope, infer_watch_type
+
+    result = build_watch_scope(
+        graph=store.graph,
+        anchor_id=anchor_id,
+        watch_type=watch_type,
+        scope_config=scope_config,
+        existing_monitor_fqns=existing_fqns,
+    )
+
+    return result.to_dict()
+
+
+@router.get("/lineage/engine/watches/infer-type/{asset_id}")
+async def engine_infer_watch_type(
+    asset_id: str,
+    stack_id: Optional[str] = Query(None),
+):
+    """Infer the best watch type for a given asset."""
+    store = _get_engine_store(stack_id)
+    if not store.graph:
+        raise HTTPException(status_code=404, detail="No graph built.")
+
+    node = store.graph.nodes.get(asset_id)
+    if not node:
+        return {"asset_id": asset_id, "watch_type": "custom_watch", "reason": "Node not found in graph"}
+
+    try:
+        from scanner.monitors.scope import infer_watch_type
+    except ImportError:
+        from monitors.scope import infer_watch_type
+
+    wt = infer_watch_type(node)
+    return {
+        "asset_id": asset_id,
+        "asset_name": node.name,
+        "node_type": node.node_type.value,
+        "platform_domain": node.platform_domain.value,
+        "watch_type": wt,
+    }
+
+
+@router.post("/lineage/engine/watches/compute-health")
+async def engine_compute_health(request: Request):
+    """Compute health report from monitor signals.
+
+    Body JSON:
+        anchor_name: str — display name of the anchor asset
+        coverage_pct: float (optional) — 0.0-1.0
+        signals: list of { monitor_id, monitor_name, monitor_type, target_fqn,
+                           status, message?, depth?, priority? }
+    """
+    body = await request.json()
+    anchor_name = body.get("anchor_name", "Unknown")
+    coverage_pct = body.get("coverage_pct", 0.0)
+    raw_signals = body.get("signals", [])
+
+    try:
+        from scanner.monitors.health import MonitorSignal, compute_health_report
+    except ImportError:
+        from monitors.health import MonitorSignal, compute_health_report
+
+    signals = [
+        MonitorSignal(
+            monitor_id=s.get("monitor_id", ""),
+            monitor_name=s.get("monitor_name", ""),
+            monitor_type=s.get("monitor_type", ""),
+            target_fqn=s.get("target_fqn", ""),
+            status=s.get("status", "ERROR"),
+            message=s.get("message"),
+            depth=s.get("depth", 0),
+            priority=s.get("priority", 2),
+        )
+        for s in raw_signals
+    ]
+
+    report = compute_health_report(signals, anchor_name, coverage_pct)
+    return report.to_dict()

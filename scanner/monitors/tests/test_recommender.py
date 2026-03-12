@@ -11,6 +11,7 @@ from ..recommender import (
     SYNC_LAG, FAILED_SYNCS, CONNECTOR_SCHEMA_DRIFT,
     DAG_LAST_RUN, DAG_SCHEDULE_LAG,
     DBT_TEST_FAILURES, DBT_MODEL_FRESHNESS, DBT_SOURCE_FRESHNESS,
+    BI_FRESHNESS_PROXY, BI_CONTENT_HEALTH, BI_UPSTREAM_BREAK_RISK,
     BUNDLE_CAP,
 )
 
@@ -153,7 +154,7 @@ class TestDirectRecommendations:
         assert DBT_TEST_FAILURES in keys
         assert DBT_MODEL_FRESHNESS in keys
 
-    def test_bi_dashboard_no_direct_monitors(self):
+    def test_bi_dashboard_gets_direct_bi_monitors(self):
         node = _make_node(
             node_type=NodeType.DASHBOARD,
             platform_domain=PlatformDomain.BI,
@@ -162,9 +163,11 @@ class TestDirectRecommendations:
             fqn="looker.dashboard.sales_overview",
         )
         recs = recommend_for_node(node)
-        # No direct monitors for BI nodes (only upstream)
         direct_recs = [r for r in recs if r.source == "direct"]
-        assert len(direct_recs) == 0
+        keys = _rec_keys(direct_recs)
+        assert BI_FRESHNESS_PROXY in keys
+        assert BI_CONTENT_HEALTH in keys
+        assert BI_UPSTREAM_BREAK_RISK in keys
 
     def test_all_direct_recs_have_source_direct(self):
         node = _make_node()
@@ -282,14 +285,17 @@ class TestBundles:
         assert rh is not None
         assert len(rh.recommendations) > 0
 
-    def test_bi_node_no_asset_stability_bundle(self):
+    def test_bi_node_gets_asset_stability_bundle(self):
         bi_node = _make_node(
             node_type=NodeType.DASHBOARD,
             platform_domain=PlatformDomain.BI,
             asset_kind=AssetKind.DASHBOARD,
         )
         bundles = get_bundles(bi_node)
-        assert not any(b.bundle_key == "asset_stability" for b in bundles)
+        asset_bundle = next((b for b in bundles if b.bundle_key == "asset_stability"), None)
+        assert asset_bundle is not None
+        keys = _rec_keys(asset_bundle.recommendations)
+        assert BI_FRESHNESS_PROXY in keys
 
     def test_bundle_cap_at_8(self):
         target = _make_node(
@@ -516,13 +522,21 @@ class TestBiNodeRecommendations:
                 assert "orders" in r.reason, f"Reason missing upstream name: {r.reason}"
                 assert "Sales Overview" in r.reason, f"Reason missing BI node name: {r.reason}"
 
-    def test_bi_dashboard_no_upstream_returns_empty_recs(self):
-        """BI dashboard with no upstream returns empty recommendations and bundles."""
+    def test_bi_dashboard_no_upstream_returns_direct_bi_recs(self):
+        """BI dashboard with no upstream returns direct BI monitors only."""
         dash = self._make_bi_dashboard()
         recs = recommend_for_node(dash, upstream_nodes=[])
         bundles = get_bundles(dash, upstream_nodes=[])
-        assert len(recs) == 0
-        assert len(bundles) == 0
+        # Should have direct BI monitors
+        assert len(recs) == 3
+        keys = _rec_keys(recs)
+        assert BI_FRESHNESS_PROXY in keys
+        assert BI_CONTENT_HEALTH in keys
+        assert BI_UPSTREAM_BREAK_RISK in keys
+        # Should have asset_stability bundle, but no upstream/reporting bundles
+        assert any(b.bundle_key == "asset_stability" for b in bundles)
+        assert not any(b.bundle_key == "upstream_stability" for b in bundles)
+        assert not any(b.bundle_key == "reporting_health" for b in bundles)
 
     def test_bi_reporting_health_bundle_contains_expected_monitors(self):
         """Reporting health bundle has correct monitor types for mixed upstream."""
@@ -553,13 +567,15 @@ class TestBiNodeRecommendations:
         assert SYNC_LAG in bundle_keys
         assert DBT_MODEL_FRESHNESS in bundle_keys
 
-    def test_recommend_for_node_returns_only_upstream_source_for_bi(self):
-        """All recs for a BI node have source='upstream', none have source='direct'."""
+    def test_recommend_for_node_bi_has_direct_and_upstream(self):
+        """BI node recs include both direct BI monitors and upstream monitors."""
         dash = self._make_bi_dashboard()
         upstream = [self._make_upstream_warehouse()]
         recs = recommend_for_node(dash, upstream_nodes=upstream)
-        for r in recs:
-            assert r.source == "upstream", f"BI node rec has source={r.source}, expected 'upstream'"
+        direct_recs = [r for r in recs if r.source == "direct"]
+        upstream_recs = [r for r in recs if r.source == "upstream"]
+        assert len(direct_recs) >= 3  # BI_FRESHNESS_PROXY, BI_CONTENT_HEALTH, BI_UPSTREAM_BREAK_RISK
+        assert len(upstream_recs) >= 1  # At least FRESHNESS on upstream table
 
     def test_is_bi_node_function(self):
         """is_bi_node correctly identifies BI nodes."""

@@ -21,6 +21,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import type { MonitorPrefillData, BundlePrefillData } from '@/components/schedule/CreateTaskModal';
+import type { WatchPrefillData } from '@/components/schedule/CreateWatchModal';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,
@@ -78,6 +79,7 @@ interface DataAssetDetailPanelProps {
   onNodeNavigate: (nodeId: string) => void;
   onCreateMonitor?: (prefill: MonitorPrefillData) => void;
   onCreateBundle?: (prefill: BundlePrefillData) => void;
+  onCreateWatch?: (prefill: WatchPrefillData) => void;
 }
 
 // ─── Collapsible Section ───────────────────────────────────────────
@@ -255,6 +257,7 @@ export function DataAssetDetailPanel({
   onNodeNavigate,
   onCreateMonitor,
   onCreateBundle,
+  onCreateWatch,
 }: DataAssetDetailPanelProps) {
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult | null>(null);
   const [blastLoading, setBlastLoading] = useState(false);
@@ -788,6 +791,39 @@ export function DataAssetDetailPanel({
                         </button>
                       );
                     })()}
+
+                    {/* Health Watch CTA */}
+                    {onCreateWatch && (
+                      <button
+                        onClick={() => {
+                          const allRecs = [
+                            ...recommendations.filter(r => !r.already_monitored).map(r => ({
+                              name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
+                              monitorType: r.monitor_key,
+                              targetFqn: r.target_fqn,
+                              config: r.config_hints,
+                            })),
+                            ...bundles.flatMap(b => b.recommendations.filter(r => !r.already_monitored).map(r => ({
+                              name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
+                              monitorType: r.monitor_key,
+                              targetFqn: r.target_fqn,
+                              config: r.config_hints,
+                            }))),
+                          ];
+                          onCreateWatch({
+                            anchorFqn: node.fullName || node.name,
+                            anchorNodeId: node.id.replace(/^lineage-/, ''),
+                            anchorNodeType: node.category,
+                            watchType: isBiNode ? 'dashboard_shield' : 'pipeline_health',
+                            monitors: allRecs,
+                          });
+                        }}
+                        className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 font-medium"
+                      >
+                        <ShieldCheck className="w-3 h-3" />
+                        Create Health Watch
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -851,6 +887,23 @@ export function DataAssetDetailPanel({
                   </button>
                 )}
               </div>
+
+              {/* Health Watch button */}
+              {onCreateWatch && (
+                <button
+                  onClick={() => {
+                    onCreateWatch({
+                      anchorFqn: node.fullName || node.name,
+                      anchorNodeId: node.id.replace(/^lineage-/, ''),
+                      anchorNodeType: node.category,
+                    });
+                  }}
+                  className="w-full flex items-center justify-center gap-1 py-1 rounded bg-blue-500/8 border border-blue-500/15 hover:bg-blue-500/15 transition-all text-[10px] text-blue-300 hover:text-blue-200 mb-2"
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  Create Health Watch
+                </button>
+              )}
 
               {/* Expanded recommendations */}
               {recsExpanded && (

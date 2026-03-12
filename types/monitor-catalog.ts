@@ -18,9 +18,10 @@ export type MonitorCategory =
   | 'ingestion'
   | 'orchestration'
   | 'transformation'
-  | 'infrastructure';
+  | 'infrastructure'
+  | 'reporting';
 
-export type ExecutorType = 'warehouse_sql' | 'tool_api' | 'ssh';
+export type ExecutorType = 'warehouse_sql' | 'tool_api' | 'ssh' | 'bi_api';
 
 export type TargetSelectorType =
   | 'fqn'        // database.schema.table picker
@@ -28,6 +29,7 @@ export type TargetSelectorType =
   | 'dag'        // Airflow/Dagster DAG picker
   | 'dbt_job'    // dbt Cloud job picker
   | 'server'     // Linux server picker
+  | 'bi_asset'   // BI dashboard/report picker
   | 'none';      // No target needed
 
 export interface ConfigField {
@@ -68,6 +70,7 @@ export const MONITOR_CATEGORY_LABELS: Record<MonitorCategory, string> = {
   orchestration: 'Orchestration',
   transformation: 'Transformation',
   infrastructure: 'Infrastructure',
+  reporting: 'Reporting / BI',
 };
 
 export const MONITOR_CATEGORY_ORDER: MonitorCategory[] = [
@@ -76,6 +79,7 @@ export const MONITOR_CATEGORY_ORDER: MonitorCategory[] = [
   'orchestration',
   'transformation',
   'infrastructure',
+  'reporting',
 ];
 
 // ---------------------------------------------------------------------------
@@ -490,6 +494,75 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
       { key: 'error_patterns', label: 'Error patterns (comma-separated)', type: 'text', placeholder: 'ERROR, FATAL, CRITICAL', advanced: true },
     ],
   },
+
+  // ==========================================================================
+  // REPORTING / BI — Looker, Tableau, Power BI, Metabase
+  // ==========================================================================
+  {
+    key: 'BI_FRESHNESS_PROXY',
+    label: 'Dashboard Freshness',
+    description: 'Checks BI asset last_updated time and upstream table freshness via lineage',
+    category: 'reporting',
+    required_integrations: ['looker', 'tableau', 'powerbi', 'metabase'],
+    target_selector_type: 'bi_asset',
+    executor_type: 'bi_api',
+    supports_baselines: false,
+    config_schema: [
+      { key: 'asset_id', label: 'BI Asset ID', type: 'text', required: true, placeholder: 'e.g. dashboard/123' },
+      { key: 'asset_type', label: 'Asset Type', type: 'select', default_value: 'dashboard', options: [
+        { value: 'dashboard', label: 'Dashboard' },
+        { value: 'report', label: 'Report' },
+        { value: 'workbook', label: 'Workbook' },
+        { value: 'explore', label: 'Explore' },
+        { value: 'question', label: 'Question' },
+      ]},
+      { key: 'max_stale_hours', label: 'Max stale hours', type: 'number', placeholder: '24', default_value: 24 },
+      { key: 'check_upstream', label: 'Check upstream table freshness', type: 'checkbox', default_value: true, advanced: true },
+    ],
+  },
+  {
+    key: 'BI_UPSTREAM_BREAK_RISK',
+    label: 'Upstream Break Risk',
+    description: 'Counts failing monitors on upstream warehouse tables via lineage',
+    category: 'reporting',
+    required_integrations: ['looker', 'tableau', 'powerbi', 'metabase'],
+    target_selector_type: 'bi_asset',
+    executor_type: 'bi_api',
+    supports_baselines: false,
+    config_schema: [
+      { key: 'asset_id', label: 'BI Asset ID', type: 'text', required: true, placeholder: 'e.g. dashboard/123' },
+      { key: 'lookback_hours', label: 'Lookback hours', type: 'number', placeholder: '24', default_value: 24, advanced: true },
+    ],
+  },
+  {
+    key: 'BI_CONTENT_HEALTH',
+    label: 'Content Health',
+    description: 'Verifies BI asset exists, is accessible, and deliveries are not failing',
+    category: 'reporting',
+    required_integrations: ['looker', 'tableau', 'powerbi', 'metabase'],
+    target_selector_type: 'bi_asset',
+    executor_type: 'bi_api',
+    supports_baselines: false,
+    config_schema: [
+      { key: 'asset_id', label: 'BI Asset ID', type: 'text', required: true, placeholder: 'e.g. dashboard/123' },
+      { key: 'check_deliveries', label: 'Check scheduled deliveries', type: 'checkbox', default_value: true, advanced: true },
+    ],
+  },
+  {
+    key: 'BI_REFRESH_FAILURE',
+    label: 'Refresh Failure',
+    description: 'Detects BI dataset/extract refresh job failures',
+    category: 'reporting',
+    required_integrations: ['powerbi', 'tableau'],
+    target_selector_type: 'bi_asset',
+    executor_type: 'bi_api',
+    supports_baselines: false,
+    config_schema: [
+      { key: 'asset_id', label: 'BI Asset ID', type: 'text', required: true, placeholder: 'e.g. dataset/456' },
+      { key: 'workspace_id', label: 'Workspace ID', type: 'text', placeholder: 'Power BI workspace or Tableau site', advanced: true },
+      { key: 'lookback_hours', label: 'Lookback hours', type: 'number', placeholder: '24', default_value: 24, advanced: true },
+    ],
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -534,6 +607,11 @@ export const TOOL_MONITOR_TYPES = [
   'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
   'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
   'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
+];
+
+export const BI_MONITOR_TYPES = [
+  'BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK',
+  'BI_CONTENT_HEALTH', 'BI_REFRESH_FAILURE',
 ];
 
 export const TOOL_NODE_TYPE_MAP: Record<string, string[]> = {

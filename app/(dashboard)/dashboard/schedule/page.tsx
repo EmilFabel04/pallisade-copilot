@@ -7,11 +7,15 @@ import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import { Button } from '@/components/ui/button';
 import { TaskCard } from '@/components/schedule/TaskCard';
 import { BundleCard } from '@/components/schedule/BundleCard';
+import { WatchCard } from '@/components/schedule/WatchCard';
+import { WatchDetailPanel } from '@/components/schedule/WatchDetailPanel';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
+import { CreateWatchModal } from '@/components/schedule/CreateWatchModal';
 import { RunHistoryTable } from '@/components/schedule/RunHistoryTable';
 import { cn } from '@/lib/utils';
 import type { ScheduledTask, TaskRun, MonitorGroupSummary } from '@/types/schedule';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
+import type { WatchSummary } from '@/types/health-watch';
 
 type FilterStatus = 'all' | 'passing' | 'failing' | 'disabled';
 
@@ -24,6 +28,13 @@ export default function SchedulePage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showWatchModal, setShowWatchModal] = useState(false);
+
+  // Watch state
+  const [watches, setWatches] = useState<WatchSummary[]>([]);
+  const [selectedWatch, setSelectedWatch] = useState<WatchSummary | null>(null);
+  const [watchDetailMonitors, setWatchDetailMonitors] = useState<any[]>([]);
+  const [watchDetailLoading, setWatchDetailLoading] = useState(false);
 
   // Bundle state
   const [bundles, setBundles] = useState<MonitorGroupSummary[]>([]);
@@ -79,15 +90,31 @@ export default function SchedulePage() {
     }
   }, []);
 
+  // Fetch watches
+  const fetchWatches = useCallback(async () => {
+    try {
+      const res = await cachedFetch('/api/schedule/watches');
+      if (res.ok) {
+        const data = await res.json();
+        setWatches(data.watches || []);
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to fetch watches:', err);
+    }
+  }, []);
+
   // Re-fetch and reset selection when pipeline changes
   useEffect(() => {
     setSelectedTask(null);
     setSelectedBundle(null);
     setBundleDetail(null);
+    setSelectedWatch(null);
+    setWatchDetailMonitors([]);
     setTaskRuns([]);
     fetchTasks();
     fetchBundles();
-  }, [fetchTasks, fetchBundles]);
+    fetchWatches();
+  }, [fetchTasks, fetchBundles, fetchWatches]);
 
   // Fetch integrations for create modal
   useEffect(() => {
@@ -161,6 +188,107 @@ export default function SchedulePage() {
 
     fetchDetail();
   }, [selectedBundle]);
+
+  // Fetch watch detail
+  useEffect(() => {
+    if (!selectedWatch) return;
+
+    const fetchDetail = async () => {
+      setWatchDetailLoading(true);
+      try {
+        const res = await fetch(`/api/schedule/watches/${selectedWatch.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setWatchDetailMonitors(data.watch?.monitors || []);
+          // Update the selected watch with latest data
+          if (data.watch) {
+            setSelectedWatch((prev) => prev ? { ...prev, ...data.watch } : prev);
+          }
+        }
+      } catch (err) {
+        console.error('[Schedule] Failed to fetch watch detail:', err);
+      } finally {
+        setWatchDetailLoading(false);
+      }
+    };
+
+    fetchDetail();
+  }, [selectedWatch?.id]);
+
+  // Create watch
+  const handleCreateWatch = async (watchData: any) => {
+    try {
+      const res = await fetch('/api/schedule/watches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(watchData),
+      });
+      if (res.ok) {
+        setShowWatchModal(false);
+        invalidateCache('/api/schedule');
+        fetchWatches();
+        fetchTasks();
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to create watch:', err);
+    }
+  };
+
+  // Toggle watch enabled
+  const handleToggleWatchEnabled = async (watchId: string, enabled: boolean) => {
+    try {
+      await fetch(`/api/schedule/watches/${watchId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      invalidateCache('/api/schedule');
+      setWatches((prev) =>
+        prev.map((w) => (w.id === watchId ? { ...w, enabled } : w))
+      );
+    } catch (err) {
+      console.error('[Schedule] Failed to toggle watch:', err);
+    }
+  };
+
+  // Run all monitors in a watch
+  const handleRunWatch = async (watchId: string) => {
+    try {
+      const res = await fetch(`/api/schedule/watches/${watchId}/run`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        fetchWatches();
+        fetchTasks();
+        if (selectedWatch?.id === watchId) {
+          const detailRes = await fetch(`/api/schedule/watches/${watchId}`);
+          if (detailRes.ok) {
+            const data = await detailRes.json();
+            if (data.watch) {
+              setSelectedWatch(data.watch);
+              setWatchDetailMonitors(data.watch.monitors || []);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to run watch:', err);
+    }
+  };
+
+  // Delete watch
+  const handleDeleteWatch = async (watchId: string) => {
+    try {
+      await fetch(`/api/schedule/watches/${watchId}`, { method: 'DELETE' });
+      invalidateCache('/api/schedule');
+      setWatches((prev) => prev.filter((w) => w.id !== watchId));
+      setSelectedWatch(null);
+      setWatchDetailMonitors([]);
+      fetchTasks();
+    } catch (err) {
+      console.error('[Schedule] Failed to delete watch:', err);
+    }
+  };
 
   // Create task or bundle
   const handleCreateTask = async (taskData: any) => {
@@ -320,6 +448,21 @@ export default function SchedulePage() {
       console.error('[Schedule] Failed to update task:', err);
     }
   };
+
+  // Watch detail view
+  if (selectedWatch) {
+    return (
+      <WatchDetailPanel
+        watch={selectedWatch}
+        detailMonitors={watchDetailMonitors}
+        detailLoading={watchDetailLoading}
+        onBack={() => { setSelectedWatch(null); setWatchDetailMonitors([]); }}
+        onRunAll={() => handleRunWatch(selectedWatch.id)}
+        onDelete={() => handleDeleteWatch(selectedWatch.id)}
+        onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
+      />
+    );
+  }
 
   // Bundle detail view
   if (selectedBundle) {
@@ -605,9 +748,14 @@ export default function SchedulePage() {
             Schedule quality checks, anomaly detection, and pipeline monitoring
           </p>
         </div>
-        <Button size="sm" onClick={() => setShowCreateModal(true)}>
-          + Create Task
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setShowCreateModal(true)}>
+            + Create Task
+          </Button>
+          <Button size="sm" onClick={() => setShowWatchModal(true)}>
+            + Health Watch
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -627,6 +775,7 @@ export default function SchedulePage() {
           </button>
         ))}
         <span className="text-[12px] text-[var(--text-faint)] ml-2">
+          {watches.length > 0 && `${watches.length} watch${watches.length !== 1 ? 'es' : ''} · `}
           {bundles.length > 0 && `${bundles.length} bundle${bundles.length !== 1 ? 's' : ''} · `}
           {tasks.length} task{tasks.length !== 1 ? 's' : ''}
         </span>
@@ -638,7 +787,7 @@ export default function SchedulePage() {
           <div className="flex items-center justify-center py-20">
             <div className="w-6 h-6 red-spinner" />
           </div>
-        ) : bundles.length === 0 && tasks.length === 0 ? (
+        ) : watches.length === 0 && bundles.length === 0 && tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <svg className="w-12 h-12 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -653,6 +802,26 @@ export default function SchedulePage() {
           </div>
         ) : (
           <div className="space-y-4">
+            {/* Health Watches section */}
+            {watches.length > 0 && (
+              <div>
+                <h3 className="text-[12px] font-medium text-[var(--text-faint)] uppercase tracking-wider mb-2">
+                  Health Watches
+                </h3>
+                <div className="space-y-2">
+                  {watches.map((watch) => (
+                    <WatchCard
+                      key={watch.id}
+                      watch={watch}
+                      onClick={() => setSelectedWatch(watch)}
+                      onToggleEnabled={(enabled) => handleToggleWatchEnabled(watch.id, enabled)}
+                      onRunAll={() => handleRunWatch(watch.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Bundles section */}
             {bundles.length > 0 && (
               <div>
@@ -706,6 +875,14 @@ export default function SchedulePage() {
         onUpdate={handleUpdateTask}
         editTask={editingTask}
         integrations={integrations}
+        stackId={selectedPipeline?.id}
+      />
+
+      {/* Create Watch modal */}
+      <CreateWatchModal
+        open={showWatchModal}
+        onClose={() => setShowWatchModal(false)}
+        onSubmit={handleCreateWatch}
         stackId={selectedPipeline?.id}
       />
     </div>

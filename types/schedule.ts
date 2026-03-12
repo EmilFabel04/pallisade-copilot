@@ -40,6 +40,14 @@ export interface MonitorGroupSummary {
   schedule?: string;
   timezone?: string;
   enabled: boolean;
+  // Health Watch fields (present when watchType is set)
+  watchType?: string;
+  anchorNodeType?: string;
+  anchorPlatform?: string;
+  healthScore?: number;
+  healthDetails?: Record<string, any>;
+  coveragePct?: number;
+  lastHealthAt?: string;
   monitors: Array<{
     id: string;
     name: string;

@@ -5,7 +5,7 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE';
+export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'UNCATEGORIZED';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
 export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
@@ -23,6 +23,7 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   VERSION_CONTROL: '#8B5CF6', // Purple
   ORCHESTRATION: '#F97316',  // Orange
   INFRASTRUCTURE: '#94A3B8', // Slate
+  UNCATEGORIZED: '#78716C',  // Stone — neutral for unknown platforms
 };
 
 // Integration type colors

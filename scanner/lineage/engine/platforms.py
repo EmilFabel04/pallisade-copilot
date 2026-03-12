@@ -3,7 +3,7 @@ Platform Registry — Single Source of Truth
 
 Every platform/tool known to the lineage engine is registered here.
 All classification functions, sets, and mappings derive from this registry.
-To add a new platform, add ONE entry to PLATFORM_REGISTRY.
+To add a new platform, add ONE entry to platform_registry.yaml.
 
 DESIGN RULE: Observed usage beats theoretical capability.
 A platform splits into multiple roles ONLY when:
@@ -13,11 +13,17 @@ A platform splits into multiple roles ONLY when:
 PlatformInfo.capabilities is an ELIGIBILITY HINT, not proof of active usage.
 """
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Dict, FrozenSet, Optional, Tuple
 
+import yaml
+
 from ..graph import PlatformDomain
+
+logger = logging.getLogger(__name__)
 
 
 class ToolCategory(Enum):
@@ -65,65 +71,36 @@ def _r(info: PlatformInfo) -> PlatformInfo:
     return info
 
 
-# ── Warehouses ────────────────────────────────────────────────────────────
-_r(PlatformInfo("bigquery",   ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=10))
-_r(PlatformInfo("snowflake",  ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, capabilities=(ToolCategory.TRANSFORMATION,), is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=11))
-_r(PlatformInfo("postgres",   ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=12))
-_r(PlatformInfo("redshift",   ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=13))
-_r(PlatformInfo("databricks", ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, capabilities=(ToolCategory.ORCHESTRATION, ToolCategory.TRANSFORMATION), is_warehouse=True, is_sql_engine=True, adapter_id="live_databricks", heuristic_order=14))
-_r(PlatformInfo("trino",      ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=15))
-_r(PlatformInfo("duckdb",     ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=16))
-_r(PlatformInfo("mysql",      ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=17))
-_r(PlatformInfo("mssql",      ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=18))
+# ── YAML loader ──────────────────────────────────────────────────────────
 
-# ── Transformation ────────────────────────────────────────────────────────
-_r(PlatformInfo("dbt_core",   ToolCategory.TRANSFORMATION, PlatformDomain.TRANSFORM, adapter_id="live_dbt", heuristic_order=20, aliases=("dbt",)))
-_r(PlatformInfo("dbt_cloud",  ToolCategory.TRANSFORMATION, PlatformDomain.TRANSFORM, adapter_id="live_dbt", heuristic_order=21))
-_r(PlatformInfo("spark",      ToolCategory.TRANSFORMATION, PlatformDomain.TRANSFORM, heuristic_order=22))
-_r(PlatformInfo("dataform",   ToolCategory.TRANSFORMATION, PlatformDomain.TRANSFORM, heuristic_order=23))
-_r(PlatformInfo("sqlmesh",    ToolCategory.TRANSFORMATION, PlatformDomain.TRANSFORM, heuristic_order=24))
+_REGISTRY_PATH = Path(__file__).parent / "platform_registry.yaml"
 
-# ── Ingestion ─────────────────────────────────────────────────────────────
-_r(PlatformInfo("fivetran",   ToolCategory.INGESTION, PlatformDomain.INGESTION, adapter_id="live_fivetran", heuristic_order=30))
-_r(PlatformInfo("airbyte",    ToolCategory.INGESTION, PlatformDomain.INGESTION, adapter_id="live_airbyte",  heuristic_order=31))
-_r(PlatformInfo("n8n",        ToolCategory.INGESTION, PlatformDomain.INGESTION, adapter_id="live_n8n",      heuristic_order=32))
-_r(PlatformInfo("meltano",    ToolCategory.INGESTION, PlatformDomain.INGESTION, heuristic_order=33))
-_r(PlatformInfo("stitch",     ToolCategory.INGESTION, PlatformDomain.INGESTION, heuristic_order=34))
-_r(PlatformInfo("hevo",       ToolCategory.INGESTION, PlatformDomain.INGESTION, heuristic_order=35))
-_r(PlatformInfo("matillion",  ToolCategory.INGESTION, PlatformDomain.INGESTION, heuristic_order=36))
-_r(PlatformInfo("rivery",     ToolCategory.INGESTION, PlatformDomain.INGESTION, heuristic_order=37))
-_r(PlatformInfo("singer",     ToolCategory.INGESTION, PlatformDomain.INGESTION, heuristic_order=38))
 
-# ── Orchestration ─────────────────────────────────────────────────────────
-_r(PlatformInfo("airflow",    ToolCategory.ORCHESTRATION, PlatformDomain.ORCHESTRATION, adapter_id="live_airflow", heuristic_order=40))
-_r(PlatformInfo("dagster",    ToolCategory.ORCHESTRATION, PlatformDomain.ORCHESTRATION, adapter_id="live_dagster", heuristic_order=41))
-_r(PlatformInfo("prefect",    ToolCategory.ORCHESTRATION, PlatformDomain.ORCHESTRATION, adapter_id="live_prefect", heuristic_order=42))
-_r(PlatformInfo("flink",      ToolCategory.ORCHESTRATION, PlatformDomain.ORCHESTRATION, heuristic_order=43))
+def _load_registry() -> None:
+    """Load platform definitions from platform_registry.yaml."""
+    try:
+        raw = yaml.safe_load(_REGISTRY_PATH.read_text())
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to load platform registry from {_REGISTRY_PATH}: {exc}"
+        ) from exc
 
-# ── Reporting / BI ────────────────────────────────────────────────────────
-_r(PlatformInfo("looker",     ToolCategory.REPORTING, PlatformDomain.BI, adapter_id="live_looker",   heuristic_order=50))
-_r(PlatformInfo("tableau",    ToolCategory.REPORTING, PlatformDomain.BI, adapter_id="live_tableau",  heuristic_order=51))
-_r(PlatformInfo("powerbi",    ToolCategory.REPORTING, PlatformDomain.BI, adapter_id="live_powerbi",  heuristic_order=52))
-_r(PlatformInfo("metabase",   ToolCategory.REPORTING, PlatformDomain.BI, adapter_id="live_metabase", heuristic_order=53))
-_r(PlatformInfo("superset",   ToolCategory.REPORTING, PlatformDomain.BI, heuristic_order=54))
-_r(PlatformInfo("mode",       ToolCategory.REPORTING, PlatformDomain.BI, heuristic_order=55))
-_r(PlatformInfo("sigma",      ToolCategory.REPORTING, PlatformDomain.BI, heuristic_order=56))
-_r(PlatformInfo("thoughtspot", ToolCategory.REPORTING, PlatformDomain.BI, heuristic_order=57))
+    platforms = raw.get("platforms") or {}
+    for name, entry in platforms.items():
+        _r(PlatformInfo(
+            name=name,
+            category=ToolCategory(entry["category"]),
+            domain=PlatformDomain(entry["domain"]),
+            capabilities=tuple(ToolCategory(c) for c in entry.get("capabilities", [])),
+            is_warehouse=entry.get("is_warehouse", False),
+            is_sql_engine=entry.get("is_sql_engine", False),
+            adapter_id=entry.get("adapter_id"),
+            heuristic_order=entry.get("heuristic_order", 50),
+            aliases=tuple(entry.get("aliases", [])),
+        ))
 
-# ── Quality ───────────────────────────────────────────────────────────────
-_r(PlatformInfo("elementary", ToolCategory.QUALITY, PlatformDomain.OTHER, adapter_id="live_elementary", heuristic_order=60))
 
-# ── Infrastructure ────────────────────────────────────────────────────────
-_r(PlatformInfo("linux",        ToolCategory.INFRASTRUCTURE, PlatformDomain.OTHER, heuristic_order=70))
-_r(PlatformInfo("linux_server", ToolCategory.INFRASTRUCTURE, PlatformDomain.OTHER, adapter_id="live_linux", heuristic_order=70))
-_r(PlatformInfo("ssh",          ToolCategory.INFRASTRUCTURE, PlatformDomain.OTHER, adapter_id="live_linux", heuristic_order=71))
-
-# ── Version Control ───────────────────────────────────────────────────────
-_r(PlatformInfo("github", ToolCategory.VERSION_CONTROL, PlatformDomain.OTHER, adapter_id="live_github", heuristic_order=80))
-_r(PlatformInfo("gitlab", ToolCategory.VERSION_CONTROL, PlatformDomain.OTHER, adapter_id="live_github", heuristic_order=81))
-
-# ── Storage ───────────────────────────────────────────────────────────────
-_r(PlatformInfo("storage", ToolCategory.INFRASTRUCTURE, PlatformDomain.OTHER, adapter_id="live_storage", heuristic_order=90))
+_load_registry()
 
 
 # ── Derived sets (computed once at import time) ───────────────────────────

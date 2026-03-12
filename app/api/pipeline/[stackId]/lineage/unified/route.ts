@@ -194,6 +194,13 @@ function engineNodeToUnified(
     layer = 'INGESTION';
   }
 
+  // Unknown platform with needs_mapping flag — surface as uncategorized
+  // rather than confidently placing in the warehouse lane
+  if (eNode.raw_metadata?.needs_mapping && !eNode.platform_native_domain) {
+    category = 'uncategorized';
+    layer = 'UNCATEGORIZED';
+  }
+
   // Extract run summary from raw_metadata (for DAG/task nodes)
   const rawRunSummary = eNode.raw_metadata?.run_summary;
   const runSummary = rawRunSummary ? {
@@ -550,14 +557,16 @@ export async function GET(
     if (engineGraph) {
       // --- ENGINE PATH: Use engine nodes/edges with confidence/evidence ---
 
-      // Step 1: Deduplicate Airflow table reference nodes with warehouse table nodes.
-      // Airflow adapter creates table ref nodes (platform="airflow", node_type="table")
-      // for tables referenced in SQL. These represent the SAME physical tables as
+      // Step 1: Deduplicate orchestrator table reference nodes with warehouse table nodes.
+      // Orchestration adapters (Airflow, Dagster, Prefect, etc.) may create table ref
+      // nodes for tables referenced in SQL. These represent the SAME physical tables as
       // warehouse adapter nodes but have different IDs (different system/namespace).
-      // We bridge them by FQN matching: Airflow edges get remapped to warehouse nodes
-      // so the orchestration graph connects to the main lineage graph.
+      // We identify them via platform_native_domain === 'orchestration' (the platform's
+      // own domain from the registry, distinct from platform_domain which is what the
+      // node represents). We bridge by FQN matching: orchestrator edges get remapped to
+      // warehouse nodes so the orchestration graph connects to the main lineage graph.
       const warehouseFqnMap = new Map<string, string>(); // FQN → engine node ID
-      const airflowTableRefs = new Map<string, string>(); // FQN → engine node ID
+      const orchestratorTableRefs = new Map<string, string>(); // FQN → engine node ID
 
       for (const eNode of engineGraph.nodes) {
         const fqn = eNode.fqn;
@@ -565,19 +574,19 @@ export async function GET(
         const nodeType = eNode.node_type?.toLowerCase();
         if (nodeType !== 'table' && nodeType !== 'view' && nodeType !== 'materialized_view') continue;
 
-        if (eNode.platform === 'airflow') {
-          airflowTableRefs.set(fqn, eNode.id);
+        if (eNode.platform_native_domain === 'orchestration') {
+          orchestratorTableRefs.set(fqn, eNode.id);
         } else if (!warehouseFqnMap.has(fqn)) {
           warehouseFqnMap.set(fqn, eNode.id);
         }
       }
 
-      // Build remap: Airflow table ref engine ID → warehouse engine ID
-      const airflowToWarehouseRemap = new Map<string, string>();
-      for (const [fqn, airflowId] of airflowTableRefs) {
+      // Build remap: orchestrator table ref engine ID → warehouse engine ID
+      const orchestratorToWarehouseRemap = new Map<string, string>();
+      for (const [fqn, orchId] of orchestratorTableRefs) {
         const warehouseId = warehouseFqnMap.get(fqn);
         if (warehouseId) {
-          airflowToWarehouseRemap.set(airflowId, warehouseId);
+          orchestratorToWarehouseRemap.set(orchId, warehouseId);
         }
       }
 
@@ -603,7 +612,7 @@ export async function GET(
         }
       }
 
-      // Step 2: Convert engine nodes to unified nodes, skipping remapped Airflow table refs
+      // Step 2: Convert engine nodes to unified nodes, skipping remapped orchestrator table refs
       const engineIdToUnifiedId = new Map<string, string>();
       dataAssetNodes = [];
 
@@ -616,8 +625,8 @@ export async function GET(
       }
 
       for (const eNode of engineGraph.nodes) {
-        if (airflowToWarehouseRemap.has(eNode.id) || inferredRemap.has(eNode.id)) {
-          // Duplicate node (Airflow table ref or inferred bridge) — skip it,
+        if (orchestratorToWarehouseRemap.has(eNode.id) || inferredRemap.has(eNode.id)) {
+          // Duplicate node (orchestrator table ref or inferred bridge) — skip it,
           // its edges will be remapped to the real node below
           continue;
         }
@@ -658,10 +667,10 @@ export async function GET(
       }
 
       // Step 3: Populate remap entries so duplicate edges → real unified IDs
-      for (const [airflowId, warehouseEngineId] of airflowToWarehouseRemap) {
+      for (const [orchId, warehouseEngineId] of orchestratorToWarehouseRemap) {
         const warehouseUnifiedId = engineIdToUnifiedId.get(warehouseEngineId);
         if (warehouseUnifiedId) {
-          engineIdToUnifiedId.set(airflowId, warehouseUnifiedId);
+          engineIdToUnifiedId.set(orchId, warehouseUnifiedId);
         }
       }
       for (const [inferredId, realEngineId] of inferredRemap) {
@@ -671,13 +680,13 @@ export async function GET(
         }
       }
 
-      if (airflowToWarehouseRemap.size > 0 || inferredRemap.size > 0) {
+      if (orchestratorToWarehouseRemap.size > 0 || inferredRemap.size > 0) {
         console.log(
-          `[UNIFIED LINEAGE] Deduped: ${airflowToWarehouseRemap.size} Airflow refs, ${inferredRemap.size} inferred duplicates`
+          `[UNIFIED LINEAGE] Deduped: ${orchestratorToWarehouseRemap.size} orchestrator table refs, ${inferredRemap.size} inferred duplicates`
         );
       }
 
-      // Step 4: Convert engine edges (Airflow→table edges now point to warehouse nodes)
+      // Step 4: Convert engine edges (orchestrator→table edges now point to warehouse nodes)
       tableEdges = engineGraph.edges
         .map((eEdge: any) => engineEdgeToUnified(eEdge, engineIdToUnifiedId))
         .filter((e: UnifiedLineageEdge | null): e is UnifiedLineageEdge => e !== null);

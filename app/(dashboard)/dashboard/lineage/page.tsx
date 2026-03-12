@@ -48,6 +48,7 @@ import {
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
 import { CreateTaskModal, type MonitorPrefillData, type BundlePrefillData } from '@/components/schedule/CreateTaskModal';
+import { CreateWatchModal, type WatchPrefillData } from '@/components/schedule/CreateWatchModal';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -66,6 +67,9 @@ function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
   ];
   if (knownCategories.includes(ot)) return ot;
 
+  // Unknown platform flagged as needs_mapping — show as uncategorized
+  if (vn.needsMapping) return 'uncategorized';
+
   // Fall back on canonical type → category mapping
   switch (vn.canonicalType) {
     case 'dataset': return 'table';
@@ -75,7 +79,7 @@ function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
       : vn.platformDomain === 'transform' ? 'transformation'
       : vn.platformDomain === 'bi' ? 'reporting'
       : vn.platformDomain === 'ingestion' ? 'ingestion'
-      : 'warehouse';
+      : 'uncategorized';
     case 'system': return 'infrastructure';
     default: return 'table';
   }
@@ -178,6 +182,14 @@ function LineagePageInner() {
     setBundlePrefill(prefill);
     setMonitorPrefill(null);
     setMonitorModalOpen(true);
+  }, []);
+
+  // Watch creation modal state
+  const [watchModalOpen, setWatchModalOpen] = useState(false);
+  const [watchPrefill, setWatchPrefill] = useState<WatchPrefillData | null>(null);
+  const handleCreateWatch = useCallback((prefill: WatchPrefillData) => {
+    setWatchPrefill(prefill);
+    setWatchModalOpen(true);
   }, []);
 
   // LLM extraction state
@@ -2041,6 +2053,7 @@ function LineagePageInner() {
               onNodeNavigate={handleNavigateToNode}
               onCreateMonitor={handleCreateMonitor}
               onCreateBundle={handleCreateBundle}
+              onCreateWatch={handleCreateWatch}
             />
           )
         )}
@@ -2073,6 +2086,25 @@ function LineagePageInner() {
         }}
         prefillData={monitorPrefill}
         bundlePrefillData={bundlePrefill}
+        stackId={stackId || undefined}
+      />
+
+      {/* Health Watch creation modal (opened from lineage node) */}
+      <CreateWatchModal
+        open={watchModalOpen}
+        onClose={() => { setWatchModalOpen(false); setWatchPrefill(null); }}
+        onSubmit={async (watchData) => {
+          try {
+            await fetch('/api/schedule/watches', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(watchData),
+            });
+          } catch {}
+          setWatchModalOpen(false);
+          setWatchPrefill(null);
+        }}
+        prefillData={watchPrefill}
         stackId={stackId || undefined}
       />
     </div>

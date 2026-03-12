@@ -297,6 +297,20 @@ def canonicalize_graph_in_place(
             canonical = map_node_type(node)
             node.canonical_type = canonical.value
         node.urn = generate_urn(node)
+
+        # Populate platform_native_domain from the platform registry.
+        # This reflects the platform's own domain (e.g. "orchestration" for
+        # Airflow) independently of what domain this particular node represents.
+        from .platforms import get_platform
+        platform_info = get_platform(node.platform or "")
+        if platform_info:
+            node.platform_native_domain = platform_info.domain.value
+        else:
+            # Unknown platform — flag for UI to surface as uncategorized
+            if node.platform:
+                node.raw_metadata["needs_mapping"] = True
+                needs_mapping.add(node.id)
+
         if is_needs_mapping(node):
             needs_mapping.add(node.id)
 

@@ -295,6 +295,7 @@ class LineageNode:
 
     # Engine extensions (backward-compatible defaults)
     platform_domain: PlatformDomain = PlatformDomain.OTHER
+    platform_native_domain: Optional[str] = None  # Platform's own domain from registry (vs node's domain)
     asset_kind: AssetKind = AssetKind.UNKNOWN
     namespace: Optional[str] = None  # account/project/env
     environment_scope: Optional[str] = None  # disambiguates same asset across envs/instances
@@ -344,6 +345,7 @@ class LineageNode:
             "upstream_count": self.upstream_count,
             "downstream_count": self.downstream_count,
             "platform_domain": self.platform_domain.value,
+            "platform_native_domain": self.platform_native_domain,
             "asset_kind": self.asset_kind.value,
             "namespace": self.namespace,
             "environment_scope": self.environment_scope,
@@ -584,7 +586,47 @@ class LineageGraph:
                         queue.append((upstream_id, current_depth + 1))
 
         return result
-    
+
+    def get_upstream_with_depth(
+        self,
+        node_id: str,
+        depth: int = -1,
+        planes: Optional[Set[LinePlane]] = None,
+    ) -> List[Tuple["LineageNode", int]]:
+        """
+        Get all upstream nodes with their depth from the anchor.
+
+        Same BFS as get_upstream(), but returns (node, depth) tuples
+        so callers can use depth for priority scoring and weighting.
+        """
+        if node_id not in self.nodes:
+            return []
+
+        result: List[Tuple["LineageNode", int]] = []
+        visited = set()
+        queue = [(node_id, 0)]
+
+        while queue:
+            current_id, current_depth = queue.pop(0)
+
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+
+            if current_id != node_id:
+                result.append((self.nodes[current_id], current_depth))
+
+            if depth == -1 or current_depth < depth:
+                if planes is not None:
+                    neighbors = self._get_plane_scoped_upstream(current_id, planes)
+                else:
+                    neighbors = self._upstream.get(current_id, set())
+                for upstream_id in neighbors:
+                    if upstream_id not in visited:
+                        queue.append((upstream_id, current_depth + 1))
+
+        return result
+
     def get_downstream(self, node_id: str, depth: int = -1, planes: Optional[Set[LinePlane]] = None) -> List[LineageNode]:
         """
         Get all downstream nodes (dependents).

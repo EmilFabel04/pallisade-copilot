@@ -75,6 +75,12 @@ DBT_TEST_FAILURES = "DBT_TEST_FAILURES"
 DBT_MODEL_FRESHNESS = "DBT_MODEL_FRESHNESS"
 DBT_SOURCE_FRESHNESS = "DBT_SOURCE_FRESHNESS"
 
+# BI / Reporting monitors
+BI_FRESHNESS_PROXY = "BI_FRESHNESS_PROXY"
+BI_UPSTREAM_BREAK_RISK = "BI_UPSTREAM_BREAK_RISK"
+BI_CONTENT_HEALTH = "BI_CONTENT_HEALTH"
+BI_REFRESH_FAILURE = "BI_REFRESH_FAILURE"
+
 # BI node types
 _BI_NODE_TYPES = {
     NodeType.DASHBOARD, NodeType.REPORT, NodeType.WORKBOOK,
@@ -204,8 +210,11 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
         _add(DBT_TEST_FAILURES, 1, "Watch for dbt test regressions on this model")
         _add(DBT_MODEL_FRESHNESS, 2, "Detect when this model build becomes stale")
 
-    # --- BI nodes get no direct monitors (upstream only) ---
-    # (handled by upstream recommendations)
+    # --- BI / Reporting nodes ---
+    elif is_bi_node(node):
+        _add(BI_FRESHNESS_PROXY, 1, "Track dashboard/report freshness via upstream lineage")
+        _add(BI_CONTENT_HEALTH, 2, "Verify BI asset exists and deliveries are not failing")
+        _add(BI_UPSTREAM_BREAK_RISK, 2, "Count failing monitors on upstream warehouse tables")
 
     return recs
 
@@ -354,18 +363,17 @@ def get_bundles(
     bundles: List[MonitorBundle] = []
 
     # --- Asset Stability: direct monitors for this node ---
-    if not is_bi_node(node):
-        direct = _recommend_direct(node)
-        if direct:
-            for r in direct:
-                r.source = "bundle"
-            _mark_existing(direct, existing_monitor_fqns)
-            bundles.append(MonitorBundle(
-                bundle_key="asset_stability",
-                label="Asset Stability",
-                description=f"Core quality monitors for {node.name}",
-                recommendations=sorted(direct, key=lambda r: r.priority)[:BUNDLE_CAP],
-            ))
+    direct = _recommend_direct(node)
+    if direct:
+        for r in direct:
+            r.source = "bundle"
+        _mark_existing(direct, existing_monitor_fqns)
+        bundles.append(MonitorBundle(
+            bundle_key="asset_stability",
+            label="Asset Stability",
+            description=f"Core quality monitors for {node.name}",
+            recommendations=sorted(direct, key=lambda r: r.priority)[:BUNDLE_CAP],
+        ))
 
     # --- Upstream Stability: monitors on upstream deps ---
     if upstream_nodes:

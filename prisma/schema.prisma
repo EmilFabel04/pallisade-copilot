@@ -3083,6 +3083,12 @@ enum MonitorKind {
   DBT_TEST_FAILURES
   DBT_MODEL_FRESHNESS
   DBT_SOURCE_FRESHNESS
+  // BI / Reporting monitors
+  BI_FRESHNESS_PROXY
+  BI_UPSTREAM_BREAK_RISK
+  BI_CONTENT_HEALTH
+  BI_REFRESH_FAILURE
+  BI_LOGIC_VALIDATION
 }
 
 enum MonitorRunStatus {
@@ -3115,6 +3121,16 @@ model MonitorGroup {
   lastStatus MonitorRunStatus?
   lastRunAt  DateTime?
 
+  // Health Watch fields (null for legacy bundles)
+  watchType      String?   // "pipeline_health"|"dashboard_shield"|"source_guard"|"model_quality"|"custom_watch"
+  scopeConfig    Json?     // { maxDepth, maxNodes, maxMonitors, domainFilters, includeNodeIds, excludeNodeIds }
+  coveragePct    Float?    // 0.0-1.0
+  healthScore    Float?    // 0.0-100.0
+  healthDetails  Json?     // HealthReport blob
+  lastHealthAt   DateTime?
+  anchorNodeType String?   // cached: "dashboard"|"table"|"connector" etc.
+  anchorPlatform String?   // cached: "bigquery"|"looker" etc.
+
   // Relations
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
@@ -3127,4 +3143,5 @@ model MonitorGroup {
   @@index([organizationId])
   @@index([groupType])
   @@index([anchorFqn])
+  @@index([watchType])
 }

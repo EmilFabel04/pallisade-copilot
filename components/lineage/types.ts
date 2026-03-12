@@ -121,7 +121,8 @@ export type UnifiedNodeCategory =
   | 'file'              // S3/GCS/ADLS object
   | 'test'              // Elementary test/monitor
   | 'dashboard'         // Looker/BI dashboard (data asset)
-  | 'report';           // Power BI report
+  | 'report'            // Power BI report
+  | 'uncategorized';    // Unknown platform — needs mapping
 
 // Issue summary for data assets
 export interface DataAssetIssues {
@@ -346,6 +347,7 @@ export const CATEGORY_LAYER_MAP: Record<UnifiedNodeCategory, PipelineLayer> = {
   test: 'WAREHOUSE',
   dashboard: 'REPORTING',
   report: 'REPORTING',
+  uncategorized: 'UNCATEGORIZED',
 };
 
 // Visual config per category
@@ -523,6 +525,13 @@ export const CATEGORY_VISUALS: Record<UnifiedNodeCategory, {
     borderColor: '#06B6D4',
     bgColor: 'rgba(6,182,212,0.1)',
     label: 'Report',
+  },
+  uncategorized: {
+    icon: 'help-circle',
+    color: '#78716C',
+    borderColor: '#78716C',
+    bgColor: 'rgba(120,113,108,0.15)',
+    label: 'Uncategorized',
   },
 };
 

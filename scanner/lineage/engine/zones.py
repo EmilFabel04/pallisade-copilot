@@ -14,9 +14,12 @@ Lane ordering (left → right):
 
 from __future__ import annotations
 
+import logging
 import re
 from enum import Enum
 from typing import TYPE_CHECKING, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 from ..graph import LineageNode, PlatformDomain, NodeType
 
@@ -447,8 +450,19 @@ def resolve_functional_role(
             ToolCategory.INFRASTRUCTURE: FunctionalRole.INFRASTRUCTURE.value,
             ToolCategory.VERSION_CONTROL: FunctionalRole.VERSION_CONTROL.value,
         }
-        return _CAT_TO_ROLE.get(cat, FunctionalRole.WAREHOUSE_RAW.value)
+        role = _CAT_TO_ROLE.get(cat)
+        if role:
+            return role
+        logger.warning(
+            "[Zone] Platform '%s' category '%s' has no role mapping, defaulting to WAREHOUSE_RAW",
+            platform, cat,
+        )
+        return FunctionalRole.WAREHOUSE_RAW.value
 
+    logger.warning(
+        "[Zone] Unknown platform '%s' — defaulting to WAREHOUSE_RAW (node: %s)",
+        platform, node.fqn or node.name,
+    )
     return FunctionalRole.WAREHOUSE_RAW.value
 
 
