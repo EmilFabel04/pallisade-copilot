@@ -96,6 +96,40 @@ export interface ToolDefinition {
   recommendedReason?: string;
   // DATA_PLANE tools create lineage nodes/edges; CONTROL_PLANE tools do not
   graphDomain?: GraphDomain;
+  // Multi-role: additional layers this tool can serve beyond its primary layer.
+  // Detected at connection time via observed_capabilities() on the backend.
+  additionalLayers?: PipelineLayer[];
+}
+
+// Multi-role display configuration
+export interface RoleInfo {
+  layer: PipelineLayer;
+  label: string;
+  color: string;
+  description: string;
+}
+
+// Which tools support multiple roles and what those roles look like
+export const MULTI_ROLE_TOOLS: Record<string, RoleInfo[]> = {
+  databricks: [
+    { layer: 'WAREHOUSE', label: 'Warehouse', color: '#6366F1', description: 'Unity Catalog tables & SQL queries' },
+    { layer: 'ORCHESTRATION', label: 'Orchestration', color: '#F97316', description: 'Databricks Jobs & Workflows' },
+    { layer: 'TRANSFORMATION', label: 'Transformation', color: '#F59E0B', description: 'Notebooks & Spark jobs' },
+  ],
+  snowflake: [
+    { layer: 'WAREHOUSE', label: 'Warehouse', color: '#6366F1', description: 'Tables, views & SQL queries' },
+    { layer: 'TRANSFORMATION', label: 'Transformation', color: '#F59E0B', description: 'Snowflake Tasks & Streams' },
+  ],
+};
+
+/** Check if a tool supports multiple roles. */
+export function isMultiRoleTool(toolId: string): boolean {
+  return toolId in MULTI_ROLE_TOOLS;
+}
+
+/** Get the role info for a multi-role tool. Returns undefined for single-role tools. */
+export function getMultiRoleInfo(toolId: string): RoleInfo[] | undefined {
+  return MULTI_ROLE_TOOLS[toolId];
 }
 
 // All available tools organized by layer with their config fields
@@ -240,6 +274,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       name: 'Snowflake',
       description: 'Snowflake Data Cloud',
       layer: 'WAREHOUSE',
+      additionalLayers: ['TRANSFORMATION'],
       configFields: [
         { name: 'account', label: 'Account Identifier', type: 'text', required: true, placeholder: 'xy12345.us-east-1' },
         { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'Your Snowflake username' },
@@ -339,6 +374,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       name: 'Databricks',
       description: 'Databricks Lakehouse',
       layer: 'WAREHOUSE',
+      additionalLayers: ['ORCHESTRATION', 'TRANSFORMATION'],
       configFields: [
         { name: 'host', label: 'Workspace URL', type: 'text', required: true, placeholder: 'https://adb-xxxx.azuredatabricks.net', helperText: 'Your Databricks workspace URL' },
         { name: 'token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'dapi...' },
@@ -391,8 +427,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       layer: 'REPORTING',
       configFields: [
         { name: 'host', label: 'Metabase URL', type: 'text', required: true, placeholder: 'https://your-metabase.com' },
-        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@example.com' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'mb_...', helperText: 'Generate from Admin > Settings > Authentication > API Keys (Metabase v0.49+)' },
       ],
     },
   ],

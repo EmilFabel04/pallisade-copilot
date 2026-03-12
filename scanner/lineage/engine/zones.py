@@ -309,9 +309,26 @@ def classify_actor_capability(node: LineageNode) -> Optional[ActorCapability]:
     Classify an actor node (service/job) by its pipeline capability.
 
     Returns None for non-actor nodes (datasets, semantics).
+
+    Resolution order:
+      1. Evidence-based: check node raw_metadata for generic metadata keys
+      2. Platform set membership: check derived platform sets
+      3. Fallback: use platform_domain
     """
+    rm = node.raw_metadata or {}
     platform = (node.platform or "").lower()
 
+    # Evidence-based resolution FIRST (generic metadata keys)
+    if rm.get("workflow_id") or rm.get("dag_id") or rm.get("is_orchestrator"):
+        return ActorCapability.ORCHESTRATION
+    if rm.get("notebook_path") or rm.get("job_id") or rm.get("spark_job_id"):
+        return ActorCapability.TRANSFORMATION
+    if rm.get("dq_check_id") or rm.get("test_results"):
+        return ActorCapability.QUALITY
+    if rm.get("semantic_asset_id"):
+        return ActorCapability.REPORTING
+
+    # Then platform set membership
     if platform in INGESTION_PLATFORMS:
         return ActorCapability.INGESTION
     if platform in TRANSFORM_PLATFORMS:

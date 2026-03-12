@@ -136,6 +136,33 @@ class LogEntry:
         }
 
 
+@dataclass
+class ObservedCapability:
+    """A capability actually observed in this tenant's platform usage.
+
+    Part of the three-level capability model:
+      - Supported capabilities: what the platform CAN do (PlatformInfo.capabilities)
+      - Observed capabilities: what the platform IS doing (this struct)
+      - Resolved roles: what each discovered node actually does (resolve_functional_role)
+
+    Only capabilities with real evidence should be reported.  Do not echo
+    back PlatformInfo.capabilities speculatively.
+    """
+    capability: str         # e.g. "warehouse", "orchestration", "transformation"
+    source: str             # e.g. "api_probe", "asset_discovery", "config", "user_override"
+    confidence: float = 1.0  # 0.0–1.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
+                            # e.g. {"api_endpoint": "/api/2.1/jobs/list", "asset_count": 42}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "capability": self.capability,
+            "source": self.source,
+            "confidence": self.confidence,
+            "metadata": self.metadata,
+        }
+
+
 # ---------------------------------------------------------------------------
 # IntegrationDriver ABC
 # ---------------------------------------------------------------------------
@@ -241,6 +268,28 @@ class IntegrationDriver(ABC):
     def recommended_monitors(self) -> List[str]:
         """Monitor types recommended for this integration."""
         return []
+
+    # ── Multi-role observation ─────────────────────────────────────────
+
+    def observed_capabilities(
+        self, config: Dict[str, Any]
+    ) -> List[ObservedCapability]:
+        """Return capabilities actually observed in this tenant's usage.
+
+        Called after ``test_connection`` succeeds.  Returns structured
+        observations with source and confidence.  Only capabilities with
+        real evidence should be returned — do NOT echo back
+        PlatformInfo.capabilities speculatively.
+
+        Default: returns the driver's primary layer as a high-confidence
+        observation.  Override in multi-role drivers to probe the platform
+        for active features.
+        """
+        return [ObservedCapability(
+            capability=self.layer().value.lower(),
+            source="driver_identity",
+            confidence=1.0,
+        )]
 
     # ── Serialisation helpers ──────────────────────────────────────────
 

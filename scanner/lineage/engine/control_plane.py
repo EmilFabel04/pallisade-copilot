@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from ..graph import LineageGraph, LinePlane, PlatformDomain
+from .platforms import is_multi_role
+from .zones import resolve_functional_role, _ROLE_TO_LANE
 
 logger = logging.getLogger(__name__)
 
@@ -108,14 +110,57 @@ def build_control_plane_graph(data_graph: LineageGraph) -> ControlPlaneGraph:
     4. Assign positions based on domain ordering and edge directions
     """
     # Step 1: Group nodes by tool identity (platform + integration_id)
+    # For multi-role platforms, use role-qualified keys ONLY when there
+    # is observed evidence of 2+ roles with meaningful content.
+    # DESIGN RULE: PlatformInfo.capabilities is an eligibility hint,
+    # not proof.  Do not create role-specific CP nodes from capability
+    # metadata alone.
     tool_key_to_nodes: Dict[str, List[str]] = defaultdict(list)
     tool_key_to_info: Dict[str, Dict[str, Any]] = {}
 
+    # First pass: collect observed roles per base tool key
+    _base_key_roles: Dict[str, Set[str]] = defaultdict(set)
+    _base_key_role_counts: Dict[str, Dict[str, int]] = defaultdict(
+        lambda: defaultdict(int),
+    )
     for node_id, node in data_graph.nodes.items():
         platform = node.platform or "unknown"
         integration_id = node.integration_id
-        # Use integration_id to distinguish multiple instances of the same tool
-        tool_key = f"{platform}:{integration_id}" if integration_id else platform
+        base_key = f"{platform}:{integration_id}" if integration_id else platform
+        if is_multi_role(platform):
+            from .canonical import map_node_type
+            ct = node.canonical_type or map_node_type(node).value
+            role = resolve_functional_role(node, ct)
+            _base_key_roles[base_key].add(role)
+            _base_key_role_counts[base_key][role] += 1
+
+    # Determine which base keys should be role-split
+    _split_base_keys: Set[str] = set()
+    for base_key, roles in _base_key_roles.items():
+        if len(roles) < 2:
+            continue
+        role_lanes = {_ROLE_TO_LANE.get(r, "") for r in roles}
+        role_lanes.discard("")
+        if len(role_lanes) < 2:
+            continue
+        # Each role must have meaningful content
+        counts = _base_key_role_counts[base_key]
+        if all(counts.get(r, 0) >= 1 for r in roles):
+            _split_base_keys.add(base_key)
+
+    # Second pass: assign nodes to tool keys
+    for node_id, node in data_graph.nodes.items():
+        platform = node.platform or "unknown"
+        integration_id = node.integration_id
+        base_key = f"{platform}:{integration_id}" if integration_id else platform
+
+        if base_key in _split_base_keys:
+            from .canonical import map_node_type
+            ct = node.canonical_type or map_node_type(node).value
+            role = resolve_functional_role(node, ct)
+            tool_key = f"{base_key}:role:{role}"
+        else:
+            tool_key = base_key
 
         tool_key_to_nodes[tool_key].append(node_id)
 
@@ -125,6 +170,7 @@ def build_control_plane_graph(data_graph: LineageGraph) -> ControlPlaneGraph:
                 "platform_domain": node.platform_domain.value if hasattr(node.platform_domain, 'value') else str(node.platform_domain),
                 "integration_id": integration_id,
                 "namespace": node.namespace,
+                "role": role if base_key in _split_base_keys else None,
             }
 
     # Step 2: Build control plane nodes
@@ -144,9 +190,25 @@ def build_control_plane_graph(data_graph: LineageGraph) -> ControlPlaneGraph:
             else:
                 health["unknown"] += 1
 
-        # Build display name
+        # Build display name (include role suffix for multi-role splits)
         namespace = info.get("namespace", "")
-        name = f"{platform.title()}" + (f" ({namespace})" if namespace else "")
+        role = info.get("role")
+        _ROLE_DISPLAY = {
+            "warehouse_raw": "Raw",
+            "warehouse_analytics": "Analytics",
+            "orchestration": "Workflows",
+            "transformation": "Transform",
+            "ingestion": "Ingestion",
+            "quality": "Quality",
+            "job_runtime": "Jobs",
+        }
+        role_suffix = _ROLE_DISPLAY.get(role, role.replace("_", " ").title() if role else "")
+        name_parts = [platform.title()]
+        if role_suffix:
+            name_parts.append(f"· {role_suffix}")
+        if namespace:
+            name_parts[0] += f" ({namespace})"
+        name = " ".join(name_parts)
 
         cp_nodes[tool_key] = ControlPlaneNode(
             id=tool_key,

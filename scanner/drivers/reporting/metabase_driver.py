@@ -19,10 +19,21 @@ class MetabaseDriver(IntegrationDriver):
         errors = []
         if not config.get("host") and not config.get("base_url"):
             errors.append("host or base_url is required")
+        if not config.get("api_key"):
+            errors.append("api_key is required")
         return ConfigValidation(valid=not errors, errors=errors)
 
     def test_connection(self, config: Dict[str, Any]) -> ConnectionResult:
-        return ConnectionResult(ok=False, message="Metabase connection test not yet implemented")
+        try:
+            from scanner.integrations.metabase import MetabaseClient
+            client = MetabaseClient(
+                host=config.get("host", config.get("base_url", "")),
+                api_key=config.get("api_key"),
+            )
+            ok, msg = client.test_connection()
+            return ConnectionResult(ok=ok, message=msg)
+        except Exception as exc:
+            return ConnectionResult(ok=False, message=f"Metabase connection failed: {exc}")
 
     def capabilities(self) -> DriverCapabilities:
         return DriverCapabilities(

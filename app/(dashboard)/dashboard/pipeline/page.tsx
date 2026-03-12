@@ -13,6 +13,7 @@ import {
   INTEGRATIONS,
   IntegrationDefinition,
   LAYER_COLORS,
+  MULTI_ROLE_TOOLS,
   PipelineEdge,
   PipelineLayer,
   PipelineNode,
@@ -20,6 +21,7 @@ import {
   ToolDefinition,
   TOOLS,
   getToolById,
+  isMultiRoleTool,
 } from '@/components/pipeline/types';
 
 type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
@@ -676,22 +678,29 @@ export default function PipelinePage() {
                             <p className="text-xs text-[var(--muted)] mt-0.5 truncate">{connector.description}</p>
                           </div>
                         </div>
-                        {status === 'CONNECTED' ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 flex-shrink-0">
-                            <Check className="w-3 h-3" />
-                            Connected
-                          </span>
-                        ) : status === 'NEEDS_ATTENTION' ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25 flex-shrink-0">
-                            <CircleAlert className="w-3 h-3" />
-                            Error
-                          </span>
-                        ) : recommended ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-[var(--accent)]/15 text-[var(--accent-2)] border border-[var(--accent)]/30 flex-shrink-0">
-                            <Zap className="w-3 h-3" />
-                            Recommended
-                          </span>
-                        ) : null}
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {isMultiRoleTool(connector.id) && status !== 'CONNECTED' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20" title="Supports multiple pipeline roles">
+                              Multi-role
+                            </span>
+                          )}
+                          {status === 'CONNECTED' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                              <Check className="w-3 h-3" />
+                              Connected
+                            </span>
+                          ) : status === 'NEEDS_ATTENTION' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                              <CircleAlert className="w-3 h-3" />
+                              Error
+                            </span>
+                          ) : recommended ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-[var(--accent)]/15 text-[var(--accent-2)] border border-[var(--accent)]/30">
+                              <Zap className="w-3 h-3" />
+                              Recommended
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
 
                       {/* Action buttons — always visible at bottom */}
@@ -742,6 +751,30 @@ export default function PipelinePage() {
                         )}
                       </div>
 
+                      {/* Multi-role badges — shown for connected multi-role tools */}
+                      {status === 'CONNECTED' && isMultiRoleTool(connector.id) && (
+                        <div className="mt-3 pt-3 border-t border-[var(--subtle-border)]">
+                          <div className="text-[10px] text-[var(--muted)] mb-2 uppercase tracking-wider font-medium">Detected Roles</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {MULTI_ROLE_TOOLS[connector.id].map((role) => (
+                              <span
+                                key={role.layer}
+                                className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border"
+                                style={{
+                                  borderColor: `${role.color}40`,
+                                  backgroundColor: `${role.color}15`,
+                                  color: role.color,
+                                }}
+                                title={role.description}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: role.color }} />
+                                {role.label}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Expanded details */}
                       {isExpanded && status === 'CONNECTED' && (
                         <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] text-xs text-[var(--muted)]">
@@ -749,6 +782,11 @@ export default function PipelinePage() {
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                             <span>Active connection — credentials stored securely</span>
                           </div>
+                          {isMultiRoleTool(connector.id) && (
+                            <div className="mt-2 text-[var(--muted)]">
+                              This tool serves multiple roles in your pipeline. Roles are auto-detected based on your workspace configuration.
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

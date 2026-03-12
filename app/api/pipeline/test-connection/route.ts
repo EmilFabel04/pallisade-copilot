@@ -404,15 +404,29 @@ export async function POST(request: NextRequest) {
         };
         break;
 
-      case 'metabase':
-        testEndpoint = `${SCANNER_API_URL}/api/test/metabase`;
-        testBody = {
-          host: config.host,
-          username: config.username,
-          password: config.password,
-          api_key: config.api_key,
-        };
-        break;
+      case 'metabase': {
+        // Test Metabase connection directly via its API
+        const mbHost = (config.host || '').replace(/\/+$/, '');
+        const mbApiKey = config.api_key;
+        if (!mbHost || !mbApiKey) {
+          return NextResponse.json({ success: false, message: 'Metabase URL and API Key are required' });
+        }
+        try {
+          const mbRes = await fetch(`${mbHost}/api/user/current`, {
+            method: 'GET',
+            headers: { 'X-Api-Key': mbApiKey },
+          });
+          if (mbRes.ok) {
+            const mbUser = await mbRes.json();
+            const name = mbUser.common_name || mbUser.email || 'Unknown';
+            return NextResponse.json({ success: true, message: `Connected as ${name}` });
+          }
+          const mbErr = await mbRes.text();
+          return NextResponse.json({ success: false, message: `Metabase returned ${mbRes.status}: ${mbErr}` });
+        } catch (e) {
+          return NextResponse.json({ success: false, message: `Failed to connect to Metabase: ${e instanceof Error ? e.message : 'Network error'}` });
+        }
+      }
 
       // Orchestration tools - test directly
       case 'airflow': {

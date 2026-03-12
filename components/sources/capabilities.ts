@@ -9,7 +9,7 @@ const TOOL_CAPABILITIES: Record<string, SourceCapability[]> = {
   sqlserver: ['Query', 'Metadata'],
   azure_sql: ['Query', 'Metadata'],
   azure_synapse: ['Query', 'Metadata'],
-  databricks: ['Query', 'Metadata', 'Lineage'],
+  databricks: ['Query', 'Metadata', 'Lineage', 'Logs'],
   mysql: ['Query', 'Metadata'],
 
   // Ingestion

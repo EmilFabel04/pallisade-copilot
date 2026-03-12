@@ -4,11 +4,18 @@ Platform Registry — Single Source of Truth
 Every platform/tool known to the lineage engine is registered here.
 All classification functions, sets, and mappings derive from this registry.
 To add a new platform, add ONE entry to PLATFORM_REGISTRY.
+
+DESIGN RULE: Observed usage beats theoretical capability.
+A platform splits into multiple roles ONLY when:
+  1. Discovered assets / metadata provide evidence of that role
+  2. Each role group has meaningful content (assets/jobs/nodes)
+  3. Role membership is evidence-backed, not just capability-based
+PlatformInfo.capabilities is an ELIGIBILITY HINT, not proof of active usage.
 """
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, FrozenSet, Optional
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from ..graph import PlatformDomain
 
@@ -27,10 +34,17 @@ class ToolCategory(Enum):
 
 @dataclass(frozen=True)
 class PlatformInfo:
-    """Metadata for a single platform/tool."""
+    """Metadata for a single platform/tool.
+
+    ``category`` is the PRIMARY role — what this platform is known for.
+    ``capabilities`` are ELIGIBILITY HINTS for additional roles the platform
+    CAN serve.  They are NOT proof of active usage — only gate which
+    observations are attempted.  Splitting requires observed evidence.
+    """
     name: str
     category: ToolCategory
     domain: PlatformDomain
+    capabilities: Tuple[ToolCategory, ...] = ()
     is_warehouse: bool = False
     is_sql_engine: bool = False
     adapter_id: Optional[str] = None
@@ -53,10 +67,10 @@ def _r(info: PlatformInfo) -> PlatformInfo:
 
 # ── Warehouses ────────────────────────────────────────────────────────────
 _r(PlatformInfo("bigquery",   ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=10))
-_r(PlatformInfo("snowflake",  ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=11))
+_r(PlatformInfo("snowflake",  ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, capabilities=(ToolCategory.TRANSFORMATION,), is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=11))
 _r(PlatformInfo("postgres",   ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=12))
 _r(PlatformInfo("redshift",   ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_warehouse",  heuristic_order=13))
-_r(PlatformInfo("databricks", ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, adapter_id="live_databricks", heuristic_order=14))
+_r(PlatformInfo("databricks", ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, capabilities=(ToolCategory.ORCHESTRATION, ToolCategory.TRANSFORMATION), is_warehouse=True, is_sql_engine=True, adapter_id="live_databricks", heuristic_order=14))
 _r(PlatformInfo("trino",      ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=15))
 _r(PlatformInfo("duckdb",     ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=16))
 _r(PlatformInfo("mysql",      ToolCategory.WAREHOUSE, PlatformDomain.WAREHOUSE, is_warehouse=True, is_sql_engine=True, heuristic_order=17))
@@ -127,11 +141,16 @@ def _platforms_where(predicate) -> FrozenSet[str]:
     return frozenset(result)
 
 
+def _has_category_or_capability(cat: ToolCategory):
+    """Predicate: platform's primary category OR eligible capabilities include cat."""
+    return lambda p: p.category == cat or cat in p.capabilities
+
+
 WAREHOUSE_PLATFORMS:     FrozenSet[str] = _platforms_where(lambda p: p.is_warehouse)
-INGESTION_PLATFORMS:     FrozenSet[str] = _platforms_where(lambda p: p.category == ToolCategory.INGESTION)
-TRANSFORM_PLATFORMS:     FrozenSet[str] = _platforms_where(lambda p: p.category == ToolCategory.TRANSFORMATION)
-ORCHESTRATION_PLATFORMS: FrozenSet[str] = _platforms_where(lambda p: p.category == ToolCategory.ORCHESTRATION)
-REPORTING_PLATFORMS:     FrozenSet[str] = _platforms_where(lambda p: p.category == ToolCategory.REPORTING)
+INGESTION_PLATFORMS:     FrozenSet[str] = _platforms_where(_has_category_or_capability(ToolCategory.INGESTION))
+TRANSFORM_PLATFORMS:     FrozenSet[str] = _platforms_where(_has_category_or_capability(ToolCategory.TRANSFORMATION))
+ORCHESTRATION_PLATFORMS: FrozenSet[str] = _platforms_where(_has_category_or_capability(ToolCategory.ORCHESTRATION))
+REPORTING_PLATFORMS:     FrozenSet[str] = _platforms_where(_has_category_or_capability(ToolCategory.REPORTING))
 INFRA_PLATFORMS:         FrozenSet[str] = _platforms_where(lambda p: p.category == ToolCategory.INFRASTRUCTURE)
 
 
@@ -143,9 +162,40 @@ def get_platform(name: str) -> Optional[PlatformInfo]:
 
 
 def get_category(name: str) -> Optional[ToolCategory]:
-    """Get the category for a platform name. Returns None if unknown."""
+    """Get the PRIMARY category for a platform name. Returns None if unknown."""
     info = get_platform(name)
     return info.category if info else None
+
+
+def get_all_categories(name: str) -> Tuple[ToolCategory, ...]:
+    """Return primary + eligible secondary capabilities.
+
+    ELIGIBILITY ONLY — does not imply the platform is actively serving
+    these roles.  Use observed evidence to determine actual usage.
+    """
+    info = get_platform(name)
+    if not info:
+        return ()
+    return (info.category,) + info.capabilities
+
+
+def has_capability(name: str, cap: ToolCategory) -> bool:
+    """Check if platform is ELIGIBLE for this capability.
+
+    Does NOT imply active usage — only that the platform can serve this role
+    when observed evidence confirms it.
+    """
+    return cap in get_all_categories(name)
+
+
+def is_multi_role(name: str) -> bool:
+    """True if the platform has declared additional capability eligibility.
+
+    This is an eligibility check, not an observed-usage check.
+    A True result means the platform CAN serve multiple roles, not that it IS.
+    """
+    info = get_platform(name)
+    return bool(info and info.capabilities)
 
 
 def get_domain(name: str) -> PlatformDomain:
