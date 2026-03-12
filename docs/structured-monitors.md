@@ -373,6 +373,79 @@ These monitors connect to your servers via SSH to check system-level health. The
 
 ---
 
+## Bundle Monitors
+
+Bundle monitors let you monitor an entire upstream data flow as a single unit. Instead of creating monitors one at a time, you select an **anchor node** (like a dashboard or key table) and Pallisade automatically discovers everything upstream — tables, connectors, DAGs, dbt models — so you can assign a scanner to each node and manage them as a group.
+
+---
+
+### What Is a Bundle?
+
+A bundle is a `MonitorGroup` — a named collection of individual monitors that share a schedule, alert configuration, and lifecycle. Each monitor in the bundle still runs independently against its own target, but the bundle aggregates their results into a single pass/fail status.
+
+**Group types:**
+
+| Type | Use case |
+|------|----------|
+| **Upstream Stability** | Watch everything that feeds into a critical table or model |
+| **Reporting Health** | Watch the full pipeline behind a BI dashboard |
+| **Asset Stability** | Watch a specific table and its direct dependencies |
+| **Custom** | Any ad-hoc grouping of monitors |
+
+---
+
+### Creating a Bundle
+
+**From the Schedule page:**
+
+1. Click **Create Task** and select the **Bundle** task type
+2. Give the bundle a name and pick a group type
+3. **Search for an anchor node** — start typing a table or asset name and select from the dropdown. This searches both the lineage engine graph and the database.
+4. Pallisade fetches all upstream nodes automatically:
+   - **Data assets** — tables, views, models found by walking upstream lineage edges
+   - **Tools** — Fivetran connectors, Airflow DAGs, dbt jobs discovered via cross-plane lineage edges (tool↔asset connections)
+5. For each upstream node, pick a **scanner type** from the dropdown. Smart defaults are pre-selected based on node type:
+   - Warehouse tables/views → **Freshness**
+   - Fivetran/Airbyte connectors → **Sync Lag**
+   - Airflow DAGs → **DAG Last Run**
+   - Airflow tasks → **Task Failure Rate**
+   - dbt models → **Model Freshness**
+   - dbt sources → **Source Freshness**
+   - Servers → **Server Health**
+6. Remove any nodes you don't want to monitor
+7. Set the shared schedule (cron) and alert channels
+8. Click **Create Bundle** — all monitors are created in a single transaction
+
+**From the Lineage page:**
+
+Click **Create Bundle** or **Monitor upstream** on any node's detail panel. This opens the Create Task modal pre-filled with the anchor node and its upstream monitors already populated.
+
+---
+
+### Bundle Execution
+
+Click **Run All** on any bundle to execute every monitor in the group. Monitors run sequentially and the bundle's aggregate status is determined by the worst individual result:
+
+**FAIL** > **ERROR** > **WARN** > **PASS**
+
+So if 9 out of 10 monitors pass but one fails, the bundle status is FAIL. The bundle card on the schedule page shows a progress bar with pass/warn/fail segments and a count like "8/10 passing."
+
+---
+
+### Bundle Management
+
+- **Edit** — Changing the bundle's schedule or alert channels propagates to all member monitors
+- **Toggle** — Enable/disable the entire bundle at once
+- **Delete** — Removes the bundle and all monitors that were created as part of it. Pre-existing monitors that were linked to the bundle (not created by it) are simply unlinked and continue to exist independently.
+
+---
+
+### Deduplication
+
+If a monitor already exists for a specific target + monitor type combination when you create a bundle, Pallisade links to the existing monitor instead of creating a duplicate. This means bundles can overlap without wasting resources on redundant checks.
+
+---
+
 ## How It All Fits Together
 
 ### Execution methods
@@ -431,3 +504,8 @@ Each monitor can have its own alert channels, so critical monitors can page on-c
 | `scanner/scheduler/executor.py` | Task orchestration and LLM validation |
 | `scanner/scheduler/service.py` | Cron scheduling loop, result persistence, alerting |
 | `components/schedule/MonitorConfigForm.tsx` | Dynamic UI form rendered from catalog |
+| `components/schedule/BundleCard.tsx` | Bundle card component for the schedule page |
+| `components/schedule/CreateTaskModal.tsx` | Task/bundle creation modal with anchor search and upstream discovery |
+| `app/api/schedule/bundles/route.ts` | Bundle list (GET) and creation (POST) |
+| `app/api/schedule/bundles/[groupId]/route.ts` | Bundle detail (GET), update (PATCH), delete (DELETE) |
+| `app/api/schedule/bundles/[groupId]/run/route.ts` | Run all monitors in a bundle (POST) |

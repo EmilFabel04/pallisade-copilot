@@ -329,39 +329,126 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
     { value: 'ANOMALY', label: 'Anomaly' },
     { value: 'UNIQUENESS', label: 'Uniqueness' },
     { value: 'CUSTOM_SQL', label: 'Custom SQL' },
+    { value: 'SYNC_LAG', label: 'Sync Lag' },
+    { value: 'FAILED_SYNCS', label: 'Failed Syncs' },
+    { value: 'DAG_LAST_RUN', label: 'DAG Last Run' },
+    { value: 'TASK_FAILURE_RATE', label: 'Task Failure Rate' },
+    { value: 'DBT_TEST_FAILURES', label: 'dbt Test Failures' },
+    { value: 'DBT_MODEL_FRESHNESS', label: 'dbt Model Freshness' },
+    { value: 'DBT_SOURCE_FRESHNESS', label: 'dbt Source Freshness' },
+    { value: 'SERVER_HEALTH', label: 'Server Health' },
   ];
 
-  // Bundle: fetch upstream nodes for the selected anchor
+  // Pick a default monitor type based on engine node metadata
+  const getDefaultMonitorType = (node: any): string => {
+    const platform = (node.platform || '').toLowerCase();
+    const nodeType = (node.node_type || '').toLowerCase();
+    const domain = (node.platform_domain || '').toLowerCase();
+    const dbtType = (node.dbt_resource_type || '').toLowerCase();
+
+    // Tool / connector nodes
+    if (['fivetran', 'airbyte'].includes(platform) || domain === 'ingestion') return 'SYNC_LAG';
+    if (platform === 'airflow' && nodeType === 'dag') return 'DAG_LAST_RUN';
+    if (platform === 'airflow' && nodeType === 'task') return 'TASK_FAILURE_RATE';
+
+    // dbt nodes
+    if (['dbt', 'dbt_core', 'dbt_cloud'].includes(platform)) {
+      if (dbtType === 'source') return 'DBT_SOURCE_FRESHNESS';
+      return 'DBT_MODEL_FRESHNESS';
+    }
+
+    // Server / infra
+    if (nodeType === 'server' || domain === 'infrastructure') return 'SERVER_HEALTH';
+
+    // Default for data assets (tables, views, models, dashboards)
+    return 'FRESHNESS';
+  };
+
+  // Bundle: fetch full upstream flow (data assets + tools) for the selected anchor
   const fetchUpstreamNodes = async (nodeId: string, nodeFqn: string) => {
-    // Try engine upstream first
     if (stackId) {
       try {
-        const res = await fetch(
+        // Step 1: Get upstream data assets
+        const upstreamRes = await fetch(
           `/api/pipeline/${stackId}/lineage/engine?action=upstream&id=${encodeURIComponent(nodeId)}&depth=5`
         );
-        if (res.ok) {
-          const data = await res.json();
-          const upstream = data.upstream || [];
-          if (upstream.length > 0) {
-            setBundleMonitors(
-              upstream.map((n: any) => {
-                const fqn = n.fqn || n.name || n.id;
-                const shortName = fqn.split('.').pop() || fqn;
-                return {
-                  name: `freshness — ${shortName}`,
-                  monitorType: 'FRESHNESS',
-                  targetFqn: fqn,
-                  config: {},
-                };
-              })
-            );
-            return;
+        if (!upstreamRes.ok) throw new Error('upstream failed');
+        const upstreamData = await upstreamRes.json();
+        const upstreamNodes: any[] = upstreamData.upstream || [];
+
+        // Step 2: For anchor + each upstream node, fetch cross-links to discover tools
+        const allNodeIds = [nodeId, ...upstreamNodes.map((n: any) => n.id)];
+        const toolNodes = new Map<string, any>(); // dedup by id
+
+        // Batch cross-link fetches (limit concurrency to 5)
+        const batchSize = 5;
+        for (let i = 0; i < allNodeIds.length; i += batchSize) {
+          const batch = allNodeIds.slice(i, i + batchSize);
+          const crossResults = await Promise.all(
+            batch.map((nid) =>
+              fetch(`/api/pipeline/${stackId}/lineage/engine?action=cross-links&id=${encodeURIComponent(nid)}`)
+                .then((r) => (r.ok ? r.json() : null))
+                .catch(() => null)
+            )
+          );
+          for (const result of crossResults) {
+            if (!result?.connected_nodes) continue;
+            for (const toolNode of result.connected_nodes) {
+              if (!toolNodes.has(toolNode.id)) {
+                toolNodes.set(toolNode.id, toolNode);
+              }
+            }
           }
+        }
+
+        // Step 3: Combine data assets + tool nodes, assign smart defaults
+        const seen = new Set<string>();
+        const monitors: Array<{ name: string; monitorType: string; targetFqn: string; config: Record<string, any> }> = [];
+
+        // Add upstream data assets first
+        for (const n of upstreamNodes) {
+          const fqn = n.fqn || n.name || n.id;
+          if (seen.has(fqn)) continue;
+          seen.add(fqn);
+          const monType = getDefaultMonitorType(n);
+          const shortName = fqn.split('.').pop() || fqn;
+          monitors.push({
+            name: `${monType.toLowerCase().replace(/_/g, ' ')} — ${shortName}`,
+            monitorType: monType,
+            targetFqn: fqn,
+            config: {},
+          });
+        }
+
+        // Add tool/orchestration nodes — only if user has a matching integration connected
+        const connectedPlatforms = new Set(
+          integrations.map((i) => i.type.toLowerCase().replace('_cloud', '').replace('_', ''))
+        );
+        for (const [, toolNode] of toolNodes) {
+          const toolPlatform = (toolNode.platform || '').toLowerCase();
+          // Skip tool nodes whose platform doesn't match any connected integration
+          if (toolPlatform && !connectedPlatforms.has(toolPlatform)) continue;
+          const fqn = toolNode.fqn || toolNode.name || toolNode.id;
+          if (seen.has(fqn)) continue;
+          seen.add(fqn);
+          const monType = getDefaultMonitorType(toolNode);
+          const shortName = fqn.split('.').pop() || fqn;
+          monitors.push({
+            name: `${monType.toLowerCase().replace(/_/g, ' ')} — ${shortName}`,
+            monitorType: monType,
+            targetFqn: fqn,
+            config: {},
+          });
+        }
+
+        if (monitors.length > 0) {
+          setBundleMonitors(monitors);
+          return;
         }
       } catch {}
     }
 
-    // Fallback: fetch upstream from Prisma lineage edges
+    // Fallback: fetch upstream from Prisma lineage edges (data assets only)
     try {
       const res = await fetch(`/api/lineage/upstream?fqn=${encodeURIComponent(nodeFqn)}&limit=20`);
       if (res.ok) {
