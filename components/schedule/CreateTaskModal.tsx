@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ScheduleInput } from './ScheduleInput';
@@ -38,6 +38,19 @@ export interface MonitorPrefillData {
   integrationId?: string;
 }
 
+export interface BundlePrefillData {
+  name: string;
+  groupType: string;
+  anchorFqn: string;
+  anchorNodeId?: string;
+  monitors: Array<{
+    name: string;
+    monitorType: string;
+    targetFqn: string;
+    config?: Record<string, any>;
+  }>;
+}
+
 interface CreateTaskModalProps {
   open: boolean;
   onClose: () => void;
@@ -45,21 +58,37 @@ interface CreateTaskModalProps {
   onUpdate?: (taskId: string, task: any) => void;
   editTask?: ScheduledTask | null;
   prefillData?: MonitorPrefillData | null;
+  bundlePrefillData?: BundlePrefillData | null;
   integrations?: Array<{ id: string; name: string; type: string }>;
   stackId?: string;
 }
 
-export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, prefillData, integrations = [], stackId }: CreateTaskModalProps) {
+export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, prefillData, bundlePrefillData, integrations = [], stackId }: CreateTaskModalProps) {
   const [step, setStep] = useState(1);
   const isEditing = !!editTask;
 
   // Step 1: Mode + content
-  const [taskMode, setTaskMode] = useState<'prompt' | 'structured'>('prompt');
+  const [taskMode, setTaskMode] = useState<'prompt' | 'structured' | 'bundle'>('prompt');
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [monitorType, setMonitorType] = useState('');
   const [targetFqn, setTargetFqn] = useState('');
   const [config, setConfig] = useState<Record<string, any>>({});
+
+  // Bundle mode state
+  const [bundleGroupType, setBundleGroupType] = useState('upstream_stability');
+  const [bundleAnchorFqn, setBundleAnchorFqn] = useState('');
+  const [bundleAnchorNodeId, setBundleAnchorNodeId] = useState('');
+  const [bundleMonitors, setBundleMonitors] = useState<Array<{
+    name: string;
+    monitorType: string;
+    targetFqn: string;
+    config?: Record<string, any>;
+  }>>([]);
+  const [bundleSearchQuery, setBundleSearchQuery] = useState('');
+  const [bundleSearchResults, setBundleSearchResults] = useState<Array<{ id: string; name: string; fqn: string }>>([]);
+  const [bundleSearching, setBundleSearching] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Step 2: Schedule
   const [schedule, setSchedule] = useState('0 8 * * *');
@@ -108,6 +137,19 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       setAlertOnStatus(editTask.alertOnStatus || ['FAIL', 'WARN', 'ERROR']);
       setIntegrationId(editTask.integrationId || '');
       setStep(1);
+    } else if (bundlePrefillData && open) {
+      setName(bundlePrefillData.name);
+      setTaskMode('bundle');
+      setBundleGroupType(bundlePrefillData.groupType);
+      setBundleAnchorFqn(bundlePrefillData.anchorFqn);
+      setBundleAnchorNodeId(bundlePrefillData.anchorNodeId || '');
+      setBundleMonitors(bundlePrefillData.monitors);
+      setSchedule('0 8 * * *');
+      setTimezone('UTC');
+      setAlertChannels([]);
+      setAlertOnStatus(['FAIL', 'WARN', 'ERROR']);
+      setIntegrationId('');
+      setStep(1);
     } else if (prefillData && open) {
       setName(prefillData.name);
       setTaskMode('structured');
@@ -128,6 +170,10 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       setMonitorType('');
       setTargetFqn('');
       setConfig({});
+      setBundleGroupType('upstream_stability');
+      setBundleAnchorFqn('');
+      setBundleAnchorNodeId('');
+      setBundleMonitors([]);
       setSchedule('0 8 * * *');
       setTimezone('UTC');
       setAlertChannels([]);
@@ -135,7 +181,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       setIntegrationId('');
       setStep(1);
     }
-  }, [editTask, prefillData, open]);
+  }, [editTask, prefillData, bundlePrefillData, open]);
 
   // Fetch connected channel status when modal opens
   useEffect(() => {
@@ -216,6 +262,8 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
   const canProceedStep1 = name.trim() && (
     taskMode === 'prompt'
       ? prompt.trim()
+      : taskMode === 'bundle'
+      ? true
       : (monitorType && (
           isInfraMonitor || isToolMonitor
             ? hasRequiredToolFields && !needsLogPaths
@@ -224,7 +272,147 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
   );
   const canProceedStep2 = schedule.trim();
 
+  // Bundle: search for lineage nodes to use as anchor (with debounce)
+  const searchLineageNodes = (query: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!query.trim()) {
+      setBundleSearchResults([]);
+      setBundleSearching(false);
+      return;
+    }
+    setBundleSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        let results: Array<{ id: string; name: string; fqn: string }> = [];
+
+        // Try engine search first (in-memory graph)
+        if (stackId) {
+          const engineRes = await fetch(
+            `/api/pipeline/${stackId}/lineage/engine?action=search&q=${encodeURIComponent(query)}&limit=10`
+          );
+          if (engineRes.ok) {
+            const data = await engineRes.json();
+            results = (data.results || []).map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              fqn: r.fqn || r.name,
+            }));
+          }
+        }
+
+        // Fall back to Prisma search if engine returned nothing
+        if (results.length === 0) {
+          const dbRes = await fetch(
+            `/api/lineage/search?q=${encodeURIComponent(query)}&limit=10`
+          );
+          if (dbRes.ok) {
+            const data = await dbRes.json();
+            results = (data.results || []).map((r: any) => ({
+              id: r.id,
+              name: r.name,
+              fqn: r.fqn || r.name,
+            }));
+          }
+        }
+
+        setBundleSearchResults(results);
+      } catch {}
+      setBundleSearching(false);
+    }, 300);
+  };
+
+  // Available scanner types for bundle per-node selection
+  const BUNDLE_SCANNER_OPTIONS = [
+    { value: 'FRESHNESS', label: 'Freshness' },
+    { value: 'VOLUME', label: 'Volume' },
+    { value: 'SCHEMA_CHANGE', label: 'Schema Change' },
+    { value: 'ANOMALY', label: 'Anomaly' },
+    { value: 'UNIQUENESS', label: 'Uniqueness' },
+    { value: 'CUSTOM_SQL', label: 'Custom SQL' },
+  ];
+
+  // Bundle: fetch upstream nodes for the selected anchor
+  const fetchUpstreamNodes = async (nodeId: string, nodeFqn: string) => {
+    // Try engine upstream first
+    if (stackId) {
+      try {
+        const res = await fetch(
+          `/api/pipeline/${stackId}/lineage/engine?action=upstream&id=${encodeURIComponent(nodeId)}&depth=5`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const upstream = data.upstream || [];
+          if (upstream.length > 0) {
+            setBundleMonitors(
+              upstream.map((n: any) => {
+                const fqn = n.fqn || n.name || n.id;
+                const shortName = fqn.split('.').pop() || fqn;
+                return {
+                  name: `freshness — ${shortName}`,
+                  monitorType: 'FRESHNESS',
+                  targetFqn: fqn,
+                  config: {},
+                };
+              })
+            );
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // Fallback: fetch upstream from Prisma lineage edges
+    try {
+      const res = await fetch(`/api/lineage/upstream?fqn=${encodeURIComponent(nodeFqn)}&limit=20`);
+      if (res.ok) {
+        const data = await res.json();
+        const nodes = data.nodes || [];
+        if (nodes.length > 0) {
+          setBundleMonitors(
+            nodes.map((n: any) => {
+              const fqn = n.fqn || n.name;
+              const shortName = fqn.split('.').pop() || fqn;
+              return {
+                name: `freshness — ${shortName}`,
+                monitorType: 'FRESHNESS',
+                targetFqn: fqn,
+                config: {},
+              };
+            })
+          );
+          return;
+        }
+      }
+    } catch {}
+
+    // Last fallback: just the anchor itself
+    const shortName = nodeFqn.split('.').pop() || nodeFqn;
+    setBundleMonitors([
+      { name: `freshness — ${shortName}`, monitorType: 'FRESHNESS', targetFqn: nodeFqn, config: {} },
+    ]);
+  };
+
   const handleSubmit = () => {
+    if (taskMode === 'bundle') {
+      // Submit as bundle
+      const bundleData = {
+        name,
+        description: `${bundleGroupType.replace(/_/g, ' ')} bundle for ${bundleAnchorFqn || 'selected assets'}`,
+        groupType: bundleGroupType,
+        anchorFqn: bundleAnchorFqn || undefined,
+        anchorNodeId: bundleAnchorNodeId || undefined,
+        schedule,
+        timezone,
+        alertChannels,
+        alertOnStatus,
+        integrationId: integrationId || undefined,
+        monitors: bundleMonitors,
+      };
+      // Use onSubmit with a special _bundle flag so the parent knows to POST to /bundles
+      onSubmit({ ...bundleData, _bundle: true });
+      return;
+    }
+
     // For tool monitors, store the integration node ID in config.toolNodeId
     const finalConfig = { ...(config || {}) };
     if (isToolMonitor && integrationId) {
@@ -443,7 +631,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                     </svg>
                     <div>
                       <span className="text-[13px] font-medium text-[var(--text)] block">AI Prompt</span>
-                      <span className="text-[11px] text-[var(--muted)]">Describe what to check in natural language</span>
+                      <span className="text-[11px] text-[var(--muted)]">Natural language</span>
                     </div>
                   </button>
                   <button
@@ -460,8 +648,26 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <div>
-                      <span className="text-[13px] font-medium text-[var(--text)] block">Structured Monitor</span>
-                      <span className="text-[11px] text-[var(--muted)]">Configure specific check with thresholds</span>
+                      <span className="text-[13px] font-medium text-[var(--text)] block">Monitor</span>
+                      <span className="text-[11px] text-[var(--muted)]">Specific check</span>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskMode('bundle')}
+                    className={cn(
+                      'flex-1 flex items-center gap-2 p-3 rounded-lg transition-colors text-left',
+                      taskMode === 'bundle'
+                        ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
+                        : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
+                    )}
+                  >
+                    <svg className="w-5 h-5 text-[var(--text-tertiary)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    <div>
+                      <span className="text-[13px] font-medium text-[var(--text)] block">Bundle</span>
+                      <span className="text-[11px] text-[var(--muted)]">Group of assets</span>
                     </div>
                   </button>
                 </div>
@@ -481,6 +687,187 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                     className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2.5 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] resize-none"
                   />
                 </div>
+              ) : taskMode === 'bundle' ? (
+                <div className="space-y-4">
+                  {/* Bundle group type */}
+                  <div>
+                    <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                      Bundle Type
+                    </label>
+                    <div className="flex gap-2">
+                      {[
+                        { value: 'upstream_stability', label: 'Upstream Stability', desc: 'Watch upstream dependencies' },
+                        { value: 'reporting_health', label: 'Reporting Health', desc: 'End-to-end BI pipeline' },
+                        { value: 'asset_stability', label: 'Asset Stability', desc: 'Core quality for an asset' },
+                        { value: 'custom', label: 'Custom', desc: 'Pick targets manually' },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setBundleGroupType(opt.value)}
+                          className={cn(
+                            'flex-1 p-2 rounded-lg text-left transition-colors',
+                            bundleGroupType === opt.value
+                              ? 'bg-amber-500/10 border border-amber-500/30'
+                              : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
+                          )}
+                        >
+                          <span className="text-[12px] font-medium text-[var(--text)] block">{opt.label}</span>
+                          <span className="text-[10px] text-[var(--muted)]">{opt.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Anchor node picker */}
+                  <div>
+                    <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                      Anchor Node
+                    </label>
+                    {bundleAnchorFqn ? (
+                      <div className="flex items-center gap-2 p-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg">
+                        <span className="text-[12px] text-[var(--text)] font-mono flex-1 truncate">{bundleAnchorFqn}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBundleAnchorFqn('');
+                            setBundleAnchorNodeId('');
+                            setBundleMonitors([]);
+                          }}
+                          className="text-[var(--muted)] hover:text-[var(--text)] text-[11px]"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={bundleSearchQuery}
+                          onChange={(e) => {
+                            setBundleSearchQuery(e.target.value);
+                            searchLineageNodes(e.target.value);
+                          }}
+                          placeholder="Search for a table, model, or dashboard..."
+                          className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
+                        />
+                        {bundleSearchResults.length > 0 && (
+                          <div className="absolute z-10 mt-1 w-full bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                            {bundleSearchResults.map((r) => (
+                              <button
+                                key={r.id}
+                                type="button"
+                                onClick={() => {
+                                  setBundleAnchorFqn(r.fqn);
+                                  setBundleAnchorNodeId(r.id);
+                                  setBundleSearchQuery('');
+                                  setBundleSearchResults([]);
+                                  fetchUpstreamNodes(r.id, r.fqn);
+                                }}
+                                className="w-full text-left px-3 py-2 hover:bg-[var(--hover-bg)] transition-colors"
+                              >
+                                <span className="text-[12px] text-[var(--text)] font-mono block truncate">{r.fqn}</span>
+                                <span className="text-[10px] text-[var(--muted)]">{r.name}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {bundleSearching && (
+                          <div className="absolute right-3 top-2.5">
+                            <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <p className="text-[10px] text-[var(--text-faint)] mt-1">
+                      Select the asset whose upstream dependencies you want to monitor as a group.
+                    </p>
+                  </div>
+
+                  {/* Upstream nodes with scanner selector */}
+                  {bundleMonitors.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-[12px] font-medium text-[var(--muted)]">
+                          Upstream Nodes ({bundleMonitors.length})
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setBundleMonitors([])}
+                          className="text-[10px] text-red-400 hover:text-red-300"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                      <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                        {bundleMonitors.map((mon, i) => (
+                          <div
+                            key={`${mon.targetFqn}-${i}`}
+                            className="flex items-center gap-2 px-2.5 py-2 bg-[var(--overlay-bg)] border border-[var(--border-faint)] rounded-lg"
+                          >
+                            <span className="text-[11px] text-[var(--text)] font-mono truncate flex-1 min-w-0" title={mon.targetFqn}>
+                              {mon.targetFqn.split('.').pop() || mon.targetFqn}
+                            </span>
+                            <select
+                              value={mon.monitorType}
+                              onChange={(e) => {
+                                const newType = e.target.value;
+                                const shortName = mon.targetFqn.split('.').pop() || mon.targetFqn;
+                                setBundleMonitors((prev) =>
+                                  prev.map((m, j) =>
+                                    j === i
+                                      ? { ...m, monitorType: newType, name: `${newType.toLowerCase().replace(/_/g, ' ')} — ${shortName}` }
+                                      : m
+                                  )
+                                );
+                              }}
+                              className="bg-[var(--surface)] border border-[var(--subtle-border)] rounded px-1.5 py-1 text-[10px] text-[var(--text)] focus:outline-none shrink-0 appearance-none"
+                            >
+                              {BUNDLE_SCANNER_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => setBundleMonitors((prev) => prev.filter((_, j) => j !== i))}
+                              className="text-[var(--muted)] hover:text-red-400 shrink-0"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Empty / loading state */}
+                  {bundleMonitors.length === 0 && bundleAnchorFqn && (
+                    <div className="py-4 text-center text-[12px] text-[var(--muted)]">
+                      Fetching upstream nodes...
+                    </div>
+                  )}
+
+                  {/* Integration selector for bundle */}
+                  {bundleMonitors.length > 0 && warehouseIntegrations.length > 0 && (
+                    <div>
+                      <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                        Run against warehouse
+                      </label>
+                      <select
+                        value={integrationId}
+                        onChange={(e) => setIntegrationId(e.target.value)}
+                        className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
+                      >
+                        <option value="">Auto-detect</option>
+                        {warehouseIntegrations.map((i) => (
+                          <option key={i.id} value={i.id}>{i.name} ({i.type})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <MonitorConfigForm
                   monitorType={monitorType}
@@ -494,8 +881,8 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                 />
               )}
 
-              {/* Integration selection — dynamic based on monitor type */}
-              {renderIntegrationSelector()}
+              {/* Integration selection — dynamic based on monitor type (non-bundle) */}
+              {taskMode !== 'bundle' && renderIntegrationSelector()}
             </>
           )}
 
@@ -564,7 +951,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
               </Button>
             ) : (
               <Button size="sm" onClick={handleSubmit}>
-                {isEditing ? 'Save Changes' : 'Create Task'}
+                {isEditing ? 'Save Changes' : taskMode === 'bundle' ? `Create Bundle (${bundleMonitors.length})` : 'Create Task'}
               </Button>
             )}
           </div>

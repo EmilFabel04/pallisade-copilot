@@ -43,6 +43,9 @@ export async function GET(request: NextRequest) {
         integration: {
           select: { id: true, name: true, type: true },
         },
+        monitorGroup: {
+          select: { id: true, name: true },
+        },
         _count: {
           select: { runs: true },
         },

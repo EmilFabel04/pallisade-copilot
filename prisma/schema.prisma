@@ -151,6 +151,7 @@ model Organization {
 
   // Coverage & Monitoring
   monitors          Monitor[]
+  monitorGroups     MonitorGroup[]
   coverageSnapshots CoverageSnapshot[]
 
   // Fix Patterns (Learning Loop)
@@ -2952,6 +2953,8 @@ model Monitor {
   organizationId String
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
+  monitorGroup   MonitorGroup? @relation(fields: [monitorGroupId], references: [id], onDelete: SetNull)
+  monitorGroupId String?
   runs           MonitorRun[]
   baselines      MonitorBaseline[]
 
@@ -2960,6 +2963,7 @@ model Monitor {
   @@index([targetFqn])
   @@index([monitorType])
   @@index([enabled])
+  @@index([monitorGroupId])
 }
 
 model MonitorRun {
@@ -3088,4 +3092,39 @@ enum MonitorRunStatus {
   ERROR
   SKIPPED
   RUNNING
+}
+
+model MonitorGroup {
+  id           String  @id @default(cuid())
+  name         String
+  description  String?
+  groupType    String  // "upstream_stability", "reporting_health", "asset_stability", "custom"
+  anchorFqn    String? // FQN of the anchor node whose upstream defines this group
+  anchorNodeId String? // Engine lineage node ID for re-computing membership
+
+  enabled  Boolean @default(true)
+  schedule String? // Shared cron expression
+  timezone String? @default("UTC")
+
+  // Alert configuration (shared for the group)
+  alertChannels String[]
+  alertOnStatus String[]
+  alertConfig   Json?
+
+  // Aggregate status (derived from member monitors)
+  lastStatus MonitorRunStatus?
+  lastRunAt  DateTime?
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+  monitors       Monitor[]
+
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([groupType])
+  @@index([anchorFqn])
 }

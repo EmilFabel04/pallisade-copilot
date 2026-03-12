@@ -18,8 +18,39 @@ export interface ScheduledTask {
   nextRunAt?: string;
   integrationId?: string;
   integrationName?: string;
+  monitorGroupId?: string;
+  monitorGroupName?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface MonitorGroupSummary {
+  id: string;
+  name: string;
+  description?: string;
+  groupType: string;
+  anchorFqn?: string;
+  anchorNodeId?: string;
+  monitorCount: number;
+  passCount: number;
+  failCount: number;
+  warnCount: number;
+  lastStatus?: string;
+  lastRunAt?: string;
+  schedule?: string;
+  timezone?: string;
+  enabled: boolean;
+  monitors: Array<{
+    id: string;
+    name: string;
+    monitorType?: string;
+    targetFqn?: string;
+    enabled: boolean;
+    lastStatus?: string;
+    lastRunAt?: string;
+    schedule?: string;
+  }>;
+  createdAt: string;
 }
 
 export interface TaskRun {

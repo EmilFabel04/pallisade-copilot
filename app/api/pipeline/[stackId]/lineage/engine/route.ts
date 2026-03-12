@@ -42,7 +42,7 @@ export async function GET(
     // Build query params to forward (always include stack_id for pipeline isolation)
     const forwardParams = new URLSearchParams();
     forwardParams.set('stack_id', stackId);
-    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane', 'direction', 'limit', 'existing_fqns']) {
+    for (const key of ['level', 'system', 'domain', 'kind', 'min_confidence', 'depth', 'fmt', 'plane', 'direction', 'limit', 'existing_fqns', 'q']) {
       const val = searchParams.get(key);
       if (val) forwardParams.set(key, val);
     }
@@ -91,6 +91,9 @@ export async function GET(
       case 'run-history':
         if (!assetId) return NextResponse.json({ error: 'Missing id param' }, { status: 400 });
         endpoint = `/api/v1/lineage/engine/run-history/${encodeURIComponent(assetId)}${qs}`;
+        break;
+      case 'search':
+        endpoint = `/api/v1/lineage/engine/search${qs}`;
         break;
       case 'view-pipeline-overview':
         endpoint = `/api/v1/lineage/engine/views/pipeline-overview${qs}`;

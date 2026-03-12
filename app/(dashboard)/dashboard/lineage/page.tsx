@@ -47,7 +47,7 @@ import {
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
-import { CreateTaskModal, type MonitorPrefillData } from '@/components/schedule/CreateTaskModal';
+import { CreateTaskModal, type MonitorPrefillData, type BundlePrefillData } from '@/components/schedule/CreateTaskModal';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -168,8 +168,15 @@ function LineagePageInner() {
   // Monitor creation modal state
   const [monitorModalOpen, setMonitorModalOpen] = useState(false);
   const [monitorPrefill, setMonitorPrefill] = useState<MonitorPrefillData | null>(null);
+  const [bundlePrefill, setBundlePrefill] = useState<BundlePrefillData | null>(null);
   const handleCreateMonitor = useCallback((prefill: MonitorPrefillData) => {
     setMonitorPrefill(prefill);
+    setBundlePrefill(null);
+    setMonitorModalOpen(true);
+  }, []);
+  const handleCreateBundle = useCallback((prefill: BundlePrefillData) => {
+    setBundlePrefill(prefill);
+    setMonitorPrefill(null);
     setMonitorModalOpen(true);
   }, []);
 
@@ -2033,6 +2040,7 @@ function LineagePageInner() {
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}
               onCreateMonitor={handleCreateMonitor}
+              onCreateBundle={handleCreateBundle}
             />
           )
         )}
@@ -2041,19 +2049,30 @@ function LineagePageInner() {
       {/* Monitor creation modal (opened from lineage node recommendations) */}
       <CreateTaskModal
         open={monitorModalOpen}
-        onClose={() => { setMonitorModalOpen(false); setMonitorPrefill(null); }}
+        onClose={() => { setMonitorModalOpen(false); setMonitorPrefill(null); setBundlePrefill(null); }}
         onSubmit={async (task) => {
           try {
-            await fetch('/api/schedule/tasks', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(task),
-            });
+            if (task._bundle) {
+              const { _bundle, ...bundleData } = task;
+              await fetch('/api/schedule/bundles', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bundleData),
+              });
+            } else {
+              await fetch('/api/schedule/tasks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(task),
+              });
+            }
           } catch {}
           setMonitorModalOpen(false);
           setMonitorPrefill(null);
+          setBundlePrefill(null);
         }}
         prefillData={monitorPrefill}
+        bundlePrefillData={bundlePrefill}
         stackId={stackId || undefined}
       />
     </div>

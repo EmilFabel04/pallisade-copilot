@@ -20,7 +20,7 @@ import {
   Package,
   Sparkles,
 } from 'lucide-react';
-import type { MonitorPrefillData } from '@/components/schedule/CreateTaskModal';
+import type { MonitorPrefillData, BundlePrefillData } from '@/components/schedule/CreateTaskModal';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,
@@ -77,6 +77,7 @@ interface DataAssetDetailPanelProps {
   onClose: () => void;
   onNodeNavigate: (nodeId: string) => void;
   onCreateMonitor?: (prefill: MonitorPrefillData) => void;
+  onCreateBundle?: (prefill: BundlePrefillData) => void;
 }
 
 // ─── Collapsible Section ───────────────────────────────────────────
@@ -253,6 +254,7 @@ export function DataAssetDetailPanel({
   onClose,
   onNodeNavigate,
   onCreateMonitor,
+  onCreateBundle,
 }: DataAssetDetailPanelProps) {
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult | null>(null);
   const [blastLoading, setBlastLoading] = useState(false);
@@ -756,27 +758,30 @@ export function DataAssetDetailPanel({
                     {/* Bundle CTA */}
                     {bundles.length > 0 && (() => {
                       const reportingBundle = bundles.find(b => b.bundle_key === 'reporting_health') || bundles[0];
-                      const uncoveredCount = reportingBundle.recommendations.filter(r => !r.already_monitored).length;
-                      if (uncoveredCount === 0) return null;
+                      const uncoveredRecs = reportingBundle.recommendations.filter(r => !r.already_monitored);
+                      if (uncoveredRecs.length === 0) return null;
                       return (
                         <button
                           onClick={() => {
-                            for (const rec of reportingBundle.recommendations) {
-                              if (!rec.already_monitored) {
-                                onCreateMonitor({
-                                  name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
-                                  monitorType: rec.monitor_key,
-                                  targetFqn: rec.target_fqn,
-                                  config: rec.config_hints,
-                                });
-                                break;
-                              }
+                            if (onCreateBundle) {
+                              onCreateBundle({
+                                name: `${reportingBundle.label} — ${node.name}`,
+                                groupType: reportingBundle.bundle_key,
+                                anchorFqn: node.fullName || node.name,
+                                anchorNodeId: node.id.replace(/^lineage-/, ''),
+                                monitors: uncoveredRecs.map(r => ({
+                                  name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
+                                  monitorType: r.monitor_key,
+                                  targetFqn: r.target_fqn,
+                                  config: r.config_hints,
+                                })),
+                              });
                             }
                           }}
                           className="w-full flex items-center justify-center gap-1 py-1 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[10px] text-amber-300 font-medium"
                         >
                           <Package className="w-3 h-3" />
-                          Create recommended checks ({uncoveredCount})
+                          Create recommended checks ({uncoveredRecs.length})
                         </button>
                       );
                     })()}
@@ -870,21 +875,25 @@ export function DataAssetDetailPanel({
                           <p className="text-[10px] text-[var(--text-faint)] mb-2">{bundle.description}</p>
                           <button
                             onClick={() => {
-                              for (const rec of bundle.recommendations) {
-                                if (!rec.already_monitored) {
-                                  onCreateMonitor({
-                                    name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
-                                    monitorType: rec.monitor_key,
-                                    targetFqn: rec.target_fqn,
-                                    config: rec.config_hints,
-                                  });
-                                  break;
-                                }
+                              const uncoveredRecs = bundle.recommendations.filter(r => !r.already_monitored);
+                              if (onCreateBundle && uncoveredRecs.length > 0) {
+                                onCreateBundle({
+                                  name: `${bundle.label} — ${node.name}`,
+                                  groupType: bundle.bundle_key,
+                                  anchorFqn: node.fullName || node.name,
+                                  anchorNodeId: node.id.replace(/^lineage-/, ''),
+                                  monitors: uncoveredRecs.map(r => ({
+                                    name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
+                                    monitorType: r.monitor_key,
+                                    targetFqn: r.target_fqn,
+                                    config: r.config_hints,
+                                  })),
+                                });
                               }
                             }}
                             className="w-full flex items-center justify-center gap-1 py-1 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[10px] text-amber-300"
                           >
-                            <Plus className="w-2.5 h-2.5" />
+                            <Package className="w-2.5 h-2.5" />
                             Create Bundle
                           </button>
                         </div>

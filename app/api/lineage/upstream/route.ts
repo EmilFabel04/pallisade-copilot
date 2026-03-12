@@ -1,0 +1,71 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import prisma from '@/lib/db';
+
+// GET /api/lineage/upstream?fqn=db.schema.table&limit=20
+// Walks upstream edges from the node matching `fqn` and returns all upstream nodes.
+export async function GET(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const organizationId = (session.user as any).organizationId;
+    const { searchParams } = new URL(request.url);
+    const fqn = searchParams.get('fqn') || '';
+    const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 50);
+
+    if (!fqn.trim()) {
+      return NextResponse.json({ nodes: [] });
+    }
+
+    // Find the anchor node
+    const anchor = await prisma.lineageNode.findFirst({
+      where: { organizationId, name: fqn },
+      select: { id: true, name: true, tableName: true },
+    });
+
+    if (!anchor) {
+      return NextResponse.json({ nodes: [] });
+    }
+
+    // BFS upstream: follow edges where targetId = current node → sourceId is upstream
+    const visited = new Set<string>();
+    const queue = [anchor.id];
+    const upstreamNodes: Array<{ id: string; name: string; fqn: string; nodeType: string | null }> = [];
+
+    while (queue.length > 0 && upstreamNodes.length < limit) {
+      const currentId = queue.shift()!;
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+
+      const edges = await prisma.lineageEdge.findMany({
+        where: { organizationId, targetId: currentId },
+        select: {
+          source: {
+            select: { id: true, name: true, tableName: true, nodeType: true },
+          },
+        },
+      });
+
+      for (const edge of edges) {
+        if (!visited.has(edge.source.id) && upstreamNodes.length < limit) {
+          upstreamNodes.push({
+            id: edge.source.id,
+            name: edge.source.tableName || edge.source.name,
+            fqn: edge.source.name,
+            nodeType: edge.source.nodeType,
+          });
+          queue.push(edge.source.id);
+        }
+      }
+    }
+
+    return NextResponse.json({ nodes: upstreamNodes });
+  } catch (error: any) {
+    console.error('[Lineage Upstream] Error:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}

@@ -1396,6 +1396,36 @@ async def engine_explain_edge(edge_id: str, stack_id: Optional[str] = Query(None
     return result
 
 
+@router.get("/lineage/engine/search")
+async def engine_search(
+    q: str = Query(..., min_length=1, description="Search query (substring match on name/fqn)"),
+    limit: int = Query(10, ge=1, le=100),
+    stack_id: Optional[str] = Query(None),
+):
+    """Search lineage nodes by name or FQN substring match."""
+    store = _get_engine_store(stack_id)
+    if not store.graph:
+        return {"results": []}
+
+    query_lower = q.lower()
+    results = []
+    for node in store.graph.nodes.values():
+        name_match = query_lower in (node.name or "").lower()
+        fqn_match = query_lower in (node.fqn or "").lower()
+        if name_match or fqn_match:
+            results.append({
+                "id": node.id,
+                "name": node.name,
+                "fqn": node.fqn or node.name,
+                "node_type": node.node_type.value if node.node_type else None,
+                "platform_domain": node.platform_domain.value if node.platform_domain else None,
+            })
+            if len(results) >= limit:
+                break
+
+    return {"results": results}
+
+
 @router.get("/lineage/engine/graph")
 async def engine_full_graph(
     plane: Optional[str] = Query(None, description="Filter edges by plane: data,control,cross"),
