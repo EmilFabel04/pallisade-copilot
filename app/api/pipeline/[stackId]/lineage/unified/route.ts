@@ -218,6 +218,22 @@ function engineNodeToUnified(
     }, {}),
   } : undefined;
 
+  // Compute freshness from engine node's last_updated, observed_at, or raw_metadata timestamps
+  let freshnessStatus: 'fresh' | 'stale' | 'unknown' = 'unknown';
+  let freshnessHours: number | undefined;
+  const lastUpdatedRaw = eNode.last_updated
+    || eNode.observed_at
+    || eNode.raw_metadata?.updated_at
+    || eNode.raw_metadata?.last_updated_at;
+  const lastUpdatedStr = lastUpdatedRaw ? String(lastUpdatedRaw) : undefined;
+  if (lastUpdatedStr) {
+    const hoursSinceUpdate = (Date.now() - new Date(lastUpdatedStr).getTime()) / (1000 * 60 * 60);
+    if (!isNaN(hoursSinceUpdate)) {
+      freshnessHours = Math.round(hoursSinceUpdate);
+      freshnessStatus = hoursSinceUpdate <= 24 ? 'fresh' : 'stale';
+    }
+  }
+
   return {
     id: `lineage-${eNode.id}`,
     name: eNode.name,
@@ -236,6 +252,9 @@ function engineNodeToUnified(
     description: eNode.description || undefined,
     owner: eNode.owner || undefined,
     tags: eNode.tags || undefined,
+    lastUpdated: lastUpdatedStr,
+    freshnessStatus,
+    freshnessHours,
     issues: issuesSummary,
     monitorStatus: monitorSummaryFn && eNode.fqn ? monitorSummaryFn(eNode.fqn) : undefined,
     // Multi-platform provenance & enriched data
@@ -706,8 +725,10 @@ export async function GET(
 
         let freshnessStatus: 'fresh' | 'stale' | 'unknown' = 'unknown';
         let freshnessHours: number | undefined;
-        if (lNode.lastUpdated) {
-          const hoursSinceUpdate = (Date.now() - new Date(lNode.lastUpdated).getTime()) / (1000 * 60 * 60);
+        // Use data freshness (lastUpdated) if available, else fall back to record timestamp (updatedAt)
+        const effectiveTimestamp = lNode.lastUpdated || lNode.updatedAt;
+        if (effectiveTimestamp) {
+          const hoursSinceUpdate = (Date.now() - new Date(effectiveTimestamp).getTime()) / (1000 * 60 * 60);
           freshnessHours = Math.round(hoursSinceUpdate);
           freshnessStatus = hoursSinceUpdate <= 24 ? 'fresh' : 'stale';
         }
@@ -730,7 +751,7 @@ export async function GET(
           description: lNode.description ?? undefined,
           owner: lNode.owner ?? undefined,
           tags: lNode.tags ?? undefined,
-          lastUpdated: lNode.lastUpdated?.toISOString() ?? undefined,
+          lastUpdated: (lNode.lastUpdated || lNode.updatedAt)?.toISOString() ?? undefined,
           freshnessStatus,
           freshnessHours,
           issues: issuesSummary,

@@ -526,8 +526,8 @@ export function DataAssetDetailPanel({
           </div>
         )}
 
-        {/* No issues */}
-        {!hasIssues && (
+        {/* No issues — only show if there's also no upstream failure */}
+        {!hasIssues && !node.hasUpstreamFailure && (
           <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
             <div className="flex items-center gap-2">
               <CheckCircle className="w-4 h-4 text-emerald-400" />
@@ -636,99 +636,132 @@ export function DataAssetDetailPanel({
         )}
 
         {/* ─── Recommended Monitors ────────────────────────── */}
-        {onCreateMonitor && (
-          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
-                <Sparkles className="w-3 h-3" />
-                Recommended Monitors
-              </span>
-            </div>
+        {onCreateMonitor && (() => {
+          const isBiNode = ['dashboard', 'report', 'workbook', 'question', 'dataset'].includes(node.category);
+          const nodeTypeLabel = node.category === 'dashboard' ? 'dashboard'
+            : node.category === 'report' ? 'report'
+            : node.category === 'workbook' ? 'workbook'
+            : node.category === 'question' ? 'question'
+            : 'asset';
 
-            {/* Quick action buttons */}
-            <div className="flex gap-2 mb-2">
-              <button
-                onClick={() => {
-                  const monitorType = node.category === 'connector' ? 'SYNC_LAG'
-                    : ['dag', 'task', 'workflow'].includes(node.category) ? 'DAG_LAST_RUN'
-                    : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'DBT_TEST_FAILURES'
-                    : 'FRESHNESS';
-                  onCreateMonitor({
-                    name: `${monitorType.toLowerCase().replace(/_/g, ' ')} — ${node.tableName || node.name}`,
-                    monitorType,
-                    targetFqn: node.fullName || node.name,
-                  });
-                }}
-                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[11px] text-blue-300 hover:text-blue-200"
+          // Shared fetch helper
+          const fetchRecs = () => {
+            if (recommendations || recsLoading) return;
+            setRecsLoading(true);
+            const engineId = node.id.replace(/^lineage-/, '');
+            const existingFqns = (node.monitorStatus?.monitors || [])
+              .map((m) => `${m.monitorType}:${node.fullName || node.name}`)
+              .join(',');
+            fetch(`/api/pipeline/${stackId}/lineage/engine?action=recommend-monitors&id=${encodeURIComponent(engineId)}&depth=3${existingFqns ? `&existing_fqns=${encodeURIComponent(existingFqns)}` : ''}`)
+              .then((res) => res.ok ? res.json() : null)
+              .then((data) => {
+                if (data) {
+                  setRecommendations(data.recommendations || []);
+                  setBundles(data.bundles || []);
+                }
+              })
+              .catch(() => {})
+              .finally(() => setRecsLoading(false));
+          };
+
+          // Shared recommendation card renderer
+          const renderRecCard = (rec: MonitorRecommendation, i: number) => {
+            const priorityColor = rec.priority === 1 ? 'text-red-300' : rec.priority === 2 ? 'text-amber-300' : 'text-[var(--muted)]';
+            return (
+              <div
+                key={`${rec.monitor_key}-${rec.target_fqn}-${i}`}
+                className={`p-2 rounded-lg border transition-all ${
+                  rec.already_monitored
+                    ? 'bg-emerald-500/5 border-emerald-500/15'
+                    : 'bg-[var(--overlay-faint)] border-[var(--border-faint)] hover:bg-[var(--hover-bg)]'
+                }`}
               >
-                <Plus className="w-3 h-3" />
-                Monitor this asset
-              </button>
-              {(totalUpstream > 0) && (
-                <button
-                  onClick={() => {
-                    if (!recsExpanded) {
-                      setRecsExpanded(true);
-                      // Trigger fetch
-                      if (!recommendations) {
-                        setRecsLoading(true);
-                        const engineId = node.id.replace(/^lineage-/, '');
-                        const existingFqns = (node.monitorStatus?.monitors || [])
-                          .map((m) => `${m.monitorType}:${node.fullName || node.name}`)
-                          .join(',');
-                        fetch(`/api/pipeline/${stackId}/lineage/engine?action=recommend-monitors&id=${encodeURIComponent(engineId)}&depth=3${existingFqns ? `&existing_fqns=${encodeURIComponent(existingFqns)}` : ''}`)
-                          .then((res) => res.ok ? res.json() : null)
-                          .then((data) => {
-                            if (data) {
-                              setRecommendations(data.recommendations || []);
-                              setBundles(data.bundles || []);
-                            }
-                          })
-                          .catch(() => {})
-                          .finally(() => setRecsLoading(false));
-                      }
-                    } else {
-                      setRecsExpanded(false);
-                    }
-                  }}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg bg-violet-500/10 border border-violet-500/20 hover:bg-violet-500/20 transition-all text-[11px] text-violet-300 hover:text-violet-200"
-                >
-                  <ArrowUpFromLine className="w-3 h-3" />
-                  Monitor upstream
-                </button>
-              )}
-            </div>
+                <div className="flex items-center gap-2">
+                  {rec.already_monitored ? (
+                    <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
+                  ) : (
+                    <ShieldCheck className={`w-3 h-3 ${priorityColor} shrink-0`} />
+                  )}
+                  <span className="text-[11px] text-[var(--text)] truncate flex-1">
+                    {rec.monitor_key.replace(/_/g, ' ')}
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)] shrink-0">
+                    {rec.source}
+                  </span>
+                </div>
+                <p className="text-[10px] text-[var(--text-faint)] mt-1 line-clamp-2">{rec.reason}</p>
+                {rec.target_fqn !== (node.fullName || node.name) && (
+                  <p className="text-[10px] text-[var(--muted)] mt-0.5 font-mono truncate" title={rec.target_fqn}>
+                    {rec.target_fqn}
+                  </p>
+                )}
+                {!rec.already_monitored && (
+                  <button
+                    onClick={() => onCreateMonitor({
+                      name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
+                      monitorType: rec.monitor_key,
+                      targetFqn: rec.target_fqn,
+                      config: rec.config_hints,
+                    })}
+                    className="mt-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[9px] text-blue-300"
+                  >
+                    <Plus className="w-2 h-2" />
+                    Create
+                  </button>
+                )}
+                {rec.already_monitored && (
+                  <span className="block mt-1 text-[10px] text-emerald-400/60">Already covered</span>
+                )}
+              </div>
+            );
+          };
 
-            {/* Expanded recommendations */}
-            {recsExpanded && (
-              <div className="mt-3 space-y-3">
+          /* ─── BI/Reporting node path ─────────────────────────── */
+          if (isBiNode) {
+            // Auto-fetch on mount for BI nodes
+            if (!recommendations && !recsLoading) {
+              // Use setTimeout to avoid state update during render
+              setTimeout(fetchRecs, 0);
+            }
+
+            return (
+              <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-violet-300" />
+                  <span className="text-[12px] text-[var(--text)] font-medium">
+                    Protect this {nodeTypeLabel}
+                  </span>
+                </div>
+                <p className="text-[10px] text-[var(--text-faint)] mb-3 leading-relaxed">
+                  Direct health monitors for this {nodeTypeLabel} are not available yet. Recommended protection comes from checking the upstream data it depends on.
+                </p>
+
                 {recsLoading && (
                   <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
                     <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
-                    Analyzing lineage...
+                    Analyzing upstream dependencies...
                   </div>
                 )}
 
-                {/* Bundles */}
-                {!recsLoading && bundles.length > 0 && (
-                  <div className="space-y-2">
-                    {bundles.map((bundle) => (
-                      <div
-                        key={bundle.bundle_key}
-                        className="p-2.5 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)]"
-                      >
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <Package className="w-3.5 h-3.5 text-amber-300" />
-                          <span className="text-[12px] text-[var(--text)] font-medium flex-1">{bundle.label}</span>
-                          <span className="text-[10px] text-[var(--muted)]">
-                            {bundle.recommendations.length} monitor{bundle.recommendations.length !== 1 ? 's' : ''}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-[var(--text-faint)] mb-2">{bundle.description}</p>
+                {/* Inline recommendation cards */}
+                {!recsLoading && recommendations && recommendations.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="text-[10px] text-[var(--muted)] uppercase tracking-wide">
+                      Upstream data checks
+                    </div>
+                    <div className="space-y-1.5">
+                      {recommendations.map((rec, i) => renderRecCard(rec, i))}
+                    </div>
+
+                    {/* Bundle CTA */}
+                    {bundles.length > 0 && (() => {
+                      const reportingBundle = bundles.find(b => b.bundle_key === 'reporting_health') || bundles[0];
+                      const uncoveredCount = reportingBundle.recommendations.filter(r => !r.already_monitored).length;
+                      if (uncoveredCount === 0) return null;
+                      return (
                         <button
                           onClick={() => {
-                            // Create all monitors in the bundle sequentially
-                            for (const rec of bundle.recommendations) {
+                            for (const rec of reportingBundle.recommendations) {
                               if (!rec.already_monitored) {
                                 onCreateMonitor({
                                   name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
@@ -736,88 +769,149 @@ export function DataAssetDetailPanel({
                                   targetFqn: rec.target_fqn,
                                   config: rec.config_hints,
                                 });
-                                break; // Open modal for first non-covered recommendation
+                                break;
                               }
                             }
                           }}
-                          className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[11px] text-amber-300"
+                          className="w-full flex items-center justify-center gap-1 py-1 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[10px] text-amber-300 font-medium"
                         >
-                          <Plus className="w-3 h-3" />
-                          Create Bundle
+                          <Package className="w-3 h-3" />
+                          Create recommended checks ({uncoveredCount})
                         </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Individual recommendations */}
-                {!recsLoading && recommendations && recommendations.length > 0 && (
-                  <div className="space-y-1.5">
-                    <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide">
-                      All Recommendations
-                    </div>
-                    {recommendations.map((rec, i) => {
-                      const priorityColor = rec.priority === 1 ? 'text-red-300' : rec.priority === 2 ? 'text-amber-300' : 'text-[var(--muted)]';
-                      return (
-                        <div
-                          key={`${rec.monitor_key}-${rec.target_fqn}-${i}`}
-                          className={`p-2 rounded-lg border transition-all ${
-                            rec.already_monitored
-                              ? 'bg-emerald-500/5 border-emerald-500/15'
-                              : 'bg-[var(--overlay-faint)] border-[var(--border-faint)] hover:bg-[var(--hover-bg)]'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            {rec.already_monitored ? (
-                              <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
-                            ) : (
-                              <ShieldCheck className={`w-3 h-3 ${priorityColor} shrink-0`} />
-                            )}
-                            <span className="text-[11px] text-[var(--text)] truncate flex-1">
-                              {rec.monitor_key.replace(/_/g, ' ')}
-                            </span>
-                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)] shrink-0">
-                              {rec.source}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-[var(--text-faint)] mt-1 line-clamp-2">{rec.reason}</p>
-                          {rec.target_fqn !== (node.fullName || node.name) && (
-                            <p className="text-[10px] text-[var(--muted)] mt-0.5 font-mono truncate" title={rec.target_fqn}>
-                              {rec.target_fqn}
-                            </p>
-                          )}
-                          {!rec.already_monitored && (
-                            <button
-                              onClick={() => onCreateMonitor({
-                                name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
-                                monitorType: rec.monitor_key,
-                                targetFqn: rec.target_fqn,
-                                config: rec.config_hints,
-                              })}
-                              className="mt-1.5 w-full flex items-center justify-center gap-1 py-1 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300"
-                            >
-                              <Plus className="w-2.5 h-2.5" />
-                              Create
-                            </button>
-                          )}
-                          {rec.already_monitored && (
-                            <span className="block mt-1 text-[10px] text-emerald-400/60">Already covered</span>
-                          )}
-                        </div>
                       );
-                    })}
+                    })()}
                   </div>
                 )}
 
+                {/* Empty state */}
                 {!recsLoading && recommendations && recommendations.length === 0 && (
-                  <div className="py-2 text-[11px] text-[var(--muted)] text-center">
-                    No additional monitors recommended for this node
+                  <div className="py-3 text-center">
+                    <p className="text-[11px] text-[var(--muted)]">
+                      No upstream data dependencies found for this {nodeTypeLabel}.
+                    </p>
                   </div>
                 )}
               </div>
-            )}
-          </div>
-        )}
+            );
+          }
+
+          /* ─── Non-BI node path (unchanged) ───────────────────── */
+          return (
+            <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
+                  <Sparkles className="w-3 h-3" />
+                  Recommended Monitors
+                </span>
+              </div>
+
+              {/* Quick action buttons */}
+              <div className="flex gap-1.5 mb-2">
+                <button
+                  onClick={() => {
+                    const monitorType = node.category === 'connector' ? 'SYNC_LAG'
+                      : ['dag', 'task', 'workflow'].includes(node.category) ? 'DAG_LAST_RUN'
+                      : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'DBT_TEST_FAILURES'
+                      : 'FRESHNESS';
+                    onCreateMonitor({
+                      name: `${monitorType.toLowerCase().replace(/_/g, ' ')} — ${node.tableName || node.name}`,
+                      monitorType,
+                      targetFqn: node.fullName || node.name,
+                    });
+                  }}
+                  className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 hover:text-blue-200"
+                >
+                  <Plus className="w-2.5 h-2.5" />
+                  Monitor this asset
+                </button>
+                {(totalUpstream > 0) && (
+                  <button
+                    onClick={() => {
+                      if (!recsExpanded) {
+                        setRecsExpanded(true);
+                        fetchRecs();
+                      } else {
+                        setRecsExpanded(false);
+                      }
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-violet-500/10 border border-violet-500/20 hover:bg-violet-500/20 transition-all text-[10px] text-violet-300 hover:text-violet-200"
+                  >
+                    <ArrowUpFromLine className="w-2.5 h-2.5" />
+                    Monitor upstream
+                  </button>
+                )}
+              </div>
+
+              {/* Expanded recommendations */}
+              {recsExpanded && (
+                <div className="mt-3 space-y-3">
+                  {recsLoading && (
+                    <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
+                      <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
+                      Analyzing lineage...
+                    </div>
+                  )}
+
+                  {/* Bundles */}
+                  {!recsLoading && bundles.length > 0 && (
+                    <div className="space-y-2">
+                      {bundles.map((bundle) => (
+                        <div
+                          key={bundle.bundle_key}
+                          className="p-2.5 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)]"
+                        >
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <Package className="w-3.5 h-3.5 text-amber-300" />
+                            <span className="text-[12px] text-[var(--text)] font-medium flex-1">{bundle.label}</span>
+                            <span className="text-[10px] text-[var(--muted)]">
+                              {bundle.recommendations.length} monitor{bundle.recommendations.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-[var(--text-faint)] mb-2">{bundle.description}</p>
+                          <button
+                            onClick={() => {
+                              for (const rec of bundle.recommendations) {
+                                if (!rec.already_monitored) {
+                                  onCreateMonitor({
+                                    name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
+                                    monitorType: rec.monitor_key,
+                                    targetFqn: rec.target_fqn,
+                                    config: rec.config_hints,
+                                  });
+                                  break;
+                                }
+                              }
+                            }}
+                            className="w-full flex items-center justify-center gap-1 py-1 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[10px] text-amber-300"
+                          >
+                            <Plus className="w-2.5 h-2.5" />
+                            Create Bundle
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Individual recommendations */}
+                  {!recsLoading && recommendations && recommendations.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide">
+                        All Recommendations
+                      </div>
+                      {recommendations.map((rec, i) => renderRecCard(rec, i))}
+                    </div>
+                  )}
+
+                  {!recsLoading && recommendations && recommendations.length === 0 && (
+                    <div className="py-2 text-[11px] text-[var(--muted)] text-center">
+                      No additional monitors recommended for this node
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Fallback warning */}
         {neighborSource === 'engine_fallback' && (

@@ -136,7 +136,7 @@ def _build_config_hints(node: LineageNode, monitor_key: str) -> Dict[str, Any]:
     return hints
 
 
-def _is_bi_node(node: LineageNode) -> bool:
+def is_bi_node(node: LineageNode) -> bool:
     """Check if a node is a BI/reporting asset."""
     return (
         node.platform_domain == PlatformDomain.BI
@@ -354,7 +354,7 @@ def get_bundles(
     bundles: List[MonitorBundle] = []
 
     # --- Asset Stability: direct monitors for this node ---
-    if not _is_bi_node(node):
+    if not is_bi_node(node):
         direct = _recommend_direct(node)
         if direct:
             for r in direct:
@@ -382,7 +382,7 @@ def get_bundles(
             ))
 
     # --- Reporting Health: BI nodes only ---
-    if _is_bi_node(node) and upstream_nodes:
+    if is_bi_node(node) and upstream_nodes:
         reporting_recs: List[MonitorRecommendation] = []
         seen: Set[str] = set()
 

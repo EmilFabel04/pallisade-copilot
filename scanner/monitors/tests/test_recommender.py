@@ -5,7 +5,7 @@ from ...lineage.graph import (
     LineageNode, NodeType, PlatformDomain, AssetKind, HealthStatus,
 )
 from ..recommender import (
-    recommend_for_node, get_bundles,
+    recommend_for_node, get_bundles, is_bi_node,
     MonitorRecommendation, MonitorBundle,
     FRESHNESS, VOLUME, SCHEMA_CHANGE, NULL_RATE, UNIQUENESS, ANOMALY,
     SYNC_LAG, FAILED_SYNCS, CONNECTOR_SCHEMA_DRIFT,
@@ -436,3 +436,145 @@ class TestPrefillShape:
             assert isinstance(d["recommendations"], list)
             for r in d["recommendations"]:
                 assert "monitor_key" in r
+
+
+# ---------------------------------------------------------------------------
+# 6. BI/Reporting node specific tests
+# ---------------------------------------------------------------------------
+
+class TestBiNodeRecommendations:
+
+    def _make_bi_dashboard(self, **kwargs):
+        return _make_node(
+            id="dash1",
+            name="Sales Overview",
+            fqn="looker.dashboard.sales_overview",
+            node_type=NodeType.DASHBOARD,
+            platform_domain=PlatformDomain.BI,
+            asset_kind=AssetKind.DASHBOARD,
+            platform="looker",
+            **kwargs,
+        )
+
+    def _make_upstream_warehouse(self, id="wh1", name="orders", fqn="proj.raw.orders"):
+        return _make_node(
+            id=id, name=name, fqn=fqn,
+            platform_domain=PlatformDomain.WAREHOUSE,
+            asset_kind=AssetKind.TABLE,
+            platform="bigquery",
+        )
+
+    def test_bi_dashboard_with_upstream_gets_concrete_recs(self):
+        """BI dashboard with 2 upstream warehouse tables returns FRESHNESS + SCHEMA_CHANGE on each."""
+        dash = self._make_bi_dashboard()
+        upstream = [
+            self._make_upstream_warehouse("wh1", "orders", "proj.raw.orders"),
+            self._make_upstream_warehouse("wh2", "payments", "proj.raw.payments"),
+        ]
+        recs = recommend_for_node(dash, upstream_nodes=upstream)
+        # Should get upstream recs for both tables
+        assert len(recs) >= 4
+        for up in upstream:
+            target_recs = _rec_keys_for_target(recs, up.fqn)
+            assert FRESHNESS in target_recs
+            assert SCHEMA_CHANGE in target_recs
+
+    def test_bi_dashboard_with_mixed_upstream_gets_all_types(self):
+        """BI dashboard with mixed upstream gets appropriate monitor types."""
+        dash = self._make_bi_dashboard()
+        upstream = [
+            self._make_upstream_warehouse("wh1", "orders", "proj.raw.orders"),
+            _make_node(
+                id="dbt1", name="stg_orders", fqn="dbt.staging.stg_orders",
+                node_type=NodeType.MODEL,
+                platform_domain=PlatformDomain.TRANSFORM,
+                asset_kind=AssetKind.MODEL,
+                platform="dbt",
+            ),
+            _make_node(
+                id="conn1", name="fivetran_orders", fqn="fivetran.conn.orders",
+                node_type=NodeType.CONNECTOR,
+                platform_domain=PlatformDomain.INGESTION,
+                asset_kind=AssetKind.CONNECTOR,
+                platform="fivetran",
+            ),
+        ]
+        recs = recommend_for_node(dash, upstream_nodes=upstream)
+        all_keys = _rec_keys(recs)
+        assert FRESHNESS in all_keys          # from warehouse upstream
+        assert SCHEMA_CHANGE in all_keys      # from warehouse upstream
+        assert DBT_TEST_FAILURES in all_keys  # from dbt upstream
+        assert SYNC_LAG in all_keys           # from connector upstream
+
+    def test_bi_node_upstream_recs_have_target_names(self):
+        """Each upstream rec's reason includes both upstream name and BI node name."""
+        dash = self._make_bi_dashboard()
+        upstream = [self._make_upstream_warehouse("wh1", "orders", "proj.raw.orders")]
+        recs = recommend_for_node(dash, upstream_nodes=upstream)
+        for r in recs:
+            if r.source == "upstream":
+                assert "orders" in r.reason, f"Reason missing upstream name: {r.reason}"
+                assert "Sales Overview" in r.reason, f"Reason missing BI node name: {r.reason}"
+
+    def test_bi_dashboard_no_upstream_returns_empty_recs(self):
+        """BI dashboard with no upstream returns empty recommendations and bundles."""
+        dash = self._make_bi_dashboard()
+        recs = recommend_for_node(dash, upstream_nodes=[])
+        bundles = get_bundles(dash, upstream_nodes=[])
+        assert len(recs) == 0
+        assert len(bundles) == 0
+
+    def test_bi_reporting_health_bundle_contains_expected_monitors(self):
+        """Reporting health bundle has correct monitor types for mixed upstream."""
+        dash = self._make_bi_dashboard()
+        upstream = [
+            self._make_upstream_warehouse("wh1", "orders", "proj.raw.orders"),
+            _make_node(
+                id="conn1", name="fivetran_conn", fqn="fivetran.conn.x",
+                node_type=NodeType.CONNECTOR,
+                platform_domain=PlatformDomain.INGESTION,
+                asset_kind=AssetKind.CONNECTOR,
+                platform="fivetran",
+            ),
+            _make_node(
+                id="dbt1", name="stg_orders", fqn="dbt.staging.stg_orders",
+                node_type=NodeType.MODEL,
+                platform_domain=PlatformDomain.TRANSFORM,
+                asset_kind=AssetKind.MODEL,
+                platform="dbt",
+            ),
+        ]
+        bundles = get_bundles(dash, upstream_nodes=upstream)
+        rh = next((b for b in bundles if b.bundle_key == "reporting_health"), None)
+        assert rh is not None
+        bundle_keys = _rec_keys(rh.recommendations)
+        assert FRESHNESS in bundle_keys
+        assert SCHEMA_CHANGE in bundle_keys
+        assert SYNC_LAG in bundle_keys
+        assert DBT_MODEL_FRESHNESS in bundle_keys
+
+    def test_recommend_for_node_returns_only_upstream_source_for_bi(self):
+        """All recs for a BI node have source='upstream', none have source='direct'."""
+        dash = self._make_bi_dashboard()
+        upstream = [self._make_upstream_warehouse()]
+        recs = recommend_for_node(dash, upstream_nodes=upstream)
+        for r in recs:
+            assert r.source == "upstream", f"BI node rec has source={r.source}, expected 'upstream'"
+
+    def test_is_bi_node_function(self):
+        """is_bi_node correctly identifies BI nodes."""
+        assert is_bi_node(self._make_bi_dashboard()) is True
+        assert is_bi_node(_make_node(
+            node_type=NodeType.REPORT, platform_domain=PlatformDomain.BI,
+            asset_kind=AssetKind.REPORT,
+        )) is True
+        assert is_bi_node(_make_node(
+            node_type=NodeType.QUESTION, platform_domain=PlatformDomain.BI,
+            asset_kind=AssetKind.QUESTION,
+        )) is True
+        # Non-BI nodes
+        assert is_bi_node(_make_node()) is False
+        assert is_bi_node(_make_node(
+            node_type=NodeType.CONNECTOR, platform_domain=PlatformDomain.INGESTION,
+            asset_kind=AssetKind.CONNECTOR,
+        )) is False

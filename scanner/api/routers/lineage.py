@@ -1365,9 +1365,9 @@ async def engine_recommend_monitors(
         existing_set = {fqn.strip() for fqn in existing_fqns.split(",") if fqn.strip()}
 
     try:
-        from scanner.monitors.recommender import recommend_for_node, get_bundles
+        from scanner.monitors.recommender import recommend_for_node, get_bundles, is_bi_node
     except ImportError:
-        from monitors.recommender import recommend_for_node, get_bundles
+        from monitors.recommender import recommend_for_node, get_bundles, is_bi_node
 
     recommendations = recommend_for_node(node, upstream_nodes=upstream_nodes, existing_monitor_fqns=existing_set)
     bundles = get_bundles(node, upstream_nodes=upstream_nodes, existing_monitor_fqns=existing_set)
@@ -1377,6 +1377,7 @@ async def engine_recommend_monitors(
         "asset_name": node.name,
         "asset_type": node.node_type.value,
         "platform_domain": node.platform_domain.value,
+        "is_bi_node": is_bi_node(node),
         "recommendations": [r.to_dict() for r in recommendations],
         "bundles": [b.to_dict() for b in bundles],
     }
