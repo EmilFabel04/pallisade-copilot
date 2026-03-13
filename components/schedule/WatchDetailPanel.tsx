@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import type { WatchSummary } from '@/types/health-watch';
@@ -64,6 +65,7 @@ export function WatchDetailPanel({
   const healthReport = watch.healthDetails as HealthReport | undefined;
   const failureGroups = healthReport?.failureGroups || [];
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
+  const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col h-full bg-[var(--surface-inset)]">
@@ -112,6 +114,9 @@ export function WatchDetailPanel({
           </Button>
         </div>
       </div>
+
+      {/* Scrollable content area */}
+      <div className="flex-1 overflow-y-auto">
 
       {/* Health summary card */}
       {healthReport && (
@@ -255,7 +260,7 @@ export function WatchDetailPanel({
       )}
 
       {/* Monitor list */}
-      <div className="flex-1 px-6 py-4 overflow-y-auto">
+      <div className="px-6 py-4">
         <h3 className="text-[14px] font-medium text-[var(--text)] mb-3">Monitors</h3>
         {detailLoading ? (
           <div className="flex items-center justify-center py-10">
@@ -269,33 +274,87 @@ export function WatchDetailPanel({
               const monStatus = mon.lastStatus
                 ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
                 : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
+              const isExpanded = expandedMonitorId === mon.id;
+              const lastRun = mon.lastRun;
               return (
                 <div
                   key={mon.id}
-                  className="flex items-center gap-3 p-3 bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg"
+                  className="bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg overflow-hidden"
                 >
-                  <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
-                    {mon.lastStatus || 'NEW'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>
-                    <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
-                      {mon.monitorType && (
-                        <span className="px-1 py-0.5 rounded bg-white/5 text-[10px] uppercase">
-                          {mon.monitorType.replace(/_/g, ' ')}
-                        </span>
-                      )}
-                      {mon.targetFqn && (
-                        <span className="font-mono truncate max-w-[200px]" title={mon.targetFqn}>
-                          {mon.targetFqn}
-                        </span>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedMonitorId(isExpanded ? null : mon.id)}
+                    className="flex items-center gap-3 p-3 w-full text-left hover:bg-[var(--hover-bg)] transition-colors"
+                  >
+                    <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
+                      {mon.lastStatus || 'NEW'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>
+                      <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+                        {mon.monitorType && (
+                          <span className="px-1 py-0.5 rounded bg-white/5 text-[10px] uppercase">
+                            {mon.monitorType.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                        {mon.targetFqn && (
+                          <span className="font-mono truncate max-w-[200px]" title={mon.targetFqn}>
+                            {mon.targetFqn}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {mon.lastRunAt && (
+                      <span className="text-[11px] text-[var(--text-faint)] shrink-0">
+                        {timeAgo(mon.lastRunAt)}
+                      </span>
+                    )}
+                    <svg
+                      className={cn('w-4 h-4 text-[var(--muted)] shrink-0 transition-transform', isExpanded && 'rotate-180')}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {isExpanded && (
+                    <div className="px-4 pb-3 pt-1 border-t border-[var(--border-faint)]">
+                      {lastRun ? (
+                        <div className="space-y-2">
+                          <div>
+                            <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-0.5">Last Run Result</p>
+                            <p className="text-[12px] text-[var(--text-secondary)]">{lastRun.message || 'No message'}</p>
+                          </div>
+                          <div className="flex items-center gap-4 text-[11px]">
+                            <div>
+                              <span className="text-[var(--text-faint)]">Status: </span>
+                              <span className="text-[var(--text-secondary)]">{lastRun.status}</span>
+                            </div>
+                            {lastRun.value != null && (
+                              <div>
+                                <span className="text-[var(--text-faint)]">Value: </span>
+                                <span className="text-[var(--text-secondary)]">{lastRun.value}</span>
+                              </div>
+                            )}
+                            {lastRun.durationMs != null && (
+                              <div>
+                                <span className="text-[var(--text-faint)]">Duration: </span>
+                                <span className="text-[var(--text-secondary)]">{lastRun.durationMs}ms</span>
+                              </div>
+                            )}
+                            {lastRun.startedAt && (
+                              <div>
+                                <span className="text-[var(--text-faint)]">At: </span>
+                                <span className="text-[var(--text-secondary)]">
+                                  {new Date(lastRun.startedAt).toLocaleString()}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[12px] text-[var(--muted)]">No runs yet. Click &quot;Run All&quot; to execute this monitor.</p>
                       )}
                     </div>
-                  </div>
-                  {mon.lastRunAt && (
-                    <span className="text-[11px] text-[var(--text-faint)] shrink-0">
-                      {timeAgo(mon.lastRunAt)}
-                    </span>
                   )}
                 </div>
               );
@@ -303,6 +362,8 @@ export function WatchDetailPanel({
           </div>
         )}
       </div>
+
+      </div>{/* end scrollable content */}
     </div>
   );
 }

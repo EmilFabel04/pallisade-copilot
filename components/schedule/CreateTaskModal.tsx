@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ScheduleInput } from './ScheduleInput';
@@ -13,6 +13,12 @@ import {
   getMonitorDefinition,
   TOOL_MONITOR_TYPES,
 } from '@/types/monitor-catalog';
+import {
+  type WatchType,
+  WATCH_TYPE_LABELS,
+  WATCH_TYPE_DESCRIPTIONS,
+  DEFAULT_SCOPE_CONFIGS,
+} from '@/types/health-watch';
 
 interface MonitorGroup {
   category: MonitorCategory;
@@ -38,18 +44,51 @@ export interface MonitorPrefillData {
   integrationId?: string;
 }
 
-export interface BundlePrefillData {
-  name: string;
-  groupType: string;
+export interface WatchPrefillData {
   anchorFqn: string;
   anchorNodeId?: string;
-  monitors: Array<{
+  anchorNodeType?: string;
+  anchorPlatform?: string;
+  watchType?: WatchType;
+  monitors?: Array<{
     name: string;
     monitorType: string;
     targetFqn: string;
     config?: Record<string, any>;
   }>;
 }
+
+interface ScopeMonitor {
+  name: string;
+  monitorType: string;
+  targetFqn: string;
+  priority: number;
+  reason: string;
+  config?: Record<string, any>;
+  checked: boolean;
+}
+
+const WATCH_TYPES: WatchType[] = [
+  'pipeline_health',
+  'dashboard_shield',
+  'source_guard',
+  'model_quality',
+  'custom_watch',
+];
+
+const WATCH_TYPE_ICONS: Record<WatchType, string> = {
+  pipeline_health: 'M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7',
+  dashboard_shield: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
+  source_guard: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4',
+  model_quality: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z',
+  custom_watch: 'M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4',
+};
+
+const PRIORITY_COLORS: Record<number, string> = {
+  1: 'bg-red-500/15 text-red-400',
+  2: 'bg-amber-500/15 text-amber-400',
+  3: 'bg-white/10 text-[var(--muted)]',
+};
 
 interface CreateTaskModalProps {
   open: boolean;
@@ -58,37 +97,41 @@ interface CreateTaskModalProps {
   onUpdate?: (taskId: string, task: any) => void;
   editTask?: ScheduledTask | null;
   prefillData?: MonitorPrefillData | null;
-  bundlePrefillData?: BundlePrefillData | null;
+  watchPrefillData?: WatchPrefillData | null;
   integrations?: Array<{ id: string; name: string; type: string }>;
   stackId?: string;
+  initialMode?: 'prompt' | 'structured' | 'watch';
 }
 
-export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, prefillData, bundlePrefillData, integrations = [], stackId }: CreateTaskModalProps) {
+export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, prefillData, watchPrefillData, integrations = [], stackId, initialMode }: CreateTaskModalProps) {
   const [step, setStep] = useState(1);
   const isEditing = !!editTask;
 
   // Step 1: Mode + content
-  const [taskMode, setTaskMode] = useState<'prompt' | 'structured' | 'bundle'>('prompt');
+  const [taskMode, setTaskMode] = useState<'prompt' | 'structured' | 'watch'>('prompt');
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [monitorType, setMonitorType] = useState('');
   const [targetFqn, setTargetFqn] = useState('');
   const [config, setConfig] = useState<Record<string, any>>({});
 
-  // Bundle mode state
-  const [bundleGroupType, setBundleGroupType] = useState('upstream_stability');
-  const [bundleAnchorFqn, setBundleAnchorFqn] = useState('');
-  const [bundleAnchorNodeId, setBundleAnchorNodeId] = useState('');
-  const [bundleMonitors, setBundleMonitors] = useState<Array<{
-    name: string;
-    monitorType: string;
-    targetFqn: string;
-    config?: Record<string, any>;
-  }>>([]);
-  const [bundleSearchQuery, setBundleSearchQuery] = useState('');
-  const [bundleSearchResults, setBundleSearchResults] = useState<Array<{ id: string; name: string; fqn: string }>>([]);
-  const [bundleSearching, setBundleSearching] = useState(false);
-  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+
+  // Watch mode state
+  const [watchType, setWatchType] = useState<WatchType>('pipeline_health');
+  const [watchStep, setWatchStep] = useState(1);
+  const [selectedWatchAsset, setSelectedWatchAsset] = useState<{ id: string; name: string; fqn: string; type?: string; platform?: string; platformDomain?: string } | null>(null);
+  const [watchSearchQuery, setWatchSearchQuery] = useState('');
+  const [watchSearchResults, setWatchSearchResults] = useState<Array<{ id: string; name: string; fqn: string }>>([]);
+  const [watchSearching, setWatchSearching] = useState(false);
+  const [scopeMonitors, setScopeMonitors] = useState<ScopeMonitor[]>([]);
+  const [scopeLoading, setScopeLoading] = useState(false);
+  const [coveragePct, setCoveragePct] = useState<number>(0);
+  const [scopeNodeCount, setScopeNodeCount] = useState<number>(0);
+  const [watchName, setWatchName] = useState('');
+  const scopeFetchedRef = useRef(false);
+  const watchRecommendDataRef = useRef<any>(null);
+  const watchSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Step 2: Schedule
   const [schedule, setSchedule] = useState('0 8 * * *');
@@ -122,6 +165,21 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       });
   }, [open, stackId]);
 
+  // Helper to reset watch state
+  const resetWatchState = () => {
+    setWatchType('pipeline_health');
+    setWatchStep(1);
+    setSelectedWatchAsset(null);
+    setWatchSearchQuery('');
+    setWatchSearchResults([]);
+    setScopeMonitors([]);
+    setCoveragePct(0);
+    setScopeNodeCount(0);
+    setWatchName('');
+    scopeFetchedRef.current = false;
+    watchRecommendDataRef.current = null;
+  };
+
   // Pre-fill form when editing an existing task or from recommendation prefill
   useEffect(() => {
     if (editTask) {
@@ -137,18 +195,36 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       setAlertOnStatus(editTask.alertOnStatus || ['FAIL', 'WARN', 'ERROR']);
       setIntegrationId(editTask.integrationId || '');
       setStep(1);
-    } else if (bundlePrefillData && open) {
-      setName(bundlePrefillData.name);
-      setTaskMode('bundle');
-      setBundleGroupType(bundlePrefillData.groupType);
-      setBundleAnchorFqn(bundlePrefillData.anchorFqn);
-      setBundleAnchorNodeId(bundlePrefillData.anchorNodeId || '');
-      setBundleMonitors(bundlePrefillData.monitors);
+      resetWatchState();
+    } else if (watchPrefillData && open) {
+      setTaskMode('watch');
+      setSelectedWatchAsset({
+        id: watchPrefillData.anchorNodeId || '',
+        name: watchPrefillData.anchorFqn?.split('.').pop() || '',
+        fqn: watchPrefillData.anchorFqn,
+        type: watchPrefillData.anchorNodeType,
+        platform: watchPrefillData.anchorPlatform,
+      });
+      setWatchType(watchPrefillData.watchType || 'pipeline_health');
+      setWatchName(`${WATCH_TYPE_LABELS[watchPrefillData.watchType || 'pipeline_health']}: ${watchPrefillData.anchorFqn?.split('.').pop() || 'Watch'}`);
+      if (watchPrefillData.monitors?.length) {
+        setScopeMonitors(watchPrefillData.monitors.map((m) => ({
+          ...m,
+          priority: 2,
+          reason: 'Prefilled',
+          checked: true,
+        })));
+        scopeFetchedRef.current = true;
+        setWatchStep(2);
+      } else {
+        scopeFetchedRef.current = false;
+        setWatchStep(1);
+      }
       setSchedule('0 8 * * *');
       setTimezone('UTC');
       setAlertChannels([]);
       setAlertOnStatus(['FAIL', 'WARN', 'ERROR']);
-      setIntegrationId('');
+      setName('');
       setStep(1);
     } else if (prefillData && open) {
       setName(prefillData.name);
@@ -163,25 +239,23 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       setAlertOnStatus(['FAIL', 'WARN', 'ERROR']);
       setIntegrationId(prefillData.integrationId || '');
       setStep(1);
+      resetWatchState();
     } else if (open) {
       setName('');
-      setTaskMode('prompt');
+      setTaskMode(initialMode || 'prompt');
       setPrompt('');
       setMonitorType('');
       setTargetFqn('');
       setConfig({});
-      setBundleGroupType('upstream_stability');
-      setBundleAnchorFqn('');
-      setBundleAnchorNodeId('');
-      setBundleMonitors([]);
       setSchedule('0 8 * * *');
       setTimezone('UTC');
       setAlertChannels([]);
       setAlertOnStatus(['FAIL', 'WARN', 'ERROR']);
       setIntegrationId('');
       setStep(1);
+      resetWatchState();
     }
-  }, [editTask, prefillData, bundlePrefillData, open]);
+  }, [editTask, prefillData, watchPrefillData, open, initialMode]);
 
   // Fetch connected channel status when modal opens
   useEffect(() => {
@@ -195,6 +269,180 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       })
       .catch(() => setConnectedChannels(channels));
   }, [open]);
+
+  // Watch: select asset and auto-detect watch type
+  const handleSelectWatchAsset = useCallback(async (asset: { id: string; name: string; fqn: string }) => {
+    setSelectedWatchAsset(asset);
+    setWatchSearchQuery('');
+    setWatchSearchResults([]);
+
+    watchRecommendDataRef.current = null;
+    scopeFetchedRef.current = false;
+
+    if (stackId && asset.id) {
+      try {
+        const res = await fetch(
+          `/api/pipeline/${stackId}/lineage/engine?action=recommend-monitors&id=${asset.id}&depth=3`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          watchRecommendDataRef.current = data;
+          const domain = data.platform_domain || '';
+          const nodeType = data.asset_type || '';
+          let inferred: WatchType = 'pipeline_health';
+          if (['dashboard', 'report', 'workbook', 'question', 'explore'].includes(nodeType) || domain === 'bi') {
+            inferred = 'dashboard_shield';
+          } else if (domain === 'ingestion') {
+            inferred = 'source_guard';
+          } else if (domain === 'transform' && nodeType === 'model') {
+            inferred = 'model_quality';
+          }
+          setWatchType(inferred);
+          setWatchName(`${WATCH_TYPE_LABELS[inferred]}: ${asset.name}`);
+        }
+      } catch {
+        setWatchName(`${WATCH_TYPE_LABELS[watchType]}: ${asset.name}`);
+      }
+    } else {
+      setWatchName(`${WATCH_TYPE_LABELS[watchType]}: ${asset.name}`);
+    }
+  }, [stackId, watchType]);
+
+  // Watch: populate scope monitors when entering watch step 2
+  // Uses cached data from step 1 handleSelectWatchAsset, falls back to fresh fetch
+  useEffect(() => {
+    if (taskMode !== 'watch' || watchStep !== 2 || !selectedWatchAsset || !stackId) return;
+    if (scopeFetchedRef.current) return;
+    scopeFetchedRef.current = true;
+
+    // Default monitors per watch type when the API returns nothing
+    const DEFAULT_MONITORS: Record<WatchType, Array<{ monitorType: string; label: string; priority: number; reason: string }>> = {
+      pipeline_health: [
+        { monitorType: 'FRESHNESS', label: 'freshness', priority: 1, reason: 'Core data quality — detect stale data' },
+        { monitorType: 'VOLUME', label: 'volume', priority: 2, reason: 'Core data quality — detect unexpected row count changes' },
+        { monitorType: 'SCHEMA_CHANGE', label: 'schema change', priority: 2, reason: 'Core data quality — detect column changes' },
+      ],
+      dashboard_shield: [
+        { monitorType: 'BI_FRESHNESS_PROXY', label: 'dashboard freshness', priority: 1, reason: 'Track dashboard freshness via upstream lineage' },
+        { monitorType: 'BI_CONTENT_HEALTH', label: 'content health', priority: 2, reason: 'Verify BI asset exists and deliveries are not failing' },
+        { monitorType: 'BI_UPSTREAM_BREAK_RISK', label: 'upstream break risk', priority: 2, reason: 'Count failing monitors on upstream warehouse tables' },
+      ],
+      source_guard: [
+        { monitorType: 'SYNC_LAG', label: 'sync lag', priority: 1, reason: 'Track ingestion connector sync lag' },
+        { monitorType: 'FAILED_SYNCS', label: 'failed syncs', priority: 1, reason: 'Detect failed syncs on this connector' },
+        { monitorType: 'CONNECTOR_SCHEMA_DRIFT', label: 'schema drift', priority: 2, reason: 'Detect schema changes at the ingestion source' },
+      ],
+      model_quality: [
+        { monitorType: 'DBT_TEST_FAILURES', label: 'test failures', priority: 1, reason: 'Watch for dbt test regressions' },
+        { monitorType: 'DBT_MODEL_FRESHNESS', label: 'model freshness', priority: 2, reason: 'Detect when model builds become stale' },
+        { monitorType: 'FRESHNESS', label: 'freshness', priority: 2, reason: 'Core data quality — detect stale data' },
+      ],
+      custom_watch: [
+        { monitorType: 'FRESHNESS', label: 'freshness', priority: 1, reason: 'Custom monitor — data freshness' },
+        { monitorType: 'VOLUME', label: 'volume', priority: 2, reason: 'Custom monitor — row volume' },
+        { monitorType: 'SCHEMA_CHANGE', label: 'schema change', priority: 2, reason: 'Custom monitor — schema changes' },
+      ],
+    };
+
+    const generateDefaults = (): ScopeMonitor[] => {
+      const shortName = selectedWatchAsset.fqn.split('.').pop() || selectedWatchAsset.name;
+      return (DEFAULT_MONITORS[watchType] || DEFAULT_MONITORS.pipeline_health).map((m) => ({
+        name: `${m.label} — ${shortName}`,
+        monitorType: m.monitorType,
+        targetFqn: selectedWatchAsset.fqn,
+        priority: m.priority,
+        reason: m.reason,
+        config: {},
+        checked: true,
+      }));
+    };
+
+    const applyMonitors = (monitors: ScopeMonitor[]) => {
+      const maxMonitors = DEFAULT_SCOPE_CONFIGS[watchType].maxMonitors;
+      monitors.sort((a, b) => a.priority - b.priority);
+      setScopeMonitors(monitors.slice(0, maxMonitors));
+      setScopeNodeCount(new Set(monitors.map((m) => m.targetFqn)).size);
+    };
+
+    const parseRecommendData = (data: any): ScopeMonitor[] => {
+      const recs = data.recommendations || [];
+      const dataBundles = data.bundles || [];
+      const monitors: ScopeMonitor[] = [];
+      const seen = new Set<string>();
+
+      for (const rec of recs) {
+        const key = `${rec.monitor_key}:${rec.target_fqn || selectedWatchAsset.fqn}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        monitors.push({
+          name: rec.name || `${(rec.monitor_key || '').toLowerCase().replace(/_/g, ' ')} — ${(rec.target_fqn || selectedWatchAsset.fqn).split('.').pop()}`,
+          monitorType: rec.monitor_key,
+          targetFqn: rec.target_fqn || selectedWatchAsset.fqn,
+          priority: rec.priority || 2,
+          reason: rec.reason || 'Recommended',
+          config: rec.config_hints,
+          checked: true,
+        });
+      }
+
+      for (const bundle of dataBundles) {
+        for (const mon of bundle.recommendations || []) {
+          const key = `${mon.monitor_key}:${mon.target_fqn}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          monitors.push({
+            name: mon.name || `${(mon.monitor_key || '').toLowerCase().replace(/_/g, ' ')} — ${(mon.target_fqn || '').split('.').pop()}`,
+            monitorType: mon.monitor_key,
+            targetFqn: mon.target_fqn,
+            priority: mon.priority || 3,
+            reason: mon.reason || `From ${bundle.label || 'bundle'}`,
+            config: mon.config_hints,
+            checked: true,
+          });
+        }
+      }
+
+      const upstreamCount = data.upstream_count || monitors.length;
+      setCoveragePct(upstreamCount > 0 ? Math.min(monitors.length / upstreamCount, 1.0) : 1.0);
+
+      return monitors;
+    };
+
+    // If we already have cached data from step 1, use it immediately
+    if (watchRecommendDataRef.current) {
+      const monitors = parseRecommendData(watchRecommendDataRef.current);
+      applyMonitors(monitors.length > 0 ? monitors : generateDefaults());
+      if (monitors.length === 0) setCoveragePct(1.0);
+      return;
+    }
+
+    // Otherwise fetch fresh (fallback)
+    const fetchScope = async () => {
+      setScopeLoading(true);
+      try {
+        const res = await fetch(
+          `/api/pipeline/${stackId}/lineage/engine?action=recommend-monitors&id=${selectedWatchAsset.id}&depth=${DEFAULT_SCOPE_CONFIGS[watchType].maxDepth}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const monitors = parseRecommendData(data);
+          applyMonitors(monitors.length > 0 ? monitors : generateDefaults());
+          if (monitors.length === 0) setCoveragePct(1.0);
+        } else {
+          applyMonitors(generateDefaults());
+          setCoveragePct(1.0);
+        }
+      } catch (err) {
+        console.error('[CreateTask] Watch scope fetch error:', err);
+        applyMonitors(generateDefaults());
+        setCoveragePct(1.0);
+      } finally {
+        setScopeLoading(false);
+      }
+    };
+
+    fetchScope();
+  }, [taskMode, watchStep, selectedWatchAsset, stackId, watchType]);
 
   if (!open) return null;
 
@@ -259,37 +507,36 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       });
   })();
 
-  const canProceedStep1 = name.trim() && (
-    taskMode === 'prompt'
-      ? prompt.trim()
-      : taskMode === 'bundle'
-      ? true
-      : (monitorType && (
-          isInfraMonitor || isToolMonitor
-            ? hasRequiredToolFields && !needsLogPaths
-            : (targetFqn.trim() && !needsColumn && !needsSql)
-        ))
-  );
+  const canProceedStep1 = taskMode === 'watch'
+    ? true // Watch mode uses its own step navigation
+    : name.trim() && (
+      taskMode === 'prompt'
+        ? prompt.trim()
+        : (monitorType && (
+            isInfraMonitor || isToolMonitor
+              ? hasRequiredToolFields && !needsLogPaths
+              : (targetFqn.trim() && !needsColumn && !needsSql)
+          ))
+    );
   const canProceedStep2 = schedule.trim();
 
-  // Bundle: search for lineage nodes to use as anchor (with debounce)
-  const searchLineageNodes = (query: string) => {
-    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+  // Watch: search for assets (reuses searchLineageNodes pattern with engine + Prisma fallback)
+  const searchWatchNodes = (query: string) => {
+    if (watchSearchTimerRef.current) clearTimeout(watchSearchTimerRef.current);
     if (!query.trim()) {
-      setBundleSearchResults([]);
-      setBundleSearching(false);
+      setWatchSearchResults([]);
+      setWatchSearching(false);
       return;
     }
-    setBundleSearching(true);
-    searchTimerRef.current = setTimeout(async () => {
+    setWatchSearching(true);
+    watchSearchTimerRef.current = setTimeout(async () => {
       try {
         let results: Array<{ id: string; name: string; fqn: string }> = [];
+        const VISIBLE_SEARCH_TYPES = new Set([
+          'table', 'view', 'materialized_view', 'source', 'model',
+          'dashboard', 'report', 'workbook', 'question', 'explore', 'dataset',
+        ]);
 
-        // Only show data-asset node types that appear on the visual lineage canvas.
-        // Engine search returns node_type/platform_domain; Prisma returns nodeType.
-        const VISIBLE_SEARCH_TYPES = new Set(['table', 'view', 'materialized_view', 'source', 'model']);
-
-        // Try engine search first (in-memory graph)
         if (stackId) {
           const engineRes = await fetch(
             `/api/pipeline/${stackId}/lineage/engine?action=search&q=${encodeURIComponent(query)}&limit=20`
@@ -302,15 +549,10 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                 return !nt || VISIBLE_SEARCH_TYPES.has(nt);
               })
               .slice(0, 10)
-              .map((r: any) => ({
-                id: r.id,
-                name: r.name,
-                fqn: r.fqn || r.name,
-              }));
+              .map((r: any) => ({ id: r.id, name: r.name, fqn: r.fqn || r.name }));
           }
         }
 
-        // Fall back to Prisma search if engine returned nothing
         if (results.length === 0) {
           const dbRes = await fetch(
             `/api/lineage/search?q=${encodeURIComponent(query)}&limit=20`
@@ -323,204 +565,46 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                 return !nt || VISIBLE_SEARCH_TYPES.has(nt);
               })
               .slice(0, 10)
-              .map((r: any) => ({
-                id: r.id,
-                name: r.name,
-                fqn: r.fqn || r.name,
-              }));
+              .map((r: any) => ({ id: r.id, name: r.name, fqn: r.fqn || r.name }));
           }
         }
 
-        setBundleSearchResults(results);
+        setWatchSearchResults(results);
       } catch {}
-      setBundleSearching(false);
+      setWatchSearching(false);
     }, 300);
   };
 
-  // Available scanner types for bundle per-node selection
-  const BUNDLE_SCANNER_OPTIONS = [
-    { value: 'FRESHNESS', label: 'Freshness' },
-    { value: 'VOLUME', label: 'Volume' },
-    { value: 'SCHEMA_CHANGE', label: 'Schema Change' },
-    { value: 'ANOMALY', label: 'Anomaly' },
-    { value: 'UNIQUENESS', label: 'Uniqueness' },
-    { value: 'CUSTOM_SQL', label: 'Custom SQL' },
-    { value: 'SYNC_LAG', label: 'Sync Lag' },
-    { value: 'FAILED_SYNCS', label: 'Failed Syncs' },
-    { value: 'DAG_LAST_RUN', label: 'DAG Last Run' },
-    { value: 'TASK_FAILURE_RATE', label: 'Task Failure Rate' },
-    { value: 'DBT_TEST_FAILURES', label: 'dbt Test Failures' },
-    { value: 'DBT_MODEL_FRESHNESS', label: 'dbt Model Freshness' },
-    { value: 'DBT_SOURCE_FRESHNESS', label: 'dbt Source Freshness' },
-    { value: 'SERVER_HEALTH', label: 'Server Health' },
-  ];
-
-  // Pick a default monitor type based on engine node metadata
-  const getDefaultMonitorType = (node: any): string => {
-    const platform = (node.platform || '').toLowerCase();
-    const nodeType = (node.node_type || '').toLowerCase();
-    const domain = (node.platform_domain || '').toLowerCase();
-    const dbtType = (node.dbt_resource_type || '').toLowerCase();
-
-    // Tool / connector nodes
-    if (['fivetran', 'airbyte'].includes(platform) || domain === 'ingestion') return 'SYNC_LAG';
-    if (platform === 'airflow' && nodeType === 'dag') return 'DAG_LAST_RUN';
-    if (platform === 'airflow' && nodeType === 'task') return 'TASK_FAILURE_RATE';
-
-    // dbt nodes
-    if (['dbt', 'dbt_core', 'dbt_cloud'].includes(platform)) {
-      if (dbtType === 'source') return 'DBT_SOURCE_FRESHNESS';
-      return 'DBT_MODEL_FRESHNESS';
-    }
-
-    // Server / infra
-    if (nodeType === 'server' || domain === 'infrastructure') return 'SERVER_HEALTH';
-
-    // Default for data assets (tables, views, models, dashboards)
-    return 'FRESHNESS';
-  };
-
-  // DESIGN RULE: Bundle/watch creation launched from the data-lineage surface
-  // must use the same upstream visibility semantics as that surface.
-  // We restrict BFS to DATA-plane edges only (via plane=data) and post-filter
-  // to match the ViewBuilder's data-plane view which only includes 'dataset'
-  // and 'semantic' canonical types. The unified route maps plane=data to
-  // "data,cross" (BI→table edges use CROSS plane), and the canonical type
-  // whitelist prevents orchestration nodes from leaking through.
-  // Future bundle/watch templates can opt into non-data-plane nodes later.
-
-  // Visibility filter matching the ViewBuilder data-plane view (views.py:2840-2843).
-  // The visual lineage canvas only renders nodes with canonical_type 'dataset' or
-  // 'semantic'. Everything else (system, service, job — including connectors like
-  // Fivetran/Postgres, orchestration DAGs/tasks, infrastructure nodes) is excluded.
-  const DATA_PLANE_CANONICAL_TYPES = new Set(['dataset', 'semantic']);
-
-  const isVisibleInDataLineage = (node: any): boolean => {
-    const canonicalType = (node.canonical_type || '').toLowerCase();
-    return DATA_PLANE_CANONICAL_TYPES.has(canonicalType);
-  };
-
-  // Bundle: fetch visible upstream data assets for the selected anchor
-  const fetchUpstreamNodes = async (nodeId: string, nodeFqn: string) => {
-    if (stackId) {
-      try {
-        // Fetch upstream via DATA+CROSS plane edges — matches the unified route's
-        // "data,cross" mapping. CROSS is needed for BI→table edges.
-        // The canonical type whitelist below prevents orchestration nodes from
-        // leaking through CROSS edges.
-        const upstreamRes = await fetch(
-          `/api/pipeline/${stackId}/lineage/engine?action=upstream&id=${encodeURIComponent(nodeId)}&depth=5&plane=data,cross`
-        );
-        if (!upstreamRes.ok) throw new Error('upstream failed');
-        const upstreamData = await upstreamRes.json();
-        const upstreamNodes: any[] = upstreamData.upstream || [];
-
-        // Post-filter: only include nodes visible in the data-lineage surface.
-        // The ViewBuilder data-plane view only shows 'dataset' and 'semantic'
-        // canonical types — this excludes connectors, DAGs, tasks, services, etc.
-        const visibleNodes = upstreamNodes.filter(isVisibleInDataLineage);
-
-        // FQN-based dedup: Airflow/Fivetran adapters create table reference nodes
-        // that duplicate real warehouse nodes. The visual lineage merges these by
-        // FQN — we do the same here, preferring non-tool-platform nodes.
-        const DEDUP_PLATFORMS = new Set(['airflow', 'fivetran']);
-        const fqnToNode = new Map<string, any>();
-        for (const n of visibleNodes) {
-          const fqn = n.fqn || n.name || n.id;
-          const existing = fqnToNode.get(fqn);
-          if (!existing) {
-            fqnToNode.set(fqn, n);
-          } else {
-            // Prefer the non-tool-platform node (warehouse node over Airflow ref)
-            const existingPlatform = (existing.platform || '').toLowerCase();
-            const nPlatform = (n.platform || '').toLowerCase();
-            if (DEDUP_PLATFORMS.has(existingPlatform) && !DEDUP_PLATFORMS.has(nPlatform)) {
-              fqnToNode.set(fqn, n);
-            }
-          }
-        }
-
-        const monitors: Array<{ name: string; monitorType: string; targetFqn: string; config: Record<string, any> }> = [];
-        for (const [fqn, n] of fqnToNode) {
-          const monType = getDefaultMonitorType(n);
-          const shortName = fqn.split('.').pop() || fqn;
-          monitors.push({
-            name: `${monType.toLowerCase().replace(/_/g, ' ')} — ${shortName}`,
-            monitorType: monType,
-            targetFqn: fqn,
-            config: {},
-          });
-        }
-
-        if (monitors.length > 0) {
-          setBundleMonitors(monitors);
-          return;
-        }
-      } catch {}
-    }
-
-    // Fallback: fetch upstream from Prisma lineage edges.
-    // Apply same visibility rule: only data asset node types that appear on the
-    // visual lineage canvas (tables, views, models, sources).
-    const VISIBLE_NODE_TYPES = new Set(['table', 'view', 'materialized_view', 'source', 'model']);
-    try {
-      const res = await fetch(`/api/lineage/upstream?fqn=${encodeURIComponent(nodeFqn)}&limit=20`);
-      if (res.ok) {
-        const data = await res.json();
-        const allNodes = data.nodes || [];
-        const nodes = allNodes.filter((n: any) => {
-          const nt = (n.nodeType || '').toLowerCase();
-          return !nt || VISIBLE_NODE_TYPES.has(nt);
-        });
-        if (nodes.length > 0) {
-          const seen = new Set<string>();
-          setBundleMonitors(
-            nodes.filter((n: any) => {
-              const fqn = n.fqn || n.name;
-              if (seen.has(fqn)) return false;
-              seen.add(fqn);
-              return true;
-            }).map((n: any) => {
-              const fqn = n.fqn || n.name;
-              const shortName = fqn.split('.').pop() || fqn;
-              return {
-                name: `freshness — ${shortName}`,
-                monitorType: 'FRESHNESS',
-                targetFqn: fqn,
-                config: {},
-              };
-            })
-          );
-          return;
-        }
-      }
-    } catch {}
-
-    // Last fallback: just the anchor itself
-    const shortName = nodeFqn.split('.').pop() || nodeFqn;
-    setBundleMonitors([
-      { name: `freshness — ${shortName}`, monitorType: 'FRESHNESS', targetFqn: nodeFqn, config: {} },
-    ]);
+  // Watch: toggle a scope monitor
+  const toggleScopeMonitor = (index: number) => {
+    setScopeMonitors((prev) =>
+      prev.map((m, i) => (i === index ? { ...m, checked: !m.checked } : m))
+    );
   };
 
   const handleSubmit = () => {
-    if (taskMode === 'bundle') {
-      // Submit as bundle
-      const bundleData = {
-        name,
-        description: `${bundleGroupType.replace(/_/g, ' ')} bundle for ${bundleAnchorFqn || 'selected assets'}`,
-        groupType: bundleGroupType,
-        anchorFqn: bundleAnchorFqn || undefined,
-        anchorNodeId: bundleAnchorNodeId || undefined,
+    if (taskMode === 'watch') {
+      const checkedMonitors = scopeMonitors.filter((m) => m.checked);
+      onSubmit({
+        _watch: true,
+        name: watchName || `${WATCH_TYPE_LABELS[watchType]}: ${selectedWatchAsset?.name || 'Watch'}`,
+        watchType,
+        anchorFqn: selectedWatchAsset?.fqn || '',
+        anchorNodeId: selectedWatchAsset?.id || '',
+        anchorNodeType: selectedWatchAsset?.type || '',
+        anchorPlatform: selectedWatchAsset?.platform || '',
+        scopeConfig: DEFAULT_SCOPE_CONFIGS[watchType],
         schedule,
         timezone,
         alertChannels,
         alertOnStatus,
-        integrationId: integrationId || undefined,
-        monitors: bundleMonitors,
-      };
-      // Use onSubmit with a special _bundle flag so the parent knows to POST to /bundles
-      onSubmit({ ...bundleData, _bundle: true });
+        monitors: checkedMonitors.map((m) => ({
+          name: m.name,
+          monitorType: m.monitorType,
+          targetFqn: m.targetFqn,
+          config: m.config,
+        })),
+      });
       return;
     }
 
@@ -679,108 +763,112 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
 
         {/* Step indicators */}
         <div className="flex-shrink-0 flex items-center gap-3 px-6 py-3 border-b border-[var(--border-faint)]">
-          {[1, 2, 3].map((s) => (
-            <div key={s} className="flex items-center gap-2">
-              <div className={cn(
-                'w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-medium',
-                step === s
-                  ? 'bg-[var(--overlay-strong)] text-[var(--text)]'
-                  : step > s
-                  ? 'bg-emerald-500/20 text-emerald-400'
-                  : 'bg-[var(--overlay-bg)] text-[var(--text-faint)]'
-              )}>
-                {step > s ? '\u2713' : s}
-              </div>
-              <span className={cn(
-                'text-[12px]',
-                step === s ? 'text-[var(--text)]' : 'text-[var(--text-faint)]'
-              )}>
-                {s === 1 ? 'Task' : s === 2 ? 'Schedule' : 'Alerts'}
-              </span>
-              {s < 3 && <div className="w-8 h-px bg-[var(--hover-bg)]" />}
-            </div>
-          ))}
+          {taskMode === 'watch' ? (
+            // Watch mode: 4-step progress
+            <>
+              {[
+                { n: 1, label: 'Asset' },
+                { n: 2, label: 'Scope' },
+                { n: 3, label: 'Schedule' },
+                { n: 4, label: 'Confirm' },
+              ].map(({ n, label }) => (
+                <div key={n} className="flex items-center gap-2">
+                  <div className={cn(
+                    'w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-medium',
+                    watchStep === n
+                      ? 'bg-[var(--overlay-strong)] text-[var(--text)]'
+                      : watchStep > n
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-[var(--overlay-bg)] text-[var(--text-faint)]'
+                  )}>
+                    {watchStep > n ? '\u2713' : n}
+                  </div>
+                  <span className={cn(
+                    'text-[12px]',
+                    watchStep === n ? 'text-[var(--text)]' : 'text-[var(--text-faint)]'
+                  )}>{label}</span>
+                  {n < 4 && <div className="w-8 h-px bg-[var(--hover-bg)]" />}
+                </div>
+              ))}
+            </>
+          ) : (
+            // Normal modes: 3-step progress
+            <>
+              {[1, 2, 3].map((s) => (
+                <div key={s} className="flex items-center gap-2">
+                  <div className={cn(
+                    'w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-medium',
+                    step === s
+                      ? 'bg-[var(--overlay-strong)] text-[var(--text)]'
+                      : step > s
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-[var(--overlay-bg)] text-[var(--text-faint)]'
+                  )}>
+                    {step > s ? '\u2713' : s}
+                  </div>
+                  <span className={cn(
+                    'text-[12px]',
+                    step === s ? 'text-[var(--text)]' : 'text-[var(--text-faint)]'
+                  )}>
+                    {s === 1 ? 'Task' : s === 2 ? 'Schedule' : 'Alerts'}
+                  </span>
+                  {s < 3 && <div className="w-8 h-px bg-[var(--hover-bg)]" />}
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
         {/* Content */}
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5">
           {step === 1 && (
             <>
-              {/* Task name */}
-              <div>
-                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                  Task Name
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Daily freshness check on orders"
-                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
-                  autoFocus
-                />
-              </div>
+              {/* Task name (hidden in watch mode — watch uses its own name in step 4) */}
+              {taskMode !== 'watch' && (
+                <div>
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                    Task Name
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g., Daily freshness check on orders"
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
+                    autoFocus
+                  />
+                </div>
+              )}
 
               {/* Mode toggle */}
               <div>
                 <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                   Task Type
                 </label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setTaskMode('prompt')}
-                    className={cn(
-                      'flex-1 flex items-center gap-2 p-3 rounded-lg transition-colors text-left',
-                      taskMode === 'prompt'
-                        ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
-                        : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-                    )}
-                  >
-                    <svg className="w-5 h-5 text-[var(--text-tertiary)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    <div>
-                      <span className="text-[13px] font-medium text-[var(--text)] block">AI Prompt</span>
-                      <span className="text-[11px] text-[var(--muted)]">Natural language</span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTaskMode('structured')}
-                    className={cn(
-                      'flex-1 flex items-center gap-2 p-3 rounded-lg transition-colors text-left',
-                      taskMode === 'structured'
-                        ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
-                        : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-                    )}
-                  >
-                    <svg className="w-5 h-5 text-[var(--text-tertiary)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <div>
-                      <span className="text-[13px] font-medium text-[var(--text)] block">Monitor</span>
-                      <span className="text-[11px] text-[var(--muted)]">Specific check</span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTaskMode('bundle')}
-                    className={cn(
-                      'flex-1 flex items-center gap-2 p-3 rounded-lg transition-colors text-left',
-                      taskMode === 'bundle'
-                        ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
-                        : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-                    )}
-                  >
-                    <svg className="w-5 h-5 text-[var(--text-tertiary)] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                    <div>
-                      <span className="text-[13px] font-medium text-[var(--text)] block">Bundle</span>
-                      <span className="text-[11px] text-[var(--muted)]">Group of assets</span>
-                    </div>
-                  </button>
+                <div className="flex gap-3">
+                  {([
+                    { mode: 'prompt' as const, label: 'AI Prompt', sub: 'Natural language', icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z' },
+                    { mode: 'structured' as const, label: 'Monitor', sub: 'Specific check', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
+                    { mode: 'watch' as const, label: 'Health Watch', sub: 'Protect an asset', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
+                  ]).map(({ mode, label, sub, icon }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => { setTaskMode(mode); if (mode === 'watch') setWatchStep(1); }}
+                      className={cn(
+                        'flex-1 flex flex-col items-center justify-center gap-1 py-2.5 rounded-lg transition-colors',
+                        taskMode === mode
+                          ? 'bg-[var(--overlay-medium)] border-2 border-[var(--overlay-strong)]'
+                          : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
+                      )}
+                    >
+                      <svg className="w-5 h-5 text-[var(--text-tertiary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={icon} />
+                      </svg>
+                      <span className="text-[13px] font-medium text-[var(--text)] leading-tight">{label}</span>
+                      <span className="text-[11px] text-[var(--muted)] leading-tight">{sub}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -798,185 +886,282 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                     className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2.5 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)] resize-none"
                   />
                 </div>
-              ) : taskMode === 'bundle' ? (
+              ) : taskMode === 'watch' ? (
                 <div className="space-y-4">
-                  {/* Bundle group type */}
-                  <div>
-                    <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                      Bundle Type
-                    </label>
-                    <div className="flex gap-2">
-                      {[
-                        { value: 'upstream_stability', label: 'Upstream Stability', desc: 'Watch upstream dependencies' },
-                        { value: 'reporting_health', label: 'Reporting Health', desc: 'End-to-end BI pipeline' },
-                        { value: 'asset_stability', label: 'Asset Stability', desc: 'Core quality for an asset' },
-                        { value: 'custom', label: 'Custom', desc: 'Pick targets manually' },
-                      ].map((opt) => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => setBundleGroupType(opt.value)}
-                          className={cn(
-                            'flex-1 p-2 rounded-lg text-left transition-colors',
-                            bundleGroupType === opt.value
-                              ? 'bg-amber-500/10 border border-amber-500/30'
-                              : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-                          )}
-                        >
-                          <span className="text-[12px] font-medium text-[var(--text)] block">{opt.label}</span>
-                          <span className="text-[10px] text-[var(--muted)]">{opt.desc}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Anchor node picker */}
-                  <div>
-                    <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                      Anchor Node
-                    </label>
-                    {bundleAnchorFqn ? (
-                      <div className="flex items-center gap-2 p-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg">
-                        <span className="text-[12px] text-[var(--text)] font-mono flex-1 truncate">{bundleAnchorFqn}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBundleAnchorFqn('');
-                            setBundleAnchorNodeId('');
-                            setBundleMonitors([]);
-                          }}
-                          className="text-[var(--muted)] hover:text-[var(--text)] text-[11px]"
-                        >
-                          Change
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={bundleSearchQuery}
-                          onChange={(e) => {
-                            setBundleSearchQuery(e.target.value);
-                            searchLineageNodes(e.target.value);
-                          }}
-                          placeholder="Search for a table, model, or dashboard..."
-                          className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
-                        />
-                        {bundleSearchResults.length > 0 && (
-                          <div className="absolute z-10 mt-1 w-full bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg shadow-xl max-h-48 overflow-y-auto">
-                            {bundleSearchResults.map((r) => (
+                  {/* Watch has its own multi-step flow inside step 1 */}
+                  {watchStep === 1 && (
+                    <>
+                      {/* Asset search */}
+                      <div>
+                        <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                          Search for an asset to protect
+                        </label>
+                        {selectedWatchAsset ? (
+                          <div className="p-3 rounded-lg border border-blue-500/20 bg-blue-500/5">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-[13px] font-medium text-[var(--text)]">{selectedWatchAsset.name}</p>
+                                <p className="text-[11px] text-[var(--muted)] font-mono">{selectedWatchAsset.fqn}</p>
+                              </div>
                               <button
-                                key={r.id}
+                                type="button"
+                                onClick={() => { setSelectedWatchAsset(null); setWatchName(''); }}
+                                className="text-[var(--muted)] hover:text-[var(--text)]"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={watchSearchQuery}
+                              onChange={(e) => {
+                                setWatchSearchQuery(e.target.value);
+                                searchWatchNodes(e.target.value);
+                              }}
+                              placeholder="Search tables, dashboards, models, connectors..."
+                              className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2.5 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-blue-500/50"
+                              autoFocus
+                            />
+                            {watchSearchResults.length > 0 && (
+                              <div className="absolute z-10 mt-1 w-full bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                                {watchSearchResults.map((r) => (
+                                  <button
+                                    key={r.id}
+                                    type="button"
+                                    onClick={() => handleSelectWatchAsset(r)}
+                                    className="w-full text-left px-3 py-2 hover:bg-[var(--hover-bg)] transition-colors"
+                                  >
+                                    <span className="text-[12px] text-[var(--text)] font-mono block truncate">{r.fqn}</span>
+                                    <span className="text-[10px] text-[var(--muted)]">{r.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {watchSearching && (
+                              <div className="absolute right-3 top-3">
+                                <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Watch type selection */}
+                      {selectedWatchAsset && (
+                        <div>
+                          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                            Watch type
+                          </label>
+                          <div className="space-y-2">
+                            {WATCH_TYPES.map((wt) => (
+                              <button
+                                key={wt}
                                 type="button"
                                 onClick={() => {
-                                  setBundleAnchorFqn(r.fqn);
-                                  setBundleAnchorNodeId(r.id);
-                                  setBundleSearchQuery('');
-                                  setBundleSearchResults([]);
-                                  fetchUpstreamNodes(r.id, r.fqn);
+                                  setWatchType(wt);
+                                  setWatchName(`${WATCH_TYPE_LABELS[wt]}: ${selectedWatchAsset.name}`);
+                                  setScopeMonitors([]);
+                                  scopeFetchedRef.current = false;
                                 }}
-                                className="w-full text-left px-3 py-2 hover:bg-[var(--hover-bg)] transition-colors"
+                                className={cn(
+                                  'flex items-center gap-3 w-full h-[52px] px-4 rounded-lg border transition-colors text-left',
+                                  wt === watchType
+                                    ? 'border-blue-500/40 bg-blue-500/5'
+                                    : 'border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] bg-[var(--surface)]'
+                                )}
                               >
-                                <span className="text-[12px] text-[var(--text)] font-mono block truncate">{r.fqn}</span>
-                                <span className="text-[10px] text-[var(--muted)]">{r.name}</span>
+                                <svg className="w-5 h-5 text-[var(--muted)] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={WATCH_TYPE_ICONS[wt]} />
+                                </svg>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[13px] font-medium text-[var(--text)] leading-tight truncate">{WATCH_TYPE_LABELS[wt]}</p>
+                                  <p className="text-[11px] text-[var(--muted)] leading-tight truncate">{WATCH_TYPE_DESCRIPTIONS[wt]}</p>
+                                </div>
                               </button>
                             ))}
                           </div>
-                        )}
-                        {bundleSearching && (
-                          <div className="absolute right-3 top-2.5">
-                            <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <p className="text-[10px] text-[var(--text-faint)] mt-1">
-                      Select the asset whose upstream dependencies you want to monitor as a group.
-                    </p>
-                  </div>
+                        </div>
+                      )}
+                    </>
+                  )}
 
-                  {/* Upstream nodes with scanner selector */}
-                  {bundleMonitors.length > 0 && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <label className="text-[12px] font-medium text-[var(--muted)]">
-                          Upstream Nodes ({bundleMonitors.length})
+                  {/* Watch step 2: Scope & Monitors */}
+                  {watchStep === 2 && (
+                    <>
+                      {/* Scope summary bar */}
+                      <div className="flex items-center gap-4 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+                        <div className="text-center">
+                          <p className="text-[18px] font-bold text-[var(--text)] tabular-nums">{scopeMonitors.filter((m) => m.checked).length}</p>
+                          <p className="text-[10px] text-[var(--muted)] uppercase">Monitors</p>
+                        </div>
+                        <div className="w-px h-8 bg-[var(--subtle-border)]" />
+                        <div className="text-center">
+                          <p className="text-[18px] font-bold text-[var(--text)] tabular-nums">{scopeNodeCount}</p>
+                          <p className="text-[10px] text-[var(--muted)] uppercase">Assets</p>
+                        </div>
+                        <div className="w-px h-8 bg-[var(--subtle-border)]" />
+                        <div className="text-center">
+                          <p className="text-[18px] font-bold text-[var(--text)] tabular-nums">{Math.round(coveragePct * 100)}%</p>
+                          <p className="text-[10px] text-[var(--muted)] uppercase">Coverage</p>
+                        </div>
+                        <div className="flex-1" />
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setScopeMonitors((prev) => prev.map((m) => ({ ...m, checked: true })))}
+                            className="text-[11px] text-blue-400 hover:text-blue-300"
+                          >All</button>
+                          <span className="text-[var(--text-faint)]">|</span>
+                          <button
+                            type="button"
+                            onClick={() => setScopeMonitors((prev) => prev.map((m) => ({ ...m, checked: false })))}
+                            className="text-[11px] text-[var(--muted)] hover:text-[var(--text)]"
+                          >None</button>
+                        </div>
+                      </div>
+
+                      {/* Monitor list */}
+                      {scopeLoading ? (
+                        <div className="flex items-center justify-center py-10">
+                          <div className="w-5 h-5 red-spinner" />
+                          <span className="text-[12px] text-[var(--muted)] ml-2">Analyzing scope...</span>
+                        </div>
+                      ) : scopeMonitors.length === 0 ? (
+                        <div className="text-center py-10">
+                          <p className="text-[13px] text-[var(--muted)]">No monitors recommended for this asset.</p>
+                          <p className="text-[11px] text-[var(--text-faint)] mt-1">Try a different watch type or asset.</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5 max-h-[340px] overflow-y-auto">
+                          {scopeMonitors.map((mon, i) => (
+                            <div
+                              key={i}
+                              onClick={() => toggleScopeMonitor(i)}
+                              className={cn(
+                                'flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors',
+                                mon.checked
+                                  ? 'border-[var(--subtle-border)] bg-[var(--surface)]'
+                                  : 'border-transparent bg-[var(--overlay-bg)] opacity-50'
+                              )}
+                            >
+                              <div className={cn(
+                                'w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                                mon.checked
+                                  ? 'bg-blue-500 border-blue-500'
+                                  : 'border-[var(--overlay-strong)] bg-transparent'
+                              )}>
+                                {mon.checked && (
+                                  <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
+                              </div>
+                              <span className={cn(
+                                'px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0',
+                                PRIORITY_COLORS[mon.priority] || PRIORITY_COLORS[3]
+                              )}>P{mon.priority}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="px-1 py-0.5 rounded bg-white/5 text-[10px] uppercase text-[var(--muted)]">
+                                    {(mon.monitorType || '').replace(/_/g, ' ')}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-[var(--muted)] mt-0.5 truncate">
+                                  {mon.targetFqn}
+                                  {mon.reason && ` — ${mon.reason}`}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Watch step 3: Schedule */}
+                  {watchStep === 3 && (
+                    <>
+                      <div>
+                        <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                          How often should this watch run?
                         </label>
-                        <button
-                          type="button"
-                          onClick={() => setBundleMonitors([])}
-                          className="text-[10px] text-red-400 hover:text-red-300"
+                        <ScheduleInput value={schedule} onChange={setSchedule} />
+                      </div>
+                      <div>
+                        <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                          Timezone
+                        </label>
+                        <select
+                          value={timezone}
+                          onChange={(e) => setTimezone(e.target.value)}
+                          className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
                         >
-                          Clear all
-                        </button>
+                          <option value="UTC">UTC</option>
+                          <option value="America/New_York">Eastern (US)</option>
+                          <option value="America/Chicago">Central (US)</option>
+                          <option value="America/Denver">Mountain (US)</option>
+                          <option value="America/Los_Angeles">Pacific (US)</option>
+                          <option value="Europe/London">London</option>
+                          <option value="Europe/Berlin">Berlin</option>
+                          <option value="Asia/Tokyo">Tokyo</option>
+                        </select>
                       </div>
-                      <div className="space-y-1.5 max-h-56 overflow-y-auto">
-                        {bundleMonitors.map((mon, i) => (
-                          <div
-                            key={`${mon.targetFqn}-${i}`}
-                            className="flex items-center gap-2 px-2.5 py-2 bg-[var(--overlay-bg)] border border-[var(--border-faint)] rounded-lg"
-                          >
-                            <span className="text-[11px] text-[var(--text)] font-mono truncate flex-1 min-w-0" title={mon.targetFqn}>
-                              {mon.targetFqn.split('.').pop() || mon.targetFqn}
-                            </span>
-                            <select
-                              value={mon.monitorType}
-                              onChange={(e) => {
-                                const newType = e.target.value;
-                                const shortName = mon.targetFqn.split('.').pop() || mon.targetFqn;
-                                setBundleMonitors((prev) =>
-                                  prev.map((m, j) =>
-                                    j === i
-                                      ? { ...m, monitorType: newType, name: `${newType.toLowerCase().replace(/_/g, ' ')} — ${shortName}` }
-                                      : m
-                                  )
-                                );
-                              }}
-                              className="bg-[var(--surface)] border border-[var(--subtle-border)] rounded px-1.5 py-1 text-[10px] text-[var(--text)] focus:outline-none shrink-0 appearance-none"
-                            >
-                              {BUNDLE_SCANNER_OPTIONS.map((opt) => (
-                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() => setBundleMonitors((prev) => prev.filter((_, j) => j !== i))}
-                              className="text-[var(--muted)] hover:text-red-400 shrink-0"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
+                    </>
+                  )}
+
+                  {/* Watch step 4: Alerts & Confirm */}
+                  {watchStep === 4 && (
+                    <>
+                      <AlertChannelPicker
+                        channels={alertChannels}
+                        onChannelsChange={setAlertChannels}
+                        alertOnStatus={alertOnStatus}
+                        onAlertOnStatusChange={setAlertOnStatus}
+                      />
+                      {/* Summary card */}
+                      <div className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)]">
+                        <div className="mb-3">
+                          <label className="block text-[12px] font-medium text-[var(--muted)] mb-1.5">
+                            Watch name
+                          </label>
+                          <input
+                            type="text"
+                            value={watchName}
+                            onChange={(e) => setWatchName(e.target.value)}
+                            className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)]"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-[12px]">
+                          <div>
+                            <span className="text-[var(--text-faint)]">Type: </span>
+                            <span className="text-[var(--text-secondary)]">{WATCH_TYPE_LABELS[watchType]}</span>
                           </div>
-                        ))}
+                          <div>
+                            <span className="text-[var(--text-faint)]">Monitors: </span>
+                            <span className="text-[var(--text-secondary)]">{scopeMonitors.filter((m) => m.checked).length}</span>
+                          </div>
+                          <div>
+                            <span className="text-[var(--text-faint)]">Schedule: </span>
+                            <span className="text-[var(--text-secondary)]">{schedule || 'None'}</span>
+                          </div>
+                          <div>
+                            <span className="text-[var(--text-faint)]">Coverage: </span>
+                            <span className="text-[var(--text-secondary)]">{Math.round(coveragePct * 100)}%</span>
+                          </div>
+                        </div>
+                        {selectedWatchAsset && (
+                          <div className="mt-2 pt-2 border-t border-[var(--border-faint)]">
+                            <span className="text-[11px] text-[var(--text-faint)]">Anchor: </span>
+                            <span className="text-[11px] text-[var(--text-secondary)] font-mono">{selectedWatchAsset.fqn}</span>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  )}
-
-                  {/* Empty / loading state */}
-                  {bundleMonitors.length === 0 && bundleAnchorFqn && (
-                    <div className="py-4 text-center text-[12px] text-[var(--muted)]">
-                      Fetching upstream nodes...
-                    </div>
-                  )}
-
-                  {/* Integration selector for bundle */}
-                  {bundleMonitors.length > 0 && warehouseIntegrations.length > 0 && (
-                    <div>
-                      <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                        Run against warehouse
-                      </label>
-                      <select
-                        value={integrationId}
-                        onChange={(e) => setIntegrationId(e.target.value)}
-                        className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)] appearance-none"
-                      >
-                        <option value="">Auto-detect</option>
-                        {warehouseIntegrations.map((i) => (
-                          <option key={i.id} value={i.id}>{i.name} ({i.type})</option>
-                        ))}
-                      </select>
-                    </div>
+                    </>
                   )}
                 </div>
               ) : (
@@ -992,8 +1177,8 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                 />
               )}
 
-              {/* Integration selection — dynamic based on monitor type (non-bundle) */}
-              {taskMode !== 'bundle' && renderIntegrationSelector()}
+              {/* Integration selection — dynamic based on monitor type (non-watch) */}
+              {taskMode !== 'watch' && renderIntegrationSelector()}
             </>
           )}
 
@@ -1041,31 +1226,73 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
 
         {/* Footer */}
         <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-t border-[var(--subtle-border)]">
-          <div>
-            {step > 1 && (
-              <Button variant="ghost" size="sm" onClick={() => setStep(step - 1)}>
-                Back
-              </Button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              Cancel
-            </Button>
-            {step < 3 ? (
-              <Button
-                size="sm"
-                onClick={() => setStep(step + 1)}
-                disabled={step === 1 ? !canProceedStep1 : !canProceedStep2}
-              >
-                Next
-              </Button>
-            ) : (
-              <Button size="sm" onClick={handleSubmit}>
-                {isEditing ? 'Save Changes' : taskMode === 'bundle' ? `Create Bundle (${bundleMonitors.length})` : 'Create Task'}
-              </Button>
-            )}
-          </div>
+          {taskMode === 'watch' ? (
+            // Watch mode footer — controls its own 4-step navigation
+            <>
+              <div>
+                {watchStep > 1 && (
+                  <Button variant="ghost" size="sm" onClick={() => setWatchStep((s) => s - 1)}>
+                    Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={onClose}>
+                  Cancel
+                </Button>
+                {watchStep < 4 ? (
+                  <Button
+                    size="sm"
+                    disabled={
+                      watchStep === 1 ? !selectedWatchAsset :
+                      watchStep === 2 ? scopeMonitors.filter((m) => m.checked).length === 0 :
+                      false
+                    }
+                    onClick={() => setWatchStep((s) => s + 1)}
+                  >
+                    Next
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    disabled={scopeMonitors.filter((m) => m.checked).length === 0}
+                    onClick={handleSubmit}
+                  >
+                    Create Health Watch
+                  </Button>
+                )}
+              </div>
+            </>
+          ) : (
+            // Normal mode footer — 3-step navigation
+            <>
+              <div>
+                {step > 1 && (
+                  <Button variant="ghost" size="sm" onClick={() => setStep(step - 1)}>
+                    Back
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={onClose}>
+                  Cancel
+                </Button>
+                {step < 3 ? (
+                  <Button
+                    size="sm"
+                    onClick={() => setStep(step + 1)}
+                    disabled={step === 1 ? !canProceedStep1 : !canProceedStep2}
+                  >
+                    Next
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={handleSubmit}>
+                    {isEditing ? 'Save Changes' : 'Create Task'}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

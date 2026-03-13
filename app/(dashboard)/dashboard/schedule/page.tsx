@@ -6,14 +6,12 @@ import { usePipeline } from '@/contexts/PipelineContext';
 import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import { Button } from '@/components/ui/button';
 import { TaskCard } from '@/components/schedule/TaskCard';
-import { BundleCard } from '@/components/schedule/BundleCard';
 import { WatchCard } from '@/components/schedule/WatchCard';
 import { WatchDetailPanel } from '@/components/schedule/WatchDetailPanel';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
-import { CreateWatchModal } from '@/components/schedule/CreateWatchModal';
 import { RunHistoryTable } from '@/components/schedule/RunHistoryTable';
 import { cn } from '@/lib/utils';
-import type { ScheduledTask, TaskRun, MonitorGroupSummary } from '@/types/schedule';
+import type { ScheduledTask, TaskRun } from '@/types/schedule';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { WatchSummary } from '@/types/health-watch';
 
@@ -28,19 +26,12 @@ export default function SchedulePage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showWatchModal, setShowWatchModal] = useState(false);
 
   // Watch state
   const [watches, setWatches] = useState<WatchSummary[]>([]);
   const [selectedWatch, setSelectedWatch] = useState<WatchSummary | null>(null);
   const [watchDetailMonitors, setWatchDetailMonitors] = useState<any[]>([]);
   const [watchDetailLoading, setWatchDetailLoading] = useState(false);
-
-  // Bundle state
-  const [bundles, setBundles] = useState<MonitorGroupSummary[]>([]);
-  const [selectedBundle, setSelectedBundle] = useState<MonitorGroupSummary | null>(null);
-  const [bundleDetail, setBundleDetail] = useState<any>(null);
-  const [bundleDetailLoading, setBundleDetailLoading] = useState(false);
 
   // Task detail state
   const [selectedTask, setSelectedTask] = useState<ScheduledTask | null>(null);
@@ -77,19 +68,6 @@ export default function SchedulePage() {
     }
   }, [filter, selectedPipeline?.id]);
 
-  // Fetch bundles
-  const fetchBundles = useCallback(async () => {
-    try {
-      const res = await cachedFetch('/api/schedule/bundles');
-      if (res.ok) {
-        const data = await res.json();
-        setBundles(data.bundles || []);
-      }
-    } catch (err) {
-      console.error('[Schedule] Failed to fetch bundles:', err);
-    }
-  }, []);
-
   // Fetch watches
   const fetchWatches = useCallback(async () => {
     try {
@@ -106,15 +84,12 @@ export default function SchedulePage() {
   // Re-fetch and reset selection when pipeline changes
   useEffect(() => {
     setSelectedTask(null);
-    setSelectedBundle(null);
-    setBundleDetail(null);
     setSelectedWatch(null);
     setWatchDetailMonitors([]);
     setTaskRuns([]);
     fetchTasks();
-    fetchBundles();
     fetchWatches();
-  }, [fetchTasks, fetchBundles, fetchWatches]);
+  }, [fetchTasks, fetchWatches]);
 
   // Fetch integrations for create modal
   useEffect(() => {
@@ -167,28 +142,6 @@ export default function SchedulePage() {
     fetchRuns();
   }, [selectedTask]);
 
-  // Fetch bundle detail
-  useEffect(() => {
-    if (!selectedBundle) return;
-
-    const fetchDetail = async () => {
-      setBundleDetailLoading(true);
-      try {
-        const res = await fetch(`/api/schedule/bundles/${selectedBundle.id}`);
-        if (res.ok) {
-          const data = await res.json();
-          setBundleDetail(data.bundle);
-        }
-      } catch (err) {
-        console.error('[Schedule] Failed to fetch bundle detail:', err);
-      } finally {
-        setBundleDetailLoading(false);
-      }
-    };
-
-    fetchDetail();
-  }, [selectedBundle]);
-
   // Fetch watch detail
   useEffect(() => {
     if (!selectedWatch) return;
@@ -224,7 +177,7 @@ export default function SchedulePage() {
         body: JSON.stringify(watchData),
       });
       if (res.ok) {
-        setShowWatchModal(false);
+        setShowCreateModal(false);
         invalidateCache('/api/schedule');
         fetchWatches();
         fetchTasks();
@@ -290,22 +243,15 @@ export default function SchedulePage() {
     }
   };
 
-  // Create task or bundle
+  // Create task, bundle, or watch
   const handleCreateTask = async (taskData: any) => {
     try {
-      if (taskData._bundle) {
-        const { _bundle, ...bundleData } = taskData;
-        const res = await fetch('/api/schedule/bundles', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(bundleData),
-        });
-        if (res.ok) {
-          setShowCreateModal(false);
-          fetchBundles();
-          fetchTasks();
-        }
-      } else {
+      if (taskData._watch) {
+        const { _watch, ...watchData } = taskData;
+        await handleCreateWatch(watchData);
+        return;
+      }
+      {
         const res = await fetch('/api/schedule/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -338,23 +284,6 @@ export default function SchedulePage() {
     }
   };
 
-  // Toggle bundle enabled
-  const handleToggleBundleEnabled = async (bundleId: string, enabled: boolean) => {
-    try {
-      await fetch(`/api/schedule/bundles/${bundleId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
-      });
-      invalidateCache('/api/schedule');
-      setBundles((prev) =>
-        prev.map((b) => (b.id === bundleId ? { ...b, enabled } : b))
-      );
-    } catch (err) {
-      console.error('[Schedule] Failed to toggle bundle:', err);
-    }
-  };
-
   // Run now
   const handleRunNow = async (taskId: string) => {
     try {
@@ -376,29 +305,6 @@ export default function SchedulePage() {
     }
   };
 
-  // Run all monitors in a bundle
-  const handleRunBundle = async (bundleId: string) => {
-    try {
-      const res = await fetch(`/api/schedule/bundles/${bundleId}/run`, {
-        method: 'POST',
-      });
-      if (res.ok) {
-        fetchBundles();
-        fetchTasks();
-        // Refresh detail if viewing this bundle
-        if (selectedBundle?.id === bundleId) {
-          const detailRes = await fetch(`/api/schedule/bundles/${bundleId}`);
-          if (detailRes.ok) {
-            const data = await detailRes.json();
-            setBundleDetail(data.bundle);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('[Schedule] Failed to run bundle:', err);
-    }
-  };
-
   // Delete task
   const handleDeleteTask = async (taskId: string) => {
     try {
@@ -410,20 +316,6 @@ export default function SchedulePage() {
       }
     } catch (err) {
       console.error('[Schedule] Failed to delete task:', err);
-    }
-  };
-
-  // Delete bundle
-  const handleDeleteBundle = async (bundleId: string) => {
-    try {
-      await fetch(`/api/schedule/bundles/${bundleId}`, { method: 'DELETE' });
-      invalidateCache('/api/schedule');
-      setBundles((prev) => prev.filter((b) => b.id !== bundleId));
-      setSelectedBundle(null);
-      setBundleDetail(null);
-      fetchTasks();
-    } catch (err) {
-      console.error('[Schedule] Failed to delete bundle:', err);
     }
   };
 
@@ -461,151 +353,6 @@ export default function SchedulePage() {
         onDelete={() => handleDeleteWatch(selectedWatch.id)}
         onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
       />
-    );
-  }
-
-  // Bundle detail view
-  if (selectedBundle) {
-    const statusColor = selectedBundle.lastStatus
-      ? RUN_STATUS_COLORS[selectedBundle.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
-      : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
-
-    const monitors = bundleDetail?.monitors || selectedBundle.monitors || [];
-
-    return (
-      <div className="flex flex-col h-full bg-[var(--surface-inset)]">
-        {/* Detail header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => { setSelectedBundle(null); setBundleDetail(null); }}
-              className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)]"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-            <div>
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                </svg>
-                <h2 className="text-[16px] font-semibold text-[var(--text)]">{selectedBundle.name}</h2>
-                <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', statusColor)}>
-                  {selectedBundle.lastStatus || 'NEW'}
-                </span>
-              </div>
-              <p className="text-[12px] text-[var(--muted)] mt-0.5">
-                {selectedBundle.groupType.replace(/_/g, ' ')}
-                {' · '}
-                {selectedBundle.monitorCount} monitor{selectedBundle.monitorCount !== 1 ? 's' : ''}
-                {selectedBundle.schedule && ` · ${selectedBundle.schedule}`}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => handleRunBundle(selectedBundle.id)}
-            >
-              Run All
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-red-400 hover:text-red-300"
-              onClick={() => handleDeleteBundle(selectedBundle.id)}
-            >
-              Delete
-            </Button>
-          </div>
-        </div>
-
-        {/* Bundle config summary */}
-        <div className="px-6 py-4 border-b border-[var(--border-faint)]">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Type</p>
-              <p className="text-[13px] text-[var(--text-secondary)] capitalize">
-                {selectedBundle.groupType.replace(/_/g, ' ')}
-              </p>
-            </div>
-            <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Schedule</p>
-              <p className="text-[13px] text-[var(--text-secondary)]">{selectedBundle.schedule || 'None'}</p>
-            </div>
-            <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Passing</p>
-              <p className="text-[13px] text-[var(--text-secondary)]">
-                {selectedBundle.passCount}/{selectedBundle.monitorCount}
-              </p>
-            </div>
-            <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Status</p>
-              <p className="text-[13px] text-[var(--text-secondary)]">
-                {selectedBundle.enabled ? 'Enabled' : 'Disabled'}
-              </p>
-            </div>
-          </div>
-          {selectedBundle.anchorFqn && (
-            <div className="mt-3 p-3 bg-[var(--overlay-bg)] rounded-lg border border-[var(--subtle-border)]">
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Anchor</p>
-              <p className="text-[13px] text-[var(--text-tertiary)] font-mono">{selectedBundle.anchorFqn}</p>
-            </div>
-          )}
-        </div>
-
-        {/* Member monitors */}
-        <div className="flex-1 px-6 py-4 overflow-y-auto">
-          <h3 className="text-[14px] font-medium text-[var(--text)] mb-3">Monitors</h3>
-          {bundleDetailLoading ? (
-            <div className="flex items-center justify-center py-10">
-              <div className="w-5 h-5 red-spinner" />
-            </div>
-          ) : monitors.length === 0 ? (
-            <p className="text-[13px] text-[var(--muted)] py-4">No monitors in this bundle.</p>
-          ) : (
-            <div className="space-y-2">
-              {monitors.map((mon: any) => {
-                const monStatus = mon.lastStatus
-                  ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
-                  : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
-                return (
-                  <div
-                    key={mon.id}
-                    className="flex items-center gap-3 p-3 bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg"
-                  >
-                    <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
-                      {mon.lastStatus || 'NEW'}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>
-                      <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
-                        {mon.monitorType && (
-                          <span className="px-1 py-0.5 rounded bg-white/5 text-[10px] uppercase">
-                            {mon.monitorType.replace(/_/g, ' ')}
-                          </span>
-                        )}
-                        {mon.targetFqn && (
-                          <span className="font-mono truncate max-w-[200px]" title={mon.targetFqn}>
-                            {mon.targetFqn}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {mon.lastRun && (
-                      <span className="text-[11px] text-[var(--text-faint)] shrink-0">
-                        {mon.lastRun.durationMs ? `${(mon.lastRun.durationMs / 1000).toFixed(1)}s` : ''}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
     );
   }
 
@@ -731,12 +478,6 @@ export default function SchedulePage() {
     );
   }
 
-  // Ungrouped tasks (not part of any bundle)
-  const ungroupedTasks = tasks.filter((t) => {
-    const raw = t as any;
-    return !raw.monitorGroupId && !t.monitorGroupName && !raw.monitorGroup;
-  });
-
   // Task list view
   return (
     <div className="flex flex-col h-full bg-[var(--surface-inset)]">
@@ -749,11 +490,8 @@ export default function SchedulePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="ghost" onClick={() => setShowCreateModal(true)}>
+          <Button size="sm" onClick={() => setShowCreateModal(true)}>
             + Create Task
-          </Button>
-          <Button size="sm" onClick={() => setShowWatchModal(true)}>
-            + Health Watch
           </Button>
         </div>
       </div>
@@ -776,7 +514,6 @@ export default function SchedulePage() {
         ))}
         <span className="text-[12px] text-[var(--text-faint)] ml-2">
           {watches.length > 0 && `${watches.length} watch${watches.length !== 1 ? 'es' : ''} · `}
-          {bundles.length > 0 && `${bundles.length} bundle${bundles.length !== 1 ? 's' : ''} · `}
           {tasks.length} task{tasks.length !== 1 ? 's' : ''}
         </span>
       </div>
@@ -787,7 +524,7 @@ export default function SchedulePage() {
           <div className="flex items-center justify-center py-20">
             <div className="w-6 h-6 red-spinner" />
           </div>
-        ) : watches.length === 0 && bundles.length === 0 && tasks.length === 0 ? (
+        ) : watches.length === 0 && tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <svg className="w-12 h-12 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -822,36 +559,11 @@ export default function SchedulePage() {
               </div>
             )}
 
-            {/* Bundles section */}
-            {bundles.length > 0 && (
-              <div>
-                <h3 className="text-[12px] font-medium text-[var(--text-faint)] uppercase tracking-wider mb-2">
-                  Bundles
-                </h3>
-                <div className="space-y-2">
-                  {bundles.map((bundle) => (
-                    <BundleCard
-                      key={bundle.id}
-                      bundle={bundle}
-                      onClick={() => setSelectedBundle(bundle)}
-                      onToggleEnabled={(enabled) => handleToggleBundleEnabled(bundle.id, enabled)}
-                      onRunAll={() => handleRunBundle(bundle.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* Individual tasks section */}
-            {ungroupedTasks.length > 0 && (
+            {tasks.length > 0 && (
               <div>
-                {bundles.length > 0 && (
-                  <h3 className="text-[12px] font-medium text-[var(--text-faint)] uppercase tracking-wider mb-2">
-                    Individual Tasks
-                  </h3>
-                )}
                 <div className="space-y-2">
-                  {ungroupedTasks.map((task) => (
+                  {tasks.map((task) => (
                     <TaskCard
                       key={task.id}
                       task={task}
@@ -878,13 +590,6 @@ export default function SchedulePage() {
         stackId={selectedPipeline?.id}
       />
 
-      {/* Create Watch modal */}
-      <CreateWatchModal
-        open={showWatchModal}
-        onClose={() => setShowWatchModal(false)}
-        onSubmit={handleCreateWatch}
-        stackId={selectedPipeline?.id}
-      />
     </div>
   );
 }

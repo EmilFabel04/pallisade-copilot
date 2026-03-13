@@ -24,9 +24,16 @@ export async function GET(request: NextRequest) {
     const where: any = { organizationId };
 
     if (due === 'true') {
+      // Scheduler needs ALL due monitors including watch-grouped ones
       where.enabled = true;
       where.nextRunAt = { lte: new Date() };
-    } else if (status === 'disabled') {
+    } else {
+      // Display queries: exclude monitors that belong to a watch group
+      // (they're shown under their parent watch, not as standalone tasks)
+      where.monitorGroupId = null;
+    }
+
+    if (status === 'disabled') {
       where.enabled = false;
     } else if (status === 'passing') {
       where.enabled = true;

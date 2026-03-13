@@ -47,8 +47,7 @@ import {
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
-import { CreateTaskModal, type MonitorPrefillData, type BundlePrefillData } from '@/components/schedule/CreateTaskModal';
-import { CreateWatchModal, type WatchPrefillData } from '@/components/schedule/CreateWatchModal';
+import { CreateTaskModal, type MonitorPrefillData, type WatchPrefillData } from '@/components/schedule/CreateTaskModal';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -172,24 +171,16 @@ function LineagePageInner() {
   // Monitor creation modal state
   const [monitorModalOpen, setMonitorModalOpen] = useState(false);
   const [monitorPrefill, setMonitorPrefill] = useState<MonitorPrefillData | null>(null);
-  const [bundlePrefill, setBundlePrefill] = useState<BundlePrefillData | null>(null);
   const handleCreateMonitor = useCallback((prefill: MonitorPrefillData) => {
     setMonitorPrefill(prefill);
-    setBundlePrefill(null);
-    setMonitorModalOpen(true);
-  }, []);
-  const handleCreateBundle = useCallback((prefill: BundlePrefillData) => {
-    setBundlePrefill(prefill);
-    setMonitorPrefill(null);
     setMonitorModalOpen(true);
   }, []);
 
-  // Watch creation modal state
-  const [watchModalOpen, setWatchModalOpen] = useState(false);
+  // Watch creation — opens CreateTaskModal in watch mode
   const [watchPrefill, setWatchPrefill] = useState<WatchPrefillData | null>(null);
   const handleCreateWatch = useCallback((prefill: WatchPrefillData) => {
     setWatchPrefill(prefill);
-    setWatchModalOpen(true);
+    setMonitorModalOpen(true);
   }, []);
 
   // LLM extraction state
@@ -2052,25 +2043,24 @@ function LineagePageInner() {
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}
               onCreateMonitor={handleCreateMonitor}
-              onCreateBundle={handleCreateBundle}
               onCreateWatch={handleCreateWatch}
             />
           )
         )}
       </div>
 
-      {/* Monitor creation modal (opened from lineage node recommendations) */}
+      {/* Monitor/Bundle/Watch creation modal (opened from lineage node recommendations) */}
       <CreateTaskModal
         open={monitorModalOpen}
-        onClose={() => { setMonitorModalOpen(false); setMonitorPrefill(null); setBundlePrefill(null); }}
+        onClose={() => { setMonitorModalOpen(false); setMonitorPrefill(null); setWatchPrefill(null); }}
         onSubmit={async (task) => {
           try {
-            if (task._bundle) {
-              const { _bundle, ...bundleData } = task;
-              await fetch('/api/schedule/bundles', {
+            if (task._watch) {
+              const { _watch, ...watchData } = task;
+              await fetch('/api/schedule/watches', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(bundleData),
+                body: JSON.stringify(watchData),
               });
             } else {
               await fetch('/api/schedule/tasks', {
@@ -2082,30 +2072,12 @@ function LineagePageInner() {
           } catch {}
           setMonitorModalOpen(false);
           setMonitorPrefill(null);
-          setBundlePrefill(null);
-        }}
-        prefillData={monitorPrefill}
-        bundlePrefillData={bundlePrefill}
-        stackId={stackId || undefined}
-      />
-
-      {/* Health Watch creation modal (opened from lineage node) */}
-      <CreateWatchModal
-        open={watchModalOpen}
-        onClose={() => { setWatchModalOpen(false); setWatchPrefill(null); }}
-        onSubmit={async (watchData) => {
-          try {
-            await fetch('/api/schedule/watches', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(watchData),
-            });
-          } catch {}
-          setWatchModalOpen(false);
           setWatchPrefill(null);
         }}
-        prefillData={watchPrefill}
+        prefillData={monitorPrefill}
+        watchPrefillData={watchPrefill}
         stackId={stackId || undefined}
+        initialMode={watchPrefill ? 'watch' : undefined}
       />
     </div>
   );

@@ -17,11 +17,9 @@ import {
   ShieldCheck,
   Plus,
   ArrowUpFromLine,
-  Package,
   Sparkles,
 } from 'lucide-react';
-import type { MonitorPrefillData, BundlePrefillData } from '@/components/schedule/CreateTaskModal';
-import type { WatchPrefillData } from '@/components/schedule/CreateWatchModal';
+import type { MonitorPrefillData, WatchPrefillData } from '@/components/schedule/CreateTaskModal';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,
@@ -63,13 +61,6 @@ interface MonitorRecommendation {
   already_monitored: boolean;
 }
 
-interface MonitorBundleResponse {
-  bundle_key: string;
-  label: string;
-  description: string;
-  recommendations: MonitorRecommendation[];
-}
-
 interface DataAssetDetailPanelProps {
   node: UnifiedLineageNode;
   allNodes: UnifiedLineageNode[];
@@ -78,7 +69,6 @@ interface DataAssetDetailPanelProps {
   onClose: () => void;
   onNodeNavigate: (nodeId: string) => void;
   onCreateMonitor?: (prefill: MonitorPrefillData) => void;
-  onCreateBundle?: (prefill: BundlePrefillData) => void;
   onCreateWatch?: (prefill: WatchPrefillData) => void;
 }
 
@@ -256,7 +246,6 @@ export function DataAssetDetailPanel({
   onClose,
   onNodeNavigate,
   onCreateMonitor,
-  onCreateBundle,
   onCreateWatch,
 }: DataAssetDetailPanelProps) {
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult | null>(null);
@@ -280,7 +269,6 @@ export function DataAssetDetailPanel({
     setShowAllMonitors(false);
     setBlastRadius(null);
     setRecommendations(null);
-    setBundles([]);
     setRecsExpanded(false);
   }, [node.id]);
 
@@ -397,7 +385,6 @@ export function DataAssetDetailPanel({
 
   // Monitor recommendations
   const [recommendations, setRecommendations] = useState<MonitorRecommendation[] | null>(null);
-  const [bundles, setBundles] = useState<MonitorBundleResponse[]>([]);
   const [recsLoading, setRecsLoading] = useState(false);
   const [recsExpanded, setRecsExpanded] = useState(false);
 
@@ -662,12 +649,10 @@ export function DataAssetDetailPanel({
               .then((data) => {
                 // Always set to array (even empty) to prevent retry loops on failure
                 setRecommendations(data?.recommendations || []);
-                setBundles(data?.bundles || []);
               })
               .catch(() => {
                 // Set empty arrays to prevent retry loops
                 setRecommendations([]);
-                setBundles([]);
               })
               .finally(() => setRecsLoading(false));
           };
@@ -761,37 +746,6 @@ export function DataAssetDetailPanel({
                       {recommendations.map((rec, i) => renderRecCard(rec, i))}
                     </div>
 
-                    {/* Bundle CTA */}
-                    {bundles.length > 0 && (() => {
-                      const reportingBundle = bundles.find(b => b.bundle_key === 'reporting_health') || bundles[0];
-                      const uncoveredRecs = reportingBundle.recommendations.filter(r => !r.already_monitored);
-                      if (uncoveredRecs.length === 0) return null;
-                      return (
-                        <button
-                          onClick={() => {
-                            if (onCreateBundle) {
-                              onCreateBundle({
-                                name: `${reportingBundle.label} — ${node.name}`,
-                                groupType: reportingBundle.bundle_key,
-                                anchorFqn: node.fullName || node.name,
-                                anchorNodeId: node.id.replace(/^lineage-/, ''),
-                                monitors: uncoveredRecs.map(r => ({
-                                  name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
-                                  monitorType: r.monitor_key,
-                                  targetFqn: r.target_fqn,
-                                  config: r.config_hints,
-                                })),
-                              });
-                            }
-                          }}
-                          className="w-full flex items-center justify-center gap-1 py-1 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[10px] text-amber-300 font-medium"
-                        >
-                          <Package className="w-3 h-3" />
-                          Create recommended checks ({uncoveredRecs.length})
-                        </button>
-                      );
-                    })()}
-
                     {/* Health Watch CTA */}
                     {onCreateWatch && (
                       <button
@@ -803,12 +757,6 @@ export function DataAssetDetailPanel({
                               targetFqn: r.target_fqn,
                               config: r.config_hints,
                             })),
-                            ...bundles.flatMap(b => b.recommendations.filter(r => !r.already_monitored).map(r => ({
-                              name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
-                              monitorType: r.monitor_key,
-                              targetFqn: r.target_fqn,
-                              config: r.config_hints,
-                            }))),
                           ];
                           onCreateWatch({
                             anchorFqn: node.fullName || node.name,
@@ -828,7 +776,7 @@ export function DataAssetDetailPanel({
                 )}
 
                 {/* Empty state */}
-                {!recsLoading && recommendations && recommendations.length === 0 && bundles.length === 0 && (
+                {!recsLoading && recommendations && recommendations.length === 0 && (
                   <div className="py-3 text-center">
                     <p className="text-[11px] text-[var(--muted)]">
                       {totalUpstream > 0
@@ -912,50 +860,6 @@ export function DataAssetDetailPanel({
                     <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
                       <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
                       Analyzing lineage...
-                    </div>
-                  )}
-
-                  {/* Bundles */}
-                  {!recsLoading && bundles.length > 0 && (
-                    <div className="space-y-2">
-                      {bundles.map((bundle) => (
-                        <div
-                          key={bundle.bundle_key}
-                          className="p-2.5 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)]"
-                        >
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <Package className="w-3.5 h-3.5 text-amber-300" />
-                            <span className="text-[12px] text-[var(--text)] font-medium flex-1">{bundle.label}</span>
-                            <span className="text-[10px] text-[var(--muted)]">
-                              {bundle.recommendations.length} monitor{bundle.recommendations.length !== 1 ? 's' : ''}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-[var(--text-faint)] mb-2">{bundle.description}</p>
-                          <button
-                            onClick={() => {
-                              const uncoveredRecs = bundle.recommendations.filter(r => !r.already_monitored);
-                              if (onCreateBundle && uncoveredRecs.length > 0) {
-                                onCreateBundle({
-                                  name: `${bundle.label} — ${node.name}`,
-                                  groupType: bundle.bundle_key,
-                                  anchorFqn: node.fullName || node.name,
-                                  anchorNodeId: node.id.replace(/^lineage-/, ''),
-                                  monitors: uncoveredRecs.map(r => ({
-                                    name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
-                                    monitorType: r.monitor_key,
-                                    targetFqn: r.target_fqn,
-                                    config: r.config_hints,
-                                  })),
-                                });
-                              }
-                            }}
-                            className="w-full flex items-center justify-center gap-1 py-1 rounded bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all text-[10px] text-amber-300"
-                          >
-                            <Package className="w-2.5 h-2.5" />
-                            Create Bundle
-                          </button>
-                        </div>
-                      ))}
                     </div>
                   )}
 

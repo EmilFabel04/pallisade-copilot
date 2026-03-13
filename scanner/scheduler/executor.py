@@ -17,6 +17,7 @@ from scanner.monitors.executor import MonitorExecutor, MONITOR_REGISTRY
 from scanner.monitors.base import MonitorResult, MonitorStatus
 from scanner.monitors.infrastructure import INFRA_MONITOR_TYPES
 from scanner.monitors.tools import TOOL_MONITOR_TYPES, TOOL_MONITOR_REGISTRY
+from scanner.monitors.bi import BI_MONITOR_TYPES, BI_MONITOR_REGISTRY
 
 logger = structlog.get_logger()
 
@@ -273,6 +274,10 @@ class TaskExecutor:
         monitor_type = (task.get("monitorType") or "").lower()
         if monitor_type in TOOL_MONITOR_TYPES:
             return await self._execute_tool_monitor(task, monitor_type)
+
+        # BI monitors use dashboard/report names (not SQL FQNs) — handle separately
+        if monitor_type in BI_MONITOR_TYPES:
+            return await self._execute_bi(task, monitor_type)
 
         return await self._execute_structured(task)
 
@@ -948,6 +953,95 @@ class TaskExecutor:
                 "status": "ERROR",
                 "message": f"Tool monitor execution failed: {str(e)}",
             }
+
+    async def _execute_bi(
+        self, task: Dict[str, Any], monitor_type: str
+    ) -> Dict[str, Any]:
+        """Run a BI/reporting monitor (dashboard freshness, content health, etc.).
+
+        BI monitors use dashboard/report names as targetFqn (not SQL table FQNs)
+        and query BI platform APIs instead of running SQL.
+        """
+        config = task.get("config") or {}
+        target_fqn = task.get("targetFqn", "")
+
+        # Use targetFqn as asset_id if not explicitly set in config
+        if not config.get("asset_id") and target_fqn:
+            config["asset_id"] = target_fqn
+
+        monitor_cls = BI_MONITOR_REGISTRY.get(monitor_type)
+        if not monitor_cls:
+            return {
+                "status": "ERROR",
+                "message": f"Unknown BI monitor type: {monitor_type}",
+            }
+
+        # Resolve BI integration config
+        integration_config = task.get("integrationConfig") or {}
+        bi_client = self._create_bi_client(integration_config)
+
+        if not bi_client:
+            platform = integration_config.get("type", "BI platform")
+            return {
+                "status": "SKIPPED",
+                "message": (
+                    f"No live {platform} integration found. "
+                    f"BI monitors require a connected BI platform (Looker, Tableau, Power BI, or Metabase) "
+                    f"with API access. Connect one on the Pipeline page to enable this monitor."
+                ),
+            }
+
+        try:
+            result: MonitorResult = MonitorExecutor.execute_bi_monitor(
+                monitor_type, config, bi_client,
+            )
+            result_dict = result.to_dict()
+
+            # LLM validation for FAIL/WARN results
+            llm_validate = config.get("llm_validate", True)
+            target = target_fqn or f"bi:{config.get('asset_id', 'unknown')}"
+            if llm_validate and result.status in (MonitorStatus.FAIL, MonitorStatus.WARN):
+                result_dict["raw_status"] = result_dict["status"]
+                result_dict = await self._llm_validate_result(
+                    result_dict, monitor_type, target
+                )
+                result_dict["final_status"] = result_dict["status"]
+
+            return result_dict
+        except Exception as e:
+            logger.error(f"[Executor] BI monitor failed: {e}")
+            return {
+                "status": "ERROR",
+                "message": f"BI monitor execution failed: {str(e)}",
+            }
+
+    def _create_bi_client(
+        self, integration_config: Dict[str, Any]
+    ) -> Any:
+        """Create a BI platform client from integration config.
+
+        Returns a client with get_asset_metadata(asset_id) method,
+        or None if no BI integration is configured.
+        """
+        bi_type = (integration_config.get("type") or "").lower()
+
+        try:
+            if bi_type == "looker":
+                from scanner.integrations.looker import LookerClient
+                return LookerClient(integration_config)
+            elif bi_type == "tableau":
+                from scanner.integrations.tableau import TableauClient
+                return TableauClient(integration_config)
+            elif bi_type in ("powerbi", "power_bi"):
+                from scanner.integrations.powerbi import PowerBIClient
+                return PowerBIClient(integration_config)
+            elif bi_type == "metabase":
+                from scanner.integrations.metabase import MetabaseClient
+                return MetabaseClient(integration_config)
+        except Exception as e:
+            logger.warning(f"[Executor] Failed to create BI client ({bi_type}): {e}")
+
+        return None
 
     def _create_tool_client(
         self, monitor_type: str, integration_config: Dict[str, Any]
