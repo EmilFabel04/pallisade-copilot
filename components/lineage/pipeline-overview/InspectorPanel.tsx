@@ -16,6 +16,7 @@ import {
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
 import type { MonitorPrefillData } from '@/components/schedule/CreateTaskModal';
+import { computeMonitorScoring, resolveAssetCategory, type MonitorScoringResult } from '@/lib/monitor-scoring';
 
 // Role badges shown when functional role differs from the lane name.
 // "transformation" and "reporting" are excluded — they match their lane, so a badge is redundant.
@@ -96,6 +97,26 @@ function NodeInspector({
     });
   }, [allMonitors, node.id, node.layer, node.metadata?.integrationId]);
 
+  // Tool-level monitor health & coverage scoring
+  const toolScoring = useMemo((): MonitorScoringResult | null => {
+    if (nodeMonitors.length === 0) return null;
+    const category = resolveAssetCategory(node.layer, node.metadata?.platformDomain as string, node.platform);
+    if (!category) return null;
+    return computeMonitorScoring(
+      nodeMonitors.map(m => ({ monitorType: m.monitorType || '', lastStatus: m.lastStatus })),
+      category,
+    );
+  }, [nodeMonitors, node.layer, node.metadata?.platformDomain, node.platform]);
+
+  // Compute effective header health color: use monitor-based when available
+  const effectiveHealthColor = toolScoring?.healthScore != null
+    ? (toolScoring.healthStatus === 'healthy' ? '#10B981'
+      : toolScoring.healthStatus === 'degraded' ? '#F59E0B'
+      : toolScoring.healthStatus === 'at_risk' ? '#F97316'
+      : toolScoring.healthStatus === 'unhealthy' ? '#EF4444'
+      : '#6B7280')
+    : (nodeMonitors.length === 0 ? '#6B7280' : healthColor); // gray when no monitors
+
   // Fetch tool details on-demand
   const [details, setDetails] = useState<ToolDetailsResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -159,7 +180,7 @@ function NodeInspector({
         <div className="flex items-center gap-2 mb-2">
           <div
             className="w-2.5 h-2.5 rounded-full"
-            style={{ backgroundColor: healthColor, boxShadow: `0 0 6px ${healthColor}60` }}
+            style={{ backgroundColor: effectiveHealthColor, boxShadow: `0 0 6px ${effectiveHealthColor}60` }}
           />
           <span className="text-[15px] font-semibold text-[var(--text)]">{node.name}</span>
         </div>
@@ -178,6 +199,66 @@ function NodeInspector({
           <span className="text-[11px] text-[var(--muted)] capitalize">{node.platform || 'Unknown'}</span>
         </div>
       </div>
+
+      {/* Monitor Health & Coverage */}
+      {toolScoring && toolScoring.healthScore != null && (
+        <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Monitor Health</span>
+            <div className="flex items-center gap-2">
+              <div className="w-14 h-1.5 rounded-full bg-[var(--subtle-bg)] overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${toolScoring.healthScore}%`,
+                    backgroundColor: toolScoring.healthStatus === 'healthy' ? '#10B981'
+                      : toolScoring.healthStatus === 'degraded' ? '#F59E0B'
+                      : toolScoring.healthStatus === 'at_risk' ? '#F97316'
+                      : '#EF4444',
+                  }}
+                />
+              </div>
+              <span
+                className="text-[11px] font-medium"
+                style={{
+                  color: toolScoring.healthStatus === 'healthy' ? '#10B981'
+                    : toolScoring.healthStatus === 'degraded' ? '#F59E0B'
+                    : toolScoring.healthStatus === 'at_risk' ? '#F97316'
+                    : '#EF4444',
+                }}
+              >
+                {Math.round(toolScoring.healthScore)}%
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Coverage</span>
+            <div className="flex items-center gap-2">
+              <div className="w-14 h-1.5 rounded-full bg-[var(--subtle-bg)] overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.min(toolScoring.coveragePct, 100)}%`,
+                    backgroundColor: toolScoring.coverageStatus === 'good' ? '#10B981'
+                      : toolScoring.coverageStatus === 'partial' ? '#F59E0B'
+                      : '#6B7280',
+                  }}
+                />
+              </div>
+              <span
+                className="text-[11px] font-medium"
+                style={{
+                  color: toolScoring.coverageStatus === 'good' ? '#10B981'
+                    : toolScoring.coverageStatus === 'partial' ? '#F59E0B'
+                    : '#6B7280',
+                }}
+              >
+                {toolScoring.configured}/{toolScoring.available}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Monitor this tool */}
       {onCreateMonitor && (() => {

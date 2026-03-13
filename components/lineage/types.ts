@@ -151,6 +151,15 @@ export interface MonitorStatusSummary {
     lastRunAt: string | null;
     lastMessage?: string;
   }>;
+  // Monitor-based health scoring (simple average of latest statuses)
+  healthScore?: number | null;
+  healthStatus?: 'healthy' | 'degraded' | 'at_risk' | 'unhealthy' | 'unmonitored';
+  // Monitor-type coverage
+  coveragePct?: number;            // 0-100
+  coverageStatus?: 'good' | 'partial' | 'none';
+  configuredMonitorTypes?: string[];
+  applicableMonitorTypes?: string[];
+  missingMonitorTypes?: string[];
 }
 
 // A node in the unified lineage graph

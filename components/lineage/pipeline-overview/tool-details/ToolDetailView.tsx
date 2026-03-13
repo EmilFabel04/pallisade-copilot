@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import type { ToolDetailsResponse } from '../types';
 import { getOverallHealth, HEALTH_COLORS } from '../types';
 import {
@@ -10,6 +10,7 @@ import {
   CoverageGapsList,
   formatRelativeTime,
 } from './SharedDetailComponents';
+import { computeMonitorScoring, resolveAssetCategory } from '@/lib/monitor-scoring';
 import { IngestionDetailView } from './IngestionDetailView';
 import { TransformDetailView } from './TransformDetailView';
 import { OrchestrationDetailView } from './OrchestrationDetailView';
@@ -75,6 +76,17 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
   const warning = monitors?.filter(m => m.lastStatus === 'WARN').length || 0;
   const failing = monitors?.filter(m => m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR').length || 0;
 
+  // Monitor-based health & coverage scoring
+  const scoring = useMemo(() => {
+    if (!monitors?.length) return null;
+    const category = resolveAssetCategory(undefined, details.platformDomain, details.platform);
+    if (!category) return null;
+    return computeMonitorScoring(
+      monitors.map(m => ({ monitorType: m.monitorType || '', lastStatus: m.lastStatus })),
+      category,
+    );
+  }, [monitors, details.platformDomain, details.platform]);
+
   return (
     <div className="space-y-4">
       {/* Stats grid */}
@@ -95,6 +107,78 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
         <div>
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Last Activity</label>
           <p className="text-[13px] text-[var(--text)] mt-1 font-mono">{formatRelativeTime(summary.lastRunTs)}</p>
+        </div>
+      )}
+
+      {/* Monitor Health & Coverage */}
+      {scoring && scoring.healthScore != null && (
+        <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Monitor Health</span>
+            <div className="flex items-center gap-2">
+              <div className="w-16 h-1.5 rounded-full bg-[var(--subtle-bg)] overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${scoring.healthScore}%`,
+                    backgroundColor: scoring.healthStatus === 'healthy' ? '#10B981'
+                      : scoring.healthStatus === 'degraded' ? '#F59E0B'
+                      : scoring.healthStatus === 'at_risk' ? '#F97316'
+                      : '#EF4444',
+                  }}
+                />
+              </div>
+              <span
+                className="text-[11px] font-medium"
+                style={{
+                  color: scoring.healthStatus === 'healthy' ? '#10B981'
+                    : scoring.healthStatus === 'degraded' ? '#F59E0B'
+                    : scoring.healthStatus === 'at_risk' ? '#F97316'
+                    : '#EF4444',
+                }}
+              >
+                {Math.round(scoring.healthScore)}%
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Coverage</span>
+            <div className="flex items-center gap-2">
+              <div className="w-16 h-1.5 rounded-full bg-[var(--subtle-bg)] overflow-hidden">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.min(scoring.coveragePct, 100)}%`,
+                    backgroundColor: scoring.coverageStatus === 'good' ? '#10B981'
+                      : scoring.coverageStatus === 'partial' ? '#F59E0B'
+                      : '#6B7280',
+                  }}
+                />
+              </div>
+              <span
+                className="text-[11px] font-medium"
+                style={{
+                  color: scoring.coverageStatus === 'good' ? '#10B981'
+                    : scoring.coverageStatus === 'partial' ? '#F59E0B'
+                    : '#6B7280',
+                }}
+              >
+                {scoring.configured}/{scoring.available}
+              </span>
+            </div>
+          </div>
+          {scoring.missingTypes.length > 0 && (
+            <div className="flex flex-wrap gap-1 pt-1">
+              {scoring.missingTypes.slice(0, 4).map(t => (
+                <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)] uppercase">
+                  {t.replace(/_/g, ' ')}
+                </span>
+              ))}
+              {scoring.missingTypes.length > 4 && (
+                <span className="text-[9px] text-[var(--text-faint)]">+{scoring.missingTypes.length - 4}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -174,10 +258,32 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
         </Section>
       )}
 
-      {/* Health */}
-      <Section title="Health Summary" defaultOpen>
-        <HealthSummaryDisplay summary={summary.healthSummary} />
-      </Section>
+      {/* Health — monitor-based when monitors exist, graph-based fallback */}
+      {scoring ? (
+        <Section title="Health Summary" defaultOpen>
+          {scoring.healthScore != null ? (
+            <div className="flex items-center gap-2">
+              <span
+                className="text-[13px] font-semibold"
+                style={{
+                  color: scoring.healthStatus === 'healthy' ? '#10B981'
+                    : scoring.healthStatus === 'degraded' ? '#F59E0B'
+                    : scoring.healthStatus === 'at_risk' ? '#F97316'
+                    : '#EF4444',
+                }}
+              >
+                {Math.round(scoring.healthScore)}% — {scoring.healthStatus?.replace('_', ' ')}
+              </span>
+            </div>
+          ) : (
+            <p className="text-[12px] text-[var(--muted)] italic">Monitors configured but no results yet</p>
+          )}
+        </Section>
+      ) : (
+        <Section title="Health Summary" defaultOpen>
+          <HealthSummaryDisplay summary={summary.healthSummary} />
+        </Section>
+      )}
 
       {/* Connections */}
       {(connections.upstream.length > 0 || connections.downstream.length > 0) && (
@@ -195,9 +301,56 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
         </>
       )}
 
-      {/* Coverage */}
+      {/* Coverage — monitor-based when scoring available, lineage-gap fallback */}
       <Section title="Coverage" defaultOpen>
-        <CoverageGapsList gaps={summary.coverageGaps} />
+        {scoring ? (
+          scoring.coveragePct > 0 ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] text-[var(--text)]">
+                  {scoring.configured}/{scoring.available} monitor types configured
+                </span>
+                <span
+                  className="text-[11px] font-medium"
+                  style={{
+                    color: scoring.coverageStatus === 'good' ? '#10B981'
+                      : scoring.coverageStatus === 'partial' ? '#F59E0B'
+                      : '#6B7280',
+                  }}
+                >
+                  {Math.round(scoring.coveragePct)}%
+                </span>
+              </div>
+              {scoring.missingTypes.length > 0 && (
+                <div>
+                  <p className="text-[10px] text-[var(--muted)] mb-1">Missing:</p>
+                  <div className="flex flex-wrap gap-1">
+                    {scoring.missingTypes.map(t => (
+                      <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 uppercase">
+                        {t.replace(/_/g, ' ')}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+              <div className="w-2 h-2 rounded-full bg-[#6B7280]" />
+              <span className="text-[12px] text-[var(--text-faint)]">No checks configured</span>
+            </div>
+          )
+        ) : (
+          /* No monitors at all — show unmonitored state instead of misleading "Full coverage" */
+          (!monitors || monitors.length === 0) ? (
+            <div className="flex items-center gap-2 px-3 py-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+              <div className="w-2 h-2 rounded-full bg-[#6B7280]" />
+              <span className="text-[12px] text-[var(--text-faint)]">Unmonitored — no checks configured</span>
+            </div>
+          ) : (
+            <CoverageGapsList gaps={summary.coverageGaps} />
+          )
+        )}
       </Section>
     </div>
   );

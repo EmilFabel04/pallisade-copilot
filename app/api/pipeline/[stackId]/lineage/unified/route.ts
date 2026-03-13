@@ -11,6 +11,11 @@ import type {
   LinePlane,
   MonitorStatusSummary,
 } from '@/components/lineage/types';
+import {
+  computeMonitorScoring,
+  resolveAssetCategory,
+  getApplicableMonitorTypes,
+} from '@/lib/monitor-scoring';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -117,7 +122,8 @@ async function fetchEngineStats(stackId: string) {
 function engineNodeToUnified(
   eNode: any,
   findingsByFqn: Map<string, any[]>,
-  monitorSummaryFn?: (fqn: string) => MonitorStatusSummary | undefined,
+  monitorSummaryFn?: (fqn: string, layer?: string, platformDomain?: string, platform?: string) => MonitorStatusSummary | undefined,
+  contractCriticalityByFqn?: Map<string, string>,
 ): UnifiedLineageNode {
   const nodeType = eNode.node_type?.toLowerCase() || 'table';
   let category: UnifiedNodeCategory = 'table';
@@ -251,7 +257,7 @@ function engineNodeToUnified(
     schema: eNode.schema || eNode.schema_name || undefined,
     tableName: eNode.name,
     nodeType: eNode.node_type,
-    criticality: eNode.criticality || 'medium',
+    criticality: (eNode.fqn && contractCriticalityByFqn?.get(eNode.fqn.toLowerCase())) || eNode.criticality || 'medium',
     rowCount: eNode.row_count || undefined,
     upstreamCount: eNode.upstream_count || 0,
     downstreamCount: eNode.downstream_count || 0,
@@ -263,7 +269,7 @@ function engineNodeToUnified(
     freshnessStatus,
     freshnessHours,
     issues: issuesSummary,
-    monitorStatus: monitorSummaryFn && eNode.fqn ? monitorSummaryFn(eNode.fqn) : undefined,
+    monitorStatus: monitorSummaryFn && eNode.fqn ? monitorSummaryFn(eNode.fqn, layer, eNode.platform_domain, eNode.platform) : undefined,
     // Multi-platform provenance & enriched data
     platforms: eNode.raw_metadata?.discovered_platforms ||
               (eNode.platform ? [eNode.platform] : undefined),
@@ -441,6 +447,16 @@ export async function GET(
       },
     });
 
+    // Fetch DataContracts for criticality override (highest precedence)
+    const dataContracts = await prisma.dataContract.findMany({
+      where: { organizationId, status: 'ACTIVE' },
+      select: { fullName: true, criticality: true },
+    });
+    const contractCriticalityByFqn = new Map<string, string>();
+    for (const dc of dataContracts) {
+      contractCriticalityByFqn.set(dc.fullName.toLowerCase(), dc.criticality.toLowerCase());
+    }
+
     // Index monitors by FQN for fast matching
     const monitorsByFqn = new Map<string, typeof monitors>();
     const monitorsByTwoPart = new Map<string, (typeof monitors)[]>();
@@ -481,10 +497,17 @@ export async function GET(
 
     const STATUS_SEVERITY: Record<string, number> = { ERROR: 5, FAIL: 4, WARN: 3, PASS: 2 };
 
-    function buildMonitorSummary(fqn: string): MonitorStatusSummary | undefined {
+    function buildMonitorSummary(fqn: string, layer?: string, platformDomain?: string, platform?: string): MonitorStatusSummary | undefined {
       const matched = matchMonitors(fqn);
       if (matched.length === 0) return undefined;
-      return {
+
+      const monitors = matched.map(m => ({
+        id: m.id, name: m.name, monitorType: m.monitorType || 'unknown',
+        lastStatus: m.lastStatus as string | null, lastRunAt: m.lastRunAt?.toISOString() || null,
+        lastMessage: m.runs[0]?.message ?? undefined,
+      }));
+
+      const summary: MonitorStatusSummary = {
         total: matched.length,
         passing: matched.filter(m => m.lastStatus === 'PASS').length,
         warning: matched.filter(m => m.lastStatus === 'WARN').length,
@@ -495,12 +518,26 @@ export async function GET(
           if (!s || !(s in STATUS_SEVERITY)) return worst;
           return (STATUS_SEVERITY[s] || 0) > (STATUS_SEVERITY[worst] || 0) ? s as any : worst;
         }, 'NONE' as MonitorStatusSummary['worstStatus']),
-        monitors: matched.map(m => ({
-          id: m.id, name: m.name, monitorType: m.monitorType || 'unknown',
-          lastStatus: m.lastStatus as string | null, lastRunAt: m.lastRunAt?.toISOString() || null,
-          lastMessage: m.runs[0]?.message ?? undefined,
-        })),
+        monitors,
       };
+
+      // Enrich with health + coverage scoring
+      const category = resolveAssetCategory(layer, platformDomain, platform);
+      if (category) {
+        const scoring = computeMonitorScoring(
+          monitors.map(m => ({ monitorType: m.monitorType, lastStatus: m.lastStatus })),
+          category,
+        );
+        summary.healthScore = scoring.healthScore;
+        summary.healthStatus = scoring.healthStatus;
+        summary.coveragePct = scoring.coveragePct;
+        summary.coverageStatus = scoring.coverageStatus;
+        summary.configuredMonitorTypes = [...new Set(monitors.map(m => m.monitorType.toUpperCase()))];
+        summary.applicableMonitorTypes = getApplicableMonitorTypes(category);
+        summary.missingMonitorTypes = scoring.missingTypes;
+      }
+
+      return summary;
     }
 
     // Get latest snapshot for timestamp
@@ -653,7 +690,7 @@ export async function GET(
           continue;
         }
 
-        const unified = engineNodeToUnified(eNode, findingsByFqn, buildMonitorSummary);
+        const unified = engineNodeToUnified(eNode, findingsByFqn, buildMonitorSummary, contractCriticalityByFqn);
         engineIdToUnifiedId.set(eNode.id, unified.id);
 
         // Primary: read integration_id from engine node directly
@@ -752,7 +789,7 @@ export async function GET(
           schema: lNode.schema ?? undefined,
           tableName: lNode.tableName,
           nodeType: lNode.nodeType,
-          criticality: lNode.criticality,
+          criticality: contractCriticalityByFqn.get(lNode.name?.toLowerCase()) || lNode.criticality,
           rowCount: lNode.rowCount ?? undefined,
           upstreamCount: lNode.upstreamCount,
           downstreamCount: lNode.downstreamCount,
@@ -764,7 +801,7 @@ export async function GET(
           freshnessStatus,
           freshnessHours,
           issues: issuesSummary,
-          monitorStatus: buildMonitorSummary(lNode.name),
+          monitorStatus: buildMonitorSummary(lNode.name, layer),
         };
       });
 

@@ -422,26 +422,55 @@ export function DataAssetDetailPanel({
           </div>
         </div>
 
-        {/* Health Status Card */}
+        {/* Health Status Card — monitor-based when available */}
         <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
           <div className="flex items-center justify-between mb-3">
             <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Health Status</span>
-            {node.freshnessStatus === 'fresh' && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                Fresh
+            {node.monitorStatus?.healthScore != null ? (
+              <span
+                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium"
+                style={{
+                  color: node.monitorStatus.healthStatus === 'healthy' ? '#10B981'
+                    : node.monitorStatus.healthStatus === 'degraded' ? '#F59E0B'
+                    : node.monitorStatus.healthStatus === 'at_risk' ? '#F97316'
+                    : '#EF4444',
+                  backgroundColor: node.monitorStatus.healthStatus === 'healthy' ? 'rgba(16,185,129,0.2)'
+                    : node.monitorStatus.healthStatus === 'degraded' ? 'rgba(245,158,11,0.2)'
+                    : node.monitorStatus.healthStatus === 'at_risk' ? 'rgba(249,115,22,0.2)'
+                    : 'rgba(239,68,68,0.2)',
+                }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{
+                    backgroundColor: node.monitorStatus.healthStatus === 'healthy' ? '#10B981'
+                      : node.monitorStatus.healthStatus === 'degraded' ? '#F59E0B'
+                      : node.monitorStatus.healthStatus === 'at_risk' ? '#F97316'
+                      : '#EF4444',
+                  }}
+                />
+                {Math.round(node.monitorStatus.healthScore)}% {node.monitorStatus.healthStatus?.replace('_', ' ')}
               </span>
-            )}
-            {isStale && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                Stale
-              </span>
-            )}
-            {node.freshnessStatus === 'unknown' && (
-              <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--overlay-medium)] text-[var(--muted)] text-[10px] font-medium">
-                Unknown
-              </span>
+            ) : (
+              <>
+                {node.freshnessStatus === 'fresh' && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Fresh
+                  </span>
+                )}
+                {isStale && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                    Stale
+                  </span>
+                )}
+                {node.freshnessStatus === 'unknown' && !node.monitorStatus?.total && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--overlay-medium)] text-[var(--muted)] text-[10px] font-medium">
+                    Unmonitored
+                  </span>
+                )}
+              </>
             )}
           </div>
           <div className="grid grid-cols-2 gap-2 text-[12px]">
@@ -459,12 +488,14 @@ export function DataAssetDetailPanel({
                   : 'Unknown'}
               </p>
             </div>
-            <div>
-              <span className="text-[var(--muted)]">Row Count</span>
-              <p className="text-[var(--text)] mt-0.5">
-                {node.rowCount?.toLocaleString() ?? '\u2014'}
-              </p>
-            </div>
+            {node.rowCount != null && (
+              <div>
+                <span className="text-[var(--muted)]">Row Count</span>
+                <p className="text-[var(--text)] mt-0.5">
+                  {node.rowCount.toLocaleString()}
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -533,9 +564,87 @@ export function DataAssetDetailPanel({
           </div>
         )}
 
-        {/* Monitors Section */}
+        {/* Monitor Health & Coverage */}
         {node.monitorStatus && node.monitorStatus.total > 0 && (
           <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            {/* Health Score + Coverage Summary */}
+            {node.monitorStatus.healthScore != null && (
+              <div className="mb-3 space-y-2">
+                {/* Health Score */}
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Health</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-16 h-1.5 rounded-full bg-[var(--subtle-bg)] overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${node.monitorStatus.healthScore}%`,
+                          backgroundColor: node.monitorStatus.healthStatus === 'healthy' ? '#10B981'
+                            : node.monitorStatus.healthStatus === 'degraded' ? '#F59E0B'
+                            : node.monitorStatus.healthStatus === 'at_risk' ? '#F97316'
+                            : '#EF4444',
+                        }}
+                      />
+                    </div>
+                    <span
+                      className="text-[11px] font-medium"
+                      style={{
+                        color: node.monitorStatus.healthStatus === 'healthy' ? '#10B981'
+                          : node.monitorStatus.healthStatus === 'degraded' ? '#F59E0B'
+                          : node.monitorStatus.healthStatus === 'at_risk' ? '#F97316'
+                          : '#EF4444',
+                      }}
+                    >
+                      {Math.round(node.monitorStatus.healthScore)}%
+                    </span>
+                  </div>
+                </div>
+                {/* Coverage */}
+                {node.monitorStatus.coveragePct != null && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Coverage</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-16 h-1.5 rounded-full bg-[var(--subtle-bg)] overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{
+                            width: `${Math.min(node.monitorStatus.coveragePct, 100)}%`,
+                            backgroundColor: node.monitorStatus.coverageStatus === 'good' ? '#10B981'
+                              : node.monitorStatus.coverageStatus === 'partial' ? '#F59E0B'
+                              : '#6B7280',
+                          }}
+                        />
+                      </div>
+                      <span
+                        className="text-[11px] font-medium"
+                        style={{
+                          color: node.monitorStatus.coverageStatus === 'good' ? '#10B981'
+                            : node.monitorStatus.coverageStatus === 'partial' ? '#F59E0B'
+                            : '#6B7280',
+                        }}
+                      >
+                        {Math.round(node.monitorStatus.coveragePct)}%
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {/* Missing monitor types */}
+                {node.monitorStatus.missingMonitorTypes && node.monitorStatus.missingMonitorTypes.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {node.monitorStatus.missingMonitorTypes.slice(0, 4).map(t => (
+                      <span key={t} className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)] uppercase">
+                        {t.replace(/_/g, ' ')}
+                      </span>
+                    ))}
+                    {node.monitorStatus.missingMonitorTypes.length > 4 && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--subtle-bg)] text-[var(--text-faint)]">
+                        +{node.monitorStatus.missingMonitorTypes.length - 4} more
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between mb-3">
               <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Monitors</span>
               <div className="flex items-center gap-1.5">
@@ -621,6 +730,19 @@ export function DataAssetDetailPanel({
                 Show all {node.monitorStatus.monitors.length} monitors
               </button>
             )}
+          </div>
+        )}
+
+        {/* Unmonitored state */}
+        {(!node.monitorStatus || node.monitorStatus.total === 0) && (
+          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-2 h-2 rounded-full bg-[#6B7280]" />
+              <span className="text-[11px] text-[var(--text-faint)]">Unmonitored — No checks configured</span>
+            </div>
+            <p className="text-[10px] text-[var(--muted)]">
+              Add monitors to track health and coverage for this asset.
+            </p>
           </div>
         )}
 

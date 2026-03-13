@@ -632,6 +632,21 @@ def _merge_node_metadata(primary: LineageNode, secondary: LineageNode) -> None:
         if not primary.last_updated or secondary.last_updated > primary.last_updated:
             primary.last_updated = secondary.last_updated
 
+    # Escalate criticality: keep the higher of the two
+    _CRIT_RANK = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+    if _CRIT_RANK.get(secondary.criticality, 0) > _CRIT_RANK.get(primary.criticality, 0):
+        primary.criticality = secondary.criticality
+
+    # Escalate domain: prefer non-None, prefer transform (more intentional)
+    if secondary.domain and not primary.domain:
+        primary.domain = secondary.domain
+    elif (
+        secondary.domain
+        and secondary.platform_domain.value == "transform"
+        and primary.platform_domain.value == "warehouse"
+    ):
+        primary.domain = secondary.domain
+
     # Merge health_status: prefer non-UNKNOWN, prefer worse status
     if primary.health_status == HealthStatus.UNKNOWN and secondary.health_status != HealthStatus.UNKNOWN:
         primary.health_status = secondary.health_status

@@ -167,6 +167,10 @@ class GraphStore:
         # Enforce DATA_PLANE vs CONTROL_PLANE graph domain separation
         self._enforce_graph_domains()
 
+        # Derive criticality from topology for nodes still at default "medium"
+        from scanner.lineage.engine.criticality import enrich_criticality
+        enrich_criticality(self.graph)
+
         return self.graph
 
     def _enforce_graph_domains(self) -> None:
