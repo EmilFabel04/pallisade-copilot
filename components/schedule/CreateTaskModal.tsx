@@ -426,41 +426,42 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       setScopeNodeCount(new Set(monitors.map((m) => m.targetFqn)).size);
     };
 
+    // Monitor types that belong to connectors/orchestration — not data assets
+    const NON_DATA_MONITOR_TYPES = new Set(['SYNC_LAG', 'FAILED_SYNCS', 'DAG_LAST_RUN', 'CONNECTOR_SCHEMA_DRIFT']);
+
     const parseRecommendData = (data: any): ScopeMonitor[] => {
       const recs = data.recommendations || [];
       const dataBundles = data.bundles || [];
       const monitors: ScopeMonitor[] = [];
       const seen = new Set<string>();
+      const anchorFqn = selectedWatchAsset.fqn;
 
-      for (const rec of recs) {
-        const key = `${rec.monitor_key}:${rec.target_fqn || selectedWatchAsset.fqn}`;
-        if (seen.has(key)) continue;
+      const addRec = (rec: any, reason: string) => {
+        const targetFqn = rec.target_fqn || anchorFqn;
+        const monitorKey = rec.monitor_key || '';
+        // Skip non-data-asset monitors for upstream nodes
+        if (targetFqn !== anchorFqn && NON_DATA_MONITOR_TYPES.has(monitorKey)) return;
+        const key = `${monitorKey}:${targetFqn}`;
+        if (seen.has(key)) return;
         seen.add(key);
         monitors.push({
-          name: rec.name || `${(rec.monitor_key || '').toLowerCase().replace(/_/g, ' ')} — ${(rec.target_fqn || selectedWatchAsset.fqn).split('.').pop()}`,
-          monitorType: rec.monitor_key,
-          targetFqn: rec.target_fqn || selectedWatchAsset.fqn,
+          name: rec.name || `${monitorKey.toLowerCase().replace(/_/g, ' ')} — ${targetFqn.split('.').pop()}`,
+          monitorType: monitorKey,
+          targetFqn,
           priority: rec.priority || 2,
-          reason: rec.reason || 'Recommended',
+          reason: rec.reason || reason,
           config: rec.config_hints,
           checked: true,
         });
+      };
+
+      for (const rec of recs) {
+        addRec(rec, 'Recommended');
       }
 
       for (const bundle of dataBundles) {
         for (const mon of bundle.recommendations || []) {
-          const key = `${mon.monitor_key}:${mon.target_fqn}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          monitors.push({
-            name: mon.name || `${(mon.monitor_key || '').toLowerCase().replace(/_/g, ' ')} — ${(mon.target_fqn || '').split('.').pop()}`,
-            monitorType: mon.monitor_key,
-            targetFqn: mon.target_fqn,
-            priority: mon.priority || 3,
-            reason: mon.reason || `From ${bundle.label || 'bundle'}`,
-            config: mon.config_hints,
-            checked: true,
-          });
+          addRec(mon, `From ${bundle.label || 'bundle'}`);
         }
       }
 

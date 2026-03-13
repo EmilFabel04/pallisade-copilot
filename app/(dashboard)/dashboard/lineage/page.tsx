@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { cachedFetch } from '@/lib/fetch-cache';
+import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import ReactFlow, {
   Node,
   Edge,
@@ -2057,19 +2057,34 @@ function LineagePageInner() {
           try {
             if (task._watch) {
               const { _watch, ...watchData } = task;
-              await fetch('/api/schedule/watches', {
+              console.log('[Lineage] Creating group monitor:', JSON.stringify(watchData, null, 2));
+              const res = await fetch('/api/schedule/watches', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(watchData),
               });
+              if (!res.ok) {
+                const errText = await res.text().catch(() => '');
+                console.error('[Lineage] Group monitor creation failed:', res.status, errText);
+                return;
+              }
+              invalidateCache('/api/schedule');
             } else {
-              await fetch('/api/schedule/tasks', {
+              const res = await fetch('/api/schedule/tasks', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(task),
               });
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                console.error('[Lineage] Task creation failed:', res.status, err);
+                return;
+              }
+              invalidateCache('/api/schedule');
             }
-          } catch {}
+          } catch (err) {
+            console.error('[Lineage] Submit error:', err);
+          }
           setMonitorModalOpen(false);
           setMonitorPrefill(null);
           setWatchPrefill(null);

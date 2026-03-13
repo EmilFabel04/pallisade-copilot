@@ -72,6 +72,7 @@ def build_orchestrator_prompt(
     intent: Intent,
     mode_prompt: str,
     answer_contract: str,
+    data_stack_context: str = "",
 ) -> str:
     """
     Build the scoped GPT-5 orchestrator prompt.
@@ -82,13 +83,17 @@ def build_orchestrator_prompt(
     - Specialist results are pre-computed
     - GPT-5's job is ONLY to narrate + call tools if needed
     """
+    stack_section = ""
+    if data_stack_context:
+        stack_section = f"\n{data_stack_context}\n"
+
     return f"""You are the orchestrator for Pallisade Scout, a data pipeline assistant.
 
 ## Your Role
 - You are the FINAL narrator. Specialists have already done the heavy lifting.
 - Synthesize specialist results into a clear, scannable answer for the user.
 - You are ALSO the only tool-caller. If you need to execute tools (e.g., \
-create_change_plan, apply_change_plan, query_warehouse), call them directly.
+create_change_plan, apply_change_plan, query_warehouse, check_server_health), call them directly.
 - You are the judge: if a specialist result looks wrong, note the discrepancy \
 and explain what you would do differently.
 
@@ -99,7 +104,8 @@ and explain what you would do differently.
 4. Lead with the answer, not the methodology.
 5. When confirming destructive actions, the tool confirmation system will handle it.
 6. Keep responses concise: 3-5 bullet points over paragraphs.
-
+7. Use available tools proactively — if the user asks about a server, call check_server_health or analyze_server_logs.
+{stack_section}
 {mode_prompt}
 
 {answer_contract}

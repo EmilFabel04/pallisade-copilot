@@ -31,10 +31,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ nodes: [] });
     }
 
+    // Node types that are tools/connectors, not physical data assets
+    const TOOL_NODE_TYPES = new Set(['connector', 'dag', 'task', 'flow', 'pipeline', 'workflow', 'tool', 'service', 'job']);
+
     // BFS upstream: follow edges where targetId = current node → sourceId is upstream
     const visited = new Set<string>();
     const queue = [anchor.id];
-    const upstreamNodes: Array<{ id: string; name: string; fqn: string; nodeType: string | null }> = [];
+    const upstreamNodes: Array<{ id: string; name: string; fqn: string; nodeType: string | null; platform: string | null }> = [];
 
     while (queue.length > 0 && upstreamNodes.length < limit) {
       const currentId = queue.shift()!;
@@ -45,18 +48,23 @@ export async function GET(request: NextRequest) {
         where: { organizationId, targetId: currentId },
         select: {
           source: {
-            select: { id: true, name: true, tableName: true, nodeType: true },
+            select: { id: true, name: true, tableName: true, nodeType: true, platform: true },
           },
         },
       });
 
       for (const edge of edges) {
         if (!visited.has(edge.source.id) && upstreamNodes.length < limit) {
+          // Skip tool/connector nodes (Fivetran connector, Airflow DAGs, etc.)
+          const nt = (edge.source.nodeType || '').toLowerCase();
+          if (!nt || TOOL_NODE_TYPES.has(nt)) continue;
+
           upstreamNodes.push({
             id: edge.source.id,
             name: edge.source.tableName || edge.source.name,
             fqn: edge.source.name,
             nodeType: edge.source.nodeType,
+            platform: edge.source.platform,
           });
           queue.push(edge.source.id);
         }

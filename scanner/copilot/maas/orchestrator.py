@@ -602,12 +602,17 @@ class MAASOrchestrator:
             mode_config = mode_from_intent(intent_result)
             answer_contract = build_answer_contract(intent_result)
 
+            # Include user's data stack context so the orchestrator knows
+            # what integrations are connected (servers, warehouses, etc.)
+            data_stack_context = context.to_system_prompt_context(query=query)
+
             orchestrator_prompt = build_orchestrator_prompt(
                 evidence_blob=evidence_blob,
                 specialist_results=specialist_summary,
                 intent=intent_result.primary.intent,
                 mode_prompt=mode_config.system_prompt_section,
                 answer_contract=answer_contract,
+                data_stack_context=data_stack_context,
             )
 
             # Create GPT-5 LLM for narration

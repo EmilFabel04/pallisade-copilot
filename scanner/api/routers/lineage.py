@@ -1383,15 +1383,15 @@ async def engine_recommend_monitors(
         from scanner.lineage.graph import LinePlane
         from scanner.lineage.engine.canonical import map_node_type, CanonicalNodeType
 
-    # Include JOB nodes (connectors, DAGs, dbt tasks) so the recommender can
-    # generate upstream monitors like SYNC_LAG, DAG_LAST_RUN, DBT_TEST_FAILURES.
-    # The recommender's own domain checks act as the real filter.
+    # Only include physical data assets (DATASET, SEMANTIC) — exclude JOB nodes
+    # (connectors, DAGs) to match the visual data-plane lineage.
+    # Use DATA plane only (no CROSS) so Fivetran synced tables and other
+    # cross-tool replicas don't appear — matches data-plane-neighbors behavior.
     _RECOMMEND_NODE_TYPES = {
         CanonicalNodeType.DATASET.value,
         CanonicalNodeType.SEMANTIC.value,
-        CanonicalNodeType.JOB.value,
     }
-    data_filters = Filters(planes={LinePlane.DATA, LinePlane.CROSS})
+    data_filters = Filters(planes={LinePlane.DATA})
     raw_upstream = store.get_upstream(asset_id, depth=depth, filters=data_filters)
     upstream_nodes = [
         n for n in raw_upstream
