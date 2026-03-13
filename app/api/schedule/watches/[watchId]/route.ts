@@ -130,6 +130,7 @@ export async function PATCH(
       alertChannels,
       alertOnStatus,
       scopeConfig,
+      removeMonitorIds,
     } = body;
 
     const updateData: any = {};
@@ -156,6 +157,20 @@ export async function PATCH(
     if (alertOnStatus !== undefined) monitorUpdate.alertOnStatus = alertOnStatus;
 
     await prisma.$transaction(async (tx) => {
+      // Remove monitors from this watch if requested
+      if (removeMonitorIds && Array.isArray(removeMonitorIds) && removeMonitorIds.length > 0) {
+        // Delete runs first, then the monitors themselves
+        await tx.monitorRun.deleteMany({
+          where: { monitorId: { in: removeMonitorIds } },
+        });
+        await tx.monitorBaseline.deleteMany({
+          where: { monitorId: { in: removeMonitorIds } },
+        });
+        await tx.monitor.deleteMany({
+          where: { id: { in: removeMonitorIds }, monitorGroupId: watchId },
+        });
+      }
+
       await tx.monitorGroup.update({
         where: { id: watchId },
         data: updateData,

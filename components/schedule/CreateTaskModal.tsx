@@ -344,6 +344,18 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       ],
     };
 
+    // Monitors to add per upstream node type (data assets only — no connectors/dags/tools)
+    const UPSTREAM_NODE_MONITORS: Record<string, Array<{ monitorType: string; label: string; priority: number }>> = {
+      table:   [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }, { monitorType: 'SCHEMA_CHANGE', label: 'schema change', priority: 3 }],
+      view:    [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }],
+      materialized_view: [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }],
+      source:  [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }],
+      model:   [{ monitorType: 'DBT_TEST_FAILURES', label: 'test failures', priority: 2 }, { monitorType: 'FRESHNESS', label: 'freshness', priority: 3 }],
+      dataset: [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }],
+      seed:    [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }],
+      snapshot: [{ monitorType: 'FRESHNESS', label: 'freshness', priority: 2 }],
+    };
+
     const generateDefaults = (): ScopeMonitor[] => {
       const shortName = selectedWatchAsset.fqn.split('.').pop() || selectedWatchAsset.name;
       return (DEFAULT_MONITORS[watchType] || DEFAULT_MONITORS.pipeline_health).map((m) => ({
@@ -355,6 +367,56 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
         config: {},
         checked: true,
       }));
+    };
+
+    // Build monitors from DB lineage upstream nodes (fallback when engine graph unavailable)
+    const generateFromDbLineage = async (): Promise<ScopeMonitor[]> => {
+      const anchorMonitors = generateDefaults();
+      try {
+        const maxDepth = DEFAULT_SCOPE_CONFIGS[watchType].maxDepth;
+        const res = await fetch(`/api/lineage/upstream?fqn=${encodeURIComponent(selectedWatchAsset.fqn)}&limit=${maxDepth * 10}`);
+        if (!res.ok) return anchorMonitors;
+        const data = await res.json();
+        const allNodes: Array<{ id: string; name: string; fqn: string; nodeType: string | null }> = data.nodes || [];
+        // Only keep physical data assets — exclude connectors, dags, tools, etc.
+        const DATA_ASSET_TYPES = new Set(['table', 'view', 'materialized_view', 'source', 'model', 'dataset', 'seed', 'snapshot']);
+        const upstreamNodes = allNodes.filter((n) => {
+          const nt = (n.nodeType || 'table').toLowerCase();
+          return DATA_ASSET_TYPES.has(nt);
+        });
+        if (upstreamNodes.length === 0) return anchorMonitors;
+
+        const upstreamMonitors: ScopeMonitor[] = [];
+        const seen = new Set<string>(anchorMonitors.map((m) => `${m.monitorType}:${m.targetFqn}`));
+
+        for (const node of upstreamNodes) {
+          const nt = (node.nodeType || 'table').toLowerCase();
+          const specs = UPSTREAM_NODE_MONITORS[nt] || UPSTREAM_NODE_MONITORS['table'];
+          const shortName = node.fqn.split('.').pop() || node.name;
+          for (const spec of specs) {
+            const key = `${spec.monitorType}:${node.fqn}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            upstreamMonitors.push({
+              name: `${spec.label} — ${shortName}`,
+              monitorType: spec.monitorType,
+              targetFqn: node.fqn,
+              priority: spec.priority,
+              reason: `Upstream dependency of ${selectedWatchAsset.name || selectedWatchAsset.fqn.split('.').pop()}`,
+              config: {},
+              checked: true,
+            });
+          }
+        }
+
+        setCoveragePct(upstreamNodes.length > 0
+          ? Math.min((anchorMonitors.length + upstreamMonitors.length) / (upstreamNodes.length + 1), 1.0)
+          : 1.0);
+        return [...anchorMonitors, ...upstreamMonitors];
+      } catch (err) {
+        console.error('[Health Watch] DB lineage fallback error:', err);
+        return anchorMonitors;
+      }
     };
 
     const applyMonitors = (monitors: ScopeMonitor[]) => {
@@ -411,12 +473,17 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
     // If we already have cached data from step 1, use it immediately
     if (watchRecommendDataRef.current) {
       const monitors = parseRecommendData(watchRecommendDataRef.current);
-      applyMonitors(monitors.length > 0 ? monitors : generateDefaults());
-      if (monitors.length === 0) setCoveragePct(1.0);
+      if (monitors.length > 0) {
+        applyMonitors(monitors);
+      } else {
+        // Engine returned nothing — fall back to DB lineage
+        setScopeLoading(true);
+        generateFromDbLineage().then((m) => applyMonitors(m)).finally(() => setScopeLoading(false));
+      }
       return;
     }
 
-    // Otherwise fetch fresh (fallback)
+    // Fetch from engine, falling back to DB lineage when engine is unavailable
     const fetchScope = async () => {
       setScopeLoading(true);
       try {
@@ -426,16 +493,22 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
         if (res.ok) {
           const data = await res.json();
           const monitors = parseRecommendData(data);
-          applyMonitors(monitors.length > 0 ? monitors : generateDefaults());
-          if (monitors.length === 0) setCoveragePct(1.0);
+          if (monitors.length > 0) {
+            applyMonitors(monitors);
+          } else {
+            // Engine had no recommendations — try DB lineage
+            const dbMonitors = await generateFromDbLineage();
+            applyMonitors(dbMonitors);
+          }
         } else {
-          applyMonitors(generateDefaults());
-          setCoveragePct(1.0);
+          // Engine unavailable (404 = graph not built) — use DB lineage
+          const dbMonitors = await generateFromDbLineage();
+          applyMonitors(dbMonitors);
         }
       } catch (err) {
         console.error('[CreateTask] Watch scope fetch error:', err);
-        applyMonitors(generateDefaults());
-        setCoveragePct(1.0);
+        const dbMonitors = await generateFromDbLineage();
+        applyMonitors(dbMonitors);
       } finally {
         setScopeLoading(false);
       }

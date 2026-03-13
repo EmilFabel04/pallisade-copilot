@@ -199,6 +199,9 @@ export default function SchedulePage() {
       setWatches((prev) =>
         prev.map((w) => (w.id === watchId ? { ...w, enabled } : w))
       );
+      if (selectedWatch?.id === watchId) {
+        setSelectedWatch((prev) => prev ? { ...prev, enabled } : prev);
+      }
     } catch (err) {
       console.error('[Schedule] Failed to toggle watch:', err);
     }
@@ -234,12 +237,39 @@ export default function SchedulePage() {
     try {
       await fetch(`/api/schedule/watches/${watchId}`, { method: 'DELETE' });
       invalidateCache('/api/schedule');
+      invalidateCache('/api/pipeline');
       setWatches((prev) => prev.filter((w) => w.id !== watchId));
       setSelectedWatch(null);
       setWatchDetailMonitors([]);
       fetchTasks();
+      fetchWatches();
     } catch (err) {
       console.error('[Schedule] Failed to delete watch:', err);
+    }
+  };
+
+  // Remove monitor from watch
+  const handleRemoveMonitorFromWatch = async (monitorId: string) => {
+    if (!selectedWatch) return;
+    try {
+      const res = await fetch(`/api/schedule/watches/${selectedWatch.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removeMonitorIds: [monitorId] }),
+      });
+      if (res.ok) {
+        invalidateCache('/api/schedule');
+        // Re-fetch watch detail
+        const detailRes = await fetch(`/api/schedule/watches/${selectedWatch.id}`);
+        if (detailRes.ok) {
+          const data = await detailRes.json();
+          setWatchDetailMonitors(data.watch?.monitors || []);
+          if (data.watch) setSelectedWatch(data.watch);
+        }
+        fetchWatches();
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to remove monitor from watch:', err);
     }
   };
 
@@ -352,6 +382,7 @@ export default function SchedulePage() {
         onRunAll={() => handleRunWatch(selectedWatch.id)}
         onDelete={() => handleDeleteWatch(selectedWatch.id)}
         onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
+        onRemoveMonitor={handleRemoveMonitorFromWatch}
       />
     );
   }

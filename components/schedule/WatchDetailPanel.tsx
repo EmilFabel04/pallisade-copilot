@@ -24,6 +24,7 @@ interface WatchDetailPanelProps {
   onRunAll: () => void;
   onDelete: () => void;
   onToggleEnabled: (enabled: boolean) => void;
+  onRemoveMonitor?: (monitorId: string) => void;
 }
 
 function cronToHuman(cron: string): string {
@@ -57,6 +58,7 @@ export function WatchDetailPanel({
   onRunAll,
   onDelete,
   onToggleEnabled,
+  onRemoveMonitor,
 }: WatchDetailPanelProps) {
   const healthStatus: HealthStatus | null = watch.healthScore != null
     ? healthStatusFromScore(watch.healthScore)
@@ -68,7 +70,7 @@ export function WatchDetailPanel({
   const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
 
   return (
-    <div className="flex flex-col h-full bg-[var(--surface-inset)]">
+    <div className={cn("flex flex-col h-full bg-[var(--surface-inset)]", !watch.enabled && "opacity-60")}>
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
         <div className="flex items-center gap-3">
@@ -86,7 +88,12 @@ export function WatchDetailPanel({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
               <h2 className="text-[16px] font-semibold text-[var(--text)]">{watch.name}</h2>
-              {healthStatus && (
+              {!watch.enabled && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
+                  Disabled
+                </span>
+              )}
+              {watch.enabled && healthStatus && (
                 <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', HEALTH_STATUS_COLORS[healthStatus])}>
                   {HEALTH_STATUS_LABELS[healthStatus]}
                 </span>
@@ -101,6 +108,21 @@ export function WatchDetailPanel({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => onToggleEnabled(!watch.enabled)}
+            className={cn(
+              'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+              watch.enabled ? 'bg-blue-500' : 'bg-[var(--overlay-strong)]'
+            )}
+            title={watch.enabled ? 'Disable watch' : 'Enable watch'}
+          >
+            <span
+              className={cn(
+                'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transition-transform',
+                watch.enabled ? 'translate-x-4' : 'translate-x-0'
+              )}
+            />
+          </button>
           <Button variant="ghost" size="sm" onClick={onRunAll}>
             Run All
           </Button>
@@ -211,7 +233,14 @@ export function WatchDetailPanel({
         <div className="px-6 py-3 border-b border-[var(--border-faint)]">
           <div className="p-3 bg-[var(--overlay-bg)] rounded-lg border border-[var(--subtle-border)]">
             <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Anchor Asset</p>
-            <p className="text-[13px] text-[var(--text-tertiary)] font-mono">{watch.anchorFqn}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-[13px] text-[var(--text-tertiary)] font-mono">{watch.anchorFqn}</p>
+              {watch.anchorPlatform && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-medium uppercase bg-white/5 text-[var(--muted)]">
+                  {watch.anchorPlatform}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -353,6 +382,19 @@ export function WatchDetailPanel({
                         </div>
                       ) : (
                         <p className="text-[12px] text-[var(--muted)]">No runs yet. Click &quot;Run All&quot; to execute this monitor.</p>
+                      )}
+                      {onRemoveMonitor && (
+                        <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex justify-end">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRemoveMonitor(mon.id);
+                            }}
+                            className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors"
+                          >
+                            Remove from watch
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}

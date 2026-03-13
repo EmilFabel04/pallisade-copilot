@@ -1383,12 +1383,19 @@ async def engine_recommend_monitors(
         from scanner.lineage.graph import LinePlane
         from scanner.lineage.engine.canonical import map_node_type, CanonicalNodeType
 
-    _DATA_PLANE_TYPES = {CanonicalNodeType.DATASET.value, CanonicalNodeType.SEMANTIC.value}
+    # Include JOB nodes (connectors, DAGs, dbt tasks) so the recommender can
+    # generate upstream monitors like SYNC_LAG, DAG_LAST_RUN, DBT_TEST_FAILURES.
+    # The recommender's own domain checks act as the real filter.
+    _RECOMMEND_NODE_TYPES = {
+        CanonicalNodeType.DATASET.value,
+        CanonicalNodeType.SEMANTIC.value,
+        CanonicalNodeType.JOB.value,
+    }
     data_filters = Filters(planes={LinePlane.DATA, LinePlane.CROSS})
     raw_upstream = store.get_upstream(asset_id, depth=depth, filters=data_filters)
     upstream_nodes = [
         n for n in raw_upstream
-        if (n.canonical_type or map_node_type(n).value) in _DATA_PLANE_TYPES
+        if (n.canonical_type or map_node_type(n).value) in _RECOMMEND_NODE_TYPES
     ]
 
     # Parse existing monitor FQNs for dedup
@@ -1412,6 +1419,7 @@ async def engine_recommend_monitors(
         "is_bi_node": is_bi_node(node),
         "recommendations": [r.to_dict() for r in recommendations],
         "bundles": [b.to_dict() for b in bundles],
+        "upstream_count": len(upstream_nodes),
     }
 
 

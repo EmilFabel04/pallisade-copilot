@@ -16,7 +16,6 @@ import {
   Play,
   ShieldCheck,
   Plus,
-  ArrowUpFromLine,
   Sparkles,
 } from 'lucide-react';
 import type { MonitorPrefillData, WatchPrefillData } from '@/components/schedule/CreateTaskModal';
@@ -269,7 +268,6 @@ export function DataAssetDetailPanel({
     setShowAllMonitors(false);
     setBlastRadius(null);
     setRecommendations(null);
-    setRecsExpanded(false);
   }, [node.id]);
 
   // Fetch neighbors from the data-plane adjacency endpoint
@@ -386,7 +384,6 @@ export function DataAssetDetailPanel({
   // Monitor recommendations
   const [recommendations, setRecommendations] = useState<MonitorRecommendation[] | null>(null);
   const [recsLoading, setRecsLoading] = useState(false);
-  const [recsExpanded, setRecsExpanded] = useState(false);
 
   const hasIssues = node.issues && node.issues.total > 0;
   const hasCritical = node.issues && node.issues.critical > 0;
@@ -636,25 +633,84 @@ export function DataAssetDetailPanel({
             : node.category === 'question' ? 'question'
             : 'asset';
 
-          // Shared fetch helper
+          // Monitor types to recommend per upstream node type (DB lineage fallback)
+          const UPSTREAM_MONITOR_MAP: Record<string, Array<{ monitor_key: string; priority: number }>> = {
+            table: [{ monitor_key: 'FRESHNESS', priority: 2 }, { monitor_key: 'SCHEMA_CHANGE', priority: 3 }],
+            view: [{ monitor_key: 'FRESHNESS', priority: 2 }],
+            materialized_view: [{ monitor_key: 'FRESHNESS', priority: 2 }],
+            source: [{ monitor_key: 'FRESHNESS', priority: 2 }],
+            model: [{ monitor_key: 'DBT_TEST_FAILURES', priority: 2 }, { monitor_key: 'FRESHNESS', priority: 3 }],
+          };
+
+          // Shared fetch helper — tries engine first, falls back to DB lineage
           const fetchRecs = () => {
             if (recommendations || recsLoading) return;
             setRecsLoading(true);
             const engineId = node.id.replace(/^lineage-/, '');
+            const anchorFqn = node.fullName || node.name;
             const existingFqns = (node.monitorStatus?.monitors || [])
-              .map((m) => `${m.monitorType}:${node.fullName || node.name}`)
+              .map((m: any) => `${m.monitorType}:${anchorFqn}`)
               .join(',');
+
+            const parseEngineData = (data: any): MonitorRecommendation[] => {
+              const topLevel = data?.recommendations || [];
+              const bundleRecs = (data?.bundles || []).flatMap((b: any) => b.recommendations || []);
+              const seen = new Set<string>();
+              return [...topLevel, ...bundleRecs].filter((r: any) => {
+                const key = `${r.monitor_key}:${r.target_fqn}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              });
+            };
+
+            // Fallback: generate recommendations from physical data lineage (upstreamByHop)
+            const buildFromPhysicalLineage = () => {
+              const recs: MonitorRecommendation[] = [];
+              const seen = new Set<string>();
+              for (const [, items] of upstreamByHop.entries()) {
+                for (const { node: upNode } of items) {
+                  const fqn = upNode.fullName || upNode.name;
+                  const nt = (upNode.nodeType || upNode.category || 'table').toLowerCase();
+                  const specs = UPSTREAM_MONITOR_MAP[nt] || UPSTREAM_MONITOR_MAP['table'];
+                  for (const spec of specs) {
+                    const key = `${spec.monitor_key}:${fqn}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    recs.push({
+                      monitor_key: spec.monitor_key,
+                      target_fqn: fqn,
+                      target_node_id: upNode.id,
+                      source: 'upstream',
+                      reason: `Upstream dependency of ${anchorFqn.split('.').pop()}`,
+                      priority: spec.priority,
+                      config_hints: {},
+                      integration_type: '',
+                      already_monitored: false,
+                    } as MonitorRecommendation);
+                  }
+                }
+              }
+              setRecommendations(recs);
+              setRecsLoading(false);
+            };
+
             fetch(`/api/pipeline/${stackId}/lineage/engine?action=recommend-monitors&id=${encodeURIComponent(engineId)}&depth=3${existingFqns ? `&existing_fqns=${encodeURIComponent(existingFqns)}` : ''}`)
               .then((res) => res.ok ? res.json() : null)
               .then((data) => {
-                // Always set to array (even empty) to prevent retry loops on failure
-                setRecommendations(data?.recommendations || []);
+                const merged = parseEngineData(data);
+                if (merged.length > 0) {
+                  setRecommendations(merged);
+                  setRecsLoading(false);
+                } else {
+                  // Engine returned nothing — try DB lineage fallback
+                  buildFromPhysicalLineage();
+                }
               })
               .catch(() => {
-                // Set empty arrays to prevent retry loops
-                setRecommendations([]);
-              })
-              .finally(() => setRecsLoading(false));
+                // Engine unavailable — try DB lineage fallback
+                buildFromPhysicalLineage();
+              });
           };
 
           // Shared recommendation card renderer
@@ -711,175 +767,103 @@ export function DataAssetDetailPanel({
 
           /* ─── BI/Reporting node path ─────────────────────────── */
           if (isBiNode) {
-            // Auto-fetch on mount for BI nodes
-            if (!recommendations && !recsLoading) {
-              // Use setTimeout to avoid state update during render
-              setTimeout(fetchRecs, 0);
-            }
-
             return (
               <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-                <div className="flex items-center gap-1.5 mb-2">
-                  <ShieldCheck className="w-3.5 h-3.5 text-violet-300" />
-                  <span className="text-[12px] text-[var(--text)] font-medium">
-                    Protect this {nodeTypeLabel}
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
+                    <Sparkles className="w-3 h-3" />
+                    Monitoring
                   </span>
                 </div>
-                <p className="text-[10px] text-[var(--text-faint)] mb-3 leading-relaxed">
-                  Direct health monitors for this {nodeTypeLabel} are not available yet. Recommended protection comes from checking the upstream data it depends on.
-                </p>
 
-                {recsLoading && (
-                  <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
-                    <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
-                    Analyzing upstream dependencies...
-                  </div>
-                )}
-
-                {/* Inline recommendation cards */}
-                {!recsLoading && recommendations && recommendations.length > 0 && (
-                  <div className="space-y-3">
-                    <div className="text-[10px] text-[var(--muted)] uppercase tracking-wide">
-                      Upstream data checks
-                    </div>
-                    <div className="space-y-1.5">
-                      {recommendations.map((rec, i) => renderRecCard(rec, i))}
-                    </div>
-
-                    {/* Health Watch CTA */}
-                    {onCreateWatch && (
-                      <button
-                        onClick={() => {
-                          const allRecs = [
-                            ...recommendations.filter(r => !r.already_monitored).map(r => ({
-                              name: `${r.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${r.target_fqn.split('.').pop()}`,
-                              monitorType: r.monitor_key,
-                              targetFqn: r.target_fqn,
-                              config: r.config_hints,
-                            })),
-                          ];
-                          onCreateWatch({
-                            anchorFqn: node.fullName || node.name,
-                            anchorNodeId: node.id.replace(/^lineage-/, ''),
-                            anchorNodeType: node.category,
-                            watchType: isBiNode ? 'dashboard_shield' : 'pipeline_health',
-                            monitors: allRecs,
-                          });
-                        }}
-                        className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 font-medium"
-                      >
-                        <ShieldCheck className="w-3 h-3" />
-                        Create Health Watch
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Empty state */}
-                {!recsLoading && recommendations && recommendations.length === 0 && (
-                  <div className="py-3 text-center">
-                    <p className="text-[11px] text-[var(--muted)]">
-                      {totalUpstream > 0
-                        ? `All monitors already configured for this ${nodeTypeLabel}.`
-                        : `No upstream data dependencies found for this ${nodeTypeLabel}.`}
-                    </p>
-                  </div>
-                )}
+                {/* Two actions: Monitor + Health Watch */}
+                <div className="flex gap-1.5">
+                  {onCreateMonitor && (
+                    <button
+                      onClick={() => onCreateMonitor({
+                        name: `Monitor — ${node.tableName || node.name}`,
+                        monitorType: 'BI_FRESHNESS_PROXY',
+                        targetFqn: node.fullName || node.name,
+                      })}
+                      className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-strong)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--text)] font-medium"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Create Monitor
+                    </button>
+                  )}
+                  {onCreateWatch && (
+                    <button
+                      onClick={() => {
+                        onCreateWatch({
+                          anchorFqn: node.fullName || node.name,
+                          anchorNodeId: node.id.replace(/^lineage-/, ''),
+                          anchorNodeType: node.category,
+                          watchType: 'dashboard_shield',
+                          monitors: [],
+                        });
+                      }}
+                      className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 font-medium"
+                    >
+                      <ShieldCheck className="w-3 h-3" />
+                      Health Watch
+                    </button>
+                  )}
+                </div>
               </div>
             );
           }
 
-          /* ─── Non-BI node path (unchanged) ───────────────────── */
+          /* ─── Non-BI node path ─────────────────────────────── */
+          const defaultMonitorType = node.category === 'connector' ? 'SYNC_LAG'
+            : ['dag', 'task', 'workflow'].includes(node.category) ? 'DAG_LAST_RUN'
+            : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'DBT_TEST_FAILURES'
+            : 'FRESHNESS';
+          const defaultWatchType = node.category === 'connector' ? 'source_guard' as const
+            : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'model_quality' as const
+            : 'pipeline_health' as const;
+
           return (
             <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
                   <Sparkles className="w-3 h-3" />
-                  Recommended Monitors
+                  Monitoring
                 </span>
               </div>
 
-              {/* Quick action buttons */}
-              <div className="flex gap-1.5 mb-2">
-                <button
-                  onClick={() => {
-                    const monitorType = node.category === 'connector' ? 'SYNC_LAG'
-                      : ['dag', 'task', 'workflow'].includes(node.category) ? 'DAG_LAST_RUN'
-                      : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'DBT_TEST_FAILURES'
-                      : 'FRESHNESS';
-                    onCreateMonitor({
-                      name: `${monitorType.toLowerCase().replace(/_/g, ' ')} — ${node.tableName || node.name}`,
-                      monitorType,
+              {/* Two actions: Monitor + Health Watch */}
+              <div className="flex gap-1.5">
+                {onCreateMonitor && (
+                  <button
+                    onClick={() => onCreateMonitor({
+                      name: `${defaultMonitorType.toLowerCase().replace(/_/g, ' ')} — ${node.tableName || node.name}`,
+                      monitorType: defaultMonitorType,
                       targetFqn: node.fullName || node.name,
-                    });
-                  }}
-                  className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 hover:text-blue-200"
-                >
-                  <Plus className="w-2.5 h-2.5" />
-                  Monitor this asset
-                </button>
-                {(totalUpstream > 0) && (
+                    })}
+                    className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-strong)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--text)] font-medium"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Create Monitor
+                  </button>
+                )}
+                {onCreateWatch && (
                   <button
                     onClick={() => {
-                      if (!recsExpanded) {
-                        setRecsExpanded(true);
-                        fetchRecs();
-                      } else {
-                        setRecsExpanded(false);
-                      }
+                      onCreateWatch({
+                        anchorFqn: node.fullName || node.name,
+                        anchorNodeId: node.id.replace(/^lineage-/, ''),
+                        anchorNodeType: node.category,
+                        watchType: defaultWatchType,
+                        monitors: [],
+                      });
                     }}
-                    className="flex-1 flex items-center justify-center gap-1 py-1 px-1.5 rounded bg-violet-500/10 border border-violet-500/20 hover:bg-violet-500/20 transition-all text-[10px] text-violet-300 hover:text-violet-200"
+                    className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 font-medium"
                   >
-                    <ArrowUpFromLine className="w-2.5 h-2.5" />
-                    Monitor upstream
+                    <ShieldCheck className="w-3 h-3" />
+                    Health Watch
                   </button>
                 )}
               </div>
-
-              {/* Health Watch button */}
-              {onCreateWatch && (
-                <button
-                  onClick={() => {
-                    onCreateWatch({
-                      anchorFqn: node.fullName || node.name,
-                      anchorNodeId: node.id.replace(/^lineage-/, ''),
-                      anchorNodeType: node.category,
-                    });
-                  }}
-                  className="w-full flex items-center justify-center gap-1 py-1 rounded bg-blue-500/8 border border-blue-500/15 hover:bg-blue-500/15 transition-all text-[10px] text-blue-300 hover:text-blue-200 mb-2"
-                >
-                  <ShieldCheck className="w-3 h-3" />
-                  Create Health Watch
-                </button>
-              )}
-
-              {/* Expanded recommendations */}
-              {recsExpanded && (
-                <div className="mt-3 space-y-3">
-                  {recsLoading && (
-                    <div className="flex items-center justify-center gap-2 py-3 text-[12px] text-[var(--muted)]">
-                      <div className="w-3.5 h-3.5 border-2 border-[var(--overlay-strong)] border-t-white/60 rounded-full animate-spin" />
-                      Analyzing lineage...
-                    </div>
-                  )}
-
-                  {/* Individual recommendations */}
-                  {!recsLoading && recommendations && recommendations.length > 0 && (
-                    <div className="space-y-1.5">
-                      <div className="text-[10px] text-[var(--text-faint)] uppercase tracking-wide">
-                        All Recommendations
-                      </div>
-                      {recommendations.map((rec, i) => renderRecCard(rec, i))}
-                    </div>
-                  )}
-
-                  {!recsLoading && recommendations && recommendations.length === 0 && (
-                    <div className="py-2 text-[11px] text-[var(--muted)] text-center">
-                      No additional monitors recommended for this node
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           );
         })()}

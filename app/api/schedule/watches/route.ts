@@ -191,7 +191,8 @@ export async function POST(request: NextRequest) {
 
       const createdMonitors = [];
 
-      for (const mon of monitors) {
+      for (let idx = 0; idx < monitors.length; idx++) {
+        const mon = monitors[idx];
         // Dedup: check if matching monitor already exists
         const existing = mon.targetFqn && mon.monitorType
           ? await tx.monitor.findFirst({
@@ -204,16 +205,29 @@ export async function POST(request: NextRequest) {
           : null;
 
         if (existing) {
+          // Inject depth/priority into existing monitor's config
+          const existingConfig = (existing.config as any) || {};
+          const isAnchor = mon.targetFqn === anchorFqn;
+          const depth = mon.depth ?? (isAnchor ? 0 : 1);
+          const priority = mon.priority ?? (isAnchor ? 1 : 2);
           const updated = await tx.monitor.update({
             where: { id: existing.id },
-            data: { monitorGroupId: group.id },
+            data: {
+              monitorGroupId: group.id,
+              config: { ...existingConfig, _watchDepth: depth, _watchPriority: priority },
+            },
           });
           createdMonitors.push(updated);
         } else {
           const isToolMonitor = TOOL_MONITOR_KINDS.includes(mon.monitorType);
           const isBIMonitor = BI_MONITOR_KINDS.includes(mon.monitorType);
           const isInfraMonitor = INFRA_MONITOR_KINDS.includes(mon.monitorType);
-          let taskConfig = mon.config || {};
+          const isAnchor = mon.targetFqn === anchorFqn;
+          let taskConfig = {
+            ...(mon.config || {}),
+            _watchDepth: mon.depth ?? (isAnchor ? 0 : 1),
+            _watchPriority: mon.priority ?? (isAnchor ? 1 : 2),
+          };
 
           if (isInfraMonitor && integrationId) {
             taskConfig = { ...taskConfig, serverNodeId: integrationId };

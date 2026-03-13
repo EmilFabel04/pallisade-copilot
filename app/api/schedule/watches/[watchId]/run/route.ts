@@ -159,7 +159,7 @@ export async function POST(
       include: {
         monitors: {
           where: { enabled: true },
-          select: { id: true, name: true, monitorType: true, targetFqn: true },
+          select: { id: true, name: true, monitorType: true, targetFqn: true, config: true },
         },
       },
     });
@@ -189,6 +189,10 @@ export async function POST(
         const resultStatus = runData.result?.status || runData.run?.status || 'ERROR';
         const resultMessage = runData.result?.message || runData.run?.message || null;
 
+        const monConfig = (monitor.config as any) || {};
+        const depth = monConfig._watchDepth ?? (monitor.targetFqn === group.anchorFqn ? 0 : 1);
+        const priority = monConfig._watchPriority ?? 2;
+
         signals.push({
           monitorId: monitor.id,
           monitorName: monitor.name,
@@ -196,11 +200,14 @@ export async function POST(
           targetFqn: monitor.targetFqn,
           status: resultStatus,
           message: resultMessage,
-          // TODO: populate from scope data when available
-          depth: monitor.targetFqn === group.anchorFqn ? 0 : 1,
-          priority: 2,
+          depth,
+          priority,
         });
       } catch (err: any) {
+        const monConfig = (monitor.config as any) || {};
+        const depth = monConfig._watchDepth ?? (monitor.targetFqn === group.anchorFqn ? 0 : 1);
+        const priority = monConfig._watchPriority ?? 2;
+
         signals.push({
           monitorId: monitor.id,
           monitorName: monitor.name,
@@ -208,8 +215,8 @@ export async function POST(
           targetFqn: monitor.targetFqn,
           status: 'ERROR',
           message: `Failed to execute: ${err.message}`,
-          depth: monitor.targetFqn === group.anchorFqn ? 0 : 1,
-          priority: 2,
+          depth,
+          priority,
         });
       }
     }
