@@ -12,7 +12,7 @@ const VALID_WATCH_TYPES = [
   'custom_watch',
 ];
 
-// GET /api/schedule/watches - List all health watches
+// GET /api/schedule/watches - List all group monitors
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/schedule/watches - Create a new health watch
+// POST /api/schedule/watches - Create a new group monitor
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);

@@ -3121,7 +3121,7 @@ model MonitorGroup {
   lastStatus MonitorRunStatus?
   lastRunAt  DateTime?
 
-  // Health Watch fields (null for legacy bundles)
+  // Group Monitor fields (null for legacy bundles)
   watchType      String?   // "pipeline_health"|"dashboard_shield"|"source_guard"|"model_quality"|"custom_watch"
   scopeConfig    Json?     // { maxDepth, maxNodes, maxMonitors, domainFilters, includeNodeIds, excludeNodeIds }
   coveragePct    Float?    // 0.0-1.0

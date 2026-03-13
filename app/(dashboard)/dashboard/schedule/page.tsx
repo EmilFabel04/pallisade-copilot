@@ -570,11 +570,11 @@ export default function SchedulePage() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Health Watches section */}
+            {/* Group Monitors section */}
             {watches.length > 0 && (
               <div>
                 <h3 className="text-[12px] font-medium text-[var(--text-faint)] uppercase tracking-wider mb-2">
-                  Health Watches
+                  Group Monitors
                 </h3>
                 <div className="space-y-2">
                   {watches.map((watch) => (

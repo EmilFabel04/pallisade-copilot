@@ -3160,14 +3160,14 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
     )
 
 
-# ── Health Watch Scope ──────────────────────────────────────────────────────
+# ── Group Monitor Scope ────────────────────────────────────────────────────
 
 @router.post("/lineage/engine/watches/scope")
 async def engine_watch_scope(
     request: Request,
     stack_id: Optional[str] = Query(None),
 ):
-    """Preview the scope for a health watch before creation.
+    """Preview the scope for a group monitor before creation.
 
     Body JSON:
         anchor_id: str — engine node ID

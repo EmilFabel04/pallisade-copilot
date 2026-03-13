@@ -40,7 +40,7 @@ export interface MonitorGroupSummary {
   schedule?: string;
   timezone?: string;
   enabled: boolean;
-  // Health Watch fields (present when watchType is set)
+  // Group Monitor fields (present when watchType is set)
   watchType?: string;
   anchorNodeType?: string;
   anchorPlatform?: string;

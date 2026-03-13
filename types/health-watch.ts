@@ -1,7 +1,7 @@
 /**
- * Health Watch Types — asset-centric protection model.
+ * Group Monitor Types — asset-centric protection model.
  *
- * A Health Watch wraps a MonitorGroup with watch-specific semantics:
+ * A Group Monitor wraps a MonitorGroup with watch-specific semantics:
  * scope selection, weighted health aggregation, and failure grouping.
  */
 
@@ -17,19 +17,19 @@ export type WatchType =
   | 'custom_watch';     // User-assembled
 
 export const WATCH_TYPE_LABELS: Record<WatchType, string> = {
-  pipeline_health: 'Pipeline Health',
-  dashboard_shield: 'Dashboard Shield',
-  source_guard: 'Source Guard',
-  model_quality: 'Model Quality',
-  custom_watch: 'Custom Watch',
+  pipeline_health: 'Data Pipeline',
+  dashboard_shield: 'Dashboard',
+  source_guard: 'Ingestion Source',
+  model_quality: 'Transformation',
+  custom_watch: 'Custom',
 };
 
 export const WATCH_TYPE_DESCRIPTIONS: Record<WatchType, string> = {
-  pipeline_health: 'Monitors a warehouse table and its upstream dependencies for freshness, volume, and schema changes.',
-  dashboard_shield: 'End-to-end protection for a BI dashboard, tracking upstream data health through to the reporting layer.',
-  source_guard: 'Guards an ingestion connector and its downstream destination tables.',
-  model_quality: 'Protects a dbt model with test failures, freshness, and upstream source checks.',
-  custom_watch: 'Custom protection policy — you choose the monitors.',
+  pipeline_health: 'Monitor a warehouse table and its upstream dependencies for freshness, volume, and schema changes.',
+  dashboard_shield: 'End-to-end monitoring for a BI dashboard, tracking upstream data health through to the reporting layer.',
+  source_guard: 'Monitor an ingestion connector and its downstream destination tables.',
+  model_quality: 'Monitor a dbt model with test failures, freshness, and upstream source checks.',
+  custom_watch: 'Custom monitoring group — you choose the monitors.',
 };
 
 // ---------------------------------------------------------------------------

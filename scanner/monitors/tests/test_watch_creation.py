@@ -1,7 +1,7 @@
-"""Tests for Health Watch creation path — upstream monitor generation.
+"""Tests for Group Monitor creation path — upstream monitor generation.
 
 Validates that the recommend-monitors endpoint returns upstream monitor specs
-for all relevant node types (DATASET, SEMANTIC, JOB) so that health watch
+for all relevant node types (DATASET, SEMANTIC, JOB) so that group monitor
 creation produces monitors for both the anchor and upstream assets.
 """
 

@@ -1,4 +1,4 @@
-"""Tests for health watch aggregation."""
+"""Tests for group monitor aggregation."""
 
 import pytest
 from ..health import (

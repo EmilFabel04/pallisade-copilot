@@ -77,8 +77,8 @@ const WATCH_TYPES: WatchType[] = [
 ];
 
 const WATCH_TYPE_ICONS: Record<WatchType, string> = {
-  pipeline_health: 'M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7',
-  dashboard_shield: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
+  pipeline_health: 'M13 5l7 7-7 7M5 5l7 7-7 7',
+  dashboard_shield: 'M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm0 8a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zm10 0a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z',
   source_guard: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4',
   model_quality: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z',
   custom_watch: 'M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4',
@@ -378,11 +378,11 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
         if (!res.ok) return anchorMonitors;
         const data = await res.json();
         const allNodes: Array<{ id: string; name: string; fqn: string; nodeType: string | null }> = data.nodes || [];
-        // Only keep physical data assets — exclude connectors, dags, tools, etc.
+        // Only keep physical data assets — exclude connectors, dags, tools, and null types
         const DATA_ASSET_TYPES = new Set(['table', 'view', 'materialized_view', 'source', 'model', 'dataset', 'seed', 'snapshot']);
         const upstreamNodes = allNodes.filter((n) => {
-          const nt = (n.nodeType || 'table').toLowerCase();
-          return DATA_ASSET_TYPES.has(nt);
+          if (!n.nodeType) return false;
+          return DATA_ASSET_TYPES.has(n.nodeType.toLowerCase());
         });
         if (upstreamNodes.length === 0) return anchorMonitors;
 
@@ -390,7 +390,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
         const seen = new Set<string>(anchorMonitors.map((m) => `${m.monitorType}:${m.targetFqn}`));
 
         for (const node of upstreamNodes) {
-          const nt = (node.nodeType || 'table').toLowerCase();
+          const nt = node.nodeType!.toLowerCase();
           const specs = UPSTREAM_NODE_MONITORS[nt] || UPSTREAM_NODE_MONITORS['table'];
           const shortName = node.fqn.split('.').pop() || node.name;
           for (const spec of specs) {
@@ -414,7 +414,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
           : 1.0);
         return [...anchorMonitors, ...upstreamMonitors];
       } catch (err) {
-        console.error('[Health Watch] DB lineage fallback error:', err);
+        console.error('[Group Monitor] DB lineage fallback error:', err);
         return anchorMonitors;
       }
     };
@@ -922,7 +922,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                   {([
                     { mode: 'prompt' as const, label: 'AI Prompt', sub: 'Natural language', icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z' },
                     { mode: 'structured' as const, label: 'Monitor', sub: 'Specific check', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
-                    { mode: 'watch' as const, label: 'Health Watch', sub: 'Protect an asset', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
+                    { mode: 'watch' as const, label: 'Group Monitor', sub: 'Protect an asset', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
                   ]).map(({ mode, label, sub, icon }) => (
                     <button
                       key={mode}
@@ -1028,7 +1028,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                       {selectedWatchAsset && (
                         <div>
                           <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                            Watch type
+                            Group type
                           </label>
                           <div className="space-y-2">
                             {WATCH_TYPES.map((wt) => (
@@ -1331,7 +1331,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                     disabled={scopeMonitors.filter((m) => m.checked).length === 0}
                     onClick={handleSubmit}
                   >
-                    Create Health Watch
+                    Create Group Monitor
                   </Button>
                 )}
               </div>

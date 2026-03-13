@@ -1,5 +1,5 @@
 """
-Health Watch Aggregation.
+Group Monitor Aggregation.
 
 Computes a weighted health score, groups failures by category,
 and generates a human-readable health summary for a watch.

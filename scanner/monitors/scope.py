@@ -1,5 +1,5 @@
 """
-Health Watch Scope Selection.
+Group Monitor Scope Selection.
 
 Given an anchor node and a watch type, selects which upstream nodes to monitor
 and generates monitor recommendations, respecting depth, node, and monitor caps.
@@ -116,7 +116,7 @@ def _node_priority_score(node: LineageNode, depth_from_anchor: int) -> float:
 
 @dataclass
 class ScopeResult:
-    """Result of scope selection for a health watch."""
+    """Result of scope selection for a group monitor."""
     anchor_id: str
     anchor_name: str
     watch_type: str
@@ -236,7 +236,7 @@ def build_watch_scope(
     existing_monitor_fqns: Optional[Set[str]] = None,
 ) -> ScopeResult:
     """
-    Build the scope for a health watch.
+    Build the scope for a group monitor.
 
     Args:
         graph: The lineage graph to traverse.
