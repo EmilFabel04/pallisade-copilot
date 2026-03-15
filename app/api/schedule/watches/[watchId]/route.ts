@@ -182,7 +182,7 @@ export async function PATCH(
           data: monitorUpdate,
         });
       }
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
@@ -229,7 +229,7 @@ export async function DELETE(
       await tx.monitorGroup.delete({
         where: { id: watchId },
       });
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import type { WatchSummary } from '@/types/health-watch';
@@ -15,6 +15,8 @@ import {
   type HealthReport,
 } from '@/types/health-watch';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
+import type { TaskRun } from '@/types/schedule';
+import { RunHistoryTable } from './RunHistoryTable';
 
 interface WatchDetailPanelProps {
   watch: WatchSummary;
@@ -68,6 +70,33 @@ export function WatchDetailPanel({
   const failureGroups = healthReport?.failureGroups || [];
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
   const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
+  const [monitorRuns, setMonitorRuns] = useState<Record<string, TaskRun[]>>({});
+  const [monitorRunsLoading, setMonitorRunsLoading] = useState<Record<string, boolean>>({});
+
+  const fetchMonitorRuns = useCallback(async (monitorId: string) => {
+    if (monitorRuns[monitorId]) return; // already fetched
+    setMonitorRunsLoading((prev) => ({ ...prev, [monitorId]: true }));
+    try {
+      const res = await fetch(`/api/schedule/tasks/${monitorId}/runs?limit=10`);
+      if (res.ok) {
+        const data = await res.json();
+        setMonitorRuns((prev) => ({ ...prev, [monitorId]: data.runs || [] }));
+      }
+    } catch (err) {
+      console.error('[WatchDetail] Failed to fetch monitor runs:', err);
+    } finally {
+      setMonitorRunsLoading((prev) => ({ ...prev, [monitorId]: false }));
+    }
+  }, [monitorRuns]);
+
+  const handleToggleMonitor = useCallback((monitorId: string) => {
+    if (expandedMonitorId === monitorId) {
+      setExpandedMonitorId(null);
+    } else {
+      setExpandedMonitorId(monitorId);
+      fetchMonitorRuns(monitorId);
+    }
+  }, [expandedMonitorId, fetchMonitorRuns]);
 
   return (
     <div className={cn("flex flex-col h-full bg-[var(--surface-inset)]", !watch.enabled && "opacity-60")}>
@@ -304,7 +333,6 @@ export function WatchDetailPanel({
                 ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
                 : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
               const isExpanded = expandedMonitorId === mon.id;
-              const lastRun = mon.lastRun;
               return (
                 <div
                   key={mon.id}
@@ -312,7 +340,7 @@ export function WatchDetailPanel({
                 >
                   <button
                     type="button"
-                    onClick={() => setExpandedMonitorId(isExpanded ? null : mon.id)}
+                    onClick={() => handleToggleMonitor(mon.id)}
                     className="flex items-center gap-3 p-3 w-full text-left hover:bg-[var(--hover-bg)] transition-colors"
                   >
                     <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
@@ -347,42 +375,13 @@ export function WatchDetailPanel({
                   </button>
                   {isExpanded && (
                     <div className="px-4 pb-3 pt-1 border-t border-[var(--border-faint)]">
-                      {lastRun ? (
-                        <div className="space-y-2">
-                          <div>
-                            <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-0.5">Last Run Result</p>
-                            <p className="text-[12px] text-[var(--text-secondary)]">{lastRun.message || 'No message'}</p>
-                          </div>
-                          <div className="flex items-center gap-4 text-[11px]">
-                            <div>
-                              <span className="text-[var(--text-faint)]">Status: </span>
-                              <span className="text-[var(--text-secondary)]">{lastRun.status}</span>
-                            </div>
-                            {lastRun.value != null && (
-                              <div>
-                                <span className="text-[var(--text-faint)]">Value: </span>
-                                <span className="text-[var(--text-secondary)]">{lastRun.value}</span>
-                              </div>
-                            )}
-                            {lastRun.durationMs != null && (
-                              <div>
-                                <span className="text-[var(--text-faint)]">Duration: </span>
-                                <span className="text-[var(--text-secondary)]">{lastRun.durationMs}ms</span>
-                              </div>
-                            )}
-                            {lastRun.startedAt && (
-                              <div>
-                                <span className="text-[var(--text-faint)]">At: </span>
-                                <span className="text-[var(--text-secondary)]">
-                                  {new Date(lastRun.startedAt).toLocaleString()}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-[12px] text-[var(--muted)]">No runs yet. Click &quot;Run All&quot; to execute this monitor.</p>
-                      )}
+                      <RunHistoryTable
+                        runs={monitorRuns[mon.id] || []}
+                        loading={monitorRunsLoading[mon.id] || false}
+                        taskName={mon.name}
+                        monitorType={mon.monitorType}
+                        targetFqn={mon.targetFqn}
+                      />
                       {onRemoveMonitor && (
                         <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex justify-end">
                           <button

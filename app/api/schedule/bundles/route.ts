@@ -216,7 +216,7 @@ export async function POST(request: NextRequest) {
       }
 
       return { group, monitors: createdMonitors };
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     return NextResponse.json(
       {

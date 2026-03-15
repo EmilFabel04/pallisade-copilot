@@ -412,7 +412,7 @@ class TaskExecutor:
 
         # Get warehouse query function — use pre-fetched config or look up by ID/org
         integration_config = task.get("integrationConfig") or await self._get_integration_config(
-            task.get("integrationId"), task.get("organizationId")
+            task.get("integrationId"), task.get("organizationId"),
         )
 
         if not integration_config:
@@ -424,6 +424,24 @@ class TaskExecutor:
 
         integration_type = integration_config.get("type", "postgres")
         dialect = _detect_dialect(integration_type)
+
+        # The FQN database may not match the connected warehouse's project/database.
+        # e.g. FQN "postgres.public.orders" from Fivetran lineage where the actual
+        # data lives in BigQuery project "acme-484520". Remap to the real project.
+        integration_db = (
+            integration_config.get("project_id")
+            or integration_config.get("project")
+            or integration_config.get("database")
+            or ""
+        )
+        if integration_db and database.lower() != integration_db.lower():
+            logger.info(
+                "[Executor] Remapping FQN database to integration project",
+                fqn_database=database,
+                integration_database=integration_db,
+            )
+            database = integration_db
+
         logger.info(f"[Executor] Using dialect={dialect}, type={integration_type}")
 
         # Enforce dataset/schema visibility: if the integration restricts
