@@ -1466,6 +1466,47 @@ async def engine_search(
     return {"results": results}
 
 
+@router.get("/lineage/engine/auto-anchor")
+async def engine_auto_anchor(stack_id: Optional[str] = Query(None)):
+    """Pick the best anchor node for full-pipeline protection.
+
+    Strategy: find the leaf node with the most upstream ancestors.
+    Falls back to any leaf, then any node.
+    """
+    store = _get_engine_store(stack_id)
+    if not store.graph or not store.graph.nodes:
+        return {"anchor": None}
+
+    leaves = store.graph.get_leaves()
+    if not leaves:
+        # No leaves — pick the node with the most upstream
+        leaves = list(store.graph.nodes.values())
+
+    # Score each candidate by upstream count
+    best = None
+    best_score = -1
+    for node in leaves:
+        upstream = store.graph.get_upstream(node.id, depth=10)
+        score = len(upstream)
+        if score > best_score:
+            best_score = score
+            best = node
+
+    if not best:
+        return {"anchor": None}
+
+    return {
+        "anchor": {
+            "id": best.id,
+            "name": best.name,
+            "fqn": best.fqn or best.name,
+            "platformDomain": best.platform_domain.value if best.platform_domain else None,
+            "nodeType": best.node_type.value if best.node_type else None,
+        },
+        "totalNodes": len(store.graph.nodes),
+    }
+
+
 @router.get("/lineage/engine/graph")
 async def engine_full_graph(
     plane: Optional[str] = Query(None, description="Filter edges by plane: data,control,cross"),

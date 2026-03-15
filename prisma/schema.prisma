@@ -152,6 +152,7 @@ model Organization {
   // Coverage & Monitoring
   monitors          Monitor[]
   monitorGroups     MonitorGroup[]
+  monitoringPlans   MonitoringPlan[]
   coverageSnapshots CoverageSnapshot[]
 
   // Fix Patterns (Learning Loop)
@@ -3131,6 +3132,14 @@ model MonitorGroup {
   anchorNodeType String?   // cached: "dashboard"|"table"|"connector" etc.
   anchorPlatform String?   // cached: "bigquery"|"looker" etc.
 
+  // Preset group fields (null for non-preset watches)
+  presetGroupId  String?   // Groups watches from same preset application
+  presetKey      String?   // "pipeline_health"|"data_drift"|"ingestion_watch"|"bi_reliability"|"full_coverage"
+
+  // Monitoring Plan parent (null for standalone groups)
+  monitoringPlan   MonitoringPlan? @relation(fields: [monitoringPlanId], references: [id], onDelete: SetNull)
+  monitoringPlanId String?
+
   // Relations
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
@@ -3144,4 +3153,56 @@ model MonitorGroup {
   @@index([groupType])
   @@index([anchorFqn])
   @@index([watchType])
+  @@index([presetGroupId])
+  @@index([monitoringPlanId])
+}
+
+model MonitoringPlan {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  // Scope (user intent)
+  scopeType    String   // "pipeline" | "stream" | "asset" | "tool"
+  scopeConfig  Json?    // { anchorNodeIds, maxDepth, domainFilters }
+  anchorFqn    String?
+  anchorNodeId String?
+
+  // Configuration (user intent)
+  mode     String   // "recommended" | "manual"
+  families String[] // selected family keys
+
+  // Aggregate metrics (cached, recomputed after runs)
+  totalAssets      Int      @default(0)
+  totalMonitors    Int      @default(0)
+  coveragePct      Float?
+  healthScore      Float?
+  healthStatus     String?  // "healthy"|"degraded"|"at_risk"|"unhealthy"
+  passCount        Int      @default(0)
+  warnCount        Int      @default(0)
+  failCount        Int      @default(0)
+  errorCount       Int      @default(0)
+  lastAggregatedAt DateTime?
+
+  // Schedule (plan-level, editing updates all child groups)
+  schedule String?
+  timezone String? @default("UTC")
+  enabled  Boolean @default(true)
+
+  // Alerts (plan-level, editing updates all child groups)
+  alertChannels String[]
+  alertOnStatus String[]
+
+  // Metadata
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+  monitorGroups  MonitorGroup[]
+
+  @@index([organizationId])
+  @@index([enabled])
 }

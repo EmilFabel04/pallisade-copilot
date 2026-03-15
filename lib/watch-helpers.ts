@@ -1,0 +1,217 @@
+/**
+ * Shared watch creation helper.
+ *
+ * Extracted from app/api/schedule/watches/route.ts so that both
+ * single-watch creation and preset batch creation can reuse the same logic.
+ */
+
+import prisma from '@/lib/db';
+import { computeNextRun } from '@/lib/cron';
+
+const TOOL_MONITOR_KINDS = [
+  'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
+  'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
+  'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
+];
+const BI_MONITOR_KINDS = [
+  'BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK',
+  'BI_CONTENT_HEALTH', 'BI_REFRESH_FAILURE',
+];
+const INFRA_MONITOR_KINDS = ['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS'];
+
+export interface CreateWatchParams {
+  name: string;
+  description?: string;
+  watchType: string;
+  anchorFqn?: string;
+  anchorNodeId?: string;
+  anchorNodeType?: string;
+  anchorPlatform?: string;
+  scopeConfig?: any;
+  schedule?: string;
+  timezone?: string;
+  alertChannels?: string[];
+  alertOnStatus?: string[];
+  integrationId?: string;
+  monitoringPlanId?: string;
+  presetGroupId?: string;
+  presetKey?: string;
+  monitors: Array<{
+    name?: string;
+    monitorType: string;
+    targetFqn: string;
+    config?: Record<string, any>;
+    depth?: number;
+    priority?: number;
+  }>;
+  organizationId: string;
+  userId: string;
+}
+
+export interface CreateWatchResult {
+  group: any;
+  monitors: any[];
+}
+
+/**
+ * Create a single watch (MonitorGroup + linked Monitors) inside a Prisma transaction.
+ * Can be called standalone or as part of a batch transaction.
+ */
+export async function createWatchInTransaction(
+  tx: any,
+  params: CreateWatchParams,
+): Promise<CreateWatchResult> {
+  const {
+    name,
+    description,
+    watchType,
+    anchorFqn,
+    anchorNodeId,
+    anchorNodeType,
+    anchorPlatform,
+    scopeConfig,
+    schedule,
+    timezone = 'UTC',
+    alertChannels = [],
+    alertOnStatus = ['FAIL', 'WARN', 'ERROR'],
+    integrationId,
+    monitoringPlanId,
+    presetGroupId,
+    presetKey,
+    monitors,
+    organizationId,
+    userId,
+  } = params;
+
+  // Validate integrationId if provided
+  let validIntegrationId: string | undefined;
+  if (integrationId) {
+    const integration = await tx.integration.findUnique({
+      where: { id: integrationId },
+      select: { id: true },
+    });
+    if (integration) {
+      validIntegrationId = integrationId;
+    }
+  }
+
+  const nextRunAt = schedule ? computeNextRun(schedule, timezone) : undefined;
+
+  const group = await tx.monitorGroup.create({
+    data: {
+      name,
+      description: description || null,
+      groupType: watchType,
+      watchType,
+      anchorFqn: anchorFqn || null,
+      anchorNodeId: anchorNodeId || null,
+      anchorNodeType: anchorNodeType || null,
+      anchorPlatform: anchorPlatform || null,
+      scopeConfig: scopeConfig || null,
+      monitoringPlanId: monitoringPlanId || null,
+      presetGroupId: presetGroupId || null,
+      presetKey: presetKey || null,
+      enabled: true,
+      schedule: schedule || null,
+      timezone,
+      alertChannels,
+      alertOnStatus,
+      organizationId,
+      createdBy: userId,
+    },
+  });
+
+  const createdMonitors = [];
+
+  for (let idx = 0; idx < monitors.length; idx++) {
+    const mon = monitors[idx];
+    const isAnchor = mon.targetFqn === anchorFqn;
+    const depth = mon.depth ?? (isAnchor ? 0 : 1);
+    const priority = mon.priority ?? (isAnchor ? 1 : 2);
+
+    // Dedup: check if matching monitor already exists
+    const existing = mon.targetFqn && mon.monitorType
+      ? await tx.monitor.findFirst({
+          where: {
+            organizationId,
+            targetFqn: mon.targetFqn,
+            monitorType: mon.monitorType,
+          },
+        })
+      : null;
+
+    if (existing) {
+      const existingConfig = (existing.config as any) || {};
+      const updated = await tx.monitor.update({
+        where: { id: existing.id },
+        data: {
+          monitorGroupId: group.id,
+          config: { ...existingConfig, _watchDepth: depth, _watchPriority: priority },
+        },
+      });
+      createdMonitors.push(updated);
+    } else {
+      const isToolMonitor = TOOL_MONITOR_KINDS.includes(mon.monitorType);
+      const isBIMonitor = BI_MONITOR_KINDS.includes(mon.monitorType);
+      const isInfraMonitor = INFRA_MONITOR_KINDS.includes(mon.monitorType);
+      let taskConfig: Record<string, any> = {
+        ...(mon.config || {}),
+        _watchDepth: depth,
+        _watchPriority: priority,
+      };
+
+      if (isInfraMonitor && integrationId) {
+        taskConfig = { ...taskConfig, serverNodeId: integrationId };
+      } else if (isToolMonitor && integrationId) {
+        taskConfig = { ...taskConfig, toolNodeId: integrationId };
+      } else if (isBIMonitor && integrationId) {
+        taskConfig = { ...taskConfig, biNodeId: integrationId };
+      } else if (!validIntegrationId && integrationId) {
+        taskConfig = { ...taskConfig, nodeId: integrationId };
+      }
+
+      try {
+        const created = await tx.monitor.create({
+          data: {
+            name: mon.name || `${mon.monitorType} — ${mon.targetFqn || 'monitor'}`,
+            taskMode: 'structured',
+            monitorType: mon.monitorType || null,
+            targetFqn: mon.targetFqn || null,
+            config: Object.keys(taskConfig).length > 0 ? taskConfig : undefined,
+            schedule: schedule || null,
+            timezone,
+            enabled: true,
+            alertChannels,
+            alertOnStatus,
+            nextRunAt,
+            createdBy: userId,
+            source: 'pallisade',
+            organizationId,
+            monitorGroupId: group.id,
+            ...(validIntegrationId && !isToolMonitor && !isInfraMonitor && !isBIMonitor
+              ? { integrationId: validIntegrationId }
+              : {}),
+          },
+        });
+        createdMonitors.push(created);
+      } catch (createErr: any) {
+        if (createErr?.code === 'P2002' && mon.targetFqn && mon.monitorType) {
+          const dup = await tx.monitor.findFirst({
+            where: { organizationId, targetFqn: mon.targetFqn, monitorType: mon.monitorType },
+          });
+          if (dup) {
+            const updated = await tx.monitor.update({
+              where: { id: dup.id },
+              data: { monitorGroupId: group.id },
+            });
+            createdMonitors.push(updated);
+          }
+        } else {
+          throw createErr;
+        }
+      }
+    }
+  }
+
+  return { group, monitors: createdMonitors };
+}

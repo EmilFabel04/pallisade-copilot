@@ -18,7 +18,7 @@ import {
   Plus,
   Sparkles,
 } from 'lucide-react';
-import type { MonitorPrefillData, WatchPrefillData } from '@/components/schedule/CreateTaskModal';
+import type { AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,
@@ -67,8 +67,8 @@ interface DataAssetDetailPanelProps {
   stackId: string;
   onClose: () => void;
   onNodeNavigate: (nodeId: string) => void;
-  onCreateMonitor?: (prefill: MonitorPrefillData) => void;
-  onCreateWatch?: (prefill: WatchPrefillData) => void;
+  onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
+  onCreateMultiMonitor?: (preselectedNodeIds: string[]) => void;
 }
 
 // ─── Collapsible Section ───────────────────────────────────────────
@@ -244,8 +244,8 @@ export function DataAssetDetailPanel({
   stackId,
   onClose,
   onNodeNavigate,
-  onCreateMonitor,
-  onCreateWatch,
+  onCreateSingleMonitor,
+  onCreateMultiMonitor,
 }: DataAssetDetailPanelProps) {
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult | null>(null);
   const [blastLoading, setBlastLoading] = useState(false);
@@ -747,7 +747,7 @@ export function DataAssetDetailPanel({
         )}
 
         {/* ─── Recommended Monitors ────────────────────────── */}
-        {onCreateMonitor && (() => {
+        {onCreateSingleMonitor && (() => {
           const isBiNode = ['dashboard', 'report', 'workbook', 'question', 'dataset'].includes(node.category);
           const nodeTypeLabel = node.category === 'dashboard' ? 'dashboard'
             : node.category === 'report' ? 'report'
@@ -868,11 +868,11 @@ export function DataAssetDetailPanel({
                 )}
                 {!rec.already_monitored && (
                   <button
-                    onClick={() => onCreateMonitor({
-                      name: `${rec.monitor_key.toLowerCase().replace(/_/g, ' ')} — ${rec.target_fqn.split('.').pop()}`,
-                      monitorType: rec.monitor_key,
-                      targetFqn: rec.target_fqn,
-                      config: rec.config_hints,
+                    onClick={() => onCreateSingleMonitor({
+                      nodeId: node.id.replace(/^lineage-/, ''),
+                      fqn: rec.target_fqn,
+                      name: rec.target_fqn.split('.').pop() || node.name,
+                      platform: node.platforms?.[0],
                     })}
                     className="mt-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[9px] text-blue-300"
                   >
@@ -894,97 +894,77 @@ export function DataAssetDetailPanel({
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
                     <Sparkles className="w-3 h-3" />
-                    Tasks
+                    Actions
                   </span>
                 </div>
 
-                {/* Two actions: Monitor + Group Monitor */}
-                <div className="flex gap-1.5">
-                  {onCreateMonitor && (
+                <div className="space-y-1.5">
+                  {onCreateMultiMonitor && (
                     <button
-                      onClick={() => onCreateMonitor({
-                        name: `Monitor — ${node.tableName || node.name}`,
-                        monitorType: 'BI_FRESHNESS_PROXY',
-                        targetFqn: node.fullName || node.name,
-                      })}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-strong)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--text)] font-medium"
-                    >
-                      <Plus className="w-3 h-3" />
-                      Create Monitor
-                    </button>
-                  )}
-                  {onCreateWatch && (
-                    <button
-                      onClick={() => {
-                        onCreateWatch({
-                          anchorFqn: node.fullName || node.name,
-                          anchorNodeId: node.id.replace(/^lineage-/, ''),
-                          anchorNodeType: node.category,
-                          watchType: 'dashboard_shield',
-                          monitors: [],
-                        });
-                      }}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 font-medium"
+                      onClick={() => onCreateMultiMonitor([node.id.replace(/^lineage-/, '')])}
+                      className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all text-[10px] text-purple-300 font-medium"
                     >
                       <ShieldCheck className="w-3 h-3" />
-                      Group Monitor
+                      Set Up Monitoring
                     </button>
                   )}
+                  <div className="flex gap-1.5">
+                    {onCreateSingleMonitor && (
+                      <button
+                        onClick={() => onCreateSingleMonitor({
+                          nodeId: node.id.replace(/^lineage-/, ''),
+                          fqn: node.fullName || node.name,
+                          name: node.tableName || node.name,
+                          platform: node.platforms?.[0],
+                        })}
+                        className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
+                      >
+                        <Plus className="w-3 h-3" />
+                        Create Monitor
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
           }
 
           /* ─── Non-BI node path ─────────────────────────────── */
-          const defaultMonitorType = node.category === 'connector' ? 'SYNC_LAG'
-            : ['dag', 'task', 'workflow'].includes(node.category) ? 'DAG_LAST_RUN'
-            : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'DBT_TEST_FAILURES'
-            : 'FRESHNESS';
-          const defaultWatchType = node.category === 'connector' ? 'source_guard' as const
-            : ['model'].includes(node.category) && node.platforms?.includes('dbt') ? 'model_quality' as const
-            : 'pipeline_health' as const;
-
           return (
             <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
                   <Sparkles className="w-3 h-3" />
-                  Tasks
+                  Actions
                 </span>
               </div>
 
-              {/* Two actions: Monitor + Group Monitor */}
-              <div className="flex gap-1.5">
-                {onCreateMonitor && (
+              <div className="space-y-1.5">
+                {onCreateMultiMonitor && (
                   <button
-                    onClick={() => onCreateMonitor({
-                      name: `${defaultMonitorType.toLowerCase().replace(/_/g, ' ')} — ${node.tableName || node.name}`,
-                      monitorType: defaultMonitorType,
-                      targetFqn: node.fullName || node.name,
-                    })}
-                    className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-strong)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--text)] font-medium"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Create Monitor
-                  </button>
-                )}
-                {onCreateWatch && (
-                  <button
-                    onClick={() => {
-                      onCreateWatch({
-                        anchorFqn: node.fullName || node.name,
-                        anchorNodeId: node.id.replace(/^lineage-/, ''),
-                        anchorNodeType: node.category,
-                        watchType: defaultWatchType,
-                        monitors: [],
-                      });
-                    }}
-                    className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-blue-500/10 border border-blue-500/20 hover:bg-blue-500/20 transition-all text-[10px] text-blue-300 font-medium"
+                    onClick={() => onCreateMultiMonitor([node.id.replace(/^lineage-/, '')])}
+                    className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all text-[10px] text-purple-300 font-medium"
                   >
                     <ShieldCheck className="w-3 h-3" />
-                    Group Monitor
+                    Set Up Monitoring
                   </button>
                 )}
+                <div className="flex gap-1.5">
+                  {onCreateSingleMonitor && (
+                    <button
+                      onClick={() => onCreateSingleMonitor({
+                        nodeId: node.id.replace(/^lineage-/, ''),
+                        fqn: node.fullName || node.name,
+                        name: node.tableName || node.name,
+                        platform: node.platforms?.[0],
+                      })}
+                      className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
+                    >
+                      <Plus className="w-3 h-3" />
+                      Create Monitor
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );

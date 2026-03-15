@@ -319,3 +319,133 @@ def compute_health_report(
         failure_groups=failure_groups,
         computed_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan-level aggregate
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PlanAggregate:
+    """Aggregate metrics for a MonitoringPlan across its child groups."""
+    health_score: float
+    health_status: str
+    coverage_pct: float
+    total_monitors: int
+    pass_count: int
+    warn_count: int
+    fail_count: int
+    error_count: int
+    lowest_health_group: Optional[str] = None    # group name
+    top_failure_groups: List[FailureGroup] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "healthScore": self.health_score,
+            "healthStatus": self.health_status,
+            "coveragePct": self.coverage_pct,
+            "totalMonitors": self.total_monitors,
+            "passCount": self.pass_count,
+            "warnCount": self.warn_count,
+            "failCount": self.fail_count,
+            "errorCount": self.error_count,
+            "lowestHealthGroup": self.lowest_health_group,
+            "topFailureGroups": [fg.to_dict() for fg in self.top_failure_groups],
+        }
+
+
+def compute_plan_aggregate(groups: List[Dict[str, Any]]) -> PlanAggregate:
+    """
+    Compute aggregate metrics for a MonitoringPlan from child group data.
+
+    Each group dict should contain:
+      - healthScore: float (0-100)
+      - coveragePct: float (0.0-1.0)
+      - totalMonitors: int (or monitor count)
+      - passCount, warnCount, failCount, errorCount: int
+      - name: str
+      - healthDetails: dict (optional, with failureGroups)
+
+    Coverage and health are weighted averages by monitor count,
+    not simple averages. A group with 15 monitors contributes more
+    than a group with 3 monitors.
+    """
+    if not groups:
+        return PlanAggregate(
+            health_score=100.0,
+            health_status="healthy",
+            coverage_pct=0.0,
+            total_monitors=0,
+            pass_count=0,
+            warn_count=0,
+            fail_count=0,
+            error_count=0,
+        )
+
+    total_monitors = 0
+    weighted_health = 0.0
+    weighted_coverage = 0.0
+    pass_count = 0
+    warn_count = 0
+    fail_count = 0
+    error_count = 0
+
+    lowest_health_score = 101.0
+    lowest_health_group = None
+    all_failure_groups: List[FailureGroup] = []
+
+    for g in groups:
+        monitors = g.get("totalMonitors", 0) or g.get("monitorCount", 0) or 0
+        health = g.get("healthScore")
+        coverage = g.get("coveragePct")
+
+        if monitors > 0 and health is not None:
+            weighted_health += health * monitors
+            total_monitors += monitors
+
+        if monitors > 0 and coverage is not None:
+            weighted_coverage += coverage * monitors
+
+        pass_count += g.get("passCount", 0)
+        warn_count += g.get("warnCount", 0)
+        fail_count += g.get("failCount", 0)
+        error_count += g.get("errorCount", 0)
+
+        # Track lowest health group
+        if health is not None and health < lowest_health_score:
+            lowest_health_score = health
+            lowest_health_group = g.get("name")
+
+        # Collect failure groups from healthDetails
+        details = g.get("healthDetails") or {}
+        for fg_dict in details.get("failureGroups", []):
+            all_failure_groups.append(FailureGroup(
+                category=fg_dict.get("category", ""),
+                severity=fg_dict.get("severity", "warning"),
+                summary=fg_dict.get("summary", ""),
+                root_cause_hint=fg_dict.get("rootCauseHint", ""),
+                signal_count=fg_dict.get("signalCount", 0),
+            ))
+
+    # Weighted averages
+    avg_health = weighted_health / total_monitors if total_monitors > 0 else 100.0
+    avg_coverage = weighted_coverage / total_monitors if total_monitors > 0 else 0.0
+
+    # Top 3 failure groups by signal count
+    all_failure_groups.sort(
+        key=lambda fg: (0 if fg.severity == "critical" else 1, -fg.signal_count)
+    )
+    top_failures = all_failure_groups[:3]
+
+    return PlanAggregate(
+        health_score=round(avg_health, 1),
+        health_status=health_status_from_score(avg_health),
+        coverage_pct=round(avg_coverage, 3),
+        total_monitors=total_monitors,
+        pass_count=pass_count,
+        warn_count=warn_count,
+        fail_count=fail_count,
+        error_count=error_count,
+        lowest_health_group=lowest_health_group,
+        top_failure_groups=top_failures,
+    )

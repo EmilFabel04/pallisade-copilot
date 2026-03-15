@@ -95,6 +95,9 @@ export async function GET(
       case 'search':
         endpoint = `/api/v1/lineage/engine/search${qs}`;
         break;
+      case 'auto-anchor':
+        endpoint = `/api/v1/lineage/engine/auto-anchor${qs}`;
+        break;
       case 'view-pipeline-overview':
         endpoint = `/api/v1/lineage/engine/views/pipeline-overview${qs}`;
         break;
@@ -144,11 +147,13 @@ export async function GET(
     // For view actions: if engine returned empty (no graph in memory after restart),
     // try restoring from the DB snapshot and retry once.
     // Triggers on: (a) empty nodes array, or (b) "No graph loaded" error from tool-details.
-    const isViewAction = action.startsWith('view-') || action === 'stats';
+    const needsGraph = action.startsWith('view-') || action === 'stats' || action === 'search' || action === 'auto-anchor';
     const hasNodeField = data && 'nodes' in data;
     const isEmpty = hasNodeField && (!data.nodes || (Array.isArray(data.nodes) && data.nodes.length === 0));
     const isNoGraphError = data?.error === 'No graph loaded';
-    if (isViewAction && (isEmpty || isNoGraphError)) {
+    const isEmptySearch = action === 'search' && data?.results && Array.isArray(data.results) && data.results.length === 0;
+    const isNullAnchor = action === 'auto-anchor' && data?.anchor === null;
+    if (needsGraph && (isEmpty || isNoGraphError || isEmptySearch || isNullAnchor)) {
       const organizationId = (session.user as any).organizationId;
       if (organizationId) {
         const snapshot = await prisma.lineageSnapshot.findFirst({

@@ -47,7 +47,9 @@ import {
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
-import { CreateTaskModal, type MonitorPrefillData, type WatchPrefillData } from '@/components/schedule/CreateTaskModal';
+import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
+import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
+import { SingleAssetMonitorModal, type AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -168,19 +170,21 @@ function LineagePageInner() {
   // Pipeline Overview inspector state
   const [pipelineInspectorTarget, setPipelineInspectorTarget] = useState<InspectorTarget>(null);
 
-  // Monitor creation modal state
-  const [monitorModalOpen, setMonitorModalOpen] = useState(false);
-  const [monitorPrefill, setMonitorPrefill] = useState<MonitorPrefillData | null>(null);
-  const handleCreateMonitor = useCallback((prefill: MonitorPrefillData) => {
-    setMonitorPrefill(prefill);
-    setMonitorModalOpen(true);
+  // Monitor creation modal states — three paths
+  const [multiMonitorModalOpen, setMultiMonitorModalOpen] = useState(false);
+  const [multiMonitorPreselect, setMultiMonitorPreselect] = useState<string[]>([]);
+  const [singleAssetModalOpen, setSingleAssetModalOpen] = useState(false);
+  const [singleAssetPrefill, setSingleAssetPrefill] = useState<AssetPrefill | null>(null);
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
+
+  const handleCreateSingleMonitor = useCallback((prefill: AssetPrefill) => {
+    setSingleAssetPrefill(prefill);
+    setSingleAssetModalOpen(true);
   }, []);
 
-  // Watch creation — opens CreateTaskModal in watch mode
-  const [watchPrefill, setWatchPrefill] = useState<WatchPrefillData | null>(null);
-  const handleCreateWatch = useCallback((prefill: WatchPrefillData) => {
-    setWatchPrefill(prefill);
-    setMonitorModalOpen(true);
+  const handleCreateMultiMonitor = useCallback((preselectedNodeIds: string[]) => {
+    setMultiMonitorPreselect(preselectedNodeIds);
+    setMultiMonitorModalOpen(true);
   }, []);
 
   // LLM extraction state
@@ -1644,7 +1648,12 @@ function LineagePageInner() {
             stackId={stackId}
             allMonitors={lineageData?.allMonitors}
             onClose={() => setPipelineInspectorTarget(null)}
-            onCreateMonitor={handleCreateMonitor}
+            onCreateSingleMonitor={(prefill: any) => handleCreateSingleMonitor({
+              nodeId: prefill.integrationId || '',
+              fqn: prefill.targetFqn || prefill.name,
+              name: prefill.name,
+            })}
+            onCreateMultiMonitor={(nodeIds: string[]) => handleCreateMultiMonitor(nodeIds)}
           />
         )}
 
@@ -2042,57 +2051,55 @@ function LineagePageInner() {
               stackId={stackId || ''}
               onClose={() => setSelectedNode(null)}
               onNodeNavigate={handleNavigateToNode}
-              onCreateMonitor={handleCreateMonitor}
-              onCreateWatch={handleCreateWatch}
+              onCreateSingleMonitor={handleCreateSingleMonitor}
+              onCreateMultiMonitor={handleCreateMultiMonitor}
             />
           )
         )}
       </div>
 
-      {/* Monitor/Bundle/Watch creation modal (opened from lineage node recommendations) */}
+      {/* Multi Monitor modal */}
+      <MultiMonitorModal
+        open={multiMonitorModalOpen}
+        onClose={() => setMultiMonitorModalOpen(false)}
+        onComplete={() => invalidateCache('/api/schedule')}
+        stackId={stackId || undefined}
+        preselectedNodeIds={multiMonitorPreselect}
+      />
+
+      {/* Single Asset Monitor modal */}
+      <SingleAssetMonitorModal
+        open={singleAssetModalOpen}
+        onClose={() => { setSingleAssetModalOpen(false); setSingleAssetPrefill(null); }}
+        onComplete={() => invalidateCache('/api/schedule')}
+        stackId={stackId || undefined}
+        prefill={singleAssetPrefill}
+      />
+
+      {/* AI Prompt Monitor modal */}
       <CreateTaskModal
-        open={monitorModalOpen}
-        onClose={() => { setMonitorModalOpen(false); setMonitorPrefill(null); setWatchPrefill(null); }}
+        open={promptModalOpen}
+        onClose={() => setPromptModalOpen(false)}
         onSubmit={async (task) => {
           try {
-            if (task._watch) {
-              const { _watch, ...watchData } = task;
-              console.log('[Lineage] Creating group monitor:', JSON.stringify(watchData, null, 2));
-              const res = await fetch('/api/schedule/watches', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(watchData),
-              });
-              if (!res.ok) {
-                const errText = await res.text().catch(() => '');
-                console.error('[Lineage] Group monitor creation failed:', res.status, errText);
-                return;
-              }
-              invalidateCache('/api/schedule');
-            } else {
-              const res = await fetch('/api/schedule/tasks', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(task),
-              });
-              if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                console.error('[Lineage] Task creation failed:', res.status, err);
-                return;
-              }
-              invalidateCache('/api/schedule');
+            const res = await fetch('/api/schedule/tasks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(task),
+            });
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              console.error('[Lineage] Monitor creation failed:', res.status, err);
+              return;
             }
+            invalidateCache('/api/schedule');
           } catch (err) {
             console.error('[Lineage] Submit error:', err);
           }
-          setMonitorModalOpen(false);
-          setMonitorPrefill(null);
-          setWatchPrefill(null);
+          setPromptModalOpen(false);
         }}
-        prefillData={monitorPrefill}
-        watchPrefillData={watchPrefill}
         stackId={stackId || undefined}
-        initialMode={watchPrefill ? 'watch' : undefined}
+        initialMode="prompt"
       />
     </div>
   );

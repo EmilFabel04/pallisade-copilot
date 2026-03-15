@@ -9,6 +9,7 @@ const VALID_WATCH_TYPES = [
   'dashboard_shield',
   'source_guard',
   'model_quality',
+  'data_drift',
   'custom_watch',
 ];
 
@@ -60,6 +61,8 @@ export async function GET(request: NextRequest) {
         anchorNodeType: g.anchorNodeType,
         anchorPlatform: g.anchorPlatform,
         scopeConfig: g.scopeConfig,
+        presetGroupId: (g as any).presetGroupId || null,
+        presetKey: (g as any).presetKey || null,
         enabled: g.enabled,
         schedule: g.schedule,
         timezone: g.timezone,

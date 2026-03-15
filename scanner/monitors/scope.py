@@ -71,6 +71,18 @@ DEFAULT_SCOPE = {
         "maxMonitors": 8,
         "domainFilters": [],
     },
+    "data_drift": {
+        "maxDepth": 3,
+        "maxNodes": 12,
+        "maxMonitors": 10,
+        "domainFilters": ["warehouse", "transform", "ingestion"],
+    },
+    "full_pipeline": {
+        "maxDepth": 5,
+        "maxNodes": 30,
+        "maxMonitors": 40,
+        "domainFilters": [],
+    },
 }
 
 
@@ -159,6 +171,15 @@ RecipeEntry = Tuple[str, int, int, Any]  # (key, priority, cap, check_fn)
 def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeEntry]:
     """Return monitor recipe entries for a given watch type."""
 
+    if watch_type == "data_drift":
+        return [
+            ("SCHEMA_CHANGE", 1, 3, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("CONNECTOR_SCHEMA_DRIFT", 1, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
+            ("VOLUME", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("UNIQUENESS", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET and n.criticality in ("critical", "high")),
+            ("NULL_RATE", 3, 1, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET and n.criticality in ("critical", "high")),
+        ]
+
     if watch_type == "pipeline_health":
         return [
             # Direct on anchor
@@ -212,6 +233,22 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
             ("FRESHNESS", 2, 3, lambda n, d: d >= 2 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
             # Upstream connectors
             ("SYNC_LAG", 3, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
+        ]
+
+    if watch_type == "full_pipeline":
+        return [
+            # Data assets — any domain
+            ("FRESHNESS", 1, 8, lambda n, d: n.asset_kind in _WAREHOUSE_ASSET),
+            ("SCHEMA_CHANGE", 2, 5, lambda n, d: n.asset_kind in _WAREHOUSE_ASSET),
+            ("VOLUME", 2, 4, lambda n, d: n.asset_kind in _WAREHOUSE_ASSET),
+            # Orchestration / control plane
+            ("DAG_LAST_RUN", 2, 4, lambda n, d: n.node_type in _ORCH_TYPES),
+            # Ingestion connectors (if in scope)
+            ("SYNC_LAG", 2, 3, lambda n, d: n.asset_kind == AssetKind.CONNECTOR),
+            # Transform
+            ("DBT_TEST_FAILURES", 3, 3, lambda n, d: n.asset_kind in _TRANSFORM_ASSET),
+            # BI
+            ("BI_FRESHNESS_PROXY", 2, 2, lambda n, d: is_bi_node(n)),
         ]
 
     # custom_watch — generic recipe
@@ -283,7 +320,7 @@ def build_watch_scope(
         downstream_nodes = graph.get_downstream(anchor_id, depth=1)
         downstream_with_depth = [(n, 1) for n in downstream_nodes]
 
-    # Phase 2: Domain filter
+    # Phase 2: Domain filter (with fallback if filtering removes everything)
     def _passes_domain_filter(node: LineageNode) -> bool:
         if not domain_filters:
             return True
@@ -298,6 +335,35 @@ def build_watch_scope(
         (n, d) for n, d in downstream_with_depth
         if _passes_domain_filter(n) and n.id not in exclude_ids
     ])
+
+    # Fallback: if domain filtering removed all nodes but there ARE upstream
+    # nodes (just with unassigned domains like "other"), include them all.
+    if not filtered and all_upstream:
+        filtered = [
+            (n, d) for n, d in all_upstream
+            if n.id not in exclude_ids
+        ]
+        filtered.extend([
+            (n, d) for n, d in downstream_with_depth
+            if n.id not in exclude_ids
+        ])
+
+    # Phase 2b: Visibility filter — exclude nodes not shown in lineage UI
+    # (e.g. Fivetran connectors that exist in graph but aren't on the canvas)
+    exclude_invisible = cfg.get("excludeInvisibleNodes", False)
+    if exclude_invisible:
+        from ..lineage.engine.canonical import map_node_type
+
+        def _is_visible_node(node: LineageNode) -> bool:
+            ct = getattr(node, 'canonical_type', None) or map_node_type(node).value
+            if ct in ("dataset", "semantic"):
+                return True
+            if ct == "job":
+                # Include orchestration jobs (DAGs, tasks) but NOT ingestion connectors
+                return node.node_type in _ORCH_TYPES or node.platform_domain == PlatformDomain.ORCHESTRATION
+            return False
+
+        filtered = [(n, d) for n, d in filtered if _is_visible_node(n)]
 
     # Phase 3: Priority scoring
     scored = [
@@ -336,42 +402,57 @@ def build_watch_scope(
     # Candidate nodes = anchor + scoped
     candidate_nodes = [(anchor, 0)] + [(n, d) for n, d, _ in scoped]
 
-    for entry_idx, (mon_key, priority, cap, check_fn) in enumerate(recipe):
-        count_key = f"{entry_idx}"
-        recipe_counts[count_key] = 0
+    def _run_recipe(entries: List[RecipeEntry]) -> None:
+        for entry_idx, (mon_key, priority, cap, check_fn) in enumerate(entries):
+            count_key = f"{entry_idx}"
+            recipe_counts[count_key] = 0
 
-        for node, depth in candidate_nodes:
-            if recipe_counts[count_key] >= cap:
-                break
-            if not check_fn(node, depth):
-                continue
+            for node, depth in candidate_nodes:
+                if recipe_counts[count_key] >= cap:
+                    break
+                if not check_fn(node, depth):
+                    continue
 
-            dedup_key = f"{mon_key}:{node.fqn}"
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
+                dedup_key = f"{mon_key}:{node.fqn}"
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
 
-            already_monitored = (
-                dedup_key in existing_monitor_fqns
-                or node.fqn in existing_monitor_fqns
-            )
+                already_monitored = (
+                    dedup_key in existing_monitor_fqns
+                    or node.fqn in existing_monitor_fqns
+                )
 
-            source = "direct" if depth == 0 else "upstream"
-            if depth < 0:
-                source = "downstream"
+                source = "direct" if depth == 0 else "upstream"
+                if depth < 0:
+                    source = "downstream"
 
-            recommendations.append(MonitorRecommendation(
-                monitor_key=mon_key,
-                target_fqn=node.fqn,
-                target_node_id=node.id,
-                source=source,
-                reason=_build_reason(mon_key, node, anchor, depth),
-                priority=priority,
-                config_hints=_build_config_hints(node, mon_key),
-                integration_type=node.platform or "",
-                already_monitored=already_monitored,
-            ))
-            recipe_counts[count_key] += 1
+                recommendations.append(MonitorRecommendation(
+                    monitor_key=mon_key,
+                    target_fqn=node.fqn,
+                    target_node_id=node.id,
+                    source=source,
+                    reason=_build_reason(mon_key, node, anchor, depth),
+                    priority=priority,
+                    config_hints=_build_config_hints(node, mon_key),
+                    integration_type=node.platform or "",
+                    already_monitored=already_monitored,
+                ))
+                recipe_counts[count_key] += 1
+
+    _run_recipe(recipe)
+
+    # Fallback: if domain-specific recipes matched nothing (nodes have
+    # platform_domain=OTHER or asset_kind=UNKNOWN), apply generic monitors
+    # to any node in scope. This handles graphs where domain/kind metadata
+    # hasn't been assigned yet.
+    if not recommendations and candidate_nodes:
+        fallback_recipe: List[RecipeEntry] = [
+            ("FRESHNESS", 1, 5, lambda n, d: True),
+            ("SCHEMA_CHANGE", 2, 5, lambda n, d: True),
+            ("VOLUME", 2, 3, lambda n, d: True),
+        ]
+        _run_recipe(fallback_recipe)
 
     # Cap total monitors
     recommendations.sort(key=lambda r: r.priority)

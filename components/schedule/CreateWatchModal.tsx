@@ -63,6 +63,7 @@ const WATCH_TYPES: WatchType[] = [
   'dashboard_shield',
   'source_guard',
   'model_quality',
+  'data_drift',
   'custom_watch',
 ];
 
@@ -71,6 +72,7 @@ const WATCH_TYPE_ICONS: Record<WatchType, string> = {
   dashboard_shield: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
   source_guard: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4',
   model_quality: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z',
+  data_drift: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6',
   custom_watch: 'M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4',
 };
 
@@ -344,7 +346,7 @@ export function CreateWatchModal({ open, onClose, onSubmit, prefillData, stackId
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
           <div>
-            <h2 className="text-[16px] font-semibold text-[var(--text)]">Create Health Watch</h2>
+            <h2 className="text-[16px] font-semibold text-[var(--text)]">Create Bundle Monitor</h2>
             <p className="text-[12px] text-[var(--muted)] mt-0.5">
               Step {step} of 4
               {step === 1 && ' — Pick your asset'}
@@ -701,7 +703,7 @@ export function CreateWatchModal({ open, onClose, onSubmit, prefillData, stackId
                 disabled={!checkedCount}
                 onClick={handleSubmit}
               >
-                Create Health Watch
+                Create Bundle Monitor
               </Button>
             )}
           </div>

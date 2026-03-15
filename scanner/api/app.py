@@ -84,6 +84,8 @@ def create_app() -> FastAPI:
     from .routers.dbt import router as dbt_router
     from .routers.schedule import router as schedule_router
     from .routers.drivers import router as drivers_router
+    from .routers.presets import router as presets_router
+    from .routers.plans import router as plans_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -114,6 +116,12 @@ def create_app() -> FastAPI:
 
     # Reporting/BI Metadata API
     app.include_router(reporting_router, prefix="/api/v1", tags=["Reporting"])
+
+    # Monitor Presets API
+    app.include_router(presets_router, prefix="/api/v1", tags=["Presets"])
+
+    # Monitoring Plans API
+    app.include_router(plans_router, prefix="/api/v1", tags=["Plans"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

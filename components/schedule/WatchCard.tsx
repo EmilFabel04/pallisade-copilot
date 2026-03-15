@@ -24,6 +24,7 @@ const WATCH_TYPE_COLORS: Record<string, string> = {
   dashboard_shield: 'bg-purple-500/15 text-purple-400',
   source_guard: 'bg-emerald-500/15 text-emerald-400',
   model_quality: 'bg-amber-500/15 text-amber-400',
+  data_drift: 'bg-orange-500/15 text-orange-400',
   custom_watch: 'bg-white/10 text-white/50',
 };
 
@@ -94,6 +95,11 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
             <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', watchTypeColor)}>
               {WATCH_TYPE_LABELS[watch.watchType] || watch.watchType}
             </span>
+            {watch.presetKey && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-500/10 text-blue-400">
+                preset
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />

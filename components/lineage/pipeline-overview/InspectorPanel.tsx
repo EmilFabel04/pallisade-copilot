@@ -15,7 +15,7 @@ import {
 } from './types';
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
-import type { MonitorPrefillData } from '@/components/schedule/CreateTaskModal';
+import type { AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
 import { computeMonitorScoring, resolveAssetCategory, type MonitorScoringResult } from '@/lib/monitor-scoring';
 
 // Role badges shown when functional role differs from the lane name.
@@ -49,7 +49,8 @@ interface InspectorPanelProps {
   stackId: string | null;
   allMonitors?: MonitorInfo[];
   onClose: () => void;
-  onCreateMonitor?: (prefill: MonitorPrefillData) => void;
+  onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
+  onCreateMultiMonitor?: (nodeIds: string[]) => void;
 }
 
 
@@ -60,13 +61,15 @@ function NodeInspector({
   laneOverview,
   stackId,
   allMonitors,
-  onCreateMonitor,
+  onCreateSingleMonitor,
+  onCreateMultiMonitor,
 }: {
   node: ViewNode;
   laneOverview: RenderedViewResponse | null;
   stackId: string | null;
   allMonitors?: MonitorInfo[];
-  onCreateMonitor?: (prefill: MonitorPrefillData) => void;
+  onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
+  onCreateMultiMonitor?: (nodeIds: string[]) => void;
 }) {
   const meta = getToolMeta(node);
   const health = getOverallHealth(meta.healthSummary);
@@ -261,7 +264,7 @@ function NodeInspector({
       )}
 
       {/* Monitor this tool */}
-      {onCreateMonitor && (() => {
+      {onCreateSingleMonitor && (() => {
         const platform = (node.platform || '').toLowerCase();
         const layer = (node.layer || '').toUpperCase();
         const toolName = node.name || platform;
@@ -288,10 +291,11 @@ function NodeInspector({
               {suggestions.map(s => (
                 <button
                   key={s.key}
-                  onClick={() => onCreateMonitor({
-                    name: `${s.label} — ${toolName}`,
-                    monitorType: s.key,
-                    integrationId: (node.metadata?.integrationId as string) || undefined,
+                  onClick={() => onCreateSingleMonitor({
+                    nodeId: node.id,
+                    fqn: (node.metadata?.fqn as string) || node.name,
+                    name: toolName,
+                    platform: node.platform || undefined,
                   })}
                   className="w-full text-left px-2.5 py-1.5 rounded-lg bg-blue-500/8 border border-blue-500/15 hover:bg-blue-500/15 transition-all text-[11px] text-blue-300 hover:text-blue-200 flex items-center gap-2"
                 >
@@ -580,7 +584,8 @@ export function InspectorPanel({
   stackId,
   allMonitors,
   onClose,
-  onCreateMonitor,
+  onCreateSingleMonitor,
+  onCreateMultiMonitor,
 }: InspectorPanelProps) {
   if (!target) return null;
 
@@ -603,7 +608,7 @@ export function InspectorPanel({
 
       {/* Content */}
       {target.kind === 'node' ? (
-        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} onCreateMonitor={onCreateMonitor} />
+        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} onCreateSingleMonitor={onCreateSingleMonitor} onCreateMultiMonitor={onCreateMultiMonitor} />
       ) : (
         <EdgeInspector edge={target.edge} laneOverview={laneOverview} />
       )}

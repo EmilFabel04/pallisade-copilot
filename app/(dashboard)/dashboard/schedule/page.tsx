@@ -7,13 +7,17 @@ import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import { Button } from '@/components/ui/button';
 import { TaskCard } from '@/components/schedule/TaskCard';
 import { WatchCard } from '@/components/schedule/WatchCard';
+import { BundleCard } from '@/components/schedule/BundleCard';
 import { WatchDetailPanel } from '@/components/schedule/WatchDetailPanel';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
+import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
+import { SingleAssetMonitorModal } from '@/components/schedule/SingleAssetMonitorModal';
+import { MonitoringPlanCard } from '@/components/schedule/MonitoringPlanCard';
 import { RunHistoryTable } from '@/components/schedule/RunHistoryTable';
 import { cn } from '@/lib/utils';
-import type { ScheduledTask, TaskRun } from '@/types/schedule';
+import type { ScheduledTask, TaskRun, MonitorGroupSummary } from '@/types/schedule';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
-import type { WatchSummary } from '@/types/health-watch';
+import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
 
 type FilterStatus = 'all' | 'passing' | 'failing' | 'disabled';
 
@@ -25,11 +29,20 @@ export default function SchedulePage() {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterStatus>('all');
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showMultiMonitorModal, setShowMultiMonitorModal] = useState(false);
+  const [showSingleAssetModal, setShowSingleAssetModal] = useState(false);
+  const [showPromptModal, setShowPromptModal] = useState(false);
+  const [showNewDropdown, setShowNewDropdown] = useState(false);
 
-  // Watch state
+  // Monitoring plans
+  const [plans, setPlans] = useState<MonitoringPlanSummary[]>([]);
+
+  // Watch state (preset-created)
   const [watches, setWatches] = useState<WatchSummary[]>([]);
   const [selectedWatch, setSelectedWatch] = useState<WatchSummary | null>(null);
+
+  // Bundle state (manually-created bundle monitors)
+  const [bundles, setBundles] = useState<MonitorGroupSummary[]>([]);
   const [watchDetailMonitors, setWatchDetailMonitors] = useState<any[]>([]);
   const [watchDetailLoading, setWatchDetailLoading] = useState(false);
 
@@ -68,7 +81,7 @@ export default function SchedulePage() {
     }
   }, [filter, selectedPipeline?.id]);
 
-  // Fetch watches
+  // Fetch watches (preset-created)
   const fetchWatches = useCallback(async () => {
     try {
       const res = await cachedFetch('/api/schedule/watches');
@@ -81,6 +94,32 @@ export default function SchedulePage() {
     }
   }, []);
 
+  // Fetch monitoring plans
+  const fetchPlans = useCallback(async () => {
+    try {
+      const res = await cachedFetch('/api/schedule/plans');
+      if (res.ok) {
+        const data = await res.json();
+        setPlans(data.plans || []);
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to fetch plans:', err);
+    }
+  }, []);
+
+  // Fetch bundles (manually-created bundle monitors)
+  const fetchBundles = useCallback(async () => {
+    try {
+      const res = await cachedFetch('/api/schedule/bundles');
+      if (res.ok) {
+        const data = await res.json();
+        setBundles(data.bundles || []);
+      }
+    } catch (err) {
+      console.error('[Schedule] Failed to fetch bundles:', err);
+    }
+  }, []);
+
   // Re-fetch and reset selection when pipeline changes
   useEffect(() => {
     setSelectedTask(null);
@@ -89,7 +128,9 @@ export default function SchedulePage() {
     setTaskRuns([]);
     fetchTasks();
     fetchWatches();
-  }, [fetchTasks, fetchWatches]);
+    fetchBundles();
+    fetchPlans();
+  }, [fetchTasks, fetchWatches, fetchBundles, fetchPlans]);
 
   // Fetch integrations for create modal
   useEffect(() => {
@@ -168,24 +209,14 @@ export default function SchedulePage() {
     fetchDetail();
   }, [selectedWatch?.id]);
 
-  // Create watch
-  const handleCreateWatch = async (watchData: any) => {
-    try {
-      const res = await fetch('/api/schedule/watches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(watchData),
-      });
-      if (res.ok) {
-        setShowCreateModal(false);
-        invalidateCache('/api/schedule');
-        fetchWatches();
-        fetchTasks();
-      }
-    } catch (err) {
-      console.error('[Schedule] Failed to create watch:', err);
-    }
-  };
+  // Refresh all data after creation
+  const handleMonitorCreated = useCallback(() => {
+    invalidateCache('/api/schedule');
+    fetchPlans();
+    fetchWatches();
+    fetchBundles();
+    fetchTasks();
+  }, [fetchPlans, fetchWatches, fetchBundles, fetchTasks]);
 
   // Toggle watch enabled
   const handleToggleWatchEnabled = async (watchId: string, enabled: boolean) => {
@@ -232,6 +263,63 @@ export default function SchedulePage() {
     }
   };
 
+  // Toggle bundle enabled
+  const handleToggleBundleEnabled = async (bundleId: string, enabled: boolean) => {
+    try {
+      await fetch(`/api/schedule/bundles/${bundleId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      invalidateCache('/api/schedule/bundles');
+      setBundles((prev) =>
+        prev.map((b) => (b.id === bundleId ? { ...b, enabled } : b))
+      );
+    } catch (err) {
+      console.error('[Schedule] Failed to toggle bundle:', err);
+    }
+  };
+
+  // Run all monitors in a bundle
+  const handleRunBundle = async (bundleId: string) => {
+    try {
+      await fetch(`/api/schedule/bundles/${bundleId}/run`, { method: 'POST' });
+      fetchBundles();
+      fetchTasks();
+    } catch (err) {
+      console.error('[Schedule] Failed to run bundle:', err);
+    }
+  };
+
+  // Toggle plan enabled
+  const handleTogglePlanEnabled = async (planId: string, enabled: boolean) => {
+    try {
+      await fetch(`/api/schedule/plans/${planId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      invalidateCache('/api/schedule');
+      setPlans((prev) =>
+        prev.map((p) => (p.id === planId ? { ...p, enabled } : p))
+      );
+    } catch (err) {
+      console.error('[Schedule] Failed to toggle plan:', err);
+    }
+  };
+
+  // Run all monitors in a plan
+  const handleRunPlan = async (planId: string) => {
+    try {
+      await fetch(`/api/schedule/plans/${planId}/run`, { method: 'POST' });
+      fetchPlans();
+      fetchWatches();
+      fetchTasks();
+    } catch (err) {
+      console.error('[Schedule] Failed to run plan:', err);
+    }
+  };
+
   // Delete watch
   const handleDeleteWatch = async (watchId: string) => {
     try {
@@ -273,24 +361,17 @@ export default function SchedulePage() {
     }
   };
 
-  // Create task, bundle, or watch
+  // Create monitor/prompt task
   const handleCreateTask = async (taskData: any) => {
     try {
-      if (taskData._watch) {
-        const { _watch, ...watchData } = taskData;
-        await handleCreateWatch(watchData);
-        return;
-      }
-      {
-        const res = await fetch('/api/schedule/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(taskData),
-        });
-        if (res.ok) {
-          setShowCreateModal(false);
-          fetchTasks();
-        }
+      const res = await fetch('/api/schedule/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(taskData),
+      });
+      if (res.ok) {
+        setShowPromptModal(false);
+        fetchTasks();
       }
     } catch (err) {
       console.error('[Schedule] Failed to create:', err);
@@ -515,15 +596,46 @@ export default function SchedulePage() {
       {/* Page header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
         <div>
-          <h1 className="text-[18px] font-semibold text-[var(--text)]">Scheduled Tasks</h1>
+          <h1 className="text-[18px] font-semibold text-[var(--text)]">Monitoring</h1>
           <p className="text-[13px] text-[var(--muted)] mt-0.5">
-            Schedule quality checks, anomaly detection, and pipeline monitoring
+            Monitoring plans, monitor groups, and individual monitors
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => setShowCreateModal(true)}>
-            + Create Task
+        <div className="relative flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => setShowNewDropdown(!showNewDropdown)}
+          >
+            + New
           </Button>
+          {showNewDropdown && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setShowNewDropdown(false)} />
+              <div className="absolute right-0 top-full mt-1 z-20 w-64 rounded-lg border border-[var(--border)] bg-[var(--bg)] shadow-xl overflow-hidden">
+                <button
+                  onClick={() => { setShowNewDropdown(false); setShowMultiMonitorModal(true); }}
+                  className="w-full text-left px-4 py-3 hover:bg-[var(--subtle-bg)] transition-colors border-b border-[var(--border)]"
+                >
+                  <p className="text-[13px] font-medium text-[var(--text)]">Multi Monitor</p>
+                  <p className="text-[11px] text-[var(--muted)] mt-0.5">Select multiple assets visually and apply monitors across the group.</p>
+                </button>
+                <button
+                  onClick={() => { setShowNewDropdown(false); setShowSingleAssetModal(true); }}
+                  className="w-full text-left px-4 py-3 hover:bg-[var(--subtle-bg)] transition-colors border-b border-[var(--border)]"
+                >
+                  <p className="text-[13px] font-medium text-[var(--text)]">Single Asset Monitor</p>
+                  <p className="text-[11px] text-[var(--muted)] mt-0.5">Create monitors for one asset.</p>
+                </button>
+                <button
+                  onClick={() => { setShowNewDropdown(false); setShowPromptModal(true); }}
+                  className="w-full text-left px-4 py-3 hover:bg-[var(--subtle-bg)] transition-colors"
+                >
+                  <p className="text-[13px] font-medium text-[var(--text)]">AI Prompt Monitor</p>
+                  <p className="text-[11px] text-[var(--muted)] mt-0.5">Describe what you want monitored in natural language.</p>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -544,8 +656,8 @@ export default function SchedulePage() {
           </button>
         ))}
         <span className="text-[12px] text-[var(--text-faint)] ml-2">
-          {watches.length > 0 && `${watches.length} watch${watches.length !== 1 ? 'es' : ''} · `}
-          {tasks.length} task{tasks.length !== 1 ? 's' : ''}
+          {(plans.length + watches.length + bundles.length) > 0 && `${plans.length + watches.length + bundles.length} group${(plans.length + watches.length + bundles.length) !== 1 ? 's' : ''} · `}
+          {tasks.length} monitor{tasks.length !== 1 ? 's' : ''}
         </span>
       </div>
 
@@ -555,28 +667,52 @@ export default function SchedulePage() {
           <div className="flex items-center justify-center py-20">
             <div className="w-6 h-6 red-spinner" />
           </div>
-        ) : watches.length === 0 && tasks.length === 0 ? (
+        ) : plans.length === 0 && watches.length === 0 && bundles.length === 0 && tasks.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <svg className="w-12 h-12 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
             </svg>
-            <h3 className="text-[15px] font-medium text-[var(--muted)] mb-1">No scheduled tasks</h3>
+            <h3 className="text-[15px] font-medium text-[var(--muted)] mb-1">No monitors yet</h3>
             <p className="text-[13px] text-[var(--text-faint)] mb-4">
-              Create your first task to start monitoring your data pipeline
+              Set up monitoring to protect your pipeline — it's the fastest way to cover your data stack.
             </p>
-            <Button size="sm" onClick={() => setShowCreateModal(true)}>
-              + Create Task
+            <Button size="sm" onClick={() => setShowMultiMonitorModal(true)}>
+              Multi Monitor
             </Button>
+            <p className="text-[12px] text-[var(--text-faint)] mt-3">
+              Or create a{' '}
+              <button onClick={() => setShowSingleAssetModal(true)} className="text-[var(--muted)] hover:text-[var(--text)] underline">single asset monitor</button>
+              {' · '}
+              <button onClick={() => setShowPromptModal(true)} className="text-[var(--muted)] hover:text-[var(--text)] underline">AI prompt monitor</button>
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Group Monitors section */}
-            {watches.length > 0 && (
+            {/* Monitor Groups (unified: plans + bundles + watches) */}
+            {(plans.length > 0 || bundles.length > 0 || watches.length > 0) && (
               <div>
                 <h3 className="text-[12px] font-medium text-[var(--text-faint)] uppercase tracking-wider mb-2">
-                  Group Monitors
+                  Monitor Groups
                 </h3>
                 <div className="space-y-2">
+                  {plans.map((plan) => (
+                    <MonitoringPlanCard
+                      key={plan.id}
+                      plan={plan}
+                      onClick={() => {/* TODO: plan detail view */}}
+                      onToggleEnabled={(enabled) => handleTogglePlanEnabled(plan.id, enabled)}
+                      onRunAll={() => handleRunPlan(plan.id)}
+                    />
+                  ))}
+                  {bundles.map((bundle) => (
+                    <BundleCard
+                      key={bundle.id}
+                      bundle={bundle}
+                      onClick={() => {/* TODO: bundle detail view */}}
+                      onToggleEnabled={(enabled) => handleToggleBundleEnabled(bundle.id, enabled)}
+                      onRunAll={() => handleRunBundle(bundle.id)}
+                    />
+                  ))}
                   {watches.map((watch) => (
                     <WatchCard
                       key={watch.id}
@@ -590,9 +726,12 @@ export default function SchedulePage() {
               </div>
             )}
 
-            {/* Individual tasks section */}
+            {/* Individual Monitors */}
             {tasks.length > 0 && (
               <div>
+                <h3 className="text-[12px] font-medium text-[var(--text-faint)] uppercase tracking-wider mb-2">
+                  Individual Monitors
+                </h3>
                 <div className="space-y-2">
                   {tasks.map((task) => (
                     <TaskCard
@@ -610,15 +749,32 @@ export default function SchedulePage() {
         )}
       </div>
 
-      {/* Create / Edit modal */}
+      {/* Multi Monitor modal */}
+      <MultiMonitorModal
+        open={showMultiMonitorModal}
+        onClose={() => setShowMultiMonitorModal(false)}
+        onComplete={handleMonitorCreated}
+        stackId={selectedPipeline?.id}
+      />
+
+      {/* Single Asset Monitor modal */}
+      <SingleAssetMonitorModal
+        open={showSingleAssetModal}
+        onClose={() => setShowSingleAssetModal(false)}
+        onComplete={handleMonitorCreated}
+        stackId={selectedPipeline?.id}
+      />
+
+      {/* AI Prompt Monitor / Edit Task modal */}
       <CreateTaskModal
-        open={showCreateModal || !!editingTask}
-        onClose={() => { setShowCreateModal(false); setEditingTask(null); }}
+        open={showPromptModal || !!editingTask}
+        onClose={() => { setShowPromptModal(false); setEditingTask(null); }}
         onSubmit={handleCreateTask}
         onUpdate={handleUpdateTask}
         editTask={editingTask}
         integrations={integrations}
         stackId={selectedPipeline?.id}
+        initialMode="prompt"
       />
 
     </div>
