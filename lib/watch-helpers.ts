@@ -123,21 +123,35 @@ export async function createWatchInTransaction(
 
   const createdMonitors = [];
 
+  // Batch dedup: fetch all existing monitors that match any (targetFqn, monitorType) pair
+  const dedupPairs = monitors
+    .filter((m) => m.targetFqn && m.monitorType)
+    .map((m) => ({ targetFqn: m.targetFqn, monitorType: m.monitorType }));
+  const existingMonitors = dedupPairs.length > 0
+    ? await tx.monitor.findMany({
+        where: {
+          organizationId,
+          OR: dedupPairs.map((p) => ({
+            targetFqn: p.targetFqn,
+            monitorType: p.monitorType,
+          })),
+        },
+      })
+    : [];
+  const existingMap = new Map<string, any>();
+  for (const em of existingMonitors) {
+    existingMap.set(`${em.targetFqn}::${em.monitorType}`, em);
+  }
+
   for (let idx = 0; idx < monitors.length; idx++) {
     const mon = monitors[idx];
     const isAnchor = mon.targetFqn === anchorFqn;
     const depth = mon.depth ?? (isAnchor ? 0 : 1);
     const priority = mon.priority ?? (isAnchor ? 1 : 2);
 
-    // Dedup: check if matching monitor already exists
-    const existing = mon.targetFqn && mon.monitorType
-      ? await tx.monitor.findFirst({
-          where: {
-            organizationId,
-            targetFqn: mon.targetFqn,
-            monitorType: mon.monitorType,
-          },
-        })
+    // Dedup: check if matching monitor already exists (from batch lookup)
+    const existing = (mon.targetFqn && mon.monitorType)
+      ? existingMap.get(`${mon.targetFqn}::${mon.monitorType}`) || null
       : null;
 
     if (existing) {

@@ -32,12 +32,23 @@ import {
 
 export type SelectionViewMode = 'lineage' | 'pipeline-overview';
 
+export interface NodeMeta {
+  id: string;
+  name: string;
+  fqn: string;
+  platform: string;
+  domain: string;
+  /** For tool/service nodes from pipeline overview: actual graph node IDs of children */
+  subNodeIds?: string[];
+}
+
 export interface NodeSelectionSurfaceProps {
   stackId: string;
   mode: SelectionViewMode;
   selectedNodeIds: string[];
   onSelectionChange: (nodeIds: string[]) => void;
   preselectedNodeIds?: string[];
+  onNodesLoaded?: (nodes: NodeMeta[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +113,7 @@ export function NodeSelectionSurface({
   selectedNodeIds,
   onSelectionChange,
   preselectedNodeIds,
+  onNodesLoaded,
 }: NodeSelectionSurfaceProps) {
   const [viewData, setViewData] = useState<RenderedViewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,6 +138,23 @@ export function NodeSelectionSurface({
       .then((data: RenderedViewResponse) => {
         setViewData(data);
         setLoading(false);
+        // Expose node metadata to parent
+        if (onNodesLoaded && data.nodes) {
+          const metas: NodeMeta[] = data.nodes.map((n) => {
+            // Extract sub-node IDs for tool/service nodes (pipeline overview)
+            const subs: string[] | undefined =
+              n.metadata?.subNodes?.map((s: { id: string }) => s.id);
+            return {
+              id: n.id,
+              name: n.name,
+              fqn: n.metadata?.fqn || n.name,
+              platform: n.platform || 'unknown',
+              domain: n.platformDomain || 'other',
+              subNodeIds: subs?.length ? subs : undefined,
+            };
+          });
+          onNodesLoaded(metas);
+        }
       })
       .catch((err) => {
         console.error('[NodeSelectionSurface] fetch error:', err);

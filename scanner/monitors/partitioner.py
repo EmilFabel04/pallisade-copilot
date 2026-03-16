@@ -21,7 +21,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from ..lineage.graph import LineageGraph, LineageNode
+from ..lineage.graph import LineageGraph
 from .scope import (
     ScopeResult,
     _node_priority_score,
@@ -104,6 +104,7 @@ def partition_scope(
     max_nodes: int = MAX_NODES_PER_GROUP,
     max_monitors: int = MAX_MONITORS_PER_GROUP,
     existing_fqns: Optional[Set[str]] = None,
+    preferred_anchor_domains: Optional[List[str]] = None,
 ) -> PartitionPlan:
     """
     Partition a set of in-scope nodes into topology-aware groups.
@@ -173,7 +174,7 @@ def partition_scope(
         if not node_ids:
             continue
 
-        anchor_id = _pick_best_node(graph, set(node_ids))
+        anchor_id = _pick_best_node(graph, set(node_ids), preferred_anchor_domains)
         if not anchor_id:
             continue
 
@@ -188,6 +189,7 @@ def partition_scope(
             "maxMonitors": max_monitors,
             "domainFilters": [],
             "includeNodeIds": list(node_ids),
+            "restrictToNodeIds": list(scope_set),  # Only generate monitors for user-selected nodes
         }
         scope_result = build_watch_scope(
             graph=graph,
@@ -548,8 +550,27 @@ def _split_partition(
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _pick_best_node(graph: LineageGraph, node_ids: Set[str]) -> Optional[str]:
-    """Pick the highest-priority node from a set."""
+def _pick_best_node(
+    graph: LineageGraph,
+    node_ids: Set[str],
+    preferred_domains: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Pick the highest-priority node from a set.
+
+    If preferred_domains is given, first try to find a node in those domains.
+    This ensures BI families pick BI nodes as anchors, ingestion families pick
+    connectors, etc.
+    """
+    if preferred_domains:
+        domain_set = set(preferred_domains)
+        domain_candidates = {
+            nid for nid in node_ids
+            if graph.nodes.get(nid)
+            and graph.nodes[nid].platform_domain.value in domain_set
+        }
+        if domain_candidates:
+            return _pick_best_node(graph, domain_candidates)
+
     best_id = None
     best_score = -1.0
     for nid in node_ids:

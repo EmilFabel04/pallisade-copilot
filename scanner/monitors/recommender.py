@@ -69,6 +69,7 @@ CONNECTOR_SCHEMA_DRIFT = "CONNECTOR_SCHEMA_DRIFT"
 # Orchestration monitors
 DAG_LAST_RUN = "DAG_LAST_RUN"
 DAG_SCHEDULE_LAG = "DAG_SCHEDULE_LAG"
+TASK_FAILURE_RATE = "TASK_FAILURE_RATE"
 
 # Transformation monitors
 DBT_TEST_FAILURES = "DBT_TEST_FAILURES"
@@ -81,15 +82,19 @@ BI_UPSTREAM_BREAK_RISK = "BI_UPSTREAM_BREAK_RISK"
 BI_CONTENT_HEALTH = "BI_CONTENT_HEALTH"
 BI_REFRESH_FAILURE = "BI_REFRESH_FAILURE"
 
-# BI node types
-_BI_NODE_TYPES = {
-    NodeType.DASHBOARD, NodeType.REPORT, NodeType.WORKBOOK,
-    NodeType.QUESTION, NodeType.EXPLORE,
-}
-_BI_ASSET_KINDS = {
-    AssetKind.DASHBOARD, AssetKind.REPORT, AssetKind.WORKBOOK,
-    AssetKind.QUESTION, AssetKind.EXPLORE,
-}
+# Warehouse ops monitors
+QUERY_PERFORMANCE = "QUERY_PERFORMANCE"
+COST_ANOMALY = "COST_ANOMALY"
+STORAGE_GROWTH = "STORAGE_GROWTH"
+
+# Infrastructure monitors
+SERVER_HEALTH = "SERVER_HEALTH"
+CERTIFICATE = "CERTIFICATE"
+LOG_ANALYSIS = "LOG_ANALYSIS"
+
+# BI node types — use string values to avoid enum identity issues across import paths
+_BI_NODE_TYPES = {"dashboard", "report", "workbook", "question", "explore"}
+_BI_ASSET_KINDS = {"dashboard", "report", "workbook", "question", "explore"}
 
 # Max recommendations per bundle
 BUNDLE_CAP = 8
@@ -129,15 +134,42 @@ def _build_config_hints(node: LineageNode, monitor_key: str) -> Dict[str, Any]:
             hints["timestamp_column"] = ts_col
 
     if monitor_key in (SYNC_LAG, FAILED_SYNCS, CONNECTOR_SCHEMA_DRIFT):
-        if node.integration_id:
+        # Prefer the real connector ID from raw_metadata (e.g. Fivetran's "speak_strongly")
+        # over integration_id which is the Pallisade DB record ID.
+        raw_connector = (node.raw_metadata or {}).get("connector_id")
+        if raw_connector:
+            hints["connector_id"] = raw_connector
+        elif node.integration_id:
             hints["connector_id"] = node.integration_id
 
-    if monitor_key in (DAG_LAST_RUN, DAG_SCHEDULE_LAG):
+    if monitor_key in (DAG_LAST_RUN, DAG_SCHEDULE_LAG, TASK_FAILURE_RATE):
         hints["dag_id"] = node.name
+
+    if monitor_key in (QUERY_PERFORMANCE, COST_ANOMALY, STORAGE_GROWTH):
+        if monitor_key == QUERY_PERFORMANCE:
+            hints["query_time_threshold_seconds"] = 300
+            hints["lookback_hours"] = 24
+        elif monitor_key == COST_ANOMALY:
+            hints["cost_spike_multiplier"] = 1.5
+            hints["lookback_days"] = 7
+        elif monitor_key == STORAGE_GROWTH:
+            hints["growth_rate_multiplier"] = 2.0
+            hints["lookback_days"] = 30
 
     if monitor_key in (DBT_TEST_FAILURES, DBT_MODEL_FRESHNESS, DBT_SOURCE_FRESHNESS):
         if node.integration_id:
             hints["dbt_job_id"] = node.integration_id
+
+    if monitor_key in (SERVER_HEALTH, CERTIFICATE, LOG_ANALYSIS):
+        if monitor_key == SERVER_HEALTH:
+            hints["cpu_threshold_pct"] = 90
+            hints["memory_threshold_pct"] = 85
+            hints["disk_threshold_pct"] = 90
+        elif monitor_key == CERTIFICATE:
+            hints["expiry_warning_days"] = 30
+        elif monitor_key == LOG_ANALYSIS:
+            hints["error_rate_threshold"] = 5.0
+            hints["lookback_hours"] = 24
 
     return hints
 
@@ -145,9 +177,9 @@ def _build_config_hints(node: LineageNode, monitor_key: str) -> Dict[str, Any]:
 def is_bi_node(node: LineageNode) -> bool:
     """Check if a node is a BI/reporting asset."""
     return (
-        node.platform_domain == PlatformDomain.BI
-        or node.node_type in _BI_NODE_TYPES
-        or node.asset_kind in _BI_ASSET_KINDS
+        node.platform_domain.value == "bi"
+        or node.node_type.value in _BI_NODE_TYPES
+        or node.asset_kind.value in _BI_ASSET_KINDS
     )
 
 
@@ -175,10 +207,11 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
             integration_type=node.platform or "",
         ))
 
+    _d = node.platform_domain.value
+    _k = node.asset_kind.value
+
     # --- Warehouse tables/views ---
-    if node.platform_domain == PlatformDomain.WAREHOUSE and node.asset_kind in (
-        AssetKind.TABLE, AssetKind.VIEW, AssetKind.MODEL, AssetKind.DATASET,
-    ):
+    if _d == "warehouse" and _k in ("table", "view", "model", "dataset"):
         _add(FRESHNESS, 1, "Core data quality — detect stale data in this warehouse asset")
         _add(VOLUME, 2, "Core data quality — detect unexpected row count changes")
         _add(SCHEMA_CHANGE, 2, "Core data quality — detect column additions or removals")
@@ -188,33 +221,42 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
             _add(UNIQUENESS, 2, "Critical asset — detect key degradation")
             _add(ANOMALY, 3, "Critical asset — statistical anomaly detection on metrics")
 
-    # --- Ingestion connectors ---
-    elif node.platform_domain == PlatformDomain.INGESTION or node.asset_kind == AssetKind.CONNECTOR:
+    # --- Ingestion connectors (tool-level only, not synced tables) ---
+    elif _d == "ingestion" and _k in ("connector", "job", "stream"):
         _add(SYNC_LAG, 1, "Track ingestion connector sync lag")
         _add(FAILED_SYNCS, 1, "Detect failed syncs on this connector")
-
         if node.columns:
             _add(CONNECTOR_SCHEMA_DRIFT, 2, "Detect schema changes at the ingestion source")
 
-    # --- Orchestration DAGs ---
-    elif node.platform_domain == PlatformDomain.ORCHESTRATION and node.node_type in (
-        NodeType.DAG, NodeType.FLOW, NodeType.PIPELINE, NodeType.WORKFLOW,
-    ):
+    # --- Orchestration DAGs/jobs ---
+    elif _d == "orchestration" and _k in ("job", "dag", "task", "pipeline"):
         _add(DAG_LAST_RUN, 1, "Ensure scheduled orchestration runs succeed")
         _add(DAG_SCHEDULE_LAG, 2, "Detect when runs fall behind schedule")
+        _add(TASK_FAILURE_RATE, 2, "Track task failure rate across DAG runs")
 
     # --- Transformation models (dbt) ---
-    elif node.platform_domain == PlatformDomain.TRANSFORM and node.asset_kind in (
-        AssetKind.MODEL, AssetKind.TABLE, AssetKind.VIEW,
-    ):
+    elif _d == "transform" and _k in ("model", "job", "task"):
         _add(DBT_TEST_FAILURES, 1, "Watch for dbt test regressions on this model")
         _add(DBT_MODEL_FRESHNESS, 2, "Detect when this model build becomes stale")
+        _add(DBT_SOURCE_FRESHNESS, 2, "Detect when dbt sources become stale")
+
+    # --- Warehouse ops (tool-level, not data tables) ---
+    elif _d == "warehouse" and _k not in ("table", "view", "model", "dataset"):
+        _add(QUERY_PERFORMANCE, 1, "Monitor warehouse query performance and timeouts")
+        _add(COST_ANOMALY, 1, "Detect abnormal warehouse cost spikes")
+        _add(STORAGE_GROWTH, 2, "Track warehouse storage growth rate")
 
     # --- BI / Reporting nodes ---
     elif is_bi_node(node):
         _add(BI_FRESHNESS_PROXY, 1, "Track dashboard/report freshness via upstream lineage")
         _add(BI_CONTENT_HEALTH, 2, "Verify BI asset exists and deliveries are not failing")
         _add(BI_UPSTREAM_BREAK_RISK, 2, "Count failing monitors on upstream warehouse tables")
+
+    # --- Infrastructure / Linux servers ---
+    elif _d in ("infrastructure", "other"):
+        _add(SERVER_HEALTH, 1, "Monitor server CPU, memory, and disk usage")
+        _add(CERTIFICATE, 1, "Track SSL/TLS certificate expiry dates")
+        _add(LOG_ANALYSIS, 2, "Detect error spikes and anomalies in server logs")
 
     return recs
 
@@ -248,31 +290,28 @@ def _recommend_upstream(
                 integration_type=up.platform or "",
             ))
 
+        up_d = up.platform_domain.value
+        up_k = up.asset_kind.value
+
         # Upstream warehouse tables
-        if up.platform_domain == PlatformDomain.WAREHOUSE and up.asset_kind in (
-            AssetKind.TABLE, AssetKind.VIEW, AssetKind.MODEL, AssetKind.DATASET,
-        ):
+        if up_d == "warehouse" and up_k in ("table", "view", "model", "dataset"):
             _add(FRESHNESS, 2,
                  f"Upstream dependency — stale data in {up.name} impacts {target_node.name}")
             _add(SCHEMA_CHANGE, 3,
                  f"Upstream schema change in {up.name} could break {target_node.name}")
 
         # Upstream ingestion connectors
-        elif up.platform_domain == PlatformDomain.INGESTION or up.asset_kind == AssetKind.CONNECTOR:
+        elif up_d == "ingestion" and up_k in ("connector", "job", "stream"):
             _add(SYNC_LAG, 2,
                  f"Upstream connector {up.name} — sync lag impacts {target_node.name}")
 
         # Upstream orchestration DAGs
-        elif up.platform_domain == PlatformDomain.ORCHESTRATION and up.node_type in (
-            NodeType.DAG, NodeType.FLOW, NodeType.PIPELINE, NodeType.WORKFLOW,
-        ):
+        elif up_d == "orchestration" and up_k in ("job", "dag", "task", "pipeline"):
             _add(DAG_LAST_RUN, 2,
                  f"Upstream DAG {up.name} — run failures impact {target_node.name}")
 
         # Upstream dbt models
-        elif up.platform_domain == PlatformDomain.TRANSFORM and up.asset_kind in (
-            AssetKind.MODEL, AssetKind.TABLE, AssetKind.VIEW,
-        ):
+        elif up_d == "transform" and up_k in ("model", "table", "view"):
             _add(DBT_TEST_FAILURES, 2,
                  f"Upstream model {up.name} — test failures impact {target_node.name}")
 
@@ -395,9 +434,10 @@ def get_bundles(
         seen: Set[str] = set()
 
         for up in upstream_nodes:
-            if up.platform_domain == PlatformDomain.WAREHOUSE and up.asset_kind in (
-                AssetKind.TABLE, AssetKind.VIEW, AssetKind.MODEL, AssetKind.DATASET,
-            ):
+            up_d = up.platform_domain.value
+            up_k = up.asset_kind.value
+
+            if up_d == "warehouse" and up_k in ("table", "view", "model", "dataset"):
                 for key, reason_tpl in [
                     (FRESHNESS, f"Reporting dependency — stale {up.name} breaks this dashboard/report"),
                     (SCHEMA_CHANGE, f"Reporting dependency — schema change in {up.name} could break queries"),
@@ -416,7 +456,7 @@ def get_bundles(
                             integration_type=up.platform or "",
                         ))
 
-            elif up.platform_domain == PlatformDomain.INGESTION or up.asset_kind == AssetKind.CONNECTOR:
+            elif up_d == "ingestion" and up_k in ("connector", "job", "stream"):
                 dedup_key = f"{SYNC_LAG}:{up.fqn}"
                 if dedup_key not in seen:
                     seen.add(dedup_key)
@@ -431,9 +471,7 @@ def get_bundles(
                         integration_type=up.platform or "",
                     ))
 
-            elif up.platform_domain == PlatformDomain.TRANSFORM and up.asset_kind in (
-                AssetKind.MODEL, AssetKind.TABLE, AssetKind.VIEW,
-            ):
+            elif up_d == "transform" and up_k in ("model", "table", "view"):
                 dedup_key = f"{DBT_MODEL_FRESHNESS}:{up.fqn}"
                 if dedup_key not in seen:
                     seen.add(dedup_key)

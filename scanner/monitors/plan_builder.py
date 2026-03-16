@@ -294,11 +294,15 @@ def _preview_recommended(
             continue
 
         # Use partition_scope to create topology-aware groups
+        # Pass preferred anchor domains so BI families pick BI nodes as anchors,
+        # ingestion families pick connectors, etc.
+        preferred_domains = family_def.eligible_domains if family_def.eligible_domains else None
         plan = partition_scope(
             graph=graph,
             scope_node_ids=scope_node_ids,
             watch_type=watch_type,
             existing_fqns=cumulative_fqns,
+            preferred_anchor_domains=preferred_domains,
         )
 
         total_dedup += plan.dedup_count

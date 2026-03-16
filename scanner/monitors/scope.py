@@ -77,6 +77,48 @@ DEFAULT_SCOPE = {
         "maxMonitors": 10,
         "domainFilters": ["warehouse", "transform", "ingestion"],
     },
+    "tool_ops": {
+        "maxDepth": 2,
+        "maxNodes": 15,
+        "maxMonitors": 12,
+        "domainFilters": ["orchestration", "ingestion", "transform", "warehouse"],
+    },
+    "ingestion_ops": {
+        "maxDepth": 1,
+        "maxNodes": 8,
+        "maxMonitors": 6,
+        "domainFilters": ["ingestion"],
+    },
+    "orchestration_ops": {
+        "maxDepth": 2,
+        "maxNodes": 10,
+        "maxMonitors": 10,
+        "domainFilters": ["orchestration"],
+    },
+    "transform_ops": {
+        "maxDepth": 2,
+        "maxNodes": 10,
+        "maxMonitors": 10,
+        "domainFilters": ["transform"],
+    },
+    "warehouse_ops": {
+        "maxDepth": 1,
+        "maxNodes": 8,
+        "maxMonitors": 6,
+        "domainFilters": ["warehouse"],
+    },
+    "bi_ops": {
+        "maxDepth": 2,
+        "maxNodes": 12,
+        "maxMonitors": 12,
+        "domainFilters": ["bi"],
+    },
+    "infrastructure_ops": {
+        "maxDepth": 1,
+        "maxNodes": 5,
+        "maxMonitors": 6,
+        "domainFilters": ["infrastructure", "other"],
+    },
     "full_pipeline": {
         "maxDepth": 5,
         "maxNodes": 30,
@@ -94,11 +136,11 @@ def infer_watch_type(node: LineageNode) -> str:
     """Auto-detect the best watch type for a given anchor node."""
     if is_bi_node(node):
         return "dashboard_shield"
-    if node.platform_domain == PlatformDomain.INGESTION:
+    if _domain(node) == "ingestion":
         return "source_guard"
-    if node.platform_domain == PlatformDomain.TRANSFORM and node.asset_kind == AssetKind.MODEL:
+    if _domain(node) == "transform" and _kind(node) == "model":
         return "model_quality"
-    if node.platform_domain == PlatformDomain.WAREHOUSE:
+    if _domain(node) == "warehouse":
         return "pipeline_health"
     return "custom_watch"
 
@@ -116,7 +158,7 @@ def _node_priority_score(node: LineageNode, depth_from_anchor: int) -> float:
 
     score += min(node.downstream_count, 20)
 
-    if node.platform_domain == PlatformDomain.WAREHOUSE:
+    if _domain(node) == "warehouse":
         score += 5
 
     return score
@@ -161,9 +203,27 @@ class ScopeResult:
 # Each recipe entry: (monitor_key, priority, per_type_cap, applicable_check)
 # applicable_check is a callable (node, depth) -> bool
 
-_WAREHOUSE_ASSET = {AssetKind.TABLE, AssetKind.VIEW, AssetKind.MODEL, AssetKind.DATASET}
-_TRANSFORM_ASSET = {AssetKind.MODEL, AssetKind.TABLE, AssetKind.VIEW}
-_ORCH_TYPES = {NodeType.DAG, NodeType.FLOW, NodeType.PIPELINE, NodeType.WORKFLOW}
+# Use string values for comparisons to avoid enum identity issues
+# (nodes may be created with enums from a different import path)
+_WAREHOUSE_ASSET = {"table", "view", "model", "dataset"}
+_TRANSFORM_ASSET = {"model", "table", "view"}
+_ORCH_TYPES = {"dag", "flow", "pipeline", "workflow"}
+# Tool-level asset kinds — monitors for these check the tool itself (API-based),
+# NOT the data assets the tool produces. "ingestion" domain alone is too broad
+# because Fivetran source tables also get domain=ingestion but kind=table.
+_CONNECTOR_KINDS = {"connector", "job", "stream"}
+
+def _domain(n: LineageNode) -> str:
+    """Get platform_domain as string, safe across import paths."""
+    return n.platform_domain.value if hasattr(n.platform_domain, 'value') else str(n.platform_domain)
+
+def _kind(n: LineageNode) -> str:
+    """Get asset_kind as string, safe across import paths."""
+    return n.asset_kind.value if hasattr(n.asset_kind, 'value') else str(n.asset_kind)
+
+def _ntype(n: LineageNode) -> str:
+    """Get node_type as string, safe across import paths."""
+    return n.node_type.value if hasattr(n.node_type, 'value') else str(n.node_type)
 
 RecipeEntry = Tuple[str, int, int, Any]  # (key, priority, cap, check_fn)
 
@@ -173,27 +233,30 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
 
     if watch_type == "data_drift":
         return [
-            ("SCHEMA_CHANGE", 1, 3, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("CONNECTOR_SCHEMA_DRIFT", 1, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
-            ("VOLUME", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("UNIQUENESS", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET and n.criticality in ("critical", "high")),
-            ("NULL_RATE", 3, 1, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET and n.criticality in ("critical", "high")),
+            ("SCHEMA_CHANGE", 1, 5, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("VOLUME", 1, 5, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("NULL_RATE", 2, 4, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("UNIQUENESS", 2, 4, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 2, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("DISTRIBUTION", 3, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("ANOMALY", 3, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("CONNECTOR_SCHEMA_DRIFT", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
         ]
 
     if watch_type == "pipeline_health":
         return [
             # Direct on anchor
-            ("FRESHNESS", 1, 1, lambda n, d: d == 0 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("VOLUME", 2, 1, lambda n, d: d == 0 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d == 0 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 1, 1, lambda n, d: d == 0 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("VOLUME", 2, 1, lambda n, d: d == 0 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d == 0 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
             # Upstream warehouse
-            ("FRESHNESS", 2, 3, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 2, 3, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
             # Ingestion
-            ("SYNC_LAG", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
+            ("SYNC_LAG", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             # Orchestration
-            ("DAG_LAST_RUN", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.ORCHESTRATION and n.node_type in _ORCH_TYPES),
+            ("DAG_LAST_RUN", 2, 2, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
             # dbt
-            ("DBT_TEST_FAILURES", 3, 2, lambda n, d: n.platform_domain == PlatformDomain.TRANSFORM and n.asset_kind in _TRANSFORM_ASSET),
+            ("DBT_TEST_FAILURES", 3, 2, lambda n, d: _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
         ]
 
     if watch_type == "dashboard_shield":
@@ -202,62 +265,151 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
             ("BI_FRESHNESS_PROXY", 1, 1, lambda n, d: d == 0 and is_bi_node(n)),
             ("BI_CONTENT_HEALTH", 2, 1, lambda n, d: d == 0 and is_bi_node(n)),
             # Upstream warehouse
-            ("FRESHNESS", 1, 5, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 1, 5, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("VOLUME", 2, 3, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 1, 5, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("SCHEMA_CHANGE", 1, 5, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("VOLUME", 2, 3, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
             # Ingestion
-            ("SYNC_LAG", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
+            ("SYNC_LAG", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             # dbt
-            ("DBT_TEST_FAILURES", 3, 3, lambda n, d: n.platform_domain == PlatformDomain.TRANSFORM and n.asset_kind in _TRANSFORM_ASSET),
+            ("DBT_TEST_FAILURES", 3, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
         ]
 
     if watch_type == "source_guard":
         return [
             # Direct on connector
-            ("SYNC_LAG", 1, 1, lambda n, d: d == 0 and (n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR)),
-            ("FAILED_SYNCS", 1, 1, lambda n, d: d == 0 and (n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR)),
-            ("CONNECTOR_SCHEMA_DRIFT", 2, 1, lambda n, d: d == 0 and (n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR)),
+            ("SYNC_LAG", 1, 1, lambda n, d: d == 0 and _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("FAILED_SYNCS", 1, 1, lambda n, d: d == 0 and _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("CONNECTOR_SCHEMA_DRIFT", 2, 1, lambda n, d: d == 0 and _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             # Downstream destination tables (uses depth=-1 meaning "downstream")
-            ("FRESHNESS", 2, 3, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 2, 3, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
         ]
 
     if watch_type == "model_quality":
         return [
             # Direct on dbt model
-            ("DBT_TEST_FAILURES", 1, 1, lambda n, d: d == 0 and n.platform_domain == PlatformDomain.TRANSFORM and n.asset_kind in _TRANSFORM_ASSET),
-            ("DBT_MODEL_FRESHNESS", 1, 1, lambda n, d: d == 0 and n.platform_domain == PlatformDomain.TRANSFORM and n.asset_kind in _TRANSFORM_ASSET),
+            ("DBT_TEST_FAILURES", 1, 1, lambda n, d: d == 0 and _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
+            ("DBT_MODEL_FRESHNESS", 1, 1, lambda n, d: d == 0 and _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
             # Warehouse materialization
-            ("FRESHNESS", 2, 1, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d >= 1 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 2, 1, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
             # Upstream warehouse sources
-            ("FRESHNESS", 2, 3, lambda n, d: d >= 2 and n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 2, 3, lambda n, d: d >= 2 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
             # Upstream connectors
-            ("SYNC_LAG", 3, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
+            ("SYNC_LAG", 3, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+        ]
+
+    if watch_type == "tool_ops":
+        # Legacy catch-all — delegates to domain-specific recipes
+        return [
+            # Orchestration
+            ("DAG_LAST_RUN", 1, 6, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_SCHEDULE_LAG", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("TASK_FAILURE_RATE", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            # Ingestion
+            ("SYNC_LAG", 1, 4, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("FAILED_SYNCS", 1, 4, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("CONNECTOR_SCHEMA_DRIFT", 2, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            # Transform
+            ("DBT_TEST_FAILURES", 2, 4, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            ("DBT_MODEL_FRESHNESS", 2, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            ("DBT_SOURCE_FRESHNESS", 2, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            # Warehouse ops
+            ("QUERY_PERFORMANCE", 1, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) not in _WAREHOUSE_ASSET),
+            ("COST_ANOMALY", 1, 2, lambda n, d: _domain(n) == "warehouse" and _kind(n) not in _WAREHOUSE_ASSET),
+            ("STORAGE_GROWTH", 2, 2, lambda n, d: _domain(n) == "warehouse" and _kind(n) not in _WAREHOUSE_ASSET),
+            # BI ops
+            ("BI_FRESHNESS_PROXY", 1, 5, lambda n, d: _domain(n) == "bi"),
+            ("BI_UPSTREAM_BREAK_RISK", 1, 5, lambda n, d: _domain(n) == "bi"),
+            ("BI_CONTENT_HEALTH", 2, 3, lambda n, d: _domain(n) == "bi"),
+            ("BI_REFRESH_FAILURE", 2, 3, lambda n, d: _domain(n) == "bi"),
+        ]
+
+    # --- Domain-specific ops recipes ---
+    if watch_type == "ingestion_ops":
+        return [
+            ("SYNC_LAG", 1, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("FAILED_SYNCS", 1, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("CONNECTOR_SCHEMA_DRIFT", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+        ]
+
+    if watch_type == "orchestration_ops":
+        return [
+            ("DAG_LAST_RUN", 1, 5, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_SCHEDULE_LAG", 1, 5, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("TASK_FAILURE_RATE", 2, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+        ]
+
+    if watch_type == "transform_ops":
+        return [
+            ("DBT_TEST_FAILURES", 1, 5, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            ("DBT_MODEL_FRESHNESS", 1, 5, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            ("DBT_SOURCE_FRESHNESS", 2, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+        ]
+
+    if watch_type == "warehouse_ops":
+        return [
+            ("QUERY_PERFORMANCE", 1, 3, lambda n, d: _domain(n) == "warehouse"),
+            ("COST_ANOMALY", 1, 2, lambda n, d: _domain(n) == "warehouse"),
+            ("STORAGE_GROWTH", 2, 2, lambda n, d: _domain(n) == "warehouse"),
+        ]
+
+    if watch_type == "bi_ops":
+        return [
+            ("BI_FRESHNESS_PROXY", 1, 5, lambda n, d: _domain(n) == "bi"),
+            ("BI_UPSTREAM_BREAK_RISK", 1, 5, lambda n, d: _domain(n) == "bi"),
+            ("BI_CONTENT_HEALTH", 2, 3, lambda n, d: _domain(n) == "bi"),
+            ("BI_REFRESH_FAILURE", 2, 3, lambda n, d: _domain(n) == "bi"),
+        ]
+
+    if watch_type == "infrastructure_ops":
+        return [
+            ("SERVER_HEALTH", 1, 3, lambda n, d: _domain(n) in ("infrastructure", "other")),
+            ("CERTIFICATE", 1, 3, lambda n, d: _domain(n) in ("infrastructure", "other")),
+            ("LOG_ANALYSIS", 2, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
         ]
 
     if watch_type == "full_pipeline":
         return [
             # Data assets — any domain
-            ("FRESHNESS", 1, 8, lambda n, d: n.asset_kind in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 2, 5, lambda n, d: n.asset_kind in _WAREHOUSE_ASSET),
-            ("VOLUME", 2, 4, lambda n, d: n.asset_kind in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 1, 8, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            ("SCHEMA_CHANGE", 2, 5, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            ("VOLUME", 2, 4, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            ("NULL_RATE", 3, 4, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            ("UNIQUENESS", 3, 4, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            ("DISTRIBUTION", 3, 3, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            ("ANOMALY", 3, 3, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
             # Orchestration / control plane
-            ("DAG_LAST_RUN", 2, 4, lambda n, d: n.node_type in _ORCH_TYPES),
+            ("DAG_LAST_RUN", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_SCHEDULE_LAG", 3, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("TASK_FAILURE_RATE", 3, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
             # Ingestion connectors (if in scope)
-            ("SYNC_LAG", 2, 3, lambda n, d: n.asset_kind == AssetKind.CONNECTOR),
+            ("SYNC_LAG", 2, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("FAILED_SYNCS", 2, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+            ("CONNECTOR_SCHEMA_DRIFT", 3, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             # Transform
-            ("DBT_TEST_FAILURES", 3, 3, lambda n, d: n.asset_kind in _TRANSFORM_ASSET),
+            ("DBT_TEST_FAILURES", 3, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            ("DBT_MODEL_FRESHNESS", 3, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            ("DBT_SOURCE_FRESHNESS", 3, 3, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
+            # Warehouse ops
+            ("QUERY_PERFORMANCE", 2, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) not in _WAREHOUSE_ASSET),
+            ("COST_ANOMALY", 2, 2, lambda n, d: _domain(n) == "warehouse" and _kind(n) not in _WAREHOUSE_ASSET),
+            ("STORAGE_GROWTH", 3, 2, lambda n, d: _domain(n) == "warehouse" and _kind(n) not in _WAREHOUSE_ASSET),
             # BI
             ("BI_FRESHNESS_PROXY", 2, 2, lambda n, d: is_bi_node(n)),
+            ("BI_CONTENT_HEALTH", 3, 2, lambda n, d: is_bi_node(n)),
+            # Infrastructure
+            ("SERVER_HEALTH", 2, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
+            ("CERTIFICATE", 2, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
+            ("LOG_ANALYSIS", 3, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
         ]
 
     # custom_watch — generic recipe
     return [
-        ("FRESHNESS", 2, 3, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-        ("SCHEMA_CHANGE", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.WAREHOUSE and n.asset_kind in _WAREHOUSE_ASSET),
-        ("SYNC_LAG", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.INGESTION or n.asset_kind == AssetKind.CONNECTOR),
-        ("DAG_LAST_RUN", 2, 2, lambda n, d: n.platform_domain == PlatformDomain.ORCHESTRATION and n.node_type in _ORCH_TYPES),
-        ("DBT_TEST_FAILURES", 3, 2, lambda n, d: n.platform_domain == PlatformDomain.TRANSFORM and n.asset_kind in _TRANSFORM_ASSET),
+        ("FRESHNESS", 2, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+        ("SCHEMA_CHANGE", 2, 2, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+        ("SYNC_LAG", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
+        ("DAG_LAST_RUN", 2, 2, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+        ("DBT_TEST_FAILURES", 3, 2, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
     ]
 
 
@@ -360,7 +512,7 @@ def build_watch_scope(
                 return True
             if ct == "job":
                 # Include orchestration jobs (DAGs, tasks) but NOT ingestion connectors
-                return node.node_type in _ORCH_TYPES or node.platform_domain == PlatformDomain.ORCHESTRATION
+                return _ntype(node) in _ORCH_TYPES or _domain(node) == "orchestration"
             return False
 
         filtered = [(n, d) for n, d in filtered if _is_visible_node(n)]
@@ -402,15 +554,43 @@ def build_watch_scope(
     # Candidate nodes = anchor + scoped
     candidate_nodes = [(anchor, 0)] + [(n, d) for n, d, _ in scoped]
 
+    # If restrictToNodeIds is set, only generate monitors for those nodes
+    # AND ensure all restricted nodes are candidates even if BFS didn't reach them
+    restrict_ids = cfg.get("restrictToNodeIds")
+    if restrict_ids:
+        restrict_set = set(restrict_ids)
+        # Add any restricted nodes that BFS didn't find (e.g. downstream of anchor,
+        # or in a different branch). Assign depth=0 so each user-selected node
+        # gets treated as a "direct" target — recipes with d==0 checks will apply.
+        candidate_ids = {n.id for n, _ in candidate_nodes}
+        for nid in restrict_set:
+            if nid not in candidate_ids:
+                node = graph.nodes.get(nid)
+                if node:
+                    candidate_nodes.append((node, 0))
+                    candidate_ids.add(nid)
+        # Filter to only restricted nodes
+        candidate_nodes = [(n, d) for n, d in candidate_nodes if n.id in restrict_set]
+
+    # In multi-monitor mode (restrictToNodeIds), lift per-entry caps so every
+    # selected node gets its applicable monitors. The per-entry caps were
+    # designed for single-anchor BFS scopes, not wide multi-asset selections.
+    # Also override depth to 0 for all nodes — each user-selected node is a
+    # "direct" target, not an upstream dependency, so d==0 recipes should apply.
+    uncapped = bool(restrict_ids)
+
     def _run_recipe(entries: List[RecipeEntry]) -> None:
         for entry_idx, (mon_key, priority, cap, check_fn) in enumerate(entries):
             count_key = f"{entry_idx}"
             recipe_counts[count_key] = 0
+            effective_cap = len(candidate_nodes) if uncapped else cap
 
             for node, depth in candidate_nodes:
-                if recipe_counts[count_key] >= cap:
+                if recipe_counts[count_key] >= effective_cap:
                     break
-                if not check_fn(node, depth):
+                # In multi-monitor mode, treat all nodes as depth=0 (direct targets)
+                effective_depth = 0 if uncapped else depth
+                if not check_fn(node, effective_depth):
                     continue
 
                 dedup_key = f"{mon_key}:{node.fqn}"
@@ -446,7 +626,10 @@ def build_watch_scope(
     # platform_domain=OTHER or asset_kind=UNKNOWN), apply generic monitors
     # to any node in scope. This handles graphs where domain/kind metadata
     # hasn't been assigned yet.
-    if not recommendations and candidate_nodes:
+    # Skip fallback in multi-monitor mode (restrictToNodeIds set) — nodes
+    # get appropriate monitors from their correct family, so "no matches"
+    # here is intentional (e.g. a BI node in a pipeline_health partition).
+    if not recommendations and candidate_nodes and not restrict_ids:
         fallback_recipe: List[RecipeEntry] = [
             ("FRESHNESS", 1, 5, lambda n, d: True),
             ("SCHEMA_CHANGE", 2, 5, lambda n, d: True),
@@ -503,10 +686,14 @@ def _build_reason(mon_key: str, node: LineageNode, anchor: LineageNode, depth: i
         "DBT_TEST_FAILURES": "test failure",
         "DBT_MODEL_FRESHNESS": "model staleness",
         "DBT_SOURCE_FRESHNESS": "source staleness",
+        "TASK_FAILURE_RATE": "task failure rate",
         "BI_FRESHNESS_PROXY": "dashboard staleness",
         "BI_CONTENT_HEALTH": "content issue",
         "BI_UPSTREAM_BREAK_RISK": "upstream break risk",
         "BI_REFRESH_FAILURE": "refresh failure",
+        "QUERY_PERFORMANCE": "query performance issue",
+        "COST_ANOMALY": "cost anomaly",
+        "STORAGE_GROWTH": "abnormal storage growth",
     }
     label = key_labels.get(mon_key, mon_key.lower().replace("_", " "))
     return f"Detect {label} in {direction} dependency {node.name} (depth {abs(depth)} from {anchor.name})"

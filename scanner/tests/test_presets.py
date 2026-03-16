@@ -234,14 +234,18 @@ class TestDataDriftScopeConfig:
         assert "transform" in cfg["domainFilters"]
         assert "ingestion" in cfg["domainFilters"]
 
-    def test_data_drift_recipe_no_freshness(self):
-        """Data drift recipe should NOT include FRESHNESS."""
+    def test_data_drift_recipe_includes_quality_monitors(self):
+        """Data drift recipe should include quality-focused monitors."""
         anchor = _make_node("x", "x", "x", PlatformDomain.WAREHOUSE)
         recipe = _recipe_for_watch_type("data_drift", anchor)
         monitor_keys = [r[0] for r in recipe]
-        assert "FRESHNESS" not in monitor_keys
         assert "SCHEMA_CHANGE" in monitor_keys
         assert "VOLUME" in monitor_keys
+        assert "NULL_RATE" in monitor_keys
+        assert "UNIQUENESS" in monitor_keys
+        assert "FRESHNESS" in monitor_keys
+        assert "DISTRIBUTION" in monitor_keys
+        assert "ANOMALY" in monitor_keys
 
     def test_data_drift_recipe_includes_drift_monitors(self):
         anchor = _make_node("x", "x", "x", PlatformDomain.WAREHOUSE)
@@ -348,8 +352,8 @@ class TestDataDriftPreset:
         graph = _build_warehouse_pipeline_graph()
         result = preview_preset(graph, "final-1", "data_drift")
         monitor_keys = {r.monitor_key for r in result.watches[0].scope_result.recommendations}
-        # Should contain schema/volume/drift monitors, NOT freshness
-        assert "FRESHNESS" not in monitor_keys
+        # Should contain quality-focused monitors
+        assert "SCHEMA_CHANGE" in monitor_keys or "VOLUME" in monitor_keys or "NULL_RATE" in monitor_keys
         # Should have at least some drift monitors
         assert len(monitor_keys) > 0
 

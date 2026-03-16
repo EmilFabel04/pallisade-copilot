@@ -496,6 +496,52 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
   },
 
   // ==========================================================================
+  // WAREHOUSE OPS — Snowflake, BigQuery, Redshift
+  // ==========================================================================
+  {
+    key: 'QUERY_PERFORMANCE',
+    label: 'Query Performance',
+    description: 'Detects slow queries, timeouts, and queue congestion in your warehouse',
+    category: 'warehouse',
+    required_integrations: WAREHOUSE_TOOL_TYPES,
+    target_selector_type: 'none',
+    executor_type: 'tool_api',
+    supports_baselines: true,
+    config_schema: [
+      { key: 'query_time_threshold_seconds', label: 'Max avg query time (seconds)', type: 'number', placeholder: '300', default_value: 300 },
+      { key: 'lookback_hours', label: 'Lookback hours', type: 'number', placeholder: '24', default_value: 24, advanced: true },
+    ],
+  },
+  {
+    key: 'COST_ANOMALY',
+    label: 'Cost Anomaly',
+    description: 'Alerts when warehouse spending spikes beyond normal patterns',
+    category: 'warehouse',
+    required_integrations: WAREHOUSE_TOOL_TYPES,
+    target_selector_type: 'none',
+    executor_type: 'tool_api',
+    supports_baselines: true,
+    config_schema: [
+      { key: 'cost_spike_multiplier', label: 'Cost spike multiplier', type: 'number', placeholder: '1.5', default_value: 1.5 },
+      { key: 'lookback_days', label: 'Rolling avg window (days)', type: 'number', placeholder: '7', default_value: 7, advanced: true },
+    ],
+  },
+  {
+    key: 'STORAGE_GROWTH',
+    label: 'Storage Growth',
+    description: 'Tracks abnormal storage growth rates across warehouse tables',
+    category: 'warehouse',
+    required_integrations: WAREHOUSE_TOOL_TYPES,
+    target_selector_type: 'none',
+    executor_type: 'tool_api',
+    supports_baselines: true,
+    config_schema: [
+      { key: 'growth_rate_multiplier', label: 'Growth rate alert multiplier', type: 'number', placeholder: '2.0', default_value: 2.0 },
+      { key: 'lookback_days', label: 'Trend window (days)', type: 'number', placeholder: '30', default_value: 30, advanced: true },
+    ],
+  },
+
+  // ==========================================================================
   // REPORTING / BI — Looker, Tableau, Power BI, Metabase
   // ==========================================================================
   {
@@ -607,6 +653,8 @@ export const TOOL_MONITOR_TYPES = [
   'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
   'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
   'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
+  'QUERY_PERFORMANCE', 'COST_ANOMALY', 'STORAGE_GROWTH',
+  'CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS',
 ];
 
 export const BI_MONITOR_TYPES = [
@@ -624,4 +672,24 @@ export const TOOL_NODE_TYPE_MAP: Record<string, string[]> = {
   DBT_TEST_FAILURES: ['dbt_cloud', 'dbt_core'],
   DBT_MODEL_FRESHNESS: ['dbt_cloud', 'dbt_core'],
   DBT_SOURCE_FRESHNESS: ['dbt_cloud', 'dbt_core'],
+  QUERY_PERFORMANCE: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'],
+  COST_ANOMALY: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'],
+  STORAGE_GROWTH: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'],
+  CERTIFICATE: ['linux_server'],
+  SERVER_HEALTH: ['linux_server'],
+  LOG_ANALYSIS: ['linux_server'],
+};
+
+/**
+ * Domain-specific monitor map — maps platform domain to the set of monitors
+ * that should appear when a tool node of that domain is selected.
+ * Used by MultiMonitorModal for per-domain filtering.
+ */
+export const DOMAIN_MONITOR_MAP: Record<string, Set<string>> = {
+  ingestion: new Set(['SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT']),
+  orchestration: new Set(['DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE']),
+  transform: new Set(['DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS']),
+  warehouse: new Set(['QUERY_PERFORMANCE', 'COST_ANOMALY', 'STORAGE_GROWTH']),
+  bi: new Set(['BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK', 'BI_CONTENT_HEALTH', 'BI_REFRESH_FAILURE']),
+  infrastructure: new Set(['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS']),
 };

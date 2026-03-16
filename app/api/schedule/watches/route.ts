@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
       where: {
         organizationId,
         watchType: { not: null },
+        monitoringPlanId: null, // Exclude groups that belong to a plan
       },
       orderBy: { createdAt: 'desc' },
       include: {

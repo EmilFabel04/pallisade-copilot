@@ -27,6 +27,7 @@ TOOL_MONITOR_TYPES = {
     "sync_lag", "failed_syncs", "connector_schema_drift",
     "dag_last_run", "dag_schedule_lag", "task_failure_rate",
     "dbt_test_failures", "dbt_model_freshness", "dbt_source_freshness",
+    "query_performance", "cost_anomaly", "storage_growth",
 }
 
 
@@ -961,6 +962,276 @@ class DbtSourceFreshnessMonitor:
 
 
 # =============================================================================
+# WAREHOUSE OPS MONITORS
+# =============================================================================
+
+
+class QueryPerformanceMonitor:
+    """Monitors warehouse query performance and timeouts.
+
+    Queries INFORMATION_SCHEMA or equivalent to detect slow queries,
+    timeouts, and queue congestion.
+
+    Config keys:
+        query_time_threshold_seconds : int
+            Maximum acceptable average query time (default: 300).
+        lookback_hours : int
+            How far back to analyze queries (default: 24).
+    """
+
+    monitor_type = "query_performance"
+
+    def __init__(self, config: Dict[str, Any] | None = None):
+        self.config = config or {}
+        self.threshold_seconds: int = int(self.config.get("query_time_threshold_seconds", 300))
+        self.lookback_hours: int = int(self.config.get("lookback_hours", 24))
+
+    def execute(self, adapter: Any) -> MonitorResult:
+        target = f"warehouse:{getattr(adapter, 'warehouse_type', 'unknown')}"
+
+        try:
+            # Adapter should expose query_performance_stats(lookback_hours)
+            # returning {"avg_duration_seconds", "max_duration_seconds",
+            #            "total_queries", "failed_queries", "timed_out_queries"}
+            stats = adapter.query_performance_stats(self.lookback_hours)
+        except AttributeError:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message="Warehouse adapter does not support query performance monitoring.",
+            )
+        except Exception as e:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message=f"Failed to fetch query performance stats: {e}",
+            )
+
+        avg_duration = stats.get("avg_duration_seconds", 0)
+        timed_out = stats.get("timed_out_queries", 0)
+        total = stats.get("total_queries", 0)
+
+        details = {
+            "avg_duration_seconds": round(avg_duration, 1),
+            "max_duration_seconds": stats.get("max_duration_seconds"),
+            "total_queries": total,
+            "failed_queries": stats.get("failed_queries", 0),
+            "timed_out_queries": timed_out,
+            "lookback_hours": self.lookback_hours,
+            "threshold_seconds": self.threshold_seconds,
+        }
+
+        if timed_out > 0:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.FAIL,
+                value=float(timed_out),
+                message=f"{timed_out} queries timed out in the last {self.lookback_hours}h.",
+                details=details,
+            )
+
+        if avg_duration > self.threshold_seconds:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.WARN,
+                value=round(avg_duration, 1),
+                threshold=float(self.threshold_seconds),
+                message=(
+                    f"Average query time {avg_duration:.0f}s exceeds threshold "
+                    f"({self.threshold_seconds}s) over {self.lookback_hours}h."
+                ),
+                details=details,
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target,
+            status=MonitorStatus.PASS,
+            value=round(avg_duration, 1),
+            message=f"Query performance healthy: avg {avg_duration:.0f}s across {total} queries.",
+            details=details,
+        )
+
+
+class CostAnomalyMonitor:
+    """Monitors warehouse cost for anomalous spikes.
+
+    Compares recent daily cost against a rolling average to detect
+    unexpected spend increases.
+
+    Config keys:
+        cost_spike_multiplier : float
+            WARN if daily cost > multiplier * rolling avg (default: 1.5).
+        lookback_days : int
+            Rolling average window (default: 7).
+    """
+
+    monitor_type = "cost_anomaly"
+
+    def __init__(self, config: Dict[str, Any] | None = None):
+        self.config = config or {}
+        self.spike_multiplier: float = float(self.config.get("cost_spike_multiplier", 1.5))
+        self.lookback_days: int = int(self.config.get("lookback_days", 7))
+
+    def execute(self, adapter: Any) -> MonitorResult:
+        target = f"warehouse:{getattr(adapter, 'warehouse_type', 'unknown')}"
+
+        try:
+            # Adapter should expose cost_stats(lookback_days)
+            # returning {"daily_costs": [float], "today_cost": float,
+            #            "rolling_avg": float, "currency": str}
+            stats = adapter.cost_stats(self.lookback_days)
+        except AttributeError:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message="Warehouse adapter does not support cost monitoring.",
+            )
+        except Exception as e:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message=f"Failed to fetch cost stats: {e}",
+            )
+
+        today_cost = stats.get("today_cost", 0)
+        rolling_avg = stats.get("rolling_avg", 0)
+        currency = stats.get("currency", "USD")
+
+        details = {
+            "today_cost": round(today_cost, 2),
+            "rolling_avg": round(rolling_avg, 2),
+            "spike_multiplier": self.spike_multiplier,
+            "lookback_days": self.lookback_days,
+            "currency": currency,
+        }
+
+        if rolling_avg > 0 and today_cost > rolling_avg * 3:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.FAIL,
+                value=round(today_cost, 2),
+                threshold=round(rolling_avg * 3, 2),
+                message=(
+                    f"Cost spike: {currency} {today_cost:.2f} today vs "
+                    f"{currency} {rolling_avg:.2f} avg (>{3}x)."
+                ),
+                details=details,
+            )
+
+        if rolling_avg > 0 and today_cost > rolling_avg * self.spike_multiplier:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.WARN,
+                value=round(today_cost, 2),
+                threshold=round(rolling_avg * self.spike_multiplier, 2),
+                message=(
+                    f"Cost elevated: {currency} {today_cost:.2f} today vs "
+                    f"{currency} {rolling_avg:.2f} avg (>{self.spike_multiplier}x)."
+                ),
+                details=details,
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target,
+            status=MonitorStatus.PASS,
+            value=round(today_cost, 2),
+            message=f"Cost normal: {currency} {today_cost:.2f} today (avg {currency} {rolling_avg:.2f}).",
+            details=details,
+        )
+
+
+class StorageGrowthMonitor:
+    """Monitors warehouse storage growth rate.
+
+    Detects abnormally fast storage growth that may indicate
+    runaway ETL jobs or missing cleanup.
+
+    Config keys:
+        growth_rate_multiplier : float
+            WARN if growth > multiplier * normal rate (default: 2.0).
+        lookback_days : int
+            Window for measuring growth trend (default: 30).
+    """
+
+    monitor_type = "storage_growth"
+
+    def __init__(self, config: Dict[str, Any] | None = None):
+        self.config = config or {}
+        self.growth_multiplier: float = float(self.config.get("growth_rate_multiplier", 2.0))
+        self.lookback_days: int = int(self.config.get("lookback_days", 30))
+
+    def execute(self, adapter: Any) -> MonitorResult:
+        target = f"warehouse:{getattr(adapter, 'warehouse_type', 'unknown')}"
+
+        try:
+            # Adapter should expose storage_stats(lookback_days)
+            # returning {"current_bytes", "previous_bytes", "growth_bytes",
+            #            "avg_daily_growth_bytes", "recent_daily_growth_bytes"}
+            stats = adapter.storage_stats(self.lookback_days)
+        except AttributeError:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message="Warehouse adapter does not support storage monitoring.",
+            )
+        except Exception as e:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message=f"Failed to fetch storage stats: {e}",
+            )
+
+        avg_daily = stats.get("avg_daily_growth_bytes", 0)
+        recent_daily = stats.get("recent_daily_growth_bytes", 0)
+        current_gb = stats.get("current_bytes", 0) / (1024 ** 3)
+
+        details = {
+            "current_gb": round(current_gb, 2),
+            "avg_daily_growth_mb": round(avg_daily / (1024 ** 2), 2) if avg_daily else 0,
+            "recent_daily_growth_mb": round(recent_daily / (1024 ** 2), 2) if recent_daily else 0,
+            "growth_multiplier": self.growth_multiplier,
+            "lookback_days": self.lookback_days,
+        }
+
+        if avg_daily > 0 and recent_daily > avg_daily * self.growth_multiplier:
+            ratio = recent_daily / avg_daily
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.WARN,
+                value=round(ratio, 1),
+                threshold=self.growth_multiplier,
+                message=(
+                    f"Storage growing {ratio:.1f}x faster than normal "
+                    f"({details['recent_daily_growth_mb']} MB/day vs "
+                    f"{details['avg_daily_growth_mb']} MB/day avg)."
+                ),
+                details=details,
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target,
+            status=MonitorStatus.PASS,
+            value=round(current_gb, 2),
+            message=f"Storage growth normal: {current_gb:.1f} GB total.",
+            details=details,
+        )
+
+
+# =============================================================================
 # Cross-cutting: Consecutive failure, Recovery, SLA breach
 # =============================================================================
 
@@ -1060,4 +1331,7 @@ TOOL_MONITOR_REGISTRY = {
     "dbt_test_failures": DbtTestFailuresMonitor,
     "dbt_model_freshness": DbtModelFreshnessMonitor,
     "dbt_source_freshness": DbtSourceFreshnessMonitor,
+    "query_performance": QueryPerformanceMonitor,
+    "cost_anomaly": CostAnomalyMonitor,
+    "storage_growth": StorageGrowthMonitor,
 }

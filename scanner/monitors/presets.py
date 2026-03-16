@@ -288,8 +288,8 @@ def _resolve_anchors(
         connectors = []
         for node, depth in upstream:
             if (
-                node.platform_domain == PlatformDomain.INGESTION
-                or node.asset_kind == AssetKind.CONNECTOR
+                node.platform_domain.value == "ingestion"
+                or node.asset_kind.value == "connector"
             ):
                 score = _node_priority_score(node, depth)
                 connectors.append((node.id, score))

@@ -216,9 +216,26 @@ export async function DELETE(
       return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
     }
 
-    // OnDelete: SetNull on MonitorGroup.monitoringPlanId handles unlinking
-    await prisma.monitoringPlan.delete({
-      where: { id: planId },
+    // Delete child monitors, then groups, then the plan
+    await prisma.$transaction(async (tx) => {
+      const childGroups = await tx.monitorGroup.findMany({
+        where: { monitoringPlanId: planId },
+        select: { id: true },
+      });
+      const groupIds = childGroups.map((g) => g.id);
+
+      if (groupIds.length > 0) {
+        await tx.monitor.deleteMany({
+          where: { monitorGroupId: { in: groupIds } },
+        });
+        await tx.monitorGroup.deleteMany({
+          where: { id: { in: groupIds } },
+        });
+      }
+
+      await tx.monitoringPlan.delete({
+        where: { id: planId },
+      });
     });
 
     return NextResponse.json({ deleted: true });

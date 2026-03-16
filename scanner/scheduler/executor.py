@@ -949,6 +949,43 @@ class TaskExecutor:
                 "message": f"Failed to connect to integration: {e}",
             }
 
+        # Resolve connector_id for Fivetran/Airbyte monitors: if the stored
+        # connector_id looks like a Pallisade CUID (not a real Fivetran ID),
+        # try to resolve the real one from the integration's connector list.
+        if monitor_type in ("sync_lag", "failed_syncs", "connector_schema_drift"):
+            stored_cid = config.get("connector_id", "")
+            if stored_cid and len(stored_cid) > 20 and stored_cid.startswith("c") and not stored_cid.startswith("connector_"):
+                # Looks like a Pallisade CUID, not a real Fivetran connector ID.
+                # Try to resolve from the Fivetran API.
+                try:
+                    connectors = client.get_connectors()
+                    if connectors and len(connectors) == 1:
+                        # Single connector — use it directly
+                        real_id = getattr(connectors[0], "id", "")
+                        if real_id:
+                            logger.info(
+                                "[Executor] Resolved Fivetran connector_id",
+                                old=stored_cid, new=real_id,
+                            )
+                            config = {**config, "connector_id": real_id}
+                    elif connectors:
+                        # Multiple connectors — try to match by target_fqn
+                        target = task.get("targetFqn", "").lower()
+                        for conn in connectors:
+                            conn_name = (getattr(conn, "schema", "") or getattr(conn, "id", "")).lower()
+                            service = (getattr(conn, "service", "") or "").lower()
+                            if conn_name and (conn_name in target or target in conn_name or service in target):
+                                real_id = getattr(conn, "id", "")
+                                if real_id:
+                                    logger.info(
+                                        "[Executor] Resolved Fivetran connector_id by name match",
+                                        old=stored_cid, new=real_id, match=conn_name,
+                                    )
+                                    config = {**config, "connector_id": real_id}
+                                    break
+                except Exception as e:
+                    logger.warning(f"[Executor] Failed to resolve Fivetran connector_id: {e}")
+
         monitor = monitor_cls(config)
         try:
             result: MonitorResult = monitor.execute(client)

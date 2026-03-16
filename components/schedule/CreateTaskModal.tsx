@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ScheduleInput } from './ScheduleInput';
@@ -13,7 +13,7 @@ import {
   getMonitorDefinition,
   TOOL_MONITOR_TYPES,
 } from '@/types/monitor-catalog';
-import { MultiMonitorForm, type MultiMonitorFormRef } from './MultiMonitorForm';
+// MultiMonitorForm removed — multi-monitor creation now uses MultiMonitorModal
 
 interface MonitorGroup {
   category: MonitorCategory;
@@ -48,7 +48,7 @@ interface CreateTaskModalProps {
   prefillData?: MonitorPrefillData | null;
   integrations?: Array<{ id: string; name: string; type: string }>;
   stackId?: string;
-  initialMode?: 'prompt' | 'structured' | 'multi';
+  initialMode?: 'prompt' | 'structured';
   onPlanCreated?: (planId: string) => void;
 }
 
@@ -57,9 +57,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
   const isEditing = !!editTask;
 
   // Step 1: Mode + content
-  const [taskMode, setTaskMode] = useState<'prompt' | 'structured' | 'multi'>('prompt');
-  const multiFormRef = useRef<MultiMonitorFormRef>(null);
-  const [multiCanCreate, setMultiCanCreate] = useState(false);
+  const [taskMode, setTaskMode] = useState<'prompt' | 'structured'>('prompt');
   const [name, setName] = useState('');
   const [prompt, setPrompt] = useState('');
   const [monitorType, setMonitorType] = useState('');
@@ -375,7 +373,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
       <div className="relative w-full max-w-3xl mx-4 bg-[var(--surface)] rounded-2xl border border-[var(--subtle-border)] shadow-2xl max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
-          <h2 className="text-[16px] font-semibold text-[var(--text)]">{isEditing ? 'Edit Monitor' : taskMode === 'multi' ? 'Set Up Monitoring' : 'Create Monitor'}</h2>
+          <h2 className="text-[16px] font-semibold text-[var(--text)]">{isEditing ? 'Edit Monitor' : 'Create Monitor'}</h2>
           <button onClick={onClose} className="text-[var(--muted)] hover:text-[var(--text)]">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -383,9 +381,8 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
           </button>
         </div>
 
-        {/* Step indicators — hidden for multi monitor mode (accordion has its own) */}
-        {taskMode !== 'multi' && (
-          <div className="flex-shrink-0 flex items-center gap-3 px-6 py-3 border-b border-[var(--border-faint)]">
+        {/* Step indicators */}
+        <div className="flex-shrink-0 flex items-center gap-3 px-6 py-3 border-b border-[var(--border-faint)]">
             {[1, 2, 3].map((s) => (
               <div key={s} className="flex items-center gap-2">
                 <div className={cn(
@@ -408,17 +405,13 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
               </div>
             ))}
           </div>
-        )}
 
         {/* Content */}
-        <div className={cn(
-          'flex-1 min-h-0 overflow-y-auto overflow-x-hidden',
-          taskMode === 'multi' ? '' : 'px-6 py-6 space-y-5',
-        )}>
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-6 py-6 space-y-5">
           {/* Type toggle — always visible in step 1 */}
           {step === 1 && (
-            <div className={taskMode === 'multi' ? 'px-6 pt-5 pb-3' : ''}>
-              {taskMode !== 'multi' && (
+            <div>
+              {(
                 <div className="mb-5">
                   <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
                     Monitor Name
@@ -441,7 +434,6 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
                   {([
                     { mode: 'prompt' as const, label: 'AI Prompt', sub: 'Natural language', icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z' },
                     { mode: 'structured' as const, label: 'Monitor', sub: 'Specific check', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
-                    { mode: 'multi' as const, label: 'Multi Monitor', sub: 'Monitoring plan', icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z' },
                   ]).map(({ mode, label, sub, icon }) => (
                     <button
                       key={mode}
@@ -466,7 +458,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
             </div>
           )}
 
-          {step === 1 && taskMode !== 'multi' && (
+          {step === 1 && (
             <>
 
               {/* Mode-specific content */}
@@ -501,20 +493,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
             </>
           )}
 
-          {/* Multi Monitor: accordion takes over the entire content area */}
-          {taskMode === 'multi' && step === 1 && (
-            <MultiMonitorForm
-              ref={multiFormRef}
-              stackId={stackId}
-              onComplete={(planId) => {
-                onPlanCreated?.(planId);
-                onClose();
-              }}
-              onCanCreateChange={setMultiCanCreate}
-            />
-          )}
-
-          {taskMode !== 'multi' && step === 2 && (
+          {step === 2 && (
             <>
               <div>
                 <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
@@ -545,7 +524,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
             </>
           )}
 
-          {taskMode !== 'multi' && step === 3 && (
+          {step === 3 && (
             <AlertChannelPicker
               channels={alertChannels}
               onChannelsChange={setAlertChannels}
@@ -559,7 +538,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
         {/* Footer */}
         <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-t border-[var(--subtle-border)]">
           <div>
-            {taskMode !== 'multi' && step > 1 && (
+            {step > 1 && (
               <Button variant="ghost" size="sm" onClick={() => setStep(step - 1)}>
                 Back
               </Button>
@@ -569,15 +548,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, editTask, p
             <Button variant="ghost" size="sm" onClick={onClose}>
               Cancel
             </Button>
-            {taskMode === 'multi' ? (
-              <Button
-                size="sm"
-                disabled={!multiCanCreate}
-                onClick={() => multiFormRef.current?.create()}
-              >
-                Create Plan
-              </Button>
-            ) : step < 3 ? (
+            {step < 3 ? (
               <Button
                 size="sm"
                 onClick={() => setStep(step + 1)}

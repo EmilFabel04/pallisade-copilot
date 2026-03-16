@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
           anchorFqn: g.anchorFqn,
           monitorCount: g.monitors?.length || 0,
           healthScore: g.healthScore,
-          healthStatus: g.healthStatus,
+          healthStatus: null,
           monitors: g.monitors,
         })),
       };
@@ -121,6 +121,14 @@ export async function POST(request: NextRequest) {
       groups, // Array of group specs from the preview
     } = body;
 
+    console.log('[Plans] POST body:', JSON.stringify({
+      name, scopeType, mode, familyCount: families?.length,
+      groupCount: groups?.length,
+      groupSummary: (groups || []).map((g: any) => ({
+        anchor: g.anchor_name, recCount: g.recommendations?.length,
+      })),
+    }));
+
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 });
     }
@@ -159,7 +167,7 @@ export async function POST(request: NextRequest) {
 
       for (const group of groups || []) {
         const monitors = (group.recommendations || []).map((rec: any) => ({
-          name: `${rec.monitor_key} — ${rec.target_fqn || 'monitor'}`,
+          name: `${(rec.monitor_key || '').replace(/_/g, ' ')} — ${(rec.target_fqn || 'monitor').split('.').pop()}`,
           monitorType: rec.monitor_key,
           targetFqn: rec.target_fqn,
           config: rec.config_hints || {},
@@ -168,8 +176,8 @@ export async function POST(request: NextRequest) {
         }));
 
         const watchResult = await createWatchInTransaction(tx, {
-          name: `${name} — ${group.anchor_name || 'Group'}`,
-          description: `Part of monitoring plan: ${name}`,
+          name: group.anchor_name || 'Monitor Group',
+          description: description || null,
           watchType: group.watch_type || 'custom_watch',
           anchorFqn: group.anchor_fqn,
           anchorNodeId: group.anchor_id,
@@ -202,7 +210,7 @@ export async function POST(request: NextRequest) {
       });
 
       return { plan, groups: createdGroups, totalMonitors };
-    });
+    }, { maxWait: 15000, timeout: 60000 });
 
     return NextResponse.json({
       id: result.plan.id,
@@ -211,7 +219,10 @@ export async function POST(request: NextRequest) {
       totalMonitors: result.totalMonitors,
     }, { status: 201 });
   } catch (error: any) {
-    console.error('[Plans] Create error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error('[Plans] Create error:', error?.message || error, error?.stack);
+    return NextResponse.json(
+      { error: error?.message || String(error) },
+      { status: 500 },
+    );
   }
 }
