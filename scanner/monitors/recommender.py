@@ -209,10 +209,15 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
 
     _d = node.platform_domain.value
     _k = node.asset_kind.value
+    _p = node.platform or ""
+    _DATA_ASSET_KINDS = {"table", "view", "model", "dataset"}
+    _DATA_DOMAINS = {"warehouse", "ingestion", "transform"}
 
-    # --- Warehouse tables/views ---
-    if _d == "warehouse" and _k in ("table", "view", "model", "dataset"):
-        _add(FRESHNESS, 1, "Core data quality — detect stale data in this warehouse asset")
+    # --- Data assets (tables/views/models from any data-producing domain) ---
+    # Fivetran-discovered tables have domain=ingestion + kind=table and are
+    # real data assets that should get the same SQL monitors as warehouse tables.
+    if _k in _DATA_ASSET_KINDS and _d in _DATA_DOMAINS:
+        _add(FRESHNESS, 1, "Core data quality — detect stale data in this asset")
         _add(VOLUME, 2, "Core data quality — detect unexpected row count changes")
         _add(SCHEMA_CHANGE, 2, "Core data quality — detect column additions or removals")
 
@@ -228,8 +233,8 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
         if node.columns:
             _add(CONNECTOR_SCHEMA_DRIFT, 2, "Detect schema changes at the ingestion source")
 
-    # --- Orchestration DAGs/jobs ---
-    elif _d == "orchestration" and _k in ("job", "dag", "task", "pipeline"):
+    # --- Orchestration DAGs/jobs (NOT individual tasks) ---
+    elif _d == "orchestration" and _k in ("job", "dag", "pipeline"):
         _add(DAG_LAST_RUN, 1, "Ensure scheduled orchestration runs succeed")
         _add(DAG_SCHEDULE_LAG, 2, "Detect when runs fall behind schedule")
         _add(TASK_FAILURE_RATE, 2, "Track task failure rate across DAG runs")
@@ -253,7 +258,9 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
         _add(BI_UPSTREAM_BREAK_RISK, 2, "Count failing monitors on upstream warehouse tables")
 
     # --- Infrastructure / Linux servers ---
-    elif _d in ("infrastructure", "other"):
+    # Exclude VCS platforms (GitHub, GitLab, etc.) which share domain=OTHER
+    # but are not servers and have no applicable monitors.
+    elif _d in ("infrastructure", "other") and _p not in ("github", "gitlab", "bitbucket"):
         _add(SERVER_HEALTH, 1, "Monitor server CPU, memory, and disk usage")
         _add(CERTIFICATE, 1, "Track SSL/TLS certificate expiry dates")
         _add(LOG_ANALYSIS, 2, "Detect error spikes and anomalies in server logs")

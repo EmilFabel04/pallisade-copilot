@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta } from './NodeSelectionSurface';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
-import { getMonitorDefinition, TOOL_MONITOR_TYPES, DOMAIN_MONITOR_MAP } from '@/types/monitor-catalog';
+import { getMonitorDefinition, DOMAIN_MONITOR_MAP } from '@/types/monitor-catalog';
 import type { MonitoringPlanPreview } from '@/types/health-watch';
 
 // ---------------------------------------------------------------------------
@@ -179,8 +179,20 @@ const PRESETS: Preset[] = [
   },
 ];
 
-/** Monitor keys that target the tool itself (API-based), not the data it produces. */
-const TOOL_MONITOR_KEYS = new Set(TOOL_MONITOR_TYPES);
+/**
+ * Monitor keys that strictly target tool-level nodes (connectors, DAGs,
+ * warehouse ops, infra) — these should NOT appear on data nodes.
+ *
+ * dbt monitors and BI monitors are intentionally excluded from this set
+ * because their targets (models, dashboards) appear as data-like nodes
+ * in the lineage graph, not as tool service nodes.
+ */
+const TOOL_ONLY_MONITOR_KEYS = new Set([
+  'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
+  'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
+  'QUERY_PERFORMANCE', 'COST_ANOMALY', 'STORAGE_GROWTH',
+  'CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS',
+]);
 
 const CONFIG_TABS: { key: ConfigTab; label: string; icon: string }[] = [
   {
@@ -411,11 +423,11 @@ export function MultiMonitorModal({
         }
         monitors = domainMonitors
           ? allMons.filter((m) => domainMonitors.has(m.key))
-          : allMons.filter((m) => TOOL_MONITOR_KEYS.has(m.key));
+          : allMons.filter((m) => TOOL_ONLY_MONITOR_KEYS.has(m.key));
       } else {
         // Data node — only data monitors (exclude all tool monitors)
         const raw = nodeMonitorMap.get(nm.id) || [];
-        monitors = raw.filter((m) => !TOOL_MONITOR_KEYS.has(m.key));
+        monitors = raw.filter((m) => !TOOL_ONLY_MONITOR_KEYS.has(m.key));
       }
 
       nodes.push({ meta: nm, monitors });

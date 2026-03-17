@@ -42,6 +42,33 @@ export async function GET(request: NextRequest) {
 
     const summaries = plans.map((plan) => {
       const groups = plan.monitorGroups || [];
+
+      // Compute fresh aggregates from child monitors (mirrors detail route)
+      let computedTotal = 0;
+      let weightedHealth = 0;
+      let passCount = 0;
+      let warnCount = 0;
+      let failCount = 0;
+      let errorCount = 0;
+
+      for (const group of groups) {
+        const monCount = group.monitors?.length || 0;
+        computedTotal += monCount;
+        const groupHealth = (group as any).healthScore ?? 100;
+        weightedHealth += groupHealth * monCount;
+
+        for (const m of group.monitors || []) {
+          if (m.lastStatus === 'PASS') passCount++;
+          else if (m.lastStatus === 'WARN') warnCount++;
+          else if (m.lastStatus === 'FAIL') failCount++;
+          else if (m.lastStatus === 'ERROR') errorCount++;
+        }
+      }
+
+      const computedHealthScore = computedTotal > 0
+        ? Math.round(weightedHealth / computedTotal * 10) / 10
+        : null;
+
       return {
         id: plan.id,
         name: plan.name,
@@ -53,14 +80,14 @@ export async function GET(request: NextRequest) {
         mode: plan.mode,
         families: plan.families,
         totalAssets: plan.totalAssets,
-        totalMonitors: plan.totalMonitors,
+        totalMonitors: computedTotal || plan.totalMonitors,
         coveragePct: plan.coveragePct,
-        healthScore: plan.healthScore,
+        healthScore: computedHealthScore,
         healthStatus: plan.healthStatus,
-        passCount: plan.passCount,
-        warnCount: plan.warnCount,
-        failCount: plan.failCount,
-        errorCount: plan.errorCount,
+        passCount,
+        warnCount,
+        failCount,
+        errorCount,
         lastAggregatedAt: plan.lastAggregatedAt?.toISOString() || null,
         schedule: plan.schedule,
         timezone: plan.timezone,
@@ -76,7 +103,7 @@ export async function GET(request: NextRequest) {
           watchType: g.watchType,
           anchorFqn: g.anchorFqn,
           monitorCount: g.monitors?.length || 0,
-          healthScore: g.healthScore,
+          healthScore: (g as any).healthScore,
           healthStatus: null,
           monitors: g.monitors,
         })),

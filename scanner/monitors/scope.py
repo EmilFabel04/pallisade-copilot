@@ -212,6 +212,28 @@ _ORCH_TYPES = {"dag", "flow", "pipeline", "workflow"}
 # NOT the data assets the tool produces. "ingestion" domain alone is too broad
 # because Fivetran source tables also get domain=ingestion but kind=table.
 _CONNECTOR_KINDS = {"connector", "job", "stream"}
+_DAG_KINDS = {"job", "dag", "pipeline"}  # NOT "task" — DAG monitors target DAGs, not individual tasks
+# Domains whose tables/views are real data assets eligible for SQL monitors
+_DATA_ASSET_DOMAINS = {"warehouse", "ingestion", "transform"}
+# Platforms that use domain=OTHER but are NOT infrastructure servers.
+# These should never receive SERVER_HEALTH, CERTIFICATE, or LOG_ANALYSIS monitors.
+_NON_INFRA_PLATFORMS = {"github", "gitlab", "bitbucket"}
+
+def _is_infra_node(n: LineageNode) -> bool:
+    """True for infrastructure/server nodes eligible for SERVER_HEALTH etc.
+
+    Excludes VCS platforms (GitHub, GitLab, Bitbucket) which share
+    domain=OTHER but are not servers and have no applicable monitors.
+    """
+    return _domain(n) in ("infrastructure", "other") and (n.platform or "") not in _NON_INFRA_PLATFORMS
+
+def _is_data_asset(n: LineageNode) -> bool:
+    """True for table/view/model/dataset nodes in any data-producing domain.
+
+    Fivetran-discovered tables have domain=ingestion + kind=table and should
+    still get FRESHNESS, VOLUME, SCHEMA_CHANGE etc. — they are real data assets.
+    """
+    return _kind(n) in _WAREHOUSE_ASSET and _domain(n) in _DATA_ASSET_DOMAINS
 
 def _domain(n: LineageNode) -> str:
     """Get platform_domain as string, safe across import paths."""
@@ -233,28 +255,28 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
 
     if watch_type == "data_drift":
         return [
-            ("SCHEMA_CHANGE", 1, 5, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("VOLUME", 1, 5, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("NULL_RATE", 2, 4, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("UNIQUENESS", 2, 4, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("FRESHNESS", 2, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("DISTRIBUTION", 3, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("ANOMALY", 3, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("SCHEMA_CHANGE", 1, 5, lambda n, d: _is_data_asset(n)),
+            ("VOLUME", 1, 5, lambda n, d: _is_data_asset(n)),
+            ("NULL_RATE", 2, 4, lambda n, d: _is_data_asset(n)),
+            ("UNIQUENESS", 2, 4, lambda n, d: _is_data_asset(n)),
+            ("FRESHNESS", 2, 3, lambda n, d: _is_data_asset(n)),
+            ("DISTRIBUTION", 3, 3, lambda n, d: _is_data_asset(n)),
+            ("ANOMALY", 3, 3, lambda n, d: _is_data_asset(n)),
             ("CONNECTOR_SCHEMA_DRIFT", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
         ]
 
     if watch_type == "pipeline_health":
         return [
             # Direct on anchor
-            ("FRESHNESS", 1, 1, lambda n, d: d == 0 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("VOLUME", 2, 1, lambda n, d: d == 0 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d == 0 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            # Upstream warehouse
-            ("FRESHNESS", 2, 3, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            ("FRESHNESS", 1, 1, lambda n, d: d == 0 and _is_data_asset(n)),
+            ("VOLUME", 2, 1, lambda n, d: d == 0 and _is_data_asset(n)),
+            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d == 0 and _is_data_asset(n)),
+            # Upstream data assets (warehouse tables, ingestion-synced tables, etc.)
+            ("FRESHNESS", 2, 3, lambda n, d: d >= 1 and _is_data_asset(n)),
             # Ingestion
             ("SYNC_LAG", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             # Orchestration
-            ("DAG_LAST_RUN", 2, 2, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_LAST_RUN", 2, 2, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
             # dbt
             ("DBT_TEST_FAILURES", 3, 2, lambda n, d: _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
         ]
@@ -264,10 +286,10 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
             # BI direct monitors on anchor
             ("BI_FRESHNESS_PROXY", 1, 1, lambda n, d: d == 0 and is_bi_node(n)),
             ("BI_CONTENT_HEALTH", 2, 1, lambda n, d: d == 0 and is_bi_node(n)),
-            # Upstream warehouse
-            ("FRESHNESS", 1, 5, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 1, 5, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("VOLUME", 2, 3, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            # Upstream data assets
+            ("FRESHNESS", 1, 5, lambda n, d: d >= 1 and _is_data_asset(n)),
+            ("SCHEMA_CHANGE", 1, 5, lambda n, d: d >= 1 and _is_data_asset(n)),
+            ("VOLUME", 2, 3, lambda n, d: d >= 1 and _is_data_asset(n)),
             # Ingestion
             ("SYNC_LAG", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             # dbt
@@ -289,11 +311,11 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
             # Direct on dbt model
             ("DBT_TEST_FAILURES", 1, 1, lambda n, d: d == 0 and _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
             ("DBT_MODEL_FRESHNESS", 1, 1, lambda n, d: d == 0 and _domain(n) == "transform" and _kind(n) in _TRANSFORM_ASSET),
-            # Warehouse materialization
-            ("FRESHNESS", 2, 1, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d >= 1 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-            # Upstream warehouse sources
-            ("FRESHNESS", 2, 3, lambda n, d: d >= 2 and _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+            # Materialized data assets
+            ("FRESHNESS", 2, 1, lambda n, d: d >= 1 and _is_data_asset(n)),
+            ("SCHEMA_CHANGE", 2, 1, lambda n, d: d >= 1 and _is_data_asset(n)),
+            # Upstream data sources
+            ("FRESHNESS", 2, 3, lambda n, d: d >= 2 and _is_data_asset(n)),
             # Upstream connectors
             ("SYNC_LAG", 3, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
         ]
@@ -302,9 +324,9 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
         # Legacy catch-all — delegates to domain-specific recipes
         return [
             # Orchestration
-            ("DAG_LAST_RUN", 1, 6, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
-            ("DAG_SCHEDULE_LAG", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
-            ("TASK_FAILURE_RATE", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_LAST_RUN", 1, 6, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
+            ("DAG_SCHEDULE_LAG", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
+            ("TASK_FAILURE_RATE", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
             # Ingestion
             ("SYNC_LAG", 1, 4, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             ("FAILED_SYNCS", 1, 4, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
@@ -334,9 +356,9 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
 
     if watch_type == "orchestration_ops":
         return [
-            ("DAG_LAST_RUN", 1, 5, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
-            ("DAG_SCHEDULE_LAG", 1, 5, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
-            ("TASK_FAILURE_RATE", 2, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_LAST_RUN", 1, 5, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
+            ("DAG_SCHEDULE_LAG", 1, 5, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
+            ("TASK_FAILURE_RATE", 2, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
         ]
 
     if watch_type == "transform_ops":
@@ -363,25 +385,25 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
 
     if watch_type == "infrastructure_ops":
         return [
-            ("SERVER_HEALTH", 1, 3, lambda n, d: _domain(n) in ("infrastructure", "other")),
-            ("CERTIFICATE", 1, 3, lambda n, d: _domain(n) in ("infrastructure", "other")),
-            ("LOG_ANALYSIS", 2, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
+            ("SERVER_HEALTH", 1, 3, lambda n, d: _is_infra_node(n)),
+            ("CERTIFICATE", 1, 3, lambda n, d: _is_infra_node(n)),
+            ("LOG_ANALYSIS", 2, 2, lambda n, d: _is_infra_node(n)),
         ]
 
     if watch_type == "full_pipeline":
         return [
-            # Data assets — any domain
-            ("FRESHNESS", 1, 8, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
-            ("SCHEMA_CHANGE", 2, 5, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
-            ("VOLUME", 2, 4, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
-            ("NULL_RATE", 3, 4, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
-            ("UNIQUENESS", 3, 4, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
-            ("DISTRIBUTION", 3, 3, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
-            ("ANOMALY", 3, 3, lambda n, d: _kind(n) in _WAREHOUSE_ASSET),
+            # Data assets — any data-producing domain
+            ("FRESHNESS", 1, 8, lambda n, d: _is_data_asset(n)),
+            ("SCHEMA_CHANGE", 2, 5, lambda n, d: _is_data_asset(n)),
+            ("VOLUME", 2, 4, lambda n, d: _is_data_asset(n)),
+            ("NULL_RATE", 3, 4, lambda n, d: _is_data_asset(n)),
+            ("UNIQUENESS", 3, 4, lambda n, d: _is_data_asset(n)),
+            ("DISTRIBUTION", 3, 3, lambda n, d: _is_data_asset(n)),
+            ("ANOMALY", 3, 3, lambda n, d: _is_data_asset(n)),
             # Orchestration / control plane
-            ("DAG_LAST_RUN", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
-            ("DAG_SCHEDULE_LAG", 3, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
-            ("TASK_FAILURE_RATE", 3, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+            ("DAG_LAST_RUN", 2, 4, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
+            ("DAG_SCHEDULE_LAG", 3, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
+            ("TASK_FAILURE_RATE", 3, 3, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
             # Ingestion connectors (if in scope)
             ("SYNC_LAG", 2, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
             ("FAILED_SYNCS", 2, 3, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
@@ -398,17 +420,17 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
             ("BI_FRESHNESS_PROXY", 2, 2, lambda n, d: is_bi_node(n)),
             ("BI_CONTENT_HEALTH", 3, 2, lambda n, d: is_bi_node(n)),
             # Infrastructure
-            ("SERVER_HEALTH", 2, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
-            ("CERTIFICATE", 2, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
-            ("LOG_ANALYSIS", 3, 2, lambda n, d: _domain(n) in ("infrastructure", "other")),
+            ("SERVER_HEALTH", 2, 2, lambda n, d: _is_infra_node(n)),
+            ("CERTIFICATE", 2, 2, lambda n, d: _is_infra_node(n)),
+            ("LOG_ANALYSIS", 3, 2, lambda n, d: _is_infra_node(n)),
         ]
 
     # custom_watch — generic recipe
     return [
-        ("FRESHNESS", 2, 3, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
-        ("SCHEMA_CHANGE", 2, 2, lambda n, d: _domain(n) == "warehouse" and _kind(n) in _WAREHOUSE_ASSET),
+        ("FRESHNESS", 2, 3, lambda n, d: _is_data_asset(n)),
+        ("SCHEMA_CHANGE", 2, 2, lambda n, d: _is_data_asset(n)),
         ("SYNC_LAG", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
-        ("DAG_LAST_RUN", 2, 2, lambda n, d: _domain(n) == "orchestration" and _kind(n) in ("job", "dag", "task", "pipeline")),
+        ("DAG_LAST_RUN", 2, 2, lambda n, d: _domain(n) == "orchestration" and _kind(n) in _DAG_KINDS),
         ("DBT_TEST_FAILURES", 3, 2, lambda n, d: _domain(n) == "transform" and _kind(n) in ("model", "job", "task")),
     ]
 
@@ -636,6 +658,13 @@ def build_watch_scope(
             ("VOLUME", 2, 3, lambda n, d: True),
         ]
         _run_recipe(fallback_recipe)
+
+    # Remove already-monitored recs before capping — they would be deduped by
+    # the caller (partition_scope) anyway and must not consume cap space that's
+    # needed for genuinely new monitors.  Without this, cross-family dedup
+    # victims (e.g. SCHEMA_CHANGE already added by pipeline_health) fill the
+    # cap in data_drift, pushing out new types like DISTRIBUTION and ANOMALY.
+    recommendations = [r for r in recommendations if not r.already_monitored]
 
     # Cap total monitors
     recommendations.sort(key=lambda r: r.priority)

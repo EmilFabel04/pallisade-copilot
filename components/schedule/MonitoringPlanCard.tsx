@@ -47,18 +47,6 @@ const FAMILY_LABELS: Record<string, string> = {
   full_coverage: 'Full Coverage',
 };
 
-function timeAgo(dateStr?: string | null): string {
-  if (!dateStr) return 'Never';
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
-}
-
 export function MonitoringPlanCard({
   plan,
   onClick,
@@ -66,17 +54,15 @@ export function MonitoringPlanCard({
   onRunAll,
   onDelete,
 }: MonitoringPlanCardProps) {
+  const hasRun = plan.passCount > 0 || plan.warnCount > 0 || plan.failCount > 0 || plan.errorCount > 0;
+
   const healthStatus: HealthStatus | null =
-    plan.healthScore != null ? healthStatusFromScore(plan.healthScore) : null;
+    hasRun && plan.healthScore != null ? healthStatusFromScore(plan.healthScore) : null;
 
   const healthColor = healthStatus
     ? HEALTH_STATUS_COLORS[healthStatus]
     : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
 
-  const coveragePct =
-    plan.coveragePct != null ? Math.round(plan.coveragePct * 100) : null;
-
-  const groupCount = plan.monitorGroups?.length ?? 0;
   const totalMonitors = plan.totalMonitors;
 
   return (
@@ -194,26 +180,12 @@ export function MonitoringPlanCard({
       {/* Metrics row */}
       <div className="flex items-center gap-4 mt-2 text-[13px]">
         <div className="flex items-center gap-1">
-          <span className="text-[var(--muted)]">Groups</span>
-          <span className="text-[var(--text)] font-medium tabular-nums">
-            {groupCount}
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
           <span className="text-[var(--muted)]">Monitors</span>
           <span className="text-[var(--text)] font-medium tabular-nums">
             {totalMonitors}
           </span>
         </div>
-        {coveragePct != null && (
-          <div className="flex items-center gap-1">
-            <span className="text-[var(--muted)]">Coverage</span>
-            <span className="text-[var(--text)] font-medium tabular-nums">
-              {coveragePct}%
-            </span>
-          </div>
-        )}
-        {plan.healthScore != null && (
+        {hasRun && plan.healthScore != null && (
           <div className="flex items-center gap-1">
             <span className="text-[var(--muted)]">Health</span>
             <span className="text-[var(--text)] font-medium tabular-nums">
@@ -223,9 +195,9 @@ export function MonitoringPlanCard({
         )}
       </div>
 
-      {/* Health bar */}
+      {/* Status bar */}
       <div className="mt-3">
-        {totalMonitors > 0 ? (
+        {totalMonitors > 0 && hasRun ? (
           <div className="flex items-center gap-2 mb-1.5">
             <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden">
               <div className="flex h-full">
@@ -245,18 +217,29 @@ export function MonitoringPlanCard({
                     }}
                   />
                 )}
-                {plan.failCount > 0 && (
+                {(plan.failCount + plan.errorCount) > 0 && (
                   <div
                     className="bg-red-500/60 h-full"
                     style={{
-                      width: `${(plan.failCount / totalMonitors) * 100}%`,
+                      width: `${((plan.failCount + plan.errorCount) / totalMonitors) * 100}%`,
                     }}
                   />
                 )}
               </div>
             </div>
             <span className="text-[11px] text-[var(--muted)] shrink-0 tabular-nums">
-              {plan.passCount}/{totalMonitors} passing
+              {plan.passCount > 0 && <span className="text-emerald-400">{plan.passCount} passed</span>}
+              {plan.passCount > 0 && (plan.failCount + plan.errorCount + plan.warnCount) > 0 && ' · '}
+              {(plan.failCount + plan.errorCount) > 0 && <span className="text-red-400">{plan.failCount + plan.errorCount} failed</span>}
+              {(plan.failCount + plan.errorCount) > 0 && plan.warnCount > 0 && ' · '}
+              {plan.warnCount > 0 && <span className="text-amber-400">{plan.warnCount} warn</span>}
+            </span>
+          </div>
+        ) : totalMonitors > 0 ? (
+          <div className="flex items-center gap-2 mb-1.5">
+            <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden" />
+            <span className="text-[11px] text-[var(--muted)] shrink-0">
+              Not yet run
             </span>
           </div>
         ) : (
@@ -288,7 +271,6 @@ export function MonitoringPlanCard({
 
       {/* Footer */}
       <div className="flex items-center gap-3 mt-2 text-[11px] text-[var(--text-faint)]">
-        <span>Aggregated: {timeAgo(plan.lastAggregatedAt)}</span>
         <span
           className={cn(
             'px-1.5 py-0.5 rounded text-[10px] font-medium',

@@ -183,13 +183,18 @@ def partition_scope(
             continue
 
         # Build scope using existing engine
+        # restrictToNodeIds is partition-scoped (not the full scope set) so
+        # each partition only generates monitors for its own nodes.  The
+        # maxMonitors cap scales with the partition size so every node can
+        # get its full set of applicable monitors.
+        effective_max_monitors = max(max_monitors, len(node_ids) * 8)
         scope_config = {
             "maxDepth": 10,  # Use large depth since we constrain by node set
             "maxNodes": len(node_ids),
-            "maxMonitors": max_monitors,
+            "maxMonitors": effective_max_monitors,
             "domainFilters": [],
             "includeNodeIds": list(node_ids),
-            "restrictToNodeIds": list(scope_set),  # Only generate monitors for user-selected nodes
+            "restrictToNodeIds": list(node_ids),  # Only generate monitors for this partition's nodes
         }
         scope_result = build_watch_scope(
             graph=graph,

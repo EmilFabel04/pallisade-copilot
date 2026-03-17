@@ -120,16 +120,22 @@ class SchedulerService:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, name, "taskMode", prompt, "monitorType",
-                           "targetFqn", config, schedule, "alertChannels",
-                           "alertConfig", "alertOnStatus", timezone,
-                           "integrationId", "organizationId",
-                           "baselineMean", "baselineStddev", "baselineCount"
-                    FROM "Monitor"
-                    WHERE enabled = true
-                      AND "nextRunAt" IS NOT NULL
-                      AND "nextRunAt" <= %s
-                    ORDER BY "nextRunAt" ASC
+                    SELECT m.id, m.name, m."taskMode", m.prompt, m."monitorType",
+                           m."targetFqn", m.config, m.schedule, m."alertChannels",
+                           m."alertConfig", m."alertOnStatus", m.timezone,
+                           m."integrationId", m."organizationId",
+                           m."baselineMean", m."baselineStddev", m."baselineCount",
+                           m."monitorGroupId",
+                           mg.name AS "groupName",
+                           mg."monitoringPlanId",
+                           mp.name AS "planName"
+                    FROM "Monitor" m
+                    LEFT JOIN "MonitorGroup" mg ON m."monitorGroupId" = mg.id
+                    LEFT JOIN "MonitoringPlan" mp ON mg."monitoringPlanId" = mp.id
+                    WHERE m.enabled = true
+                      AND m."nextRunAt" IS NOT NULL
+                      AND m."nextRunAt" <= %s
+                    ORDER BY m."nextRunAt" ASC
                     LIMIT 50
                     """,
                     (now,),
@@ -142,17 +148,34 @@ class SchedulerService:
 
             logger.info(f"[Scheduler] Found {len(rows)} due tasks")
 
+            # Execute all tasks and collect results for group-level summary alerts
+            group_results: Dict[str, List[Dict[str, Any]]] = {}  # groupId -> [{task, result, status}]
+
             for row in rows:
                 task = dict(zip(col_names, row))
-                await self._execute_task(task, conn)
+                result = await self._execute_task(task, conn)
+                # Buffer results for monitors that belong to a group/plan
+                group_id = task.get("monitorGroupId")
+                if group_id and result:
+                    if group_id not in group_results:
+                        group_results[group_id] = []
+                    group_results[group_id].append({
+                        "task": task,
+                        "result": result,
+                        "status": (result.get("status", "ERROR")).upper(),
+                    })
+
+            # Send summary alerts per group (instead of per-monitor)
+            for group_id, items in group_results.items():
+                await self._dispatch_group_summary_alert(group_id, items)
 
         except Exception as e:
             logger.error(f"[Scheduler] Failed to check due tasks: {e}")
         finally:
             conn.close()
 
-    async def _execute_task(self, task: Dict[str, Any], conn):
-        """Execute a single task and save the result."""
+    async def _execute_task(self, task: Dict[str, Any], conn) -> Optional[Dict[str, Any]]:
+        """Execute a single task and save the result. Returns the result dict."""
         from .executor import TaskExecutor
 
         task_id = task["id"]
@@ -302,39 +325,42 @@ class SchedulerService:
             except Exception as baseline_err:
                 logger.debug(f"[Scheduler] Baseline record skipped: {baseline_err}")
 
-            # Evaluate whether to send an alert (with dedup/suppression)
-            from .alert_engine import AlertEngine
-            alert_engine = AlertEngine()
-            decision = alert_engine.evaluate(task, result)
+            # For standalone monitors (no group), dispatch alert immediately.
+            # For group monitors, the caller buffers results and sends a summary.
+            if not task.get("monitorGroupId"):
+                from .alert_engine import AlertEngine
+                alert_engine = AlertEngine()
+                decision = alert_engine.evaluate(task, result)
 
-            if decision.should_alert:
-                await self._dispatch_alert(task, result)
-                # Update alert tracking fields
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            UPDATE "Monitor"
-                            SET "lastAlertStatus" = %s,
-                                "lastAlertAt" = %s
-                            WHERE id = %s
-                            """,
-                            (status, end_time, task_id),
-                        )
-                        conn.commit()
-                except Exception:
-                    pass  # Alert tracking update is best-effort
-            elif decision.suppressed:
-                logger.info(
-                    f"[Scheduler] Alert suppressed: {task_name}",
-                    reason=decision.reason,
-                )
+                if decision.should_alert:
+                    await self._dispatch_alert(task, result)
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE "Monitor"
+                                SET "lastAlertStatus" = %s,
+                                    "lastAlertAt" = %s
+                                WHERE id = %s
+                                """,
+                                (status, end_time, task_id),
+                            )
+                            conn.commit()
+                    except Exception:
+                        pass
+                elif decision.suppressed:
+                    logger.info(
+                        f"[Scheduler] Alert suppressed: {task_name}",
+                        reason=decision.reason,
+                    )
 
             logger.info(
                 f"[Scheduler] Task completed: {task_name}",
                 status=status,
                 duration_ms=duration_ms,
             )
+
+            return result
 
         except Exception as e:
             logger.error(f"[Scheduler] Task execution failed: {task_name}: {e}")
@@ -371,6 +397,121 @@ class SchedulerService:
                     conn.commit()
             except Exception as save_err:
                 logger.error(f"[Scheduler] Failed to save error result: {save_err}")
+            return None
+
+    async def _dispatch_group_summary_alert(
+        self,
+        group_id: str,
+        items: List[Dict[str, Any]],
+    ):
+        """Send a single summary alert for all monitors in a group/plan.
+
+        Instead of N individual alerts, sends one summary like:
+        "Full Lineage: 10 passed, 5 failed, 2 warned (17 monitors)"
+        """
+        if not items:
+            return
+
+        # Use the first task for alert config (group-level settings propagate)
+        first_task = items[0]["task"]
+        alert_channels = first_task.get("alertChannels") or []
+        alert_on = first_task.get("alertOnStatus") or []
+
+        if not alert_channels:
+            return
+
+        # Count statuses
+        pass_count = sum(1 for i in items if i["status"] == "PASS")
+        fail_count = sum(1 for i in items if i["status"] == "FAIL")
+        warn_count = sum(1 for i in items if i["status"] == "WARN")
+        error_count = sum(1 for i in items if i["status"] == "ERROR")
+        total = len(items)
+
+        # Only alert if there are statuses matching alertOnStatus
+        triggered_statuses = set(i["status"] for i in items) & set(alert_on)
+        if not triggered_statuses:
+            return
+
+        # Determine worst status for severity
+        worst = "PASS"
+        for s in ("FAIL", "ERROR", "WARN"):
+            if any(i["status"] == s for i in items):
+                worst = s
+                break
+
+        # Build summary
+        plan_name = first_task.get("planName") or first_task.get("groupName") or "Monitoring Plan"
+
+        parts = []
+        if pass_count > 0:
+            parts.append(f"{pass_count} passed")
+        if fail_count > 0:
+            parts.append(f"{fail_count} failed")
+        if error_count > 0:
+            parts.append(f"{error_count} errored")
+        if warn_count > 0:
+            parts.append(f"{warn_count} warned")
+
+        summary_line = ", ".join(parts)
+        message = f"{plan_name}: {summary_line} ({total} monitors)"
+
+        # Add details for failed/warned monitors
+        problem_monitors = [
+            i for i in items if i["status"] in ("FAIL", "ERROR", "WARN")
+        ]
+        if problem_monitors:
+            details_lines = []
+            for i in problem_monitors[:10]:  # Cap at 10 to avoid huge messages
+                t = i["task"]
+                r = i["result"]
+                details_lines.append(
+                    f"- {t.get('name', '?')}: {i['status']} — {r.get('message', '')}"
+                )
+            if len(problem_monitors) > 10:
+                details_lines.append(f"  ... and {len(problem_monitors) - 10} more")
+            message += "\n\n" + "\n".join(details_lines)
+
+        try:
+            import httpx
+
+            nextjs_url = os.environ.get("NEXTAUTH_URL", "http://localhost:3000")
+            alert_url = f"{nextjs_url}/api/schedule/alert"
+
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    alert_url,
+                    json={
+                        "taskId": group_id,
+                        "taskName": plan_name,
+                        "status": worst,
+                        "message": message,
+                        "channels": alert_channels,
+                        "config": first_task.get("alertConfig"),
+                        "organizationId": first_task.get("organizationId"),
+                        "grouped": True,
+                        "grouped_count": total,
+                        "summary": {
+                            "total": total,
+                            "pass": pass_count,
+                            "fail": fail_count,
+                            "warn": warn_count,
+                            "error": error_count,
+                        },
+                    },
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"[Scheduler] Group alert dispatch failed: {resp.status_code}"
+                    )
+                else:
+                    logger.info(
+                        f"[Scheduler] Group summary alert sent: {plan_name}",
+                        total=total,
+                        pass_count=pass_count,
+                        fail_count=fail_count,
+                    )
+        except Exception as e:
+            logger.warning(f"[Scheduler] Group alert dispatch error: {e}")
 
     @staticmethod
     def _baseline_metric_name(monitor_type: str, task: Dict[str, Any]) -> str:
