@@ -66,6 +66,8 @@ export async function POST(
 
     const { taskId } = await params;
     const organizationId = (session.user as any).organizationId;
+    const baseUrl = request.nextUrl?.origin || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    const cookie = request.headers.get('cookie') || '';
 
     const task = await prisma.monitor.findFirst({
       where: { id: taskId, organizationId },
@@ -314,6 +316,43 @@ export async function POST(
       };
     }
 
+    // --- Resolve policy for runtime enforcement ---
+    let policyConfig: Record<string, any> | null = null;
+    const policyOverrides: string[] = (task.policyOverrides as string[]) || [];
+
+    if (task.targetFqn && !isInfra && !isTool) {
+      try {
+        const policyRes = await fetch(`${baseUrl}/api/schedule/policies/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', cookie },
+          body: JSON.stringify({
+            nodes: [{ fqn: task.targetFqn, domain: 'warehouse', criticality: 'medium' }],
+            stackId: undefined,
+          }),
+        });
+        if (policyRes.ok) {
+          const policyData = await policyRes.json();
+          const resolved = policyData.policies?.[task.targetFqn];
+          if (resolved) {
+            // Flatten policy sections into a single config dict
+            policyConfig = {
+              ...resolved.freshness,
+              ...resolved.schema,
+              ...resolved.volume,
+              ...resolved.anomaly,
+              ...resolved.quality,
+              ...resolved.ingestion,
+              ...resolved.bi,
+              ...resolved.orchestration,
+              ...resolved.transform,
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('[Schedule] Policy resolution failed (non-fatal):', err);
+      }
+    }
+
     // Call the Python backend to execute
     const startedAt = new Date();
 
@@ -331,6 +370,8 @@ export async function POST(
         integration_id: task.integrationId,
         organization_id: organizationId,
         integration_config: integrationConfig,
+        policy_config: policyConfig,
+        policy_overrides: policyOverrides,
       }),
     });
 
