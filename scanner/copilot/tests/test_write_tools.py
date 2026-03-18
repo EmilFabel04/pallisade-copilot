@@ -68,7 +68,7 @@ async def test_create_watch_modal_tier_for_many_monitors():
 
 @pytest.mark.asyncio
 async def test_create_watch_executes_when_confirmed():
-    """When confirmed_data is passed, create_watch should call the API."""
+    """When confirmed_data is passed, create_watch should call the 3-step pipeline."""
     from scanner.copilot.tool_executor import ToolExecutor, ToolResult
 
     mock_context = MagicMock()
@@ -77,6 +77,8 @@ async def test_create_watch_executes_when_confirmed():
     mock_context.org_id = "org_123"
     mock_context.base_url = "http://localhost:3000"
     mock_context.auth_token = "test-token"
+    mock_context.pipeline_stack_id = ""
+    mock_context.graph = None
 
     executor = ToolExecutor(mock_context)
 
@@ -89,22 +91,40 @@ async def test_create_watch_executes_when_confirmed():
         "timezone": "UTC",
     }
 
-    mock_response = AsyncMock()
-    mock_response.status = 200
-    mock_response.json = AsyncMock(return_value={
-        "watch": {"id": "w_456", "name": "Orders Health", "monitorCount": 1}
-    })
-    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
-    mock_response.__aexit__ = AsyncMock(return_value=False)
+    # Mock the 3-step pipeline: preview, policy resolve, plans create
+    preview_response = {
+        "groups": [{
+            "anchor_name": "orders",
+            "anchor_fqn": "analytics.public.orders",
+            "anchor_id": "",
+            "anchor_node_type": "table",
+            "anchor_platform": "bigquery",
+            "watch_type": "pipeline_health",
+            "recommendations": [{
+                "monitor_key": "FRESHNESS",
+                "target_fqn": "analytics.public.orders",
+                "config_hints": {"max_hours": 24},
+            }],
+        }],
+    }
+    policy_response = {"policies": {}}
+    plans_response = {"id": "plan_123", "name": "Orders Health", "totalMonitors": 1}
 
-    mock_session = AsyncMock()
-    mock_session.post = MagicMock(return_value=mock_response)
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
+    async def mock_call_fastapi(path, body):
+        if "preview" in path:
+            return preview_response
+        if "policies" in path:
+            return policy_response
+        return {}
 
-    with patch("aiohttp.ClientSession", return_value=mock_session):
+    async def mock_call_nextjs(path, body):
+        return plans_response
+
+    with patch.object(executor, '_call_fastapi', side_effect=mock_call_fastapi), \
+         patch.object(executor, '_call_nextjs', side_effect=mock_call_nextjs):
         result = await executor.execute_confirmed("create_watch", confirmed_data)
 
     assert isinstance(result, ToolResult)
     assert result.success is True
-    assert result.data["watchId"] == "w_456"
+    assert result.data["planId"] == "plan_123"
+    assert result.data["monitorCount"] == 1

@@ -841,106 +841,156 @@ class ToolExecutor:
             logger.exception(f"Error executing confirmed {tool_name}")
             return ToolResult(success=False, error=str(e))
 
-    async def _execute_confirmed_create_watch(self, data: Dict[str, Any]) -> ToolResult:
-        """Create standalone monitors via the tasks API (no watch group)."""
+    # ---- HTTP helpers for 3-step pipeline ----
+
+    async def _call_fastapi(self, path: str, body: dict) -> dict:
+        """POST to FastAPI (scanner) endpoint."""
+        import aiohttp
+        base = "http://127.0.0.1:8000"
+        stack_id = getattr(self.context, 'pipeline_stack_id', '') or ''
+        url = f"{base}{path}"
+        if stack_id:
+            separator = '&' if '?' in url else '?'
+            url += f"{separator}stack_id={stack_id}"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=body, headers={"Content-Type": "application/json"}) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise Exception(f"FastAPI {path} failed ({resp.status}): {error}")
+                return await resp.json()
+
+    async def _call_nextjs(self, path: str, body: dict) -> dict:
+        """POST to Next.js endpoint with internal auth."""
         import aiohttp
         import os
-
-        base_url = self.context.base_url
+        url = f"{self.context.base_url}{path}"
         headers = {
             "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
             "X-Organization-Id": self.context.org_id,
             "Content-Type": "application/json",
         }
-
-        # Resolve policies for target FQNs to enrich monitor configs
-        policy_configs = {}
-        try:
-            from scanner.monitors.policy_resolver import build_policy_map
-            target_fqns = set()
-            for mon in data.get("monitors", []):
-                fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
-                if fqn:
-                    target_fqns.add(fqn)
-
-            if target_fqns and hasattr(self.context, 'graph') and self.context.graph:
-                nodes_for_policy = [
-                    node for node in self.context.graph.nodes
-                    if hasattr(node, 'fqn') and node.fqn in target_fqns
-                ]
-                if nodes_for_policy:
-                    policy_map = build_policy_map(nodes_for_policy)
-                    for fqn, policy in policy_map.items():
-                        policy_configs[fqn] = {
-                            k: v for k, v in {
-                                "max_hours": getattr(policy, 'freshness_max_hours', None),
-                                "warning_hours": getattr(policy, 'freshness_warning_hours', None),
-                                "anomaly_threshold": getattr(policy, 'anomaly_sensitivity', None),
-                                "lookback_days": getattr(policy, 'anomaly_lookback_days', None),
-                                "strictness": getattr(policy, 'schema_strictness', None),
-                            }.items() if v is not None
-                        }
-        except Exception as e:
-            logger.warning(f"[CreateMonitor] Policy resolution failed (non-fatal): {e}")
-
-        schedule = data.get("schedule", "0 * * * *")
-        timezone = data.get("timezone", "UTC")
-        raw_monitors = data.get("monitors", [])
-        created = []
-        errors = []
-
         async with aiohttp.ClientSession() as session:
-            for mon in raw_monitors:
-                target_fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
-                monitor_type = mon.get("monitorType") or mon.get("monitor_type") or ""
-                base_config = mon.get("config", {})
+            async with session.post(url, json=body, headers=headers) as resp:
+                if resp.status not in (200, 201):
+                    error = await resp.text()
+                    raise Exception(f"Next.js {path} failed ({resp.status}): {error}")
+                return await resp.json()
 
-                # Merge policy config (policy provides defaults, explicit config overrides)
-                if target_fqn in policy_configs:
-                    merged_config = {**policy_configs[target_fqn], **base_config}
-                else:
-                    merged_config = base_config
+    def _resolve_fqn_to_node_id(self, fqn: str) -> str:
+        """Look up node ID from lineage graph."""
+        if hasattr(self.context, 'graph') and self.context.graph:
+            for node in self.context.graph.nodes:
+                if hasattr(node, 'fqn') and node.fqn == fqn:
+                    return getattr(node, 'id', '') or getattr(node, 'node_id', '') or ''
+        return ''
 
-                monitor_name = mon.get("name") or f"{monitor_type} — {target_fqn}"
+    def _merge_policy_into_groups(self, groups: list, policies: dict) -> list:
+        """Merge resolved policy configs into group recommendations.
 
-                body = {
-                    "name": monitor_name,
-                    "taskMode": "structured",
-                    "monitorType": monitor_type,
-                    "targetFqn": target_fqn,
-                    "config": merged_config,
-                    "schedule": schedule,
-                    "timezone": timezone,
-                }
+        The /policies/resolve endpoint returns nested sections:
+          { "fqn": { freshness: {maxHours: 2}, schema: {strictness: "strict"}, ... } }
 
-                try:
-                    url = f"{base_url}/api/schedule/tasks"
-                    async with session.post(url, json=body, headers=headers) as resp:
-                        if resp.status not in (200, 201):
-                            error_body = await resp.text()
-                            errors.append(f"{monitor_type} on {target_fqn}: {error_body}")
-                        else:
-                            result = await resp.json()
-                            task = result.get("task", {})
-                            created.append({
-                                "id": task.get("id"),
-                                "name": task.get("name"),
-                                "monitorType": task.get("monitorType"),
-                                "targetFqn": task.get("targetFqn"),
-                            })
-                except Exception as e:
-                    errors.append(f"{monitor_type} on {target_fqn}: {str(e)}")
+        merge_policy_config() expects flat policy-field keys:
+          { "freshness_max_hours": 2, "schema_strictness": "strict", ... }
 
-        if errors and not created:
-            return ToolResult(success=False, error=f"Monitor creation failed: {'; '.join(errors)}")
+        We flatten the nested structure before calling merge_policy_config.
+        """
+        from scanner.monitors.policy_config import merge_policy_config
+        policy_map = policies.get("policies", {})
+
+        def _flatten_policy(nested: dict) -> dict:
+            """Convert nested {section: {field: val}} to flat {section_field: val}."""
+            flat = {}
+            for section, fields in nested.items():
+                if isinstance(fields, dict):
+                    for key, val in fields.items():
+                        # Convert camelCase to snake_case: maxHours -> max_hours
+                        snake_key = ''.join(f'_{c.lower()}' if c.isupper() else c for c in key)
+                        flat[f"{section}_{snake_key}"] = val
+                # Skip non-dict fields like 'source', 'profileId', 'status'
+            return flat
+
+        for group in groups:
+            for rec in group.get("recommendations", []):
+                fqn = rec.get("target_fqn", "")
+                policy = policy_map.get(fqn)
+                if policy and rec.get("monitor_key"):
+                    flat_policy = _flatten_policy(policy)
+                    merged, _ = merge_policy_config(
+                        monitor_type=rec["monitor_key"],
+                        config=rec.get("config_hints", {}),
+                        policy_config=flat_policy,
+                        policy_overrides=[],
+                    )
+                    rec["config_hints"] = merged
+        return groups
+
+    # ---- Monitor creation via unified 3-step pipeline ----
+
+    async def _execute_confirmed_create_watch(self, data: Dict[str, Any]) -> ToolResult:
+        """Create monitors via the unified 3-step pipeline."""
+        anchor_fqn = data.get("anchorFqn") or data.get("anchor_fqn") or ""
+        node_id = self._resolve_fqn_to_node_id(anchor_fqn)
+        monitors = data.get("monitors", [])
+
+        # Normalize monitor types
+        monitor_types = []
+        for mon in monitors:
+            mt = mon.get("monitorType") or mon.get("monitor_type") or ""
+            monitor_types.append(mt)
+
+        try:
+            # Step 1: Preview
+            manual_selections = {node_id: monitor_types} if node_id else {}
+            preview = await self._call_fastapi("/api/v1/monitors/plans/preview", {
+                "scope_type": "asset",
+                "scope_config": {"nodeIds": [node_id]} if node_id else {},
+                "mode": "manual",
+                "manual_selections": manual_selections,
+                "families": [],
+            })
+        except Exception as e:
+            logger.error(f"[CreateMonitor] Preview failed: {e}")
+            return ToolResult(success=False, error=f"Preview failed: {e}")
+
+        # Step 2: Policy resolve (non-fatal)
+        policies = {}
+        try:
+            policies = await self._call_fastapi("/api/v1/policies/resolve", {
+                "nodes": [{"fqn": anchor_fqn}],
+                "stackId": getattr(self.context, 'pipeline_stack_id', ''),
+            })
+        except Exception as e:
+            logger.warning(f"[CreateMonitor] Policy resolve failed (non-fatal): {e}")
+
+        # Merge policy into groups
+        groups = preview.get("groups", [])
+        if policies:
+            groups = self._merge_policy_into_groups(groups, policies)
+
+        try:
+            # Step 3: Create plan
+            result = await self._call_nextjs("/api/schedule/plans", {
+                "name": data.get("name", "Copilot Monitor"),
+                "scopeType": "asset",
+                "scopeConfig": {"nodeIds": [node_id]} if node_id else {},
+                "mode": "manual",
+                "families": [],
+                "schedule": data.get("schedule", "0 * * * *"),
+                "timezone": data.get("timezone", "UTC"),
+                "groups": groups,
+            })
+        except Exception as e:
+            logger.error(f"[CreateMonitor] Plan creation failed: {e}")
+            return ToolResult(success=False, error=f"Monitor creation failed: {e}")
 
         return ToolResult(
             success=True,
             data={
-                "created": created,
-                "monitorCount": len(created),
-                "errors": errors if errors else None,
-                "message": f"Created {len(created)} monitor(s)" + (f" ({len(errors)} failed)" if errors else ""),
+                "planId": result.get("id"),
+                "name": result.get("name"),
+                "monitorCount": result.get("totalMonitors", len(monitors)),
+                "message": f"Created {result.get('totalMonitors', 0)} monitor(s) in plan '{result.get('name')}'",
             }
         )
 
