@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
+import { UIArtifact } from '@/types/artifacts';
 
 export interface StreamingToolCall {
   id: string;
@@ -31,6 +32,7 @@ export interface StreamingMessage {
   inputTokens: number;
   outputTokens: number;
   stopReason: string;
+  artifacts: UIArtifact[];
 }
 
 interface PendingToolCall {
@@ -91,6 +93,7 @@ export function useStreamingChat() {
       inputTokens: 0,
       outputTokens: 0,
       stopReason: '',
+      artifacts: [],
     });
 
     let sessionId: string | null = null;
@@ -226,6 +229,15 @@ export function useStreamingChat() {
                 } : prev
               );
               break;
+
+            case 'ui_artifact': {
+              const artifact = data as UIArtifact;
+              setStreamingMessage(prev => prev ? {
+                ...prev,
+                artifacts: [...prev.artifacts, artifact],
+              } : prev);
+              break;
+            }
 
             case 'error':
               setStreamingMessage(prev =>
