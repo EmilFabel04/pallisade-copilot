@@ -48,6 +48,7 @@ export async function GET(
         lastRunAt: m.lastRunAt?.toISOString() ?? null,
         schedule: m.schedule,
         config: m.config,
+        policyOverrides: (m as any).policyOverrides || [],
         lastRun: lastRun
           ? {
               id: lastRun.id,
@@ -61,6 +62,46 @@ export async function GET(
           : null,
       };
     });
+
+    // Resolve policies for all monitor targets (bulk, deduplicated)
+    const uniqueFqns = [
+      ...new Set(
+        group.monitors
+          .map((m) => m.targetFqn)
+          .filter(Boolean) as string[]
+      ),
+    ];
+
+    let resolvedPolicies: Record<string, any> = {};
+    if (uniqueFqns.length > 0) {
+      try {
+        const baseUrl = request.nextUrl?.origin || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+        const cookie = request.headers.get('cookie') || '';
+        const policyRes = await fetch(`${baseUrl}/api/schedule/policies/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', cookie },
+          body: JSON.stringify({
+            nodes: uniqueFqns.map((fqn) => ({
+              fqn,
+              domain: 'warehouse',
+              criticality: 'medium',
+            })),
+          }),
+        });
+        if (policyRes.ok) {
+          const data = await policyRes.json();
+          resolvedPolicies = data.policies || {};
+        }
+      } catch (err) {
+        console.warn('[Watch] Policy resolution failed (non-fatal):', err);
+      }
+    }
+
+    // Attach resolved policy to each monitor
+    const monitorsWithPolicy = monitors.map((m) => ({
+      ...m,
+      resolvedPolicy: m.targetFqn ? resolvedPolicies[m.targetFqn] || null : null,
+    }));
 
     return NextResponse.json({
       watch: {
@@ -86,11 +127,11 @@ export async function GET(
         coveragePct: group.coveragePct,
         lastHealthAt: group.lastHealthAt?.toISOString() ?? null,
         createdAt: group.createdAt.toISOString(),
-        monitorCount: monitors.length,
-        passCount: monitors.filter((m) => m.lastStatus === 'PASS').length,
-        failCount: monitors.filter((m) => m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR').length,
-        warnCount: monitors.filter((m) => m.lastStatus === 'WARN').length,
-        monitors,
+        monitorCount: monitorsWithPolicy.length,
+        passCount: monitorsWithPolicy.filter((m) => m.lastStatus === 'PASS').length,
+        failCount: monitorsWithPolicy.filter((m) => m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR').length,
+        warnCount: monitorsWithPolicy.filter((m) => m.lastStatus === 'WARN').length,
+        monitors: monitorsWithPolicy,
       },
     });
   } catch (error: any) {
