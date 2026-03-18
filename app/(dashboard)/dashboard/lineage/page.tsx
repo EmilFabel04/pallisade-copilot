@@ -2327,24 +2327,7 @@ function LineagePageInner() {
       <CreateTaskModal
         open={promptModalOpen}
         onClose={() => setPromptModalOpen(false)}
-        onSubmit={async (task) => {
-          try {
-            const res = await fetch('/api/schedule/tasks', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(task),
-            });
-            if (!res.ok) {
-              const err = await res.json().catch(() => ({}));
-              console.error('[Lineage] Monitor creation failed:', res.status, err);
-              return;
-            }
-            invalidateCache('/api/schedule');
-          } catch (err) {
-            console.error('[Lineage] Submit error:', err);
-          }
-          setPromptModalOpen(false);
-        }}
+        onComplete={() => invalidateCache('/api/schedule')}
         stackId={stackId || undefined}
         initialMode="prompt"
       />

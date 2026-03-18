@@ -240,14 +240,6 @@ export default function SchedulePage() {
     } catch (err) { console.error('[Schedule] Failed to remove monitor:', err); }
   };
 
-  // Tasks
-  const handleCreateTask = async (taskData: any) => {
-    try {
-      const res = await fetch('/api/schedule/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(taskData) });
-      if (res.ok) { setShowMonitorModal(false); fetchTasks(); }
-    } catch (err) { console.error('[Schedule] Failed to create:', err); }
-  };
-
   const handleToggleEnabled = async (taskId: string, enabled: boolean) => {
     try {
       await fetch(`/api/schedule/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
@@ -345,7 +337,7 @@ export default function SchedulePage() {
           <h3 className="text-[14px] font-medium text-[var(--text)] mb-3">Run History</h3>
           <RunHistoryTable runs={taskRuns} loading={runsLoading} taskName={selectedTask.name} monitorType={selectedTask.monitorType} targetFqn={selectedTask.targetFqn} />
         </div>
-        <CreateTaskModal open={!!editingTask} onClose={() => setEditingTask(null)} onSubmit={handleCreateTask} onUpdate={handleUpdateTask} editTask={editingTask} integrations={integrations} stackId={selectedPipeline?.id} />
+        <CreateTaskModal open={!!editingTask} onClose={() => setEditingTask(null)} onUpdate={handleUpdateTask} onComplete={refreshAll} editTask={editingTask} integrations={integrations} stackId={selectedPipeline?.id} />
       </div>
     );
   }
@@ -457,7 +449,7 @@ export default function SchedulePage() {
       {/* Modals */}
       <MultiMonitorModal open={showMonitorModal} onClose={() => setShowMonitorModal(false)} onComplete={refreshAll} stackId={selectedPipeline?.id} integrations={integrations} />
       {/* Edit modal for existing tasks (opened from task detail view) */}
-      <CreateTaskModal open={!!editingTask} onClose={() => setEditingTask(null)} onSubmit={handleCreateTask} onUpdate={handleUpdateTask} editTask={editingTask} integrations={integrations} stackId={selectedPipeline?.id} />
+      <CreateTaskModal open={!!editingTask} onClose={() => setEditingTask(null)} onUpdate={handleUpdateTask} onComplete={refreshAll} editTask={editingTask} integrations={integrations} stackId={selectedPipeline?.id} />
     </div>
   );
 }
