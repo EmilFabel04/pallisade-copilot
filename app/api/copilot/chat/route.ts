@@ -414,7 +414,7 @@ async function handleStreamingChat(
 
     confirmedArtifacts = {
       [artifactId]: {
-        _tool_name: toolName,
+        tool_name: toolName,
         ...(editedData || {}),
       },
     };

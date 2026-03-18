@@ -230,13 +230,15 @@ function AssistantPageInner() {
   } = useStreamingChat();
 
   const handleArtifactConfirm = useCallback(async (artifactId: string, editedData?: Record<string, any>) => {
-    const artifact = streamingMessage?.artifacts.find(a => a.artifact_id === artifactId);
+    // Search in streaming message first, then in finalized messages
+    const artifact = streamingMessage?.artifacts.find(a => a.artifact_id === artifactId)
+      || messages.flatMap(m => m.artifacts || []).find(a => a.artifact_id === artifactId);
     if (!artifact) return;
 
     const toolName = artifact.tool_name || 'create_watch';
-    const actionMessage = editedData
-      ? `__action:confirm:${artifactId}:${toolName}:${JSON.stringify(editedData)}`
-      : `__action:confirm:${artifactId}:${toolName}`;
+    // Always include artifact data so the confirmed handler has the fields it needs
+    const dataToSend = editedData || artifact.data;
+    const actionMessage = `__action:confirm:${artifactId}:${toolName}:${JSON.stringify(dataToSend)}`;
 
     await sendStreamingMessage(actionMessage, {
       sessionId: sessionId || undefined,
