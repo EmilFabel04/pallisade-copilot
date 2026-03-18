@@ -42,6 +42,7 @@ export async function PUT(
       updateData.config = config;
     }
 
+    // Store policyOverrides if the column exists (requires migration)
     if (policyOverrides !== undefined) {
       if (
         !Array.isArray(policyOverrides) ||
@@ -55,10 +56,24 @@ export async function PUT(
       updateData.policyOverrides = policyOverrides;
     }
 
-    const updated = await prisma.monitor.update({
-      where: { id: monitorId },
-      data: updateData,
-    });
+    // Try update — if policyOverrides column doesn't exist yet, retry without it
+    let updated;
+    try {
+      updated = await prisma.monitor.update({
+        where: { id: monitorId },
+        data: updateData,
+      });
+    } catch (err: any) {
+      if (updateData.policyOverrides !== undefined && err?.message?.includes('policyOverrides')) {
+        delete updateData.policyOverrides;
+        updated = await prisma.monitor.update({
+          where: { id: monitorId },
+          data: updateData,
+        });
+      } else {
+        throw err;
+      }
+    }
 
     return NextResponse.json({ monitor: updated });
   } catch (error: any) {

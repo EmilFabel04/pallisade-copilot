@@ -14,6 +14,8 @@ import {
   type HealthStatus,
 } from '@/types/health-watch';
 import { MonitorEditPanel } from '@/components/schedule/MonitorEditPanel';
+import { WatchEditModal } from '@/components/schedule/WatchEditModal';
+import { Settings } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +61,7 @@ export default function PlanDetailPage() {
   const [monitorRuns, setMonitorRuns] = useState<Record<string, TaskRun[]>>({});
   const [monitorRunsLoading, setMonitorRunsLoading] = useState<Record<string, boolean>>({});
   const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
+  const [showPlanEditModal, setShowPlanEditModal] = useState(false);
 
   // Fetch plan data
   const fetchPlan = useCallback(async () => {
@@ -221,6 +224,13 @@ export default function PlanDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowPlanEditModal(true)}
+            className="p-1.5 rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors"
+            title="Edit plan settings"
+          >
+            <Settings size={16} />
+          </button>
           <button
             onClick={() => handleToggleEnabled(!plan.enabled)}
             className={cn(
@@ -443,6 +453,30 @@ export default function PlanDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Plan edit modal */}
+      {showPlanEditModal && (
+        <WatchEditModal
+          watch={{
+            id: plan.id,
+            name: plan.name,
+            schedule: plan.schedule,
+            timezone: plan.timezone,
+            alertChannels: [],
+            alertOnStatus: [],
+            enabled: plan.enabled,
+          }}
+          onSave={async (data: Record<string, any>) => {
+            await fetch(`/api/schedule/plans/${planId}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data),
+            });
+            fetchPlan();
+          }}
+          onClose={() => setShowPlanEditModal(false)}
+        />
+      )}
     </div>
   );
 }
