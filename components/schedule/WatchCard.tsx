@@ -1,7 +1,10 @@
 'use client';
 
+import { useState } from 'react';
+import { Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WatchSummary } from '@/types/health-watch';
+import WatchEditModal from './WatchEditModal';
 import {
   WATCH_TYPE_LABELS,
   HEALTH_STATUS_COLORS,
@@ -25,7 +28,7 @@ const WATCH_TYPE_COLORS: Record<string, string> = {
   source_guard: 'bg-emerald-500/15 text-emerald-400',
   model_quality: 'bg-amber-500/15 text-amber-400',
   data_drift: 'bg-orange-500/15 text-orange-400',
-  custom_watch: 'bg-white/10 text-white/50',
+  custom_watch: 'bg-[var(--overlay-medium)] text-[var(--muted)]',
 };
 
 function cronToHuman(cron: string): string {
@@ -52,6 +55,8 @@ function timeAgo(dateStr?: string | null): string {
 }
 
 export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCardProps) {
+  const [showEditModal, setShowEditModal] = useState(false);
+
   const healthStatus: HealthStatus | null = watch.healthScore != null
     ? healthStatusFromScore(watch.healthScore)
     : null;
@@ -124,6 +129,13 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowEditModal(true); }}
+            className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] opacity-0 group-hover:opacity-100 transition-all"
+            title="Edit watch settings"
+          >
+            <Settings size={14} />
           </button>
           <button
             onClick={() => onToggleEnabled(!watch.enabled)}
@@ -211,6 +223,28 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
           </span>
         )}
       </div>
+
+      {showEditModal && (
+        <WatchEditModal
+          watch={{
+            id: watch.id,
+            name: watch.name,
+            schedule: watch.schedule,
+            timezone: watch.timezone,
+            alertChannels: watch.alertChannels || [],
+            alertOnStatus: watch.alertOnStatus || [],
+            enabled: watch.enabled,
+          }}
+          onSave={async (data) => {
+            await fetch(`/api/schedule/watches/${watch.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data),
+            });
+          }}
+          onClose={() => setShowEditModal(false)}
+        />
+      )}
     </div>
   );
 }

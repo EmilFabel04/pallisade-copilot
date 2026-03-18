@@ -17,6 +17,7 @@ import {
 import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { TaskRun } from '@/types/schedule';
 import { RunHistoryTable } from './RunHistoryTable';
+import MonitorEditPanel from './MonitorEditPanel';
 
 interface WatchDetailPanelProps {
   watch: WatchSummary;
@@ -70,6 +71,7 @@ export function WatchDetailPanel({
   const failureGroups = healthReport?.failureGroups || [];
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
   const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
+  const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
   const [monitorRuns, setMonitorRuns] = useState<Record<string, TaskRun[]>>({});
   const [monitorRunsLoading, setMonitorRunsLoading] = useState<Record<string, boolean>>({});
 
@@ -382,8 +384,40 @@ export function WatchDetailPanel({
                         monitorType={mon.monitorType}
                         targetFqn={mon.targetFqn}
                       />
-                      {onRemoveMonitor && (
-                        <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex justify-end">
+                      {editingMonitorId === mon.id && (
+                        <MonitorEditPanel
+                          monitor={{
+                            id: mon.id,
+                            name: mon.name,
+                            monitorType: mon.monitorType || '',
+                            targetFqn: mon.targetFqn,
+                            config: mon.config || {},
+                            policyOverrides: mon.policyOverrides || [],
+                          }}
+                          resolvedPolicy={mon.resolvedPolicy || null}
+                          onSave={async (monitorId, config, policyOverrides) => {
+                            await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ config, policyOverrides }),
+                            });
+                            setEditingMonitorId(null);
+                          }}
+                        />
+                      )}
+                      <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex items-center justify-between">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingMonitorId(
+                              editingMonitorId === mon.id ? null : mon.id
+                            );
+                          }}
+                          className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text-secondary)] underline"
+                        >
+                          {editingMonitorId === mon.id ? 'Close' : 'Edit config'}
+                        </button>
+                        {onRemoveMonitor && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -393,8 +427,8 @@ export function WatchDetailPanel({
                           >
                             Remove from watch
                           </button>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
