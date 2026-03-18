@@ -32,6 +32,8 @@ export async function GET(
                 lastStatus: true,
                 lastRunAt: true,
                 schedule: true,
+                config: true,
+                policyOverrides: true,
               },
             },
           },

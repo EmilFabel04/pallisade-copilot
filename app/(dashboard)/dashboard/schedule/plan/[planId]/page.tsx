@@ -13,6 +13,7 @@ import {
   HEALTH_STATUS_LABELS,
   type HealthStatus,
 } from '@/types/health-watch';
+import { MonitorEditPanel } from '@/components/schedule/MonitorEditPanel';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,6 +58,7 @@ export default function PlanDetailPage() {
   const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
   const [monitorRuns, setMonitorRuns] = useState<Record<string, TaskRun[]>>({});
   const [monitorRunsLoading, setMonitorRunsLoading] = useState<Record<string, boolean>>({});
+  const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
 
   // Fetch plan data
   const fetchPlan = useCallback(async () => {
@@ -163,7 +165,7 @@ export default function PlanDetailPage() {
 
   // Flatten all monitors from all groups
   const allMonitors: any[] = (plan.monitorGroups || []).flatMap((g: any) =>
-    (g.monitors || []).map((m: any) => ({ ...m, groupName: g.name }))
+    (g.monitors || []).map((m: any) => ({ ...m, groupName: g.name, groupId: g.id }))
   );
 
   const healthStatus: HealthStatus | null =
@@ -391,6 +393,40 @@ export default function PlanDetailPage() {
                     </button>
                     {isExpanded && (
                       <div className="px-4 pb-3 pt-1 border-t border-[var(--border-faint)]">
+                        <div className="flex items-center justify-end mb-2">
+                          <button
+                            onClick={() => setEditingMonitorId(
+                              editingMonitorId === mon.id ? null : mon.id
+                            )}
+                            className="text-[11px] text-[var(--muted)] hover:text-[var(--text-secondary)] underline"
+                          >
+                            {editingMonitorId === mon.id ? 'Close editor' : 'Edit config'}
+                          </button>
+                        </div>
+                        {editingMonitorId === mon.id && (
+                          <div className="mb-3">
+                            <MonitorEditPanel
+                              monitor={{
+                                id: mon.id,
+                                name: mon.name,
+                                monitorType: mon.monitorType || '',
+                                targetFqn: mon.targetFqn,
+                                config: mon.config || {},
+                                policyOverrides: mon.policyOverrides || [],
+                              }}
+                              resolvedPolicy={null}
+                              onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
+                                await fetch(`/api/schedule/watches/${mon.groupId}/monitors/${monitorId}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ config, policyOverrides }),
+                                });
+                                setEditingMonitorId(null);
+                                fetchPlan();
+                              }}
+                            />
+                          </div>
+                        )}
                         <RunHistoryTable
                           runs={monitorRuns[mon.id] || []}
                           loading={monitorRunsLoading[mon.id] || false}
