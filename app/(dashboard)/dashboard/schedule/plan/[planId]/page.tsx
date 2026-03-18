@@ -62,6 +62,7 @@ export default function PlanDetailPage() {
   const [monitorRunsLoading, setMonitorRunsLoading] = useState<Record<string, boolean>>({});
   const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
   const [showPlanEditModal, setShowPlanEditModal] = useState(false);
+  const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
 
   // Fetch plan data
   const fetchPlan = useCallback(async () => {
@@ -73,6 +74,33 @@ export default function PlanDetailPage() {
         const data = await res.json();
         setPlan(data.plan);
         setAggregate(data.aggregate);
+
+        // Resolve policies for all monitor targets
+        const allMons = (data.plan?.monitorGroups || []).flatMap(
+          (g: any) => g.monitors || []
+        );
+        const fqns = [...new Set(
+          allMons.map((m: any) => m.targetFqn).filter(Boolean)
+        )] as string[];
+        if (fqns.length > 0) {
+          try {
+            const policyRes = await fetch('/api/schedule/policies/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                nodes: fqns.map((fqn) => ({
+                  fqn, domain: 'warehouse', criticality: 'medium',
+                })),
+              }),
+            });
+            if (policyRes.ok) {
+              const policyData = await policyRes.json();
+              setResolvedPolicies(policyData.policies || {});
+            }
+          } catch {
+            // Policy resolution is non-fatal
+          }
+        }
       }
     } catch (err) {
       console.error('[PlanDetail] Failed to fetch plan:', err);
@@ -424,7 +452,7 @@ export default function PlanDetailPage() {
                                 config: mon.config || {},
                                 policyOverrides: mon.policyOverrides || [],
                               }}
-                              resolvedPolicy={null}
+                              resolvedPolicy={mon.targetFqn ? resolvedPolicies[mon.targetFqn] || null : null}
                               onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
                                 await fetch(`/api/schedule/watches/${mon.groupId}/monitors/${monitorId}`, {
                                   method: 'PUT',
