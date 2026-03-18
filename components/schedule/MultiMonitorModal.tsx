@@ -668,21 +668,39 @@ export function MultiMonitorModal({
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
       if (configTab === 'ai-prompt') {
-        // AI Prompt mode → create a task via POST /api/schedule/tasks
-        const taskData = {
-          name: planName,
-          taskMode: 'prompt',
-          prompt: aiPrompt,
-          schedule,
-          timezone,
-          alertChannels,
-          alertOnStatus,
-          integrationId: aiIntegrationId || undefined,
-        };
-        const res = await fetch('/api/schedule/tasks', {
+        // AI Prompt mode → wrap in a plan via POST /api/schedule/plans
+        const groups = [{
+          anchor_name: planName,
+          anchor_fqn: planName,
+          anchor_id: 'ai_prompt',
+          anchor_node_type: 'prompt',
+          anchor_platform: 'ai',
+          watch_type: 'custom_watch',
+          recommendations: [{
+            monitor_key: 'AI_PROMPT',
+            target_fqn: planName,
+            config_hints: {
+              taskMode: 'prompt',
+              prompt: aiPrompt,
+              ...(aiIntegrationId ? { integrationId: aiIntegrationId } : {}),
+            },
+          }],
+        }];
+
+        const res = await fetch('/api/schedule/plans', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(taskData),
+          body: JSON.stringify({
+            name: planName,
+            scopeType: 'asset',
+            mode: 'manual',
+            families: [],
+            schedule,
+            timezone,
+            alertChannels,
+            alertOnStatus,
+            groups,
+          }),
         });
         if (res.ok) {
           onComplete();
