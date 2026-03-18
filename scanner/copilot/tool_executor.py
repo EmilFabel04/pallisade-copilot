@@ -853,14 +853,52 @@ class ToolExecutor:
             "Content-Type": "application/json",
         }
 
-        # Map monitors from LLM snake_case to API camelCase
+        # Resolve policies for target FQNs to enrich monitor configs
+        policy_configs = {}
+        try:
+            from scanner.monitors.policy_resolver import build_policy_map
+            # Build minimal node-like objects for policy resolution
+            target_fqns = set()
+            for mon in data.get("monitors", []):
+                fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
+                if fqn:
+                    target_fqns.add(fqn)
+
+            if target_fqns and hasattr(self.context, 'graph') and self.context.graph:
+                nodes_for_policy = []
+                for node in self.context.graph.nodes:
+                    if hasattr(node, 'fqn') and node.fqn in target_fqns:
+                        nodes_for_policy.append(node)
+                if nodes_for_policy:
+                    policy_map = build_policy_map(nodes_for_policy)
+                    for fqn, policy in policy_map.items():
+                        policy_configs[fqn] = {
+                            k: v for k, v in {
+                                "max_hours": getattr(policy, 'freshness_max_hours', None),
+                                "warning_hours": getattr(policy, 'freshness_warning_hours', None),
+                                "anomaly_threshold": getattr(policy, 'anomaly_sensitivity', None),
+                                "lookback_days": getattr(policy, 'anomaly_lookback_days', None),
+                                "strictness": getattr(policy, 'schema_strictness', None),
+                            }.items() if v is not None
+                        }
+        except Exception as e:
+            logger.warning(f"[CreateWatch] Policy resolution failed (non-fatal): {e}")
+
+        # Map monitors from LLM snake_case to API camelCase, merging policy config
         raw_monitors = data.get("monitors", [])
         mapped_monitors = []
         for mon in raw_monitors:
+            target_fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
+            base_config = mon.get("config", {})
+            # Merge policy config (policy provides defaults, explicit config overrides)
+            if target_fqn in policy_configs:
+                merged_config = {**policy_configs[target_fqn], **base_config}
+            else:
+                merged_config = base_config
             mapped_monitors.append({
                 "monitorType": mon.get("monitorType") or mon.get("monitor_type"),
-                "targetFqn": mon.get("targetFqn") or mon.get("target_fqn"),
-                "config": mon.get("config", {}),
+                "targetFqn": target_fqn,
+                "config": merged_config,
                 "name": mon.get("name"),
             })
 

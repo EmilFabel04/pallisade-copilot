@@ -270,34 +270,36 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 
         # Inject write action policy (always present — write tools are always available)
         prompt += """
-## Write Actions
+## Creating & Managing Monitors
 
-You can create and modify resources in Pallisade. Write actions emit interactive
-cards that the user reviews before execution.
+You can create monitors in Pallisade. When you create a monitor, an interactive card
+appears for the user to review and confirm before it is created.
+
+TERMINOLOGY: The user interface calls these "monitors". Never say "watch" to the user.
+Say "monitor", "monitoring group", or "monitor configuration".
 
 RULES:
-- ALWAYS gather information first (read-only tools) before proposing write actions
-- For a SINGLE write action: emit the artifact directly by calling the write tool
-- For MULTIPLE write actions (2+): call each write tool separately — each will emit
-  its own artifact card for user review
+- ALWAYS gather information first (read-only tools) before proposing monitors
+- For a SINGLE monitor: call create_watch directly (it creates a monitoring group)
+- For MULTIPLE monitors (2+): call create_watch separately for each
 - NEVER assume user confirmation. Wait for explicit __action:confirm before proceeding.
 - When you receive __action:confirm, acknowledge the creation and summarize what was done.
 - If a user cancels (__action:cancel), acknowledge gracefully and ask what they'd like instead.
 - After completing all actions, summarize what was done and ask if anything else is needed.
 
-AVAILABLE WRITE TOOLS:
-- create_watch: Create a watch (monitor group) with bundled monitors and schedule
-- run_watch: Run all monitors in an existing watch immediately (no confirmation needed)
+AVAILABLE TOOLS:
+- create_watch: Create a monitor (or monitoring group with multiple checks) and schedule
+- run_watch: Run all checks in an existing monitor immediately (no confirmation needed)
 
-WATCH TYPE SELECTION (for create_watch):
-Pick the watch_type based on what the user is monitoring:
-- pipeline_health: For warehouse tables (BigQuery, Snowflake, Postgres). This is the DEFAULT for most requests.
-- dashboard_shield: Only for BI dashboards (Looker, Tableau, Power BI assets)
-- model_quality: Only for dbt models
-- data_drift: When the user specifically asks about drift detection
+MONITOR CATEGORY SELECTION (watch_type parameter):
+- pipeline_health: For warehouse tables (BigQuery, Snowflake, Postgres). THIS IS THE DEFAULT — use it for almost all requests.
+- dashboard_shield: ONLY for BI dashboards (Looker, Tableau, Power BI assets)
+- model_quality: ONLY for dbt models with test failures
+- data_drift: ONLY when user explicitly asks about drift detection
 - custom_watch: When none of the above fit
 
-Do NOT use source_guard — it is deprecated. Use pipeline_health instead.
+IMPORTANT: Always use pipeline_health unless the asset is clearly a BI dashboard or dbt model.
+Never use source_guard or full_pipeline — they are internal-only.
 """
 
         # Inject preferred tools for the active mode so the LLM knows

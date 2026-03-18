@@ -13,13 +13,12 @@ interface MonitorArtifactCardProps {
   onEdit: (artifact: UIArtifact) => void;
 }
 
-const WATCH_TYPE_COLORS: Record<string, string> = {
-  pipeline_health: 'bg-blue-500/20 text-blue-400',
-  dashboard_shield: 'bg-purple-500/20 text-purple-400',
-  source_guard: 'bg-green-500/20 text-green-400',
-  model_quality: 'bg-amber-500/20 text-amber-400',
-  data_drift: 'bg-red-500/20 text-red-400',
-  custom_watch: 'bg-gray-500/20 text-gray-400',
+const CATEGORY_LABELS: Record<string, { label: string; color: string }> = {
+  pipeline_health: { label: 'Data Pipeline', color: 'bg-blue-500/20 text-blue-400' },
+  dashboard_shield: { label: 'Dashboard', color: 'bg-purple-500/20 text-purple-400' },
+  model_quality: { label: 'Transformation', color: 'bg-amber-500/20 text-amber-400' },
+  data_drift: { label: 'Data Drift', color: 'bg-red-500/20 text-red-400' },
+  custom_watch: { label: 'Custom', color: 'bg-gray-500/20 text-gray-400' },
 };
 
 const ACTION_LABELS: Record<string, { text: string; color: string }> = {
@@ -52,7 +51,7 @@ function formatCron(cron: string): string {
 export default function MonitorArtifactCard({ artifact, onConfirm, onCancel, onEdit }: MonitorArtifactCardProps) {
   const { data, action, status } = artifact;
   const actionLabel = ACTION_LABELS[action] || ACTION_LABELS.create;
-  const watchTypeColor = WATCH_TYPE_COLORS[data.watchType] || WATCH_TYPE_COLORS.custom_watch;
+  const category = CATEGORY_LABELS[data.watchType] || CATEGORY_LABELS.custom_watch;
   const isProposed = status === 'proposed';
   const isExecuting = status === 'executing';
   const isCompleted = status === 'completed';
@@ -66,10 +65,10 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel, onE
           <Badge className={actionLabel.color}>
             {actionLabel.text}
           </Badge>
-          <span className="font-semibold text-sm">{data.name || 'Watch'}</span>
+          <span className="font-semibold text-sm">{data.name || 'Monitor'}</span>
           {data.watchType && (
-            <Badge className={watchTypeColor}>
-              {data.watchType.replace(/_/g, ' ')}
+            <Badge className={category.color}>
+              {category.label}
             </Badge>
           )}
         </div>

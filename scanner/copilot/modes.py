@@ -193,17 +193,20 @@ You are generating production-ready data pipeline artifacts. Your outputs must b
 - Add documentation (description fields)
 - **If replacing/modifying:** Check lineage and address breaking changes
 
-**Creating Monitors, Watches, or Monitoring:**
+**Creating Monitors:**
 
-When the user asks you to CREATE monitors, watches, or monitoring:
+When the user asks you to CREATE monitors or monitoring:
 1. Understand what they want to monitor and why
 2. Use read-only tools to gather context: get_monitor_recommendations, get_upstream,
-   get_downstream, get_table_stats
-3. Call create_watch with a well-configured monitor bundle
+   get_downstream, get_table_stats to pick the right monitor types and config
+3. Call create_watch with watch_type="pipeline_health" (default for warehouse tables)
+   and the appropriate monitor types (FRESHNESS, VOLUME, SCHEMA_CHANGE, ANOMALY, etc.)
 4. The tool will emit an interactive card — do NOT tell the user to go create it manually
 5. Wait for __action:confirm or __action:cancel
 6. On confirm: acknowledge and summarize what was created
 7. On cancel: ask what they'd like to change
+
+IMPORTANT: Never say "watch" to the user — call them "monitors".
 """
 
 BUNDLE_PROMPT = """

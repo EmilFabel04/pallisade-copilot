@@ -1067,15 +1067,17 @@ class ToolRegistry:
         self._register(Tool(
             name="create_watch",
             description=(
-                "Create a watch (monitor group) for a data asset. A watch bundles "
-                "multiple monitors (freshness, volume, schema_change, anomaly, etc.) "
-                "with a shared schedule and alert configuration. Returns an interactive "
-                "card for the user to review and confirm before creation."
+                "Create a monitor for a data asset. Bundles one or more checks "
+                "(freshness, volume, schema_change, anomaly, etc.) with a shared "
+                "schedule. Returns an interactive card for the user to review and "
+                "confirm before creation. Use watch_type='pipeline_health' for "
+                "warehouse tables (default). The user calls these 'monitors', not 'watches'."
             ),
             category=ToolCategory.COVERAGE,
             parameters=[
-                ToolParameter("name", "string", "Name for the watch (e.g., 'Orders Pipeline Health')"),
-                ToolParameter("watch_type", "string", "Type of watch",
+                ToolParameter("name", "string", "Name for the monitor (e.g., 'Orders Freshness' or 'Events Volume')"),
+                ToolParameter("watch_type", "string",
+                              "Category — use pipeline_health for warehouse tables (default)",
                               enum=["pipeline_health", "dashboard_shield",
                                     "model_quality", "data_drift", "custom_watch"]),
                 ToolParameter("anchor_fqn", "string", "Fully qualified name of the anchor asset (e.g., 'analytics.public.orders')"),
