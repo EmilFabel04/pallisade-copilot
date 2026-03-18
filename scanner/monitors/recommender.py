@@ -53,12 +53,21 @@ class MonitorBundle:
 # Constants — monitor keys (match types/monitor-catalog.ts)
 # ---------------------------------------------------------------------------
 
-# Warehouse SQL monitors
+# Warehouse SQL monitors — canonical set
 FRESHNESS = "FRESHNESS"
 VOLUME = "VOLUME"
 SCHEMA_CHANGE = "SCHEMA_CHANGE"
+NULL_CHECK = "NULL_CHECK"
+UNIQUENESS_CHECK = "UNIQUENESS_CHECK"
+REFERENTIAL = "REFERENTIAL"
+RANGE_VALIDATION = "RANGE_VALIDATION"
+ACCEPTED_VALUES = "ACCEPTED_VALUES"
+DATE_CONSISTENCY = "DATE_CONSISTENCY"
+DATA_TYPE_VALIDATION = "DATA_TYPE_VALIDATION"
+OUTLIER_DETECTION = "OUTLIER_DETECTION"
+
+# Legacy aliases — kept for backward compat in dedup/existing code
 NULL_RATE = "NULL_RATE"
-UNIQUENESS = "UNIQUENESS"
 ANOMALY = "ANOMALY"
 
 # Ingestion monitors
@@ -124,11 +133,79 @@ def _guess_timestamp_column(node: LineageNode) -> Optional[str]:
     return None
 
 
-def _build_config_hints(node: LineageNode, monitor_key: str) -> Dict[str, Any]:
-    """Build prefilled config hints based on node metadata and monitor type."""
+from scanner.monitors.policy_config import sensitivity_to_zscore as _sensitivity_to_zscore
+
+
+def _build_config_hints(node: LineageNode, monitor_key: str, policy: Any = None) -> Dict[str, Any]:
+    """Build prefilled config hints based on node metadata, monitor type, and optional policy.
+
+    When a policy (EffectivePolicy) is provided, its values take precedence over
+    hardcoded defaults. Auto-config and baselines still complement policy — policy
+    informs defaults/strictness, it does not force static values.
+    """
     hints: Dict[str, Any] = {}
 
-    if monitor_key in (FRESHNESS, VOLUME, ANOMALY):
+    # --- Policy-driven overrides (highest precedence for threshold defaults) ---
+    if policy:
+        if monitor_key == "FRESHNESS":
+            if getattr(policy, "freshness_max_hours", None):
+                hints["freshness_hours"] = policy.freshness_max_hours
+            if getattr(policy, "freshness_warning_hours", None):
+                hints["warning_hours"] = policy.freshness_warning_hours
+        elif monitor_key == "SCHEMA_CHANGE":
+            if getattr(policy, "schema_strictness", None):
+                hints["strictness"] = policy.schema_strictness
+        elif monitor_key == "VOLUME":
+            if getattr(policy, "volume_growth_threshold", None):
+                hints["growth_rate_threshold"] = policy.volume_growth_threshold
+            if getattr(policy, "volume_min_rows", None):
+                hints["min_rows"] = policy.volume_min_rows
+            if getattr(policy, "volume_max_rows", None):
+                hints["max_rows"] = policy.volume_max_rows
+        elif monitor_key == "ANOMALY":
+            if getattr(policy, "anomaly_sensitivity", None):
+                # Convert 0-1 sensitivity scale to z-score threshold.
+                # Higher sensitivity → lower z-score threshold → more alerts.
+                # 0.99 → 2.0, 0.95 → 3.0, 0.90 → 3.5, 0.80 → 4.0
+                sens = policy.anomaly_sensitivity
+                hints["anomaly_threshold"] = _sensitivity_to_zscore(sens)
+            if getattr(policy, "anomaly_lookback_days", None):
+                hints["lookback_days"] = policy.anomaly_lookback_days
+        elif monitor_key in ("NULL_RATE", "NULL_CHECK"):
+            if getattr(policy, "quality_max_null_rate", None):
+                hints["max_null_rate"] = policy.quality_max_null_rate
+        elif monitor_key == "UNIQUENESS_CHECK":
+            if getattr(policy, "quality_max_duplicate_rate", None):
+                hints["max_duplicate_rate"] = policy.quality_max_duplicate_rate
+        elif monitor_key in ("OUTLIER_DETECTION", "ANOMALY"):
+            # Same logic as ANOMALY above — sensitivity → z-score
+            if getattr(policy, "anomaly_sensitivity", None):
+                sens = policy.anomaly_sensitivity
+                hints["anomaly_threshold"] = _sensitivity_to_zscore(sens)
+            if getattr(policy, "anomaly_lookback_days", None):
+                hints["lookback_days"] = policy.anomaly_lookback_days
+        elif monitor_key == "DATA_TYPE_VALIDATION":
+            if getattr(policy, "schema_strictness", None):
+                hints["strictness"] = policy.schema_strictness
+        elif monitor_key == "SYNC_LAG":
+            if getattr(policy, "sync_lag_tolerance_minutes", None):
+                hints["max_lag_minutes"] = policy.sync_lag_tolerance_minutes
+        elif monitor_key == "CONNECTOR_SCHEMA_DRIFT":
+            if getattr(policy, "schema_drift_strictness", None):
+                hints["strictness"] = policy.schema_drift_strictness
+        elif monitor_key == "BI_FRESHNESS_PROXY":
+            if getattr(policy, "bi_freshness_hours", None):
+                hints["max_stale_hours"] = policy.bi_freshness_hours
+        elif monitor_key == "BI_UPSTREAM_BREAK_RISK":
+            if getattr(policy, "upstream_break_strictness", None):
+                hints["strictness"] = policy.upstream_break_strictness
+        elif monitor_key in ("DAG_LAST_RUN", "DAG_SCHEDULE_LAG"):
+            if getattr(policy, "run_latency_minutes", None):
+                hints["max_latency_minutes"] = policy.run_latency_minutes
+            if getattr(policy, "schedule_lag_minutes", None):
+                hints["max_schedule_lag_minutes"] = policy.schedule_lag_minutes
+
+    if monitor_key in (FRESHNESS, VOLUME, OUTLIER_DETECTION):
         ts_col = _guess_timestamp_column(node)
         if ts_col:
             hints["timestamp_column"] = ts_col
@@ -191,7 +268,7 @@ def _is_high_criticality(node: LineageNode) -> bool:
 # Direct monitor recommendations
 # ---------------------------------------------------------------------------
 
-def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
+def _recommend_direct(node: LineageNode, policy: Any = None) -> List[MonitorRecommendation]:
     """Recommend monitors directly applicable to this node."""
     recs: List[MonitorRecommendation] = []
 
@@ -203,7 +280,7 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
             source="direct",
             reason=reason,
             priority=priority,
-            config_hints=_build_config_hints(node, key),
+            config_hints=_build_config_hints(node, key, policy=policy),
             integration_type=node.platform or "",
         ))
 
@@ -220,11 +297,11 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
         _add(FRESHNESS, 1, "Core data quality — detect stale data in this asset")
         _add(VOLUME, 2, "Core data quality — detect unexpected row count changes")
         _add(SCHEMA_CHANGE, 2, "Core data quality — detect column additions or removals")
+        _add(NULL_CHECK, 2, "Data quality — monitor null spikes in key columns")
+        _add(UNIQUENESS_CHECK, 2, "Data quality — detect duplicate values in key columns")
 
         if _is_high_criticality(node):
-            _add(NULL_RATE, 2, "Critical asset — monitor null spikes in key columns")
-            _add(UNIQUENESS, 2, "Critical asset — detect key degradation")
-            _add(ANOMALY, 3, "Critical asset — statistical anomaly detection on metrics")
+            _add(OUTLIER_DETECTION, 3, "Critical asset — column-level statistical anomaly detection")
 
     # --- Ingestion connectors (tool-level only, not synced tables) ---
     elif _d == "ingestion" and _k in ("connector", "job", "stream"):
@@ -275,10 +352,12 @@ def _recommend_direct(node: LineageNode) -> List[MonitorRecommendation]:
 def _recommend_upstream(
     target_node: LineageNode,
     upstream_nodes: List[LineageNode],
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> List[MonitorRecommendation]:
     """Recommend monitors on upstream dependencies of target_node."""
     recs: List[MonitorRecommendation] = []
     seen: Set[str] = set()  # (monitor_key, target_fqn) dedup
+    _pm = policy_map or {}
 
     for up in upstream_nodes:
         def _add(key: str, priority: int, reason: str):
@@ -293,7 +372,7 @@ def _recommend_upstream(
                 source="upstream",
                 reason=reason,
                 priority=priority,
-                config_hints=_build_config_hints(up, key),
+                config_hints=_build_config_hints(up, key, policy=_pm.get(up.fqn)),
                 integration_type=up.platform or "",
             ))
 
@@ -350,6 +429,8 @@ def recommend_for_node(
     node: LineageNode,
     upstream_nodes: Optional[List[LineageNode]] = None,
     existing_monitor_fqns: Optional[Set[str]] = None,
+    policy: Any = None,
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> List[MonitorRecommendation]:
     """Return all monitor recommendations for a node and its upstream context.
 
@@ -357,6 +438,8 @@ def recommend_for_node(
         node: The lineage node to recommend monitors for.
         upstream_nodes: Upstream dependency nodes (depth 1-3 typically).
         existing_monitor_fqns: Set of "MONITOR_KEY:target_fqn" strings for dedup.
+        policy: EffectivePolicy for this node (used for direct recommendations).
+        policy_map: Dict[fqn, EffectivePolicy] for upstream node lookups.
 
     Returns:
         List of MonitorRecommendation sorted by priority (1=highest).
@@ -365,10 +448,10 @@ def recommend_for_node(
     existing_monitor_fqns = existing_monitor_fqns or set()
 
     # Direct recommendations for this node
-    direct = _recommend_direct(node)
+    direct = _recommend_direct(node, policy=policy)
 
     # Upstream recommendations
-    upstream = _recommend_upstream(node, upstream_nodes)
+    upstream = _recommend_upstream(node, upstream_nodes, policy_map=policy_map)
 
     all_recs = direct + upstream
 
@@ -398,6 +481,8 @@ def get_bundles(
     node: LineageNode,
     upstream_nodes: Optional[List[LineageNode]] = None,
     existing_monitor_fqns: Optional[Set[str]] = None,
+    policy: Any = None,
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> List[MonitorBundle]:
     """Return applicable monitor bundles for a node.
 
@@ -406,10 +491,11 @@ def get_bundles(
     """
     upstream_nodes = upstream_nodes or []
     existing_monitor_fqns = existing_monitor_fqns or set()
+    _pm = policy_map or {}
     bundles: List[MonitorBundle] = []
 
     # --- Asset Stability: direct monitors for this node ---
-    direct = _recommend_direct(node)
+    direct = _recommend_direct(node, policy=policy)
     if direct:
         for r in direct:
             r.source = "bundle"
@@ -423,7 +509,7 @@ def get_bundles(
 
     # --- Upstream Stability: monitors on upstream deps ---
     if upstream_nodes:
-        upstream = _recommend_upstream(node, upstream_nodes)
+        upstream = _recommend_upstream(node, upstream_nodes, policy_map=_pm)
         if upstream:
             for r in upstream:
                 r.source = "bundle"
@@ -459,7 +545,7 @@ def get_bundles(
                             source="bundle",
                             reason=reason_tpl,
                             priority=1,
-                            config_hints=_build_config_hints(up, key),
+                            config_hints=_build_config_hints(up, key, policy=_pm.get(up.fqn)),
                             integration_type=up.platform or "",
                         ))
 
@@ -474,7 +560,7 @@ def get_bundles(
                         source="bundle",
                         reason=f"Reporting dependency — ingestion lag in {up.name} delays this dashboard/report",
                         priority=2,
-                        config_hints=_build_config_hints(up, SYNC_LAG),
+                        config_hints=_build_config_hints(up, SYNC_LAG, policy=_pm.get(up.fqn)),
                         integration_type=up.platform or "",
                     ))
 
@@ -489,7 +575,7 @@ def get_bundles(
                         source="bundle",
                         reason=f"Reporting dependency — stale transform {up.name} delays this dashboard/report",
                         priority=2,
-                        config_hints=_build_config_hints(up, DBT_MODEL_FRESHNESS),
+                        config_hints=_build_config_hints(up, DBT_MODEL_FRESHNESS, policy=_pm.get(up.fqn)),
                         integration_type=up.platform or "",
                     ))
 
