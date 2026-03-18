@@ -120,13 +120,25 @@ export async function GET(request: NextRequest) {
 // POST /api/schedule/plans - Create a monitoring plan with child groups
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Support both session auth (browser) and internal auth (copilot executor)
+    let organizationId: string | undefined;
+    let userId: string = '';
+
+    const internalSecret = request.headers.get('X-Internal-Secret');
+    const expectedSecret = process.env.INTERNAL_API_SECRET || 'pallisade-internal';
+
+    if (internalSecret && internalSecret === expectedSecret) {
+      organizationId = request.headers.get('X-Organization-Id') || undefined;
+      userId = 'copilot-system';
+    } else {
+      const session = await getServerSession(authOptions);
+      if (!session?.user) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      organizationId = (session.user as any).organizationId;
+      userId = (session.user as any).id;
     }
 
-    const userId = (session.user as any).id;
-    const organizationId = (session.user as any).organizationId;
     if (!organizationId) {
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
