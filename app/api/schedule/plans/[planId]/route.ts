@@ -22,20 +22,7 @@ export async function GET(
       include: {
         monitorGroups: {
           include: {
-            monitors: {
-              select: {
-                id: true,
-                name: true,
-                monitorType: true,
-                targetFqn: true,
-                enabled: true,
-                lastStatus: true,
-                lastRunAt: true,
-                schedule: true,
-                config: true,
-                policyOverrides: true,
-              },
-            },
+            monitors: true,
           },
         },
       },
