@@ -44,6 +44,7 @@ export default function SchedulePage() {
   const [runsLoading, setRunsLoading] = useState(false);
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null);
   const [integrations, setIntegrations] = useState<Array<{ id: string; name: string; type: string }>>([]);
+  const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
 
   // ---------------------------------------------------------------------------
   // Data fetching
@@ -85,6 +86,34 @@ export default function SchedulePage() {
     fetchPlans();
     fetchWatches();
   }, [fetchTasks, fetchPlans, fetchWatches]);
+
+  // Resolve policies for all monitor targets across plans and watches
+  useEffect(() => {
+    const allFqns = new Set<string>();
+    for (const plan of plans) {
+      for (const group of plan.monitorGroups || []) {
+        for (const mon of group.monitors || []) {
+          if (mon.targetFqn) allFqns.add(mon.targetFqn);
+        }
+      }
+    }
+    for (const watch of watches) {
+      for (const mon of watch.monitors || []) {
+        if (mon.targetFqn) allFqns.add(mon.targetFqn);
+      }
+    }
+    if (allFqns.size === 0) return;
+    fetch('/api/schedule/policies/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodes: [...allFqns].map((fqn) => ({ fqn, domain: 'warehouse', criticality: 'medium' })),
+      }),
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => { if (data?.policies) setResolvedPolicies(data.policies); })
+      .catch(() => {});
+  }, [plans, watches]);
 
   useEffect(() => {
     if (!selectedPipeline?.id) return;
@@ -374,6 +403,16 @@ export default function SchedulePage() {
                       onToggleEnabled={(enabled) => handleTogglePlanEnabled(plan.id, enabled)}
                       onRunAll={() => handleRunPlan(plan.id)}
                       onDelete={() => handleDeletePlan(plan.id)}
+                      policyMonitorCount={
+                        (plan.monitorGroups || []).flatMap((g) => g.monitors || [])
+                          .filter((m) => m.targetFqn && resolvedPolicies[m.targetFqn] && resolvedPolicies[m.targetFqn].status !== 'none')
+                          .length
+                      }
+                      overrideMonitorCount={
+                        (plan.monitorGroups || []).flatMap((g) => g.monitors || [])
+                          .filter((m) => ((m as any).policyOverrides || []).length > 0)
+                          .length
+                      }
                     />
                   ))}
                   {watches.map((watch) => (

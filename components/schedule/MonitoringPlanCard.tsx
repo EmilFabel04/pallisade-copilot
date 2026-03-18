@@ -17,6 +17,10 @@ interface MonitoringPlanCardProps {
   onToggleEnabled: (enabled: boolean) => void;
   onRunAll: () => void;
   onDelete?: () => void;
+  /** Number of monitors with policy coverage (0 = no policies) */
+  policyMonitorCount?: number;
+  /** Number of monitors with overrides */
+  overrideMonitorCount?: number;
 }
 
 const MODE_COLORS: Record<string, string> = {
@@ -56,6 +60,8 @@ export function MonitoringPlanCard({
   onToggleEnabled,
   onRunAll,
   onDelete,
+  policyMonitorCount = 0,
+  overrideMonitorCount = 0,
 }: MonitoringPlanCardProps) {
   const [showEditModal, setShowEditModal] = useState(false);
   const hasRun = plan.passCount > 0 || plan.warnCount > 0 || plan.failCount > 0 || plan.errorCount > 0;
@@ -201,6 +207,22 @@ export function MonitoringPlanCard({
             <span className="text-[var(--muted)]">Health</span>
             <span className="text-[var(--text)] font-medium tabular-nums">
               {Math.round(plan.healthScore)}
+            </span>
+          </div>
+        )}
+        {policyMonitorCount > 0 && (
+          <div className="flex items-center gap-1">
+            <span
+              className={cn(
+                'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                overrideMonitorCount > 0
+                  ? 'bg-amber-500/15 text-amber-400'
+                  : 'bg-violet-500/15 text-violet-400'
+              )}
+            >
+              {overrideMonitorCount > 0
+                ? `${overrideMonitorCount} override${overrideMonitorCount !== 1 ? 's' : ''}`
+                : `${policyMonitorCount} policy-covered`}
             </span>
           </div>
         )}

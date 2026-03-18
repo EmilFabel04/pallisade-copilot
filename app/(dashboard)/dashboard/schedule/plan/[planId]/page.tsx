@@ -389,6 +389,9 @@ export default function PlanDetailPage() {
                   ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
                   : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
                 const isExpanded = expandedMonitorId === mon.id;
+                const monPolicy = mon.targetFqn ? resolvedPolicies[mon.targetFqn] : null;
+                const monOverrides = mon.policyOverrides || [];
+                const hasOverrides = monOverrides.length > 0;
                 return (
                   <div
                     key={mon.id}
@@ -417,6 +420,23 @@ export default function PlanDetailPage() {
                           )}
                         </div>
                       </div>
+                      {/* Policy badge on the row */}
+                      {monPolicy && monPolicy.status !== 'none' && (
+                        <span
+                          className={cn(
+                            'px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0',
+                            hasOverrides
+                              ? 'bg-amber-500/15 text-amber-400'
+                              : 'bg-violet-500/15 text-violet-400'
+                          )}
+                          title={hasOverrides
+                            ? `${monOverrides.length} field(s) overridden from ${monPolicy.profileName || 'policy'}`
+                            : `Following ${monPolicy.profileName || 'policy'}`
+                          }
+                        >
+                          {hasOverrides ? 'Override' : monPolicy.profileName || 'Policy'}
+                        </span>
+                      )}
                       {mon.lastRunAt && (
                         <span className="text-[11px] text-[var(--text-faint)] shrink-0">
                           {timeAgo(mon.lastRunAt)}
