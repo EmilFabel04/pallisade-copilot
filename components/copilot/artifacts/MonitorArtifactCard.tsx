@@ -31,10 +31,21 @@ const ACTION_LABELS: Record<string, { text: string; color: string }> = {
 function formatCron(cron: string): string {
   const parts = cron.split(' ');
   if (parts.length !== 5) return cron;
-  const [min, hour] = parts;
+  const [min, hour, dom, mon, dow] = parts;
+  // Every minute
+  if (min === '*' && hour === '*') return 'Every minute';
+  // Every N minutes
+  if (min.startsWith('*/') && hour === '*') return `Every ${min.slice(2)} min`;
+  // Hourly
+  if (min === '0' && hour === '*') return 'Hourly';
+  // Every N hours
   if (min === '0' && hour.startsWith('*/')) return `Every ${hour.slice(2)}h`;
-  if (min === '0' && hour === '0') return 'Daily at midnight';
-  if (min === '0') return `Daily at ${hour}:00`;
+  // Daily at midnight
+  if (min === '0' && hour === '0' && dom === '*') return 'Daily at midnight';
+  // Daily at specific hour
+  if (min === '0' && /^\d+$/.test(hour) && dom === '*') return `Daily at ${hour}:00`;
+  // Weekly
+  if (dom === '*' && dow !== '*') return `Weekly on ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][parseInt(dow)] || dow}`;
   return cron;
 }
 
@@ -63,7 +74,7 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel, onE
         </div>
         {isProposed && (
           <div className="flex gap-2">
-            <Button variant="ghost" size="sm" onClick={() => onEdit(artifact)}>
+            <Button variant="ghost" size="sm" disabled title="Editing coming soon">
               <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
             </Button>
             <Button variant="ghost" size="sm" onClick={() => onCancel(artifact.artifact_id)}>

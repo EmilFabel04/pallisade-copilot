@@ -240,23 +240,35 @@ function AssistantPageInner() {
     const dataToSend = editedData || artifact.data;
     const actionMessage = `__action:confirm:${artifactId}:${toolName}:${JSON.stringify(dataToSend)}`;
 
-    await sendStreamingMessage(actionMessage, {
-      sessionId: sessionId || undefined,
-      model: selectedModel,
-      mode: selectedMode,
-      pipelineStackId: selectedPipelineId || undefined,
-    });
-  }, [streamingMessage, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage]);
+    try {
+      await sendStreamingMessage(actionMessage, {
+        sessionId: sessionId || undefined,
+        model: selectedModel,
+        mode: selectedMode,
+        pipelineStackId: selectedPipelineId || undefined,
+      });
+    } catch (err) {
+      console.error('Artifact confirm failed:', err);
+      clearStreamingMessage();
+      setIsLoading(false);
+    }
+  }, [streamingMessage, messages, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage]);
 
   const handleArtifactCancel = useCallback(async (artifactId: string) => {
     const actionMessage = `__action:cancel:${artifactId}`;
-    await sendStreamingMessage(actionMessage, {
-      sessionId: sessionId || undefined,
-      model: selectedModel,
-      mode: selectedMode,
-      pipelineStackId: selectedPipelineId || undefined,
-    });
-  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage]);
+    try {
+      await sendStreamingMessage(actionMessage, {
+        sessionId: sessionId || undefined,
+        model: selectedModel,
+        mode: selectedMode,
+        pipelineStackId: selectedPipelineId || undefined,
+      });
+    } catch (err) {
+      console.error('Artifact cancel failed:', err);
+      clearStreamingMessage();
+      setIsLoading(false);
+    }
+  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage]);
 
   const handleArtifactEdit = useCallback((artifact: UIArtifact) => {
     setEditingArtifact(artifact);
