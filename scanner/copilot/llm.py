@@ -288,6 +288,16 @@ RULES:
 AVAILABLE WRITE TOOLS:
 - create_watch: Create a watch (monitor group) with bundled monitors and schedule
 - run_watch: Run all monitors in an existing watch immediately (no confirmation needed)
+
+WATCH TYPE SELECTION (for create_watch):
+Pick the watch_type based on what the user is monitoring:
+- pipeline_health: For warehouse tables (BigQuery, Snowflake, Postgres). This is the DEFAULT for most requests.
+- dashboard_shield: Only for BI dashboards (Looker, Tableau, Power BI assets)
+- model_quality: Only for dbt models
+- data_drift: When the user specifically asks about drift detection
+- custom_watch: When none of the above fit
+
+Do NOT use source_guard — it is deprecated. Use pipeline_health instead.
 """
 
         # Inject preferred tools for the active mode so the LLM knows

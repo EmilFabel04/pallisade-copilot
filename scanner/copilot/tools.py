@@ -1076,7 +1076,7 @@ class ToolRegistry:
             parameters=[
                 ToolParameter("name", "string", "Name for the watch (e.g., 'Orders Pipeline Health')"),
                 ToolParameter("watch_type", "string", "Type of watch",
-                              enum=["pipeline_health", "dashboard_shield", "source_guard",
+                              enum=["pipeline_health", "dashboard_shield",
                                     "model_quality", "data_drift", "custom_watch"]),
                 ToolParameter("anchor_fqn", "string", "Fully qualified name of the anchor asset (e.g., 'analytics.public.orders')"),
                 ToolParameter("monitors", "array", "Array of monitors to include",
