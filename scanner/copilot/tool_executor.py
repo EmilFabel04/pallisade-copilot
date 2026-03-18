@@ -845,9 +845,10 @@ class ToolExecutor:
         """Actually create the watch via Next.js API."""
         import aiohttp
 
+        import os
         url = f"{self.context.base_url}/api/schedule/watches"
         headers = {
-            "Authorization": f"Bearer {self.context.auth_token}",
+            "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
             "X-Organization-Id": self.context.org_id,
             "Content-Type": "application/json",
         }
@@ -5766,9 +5767,10 @@ class ToolExecutor:
         if not watch_id:
             return ToolResult(success=False, error="watch_id is required")
 
+        import os
         url = f"{self.context.base_url}/api/schedule/watches/{watch_id}/run"
         headers = {
-            "Authorization": f"Bearer {self.context.auth_token}",
+            "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
             "X-Organization-Id": self.context.org_id,
             "Content-Type": "application/json",
         }

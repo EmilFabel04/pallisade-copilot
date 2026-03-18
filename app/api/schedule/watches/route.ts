@@ -103,13 +103,26 @@ export async function GET(request: NextRequest) {
 // POST /api/schedule/watches - Create a new group monitor
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    // Support both session auth (browser) and internal auth (copilot executor)
+    let organizationId: string | undefined;
+    let userId: string | undefined;
 
-    const organizationId = (session.user as any).organizationId;
-    const userId = (session.user as any).id;
+    const internalSecret = request.headers.get('X-Internal-Secret');
+    const expectedSecret = process.env.INTERNAL_API_SECRET || 'pallisade-internal';
+
+    if (internalSecret && internalSecret === expectedSecret) {
+      // Internal request from copilot executor
+      organizationId = request.headers.get('X-Organization-Id') || undefined;
+      userId = 'copilot-system';
+    } else {
+      // Browser request with session cookie
+      const session = await getServerSession(authOptions);
+      if (!session?.user) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+      organizationId = (session.user as any).organizationId;
+      userId = (session.user as any).id;
+    }
 
     if (!organizationId) {
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
