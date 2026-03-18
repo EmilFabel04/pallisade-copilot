@@ -41,59 +41,68 @@ interface MonitorEditPanelProps {
 
 type PolicyFieldMap = Record<string, Record<string, [string, string]>>;
 
+// Maps: configField (snake_case, what monitors store) →
+//   [policySection, policySectionField (camelCase, what resolve returns)]
 const POLICY_FIELD_MAP: PolicyFieldMap = {
   FRESHNESS: {
-    max_hours: ['freshness', 'max_hours'],
+    max_hours: ['freshness', 'maxHours'],
+    warning_hours: ['freshness', 'warningHours'],
   },
   VOLUME: {
-    min_rows: ['volume', 'min_rows'],
-    max_rows: ['volume', 'max_rows'],
+    min_rows: ['volume', 'minRows'],
+    max_rows: ['volume', 'maxRows'],
+    growth_rate_threshold: ['volume', 'growthRateThreshold'],
   },
   OUTLIER_DETECTION: {
-    anomaly_threshold: ['anomaly', 'z_score_threshold'],
-    lookback_days: ['anomaly', 'lookback_days'],
+    anomaly_threshold: ['anomaly', 'sensitivity'],
+    lookback_days: ['anomaly', 'lookbackDays'],
   },
   ANOMALY: {
-    anomaly_threshold: ['anomaly', 'z_score_threshold'],
-    lookback_days: ['anomaly', 'lookback_days'],
+    anomaly_threshold: ['anomaly', 'sensitivity'],
+    lookback_days: ['anomaly', 'lookbackDays'],
   },
   NULL_CHECK: {
-    max_null_rate: ['quality', 'max_null_rate'],
+    max_null_rate: ['quality', 'maxNullRate'],
   },
   UNIQUENESS_CHECK: {
-    max_duplicate_rate: ['quality', 'max_duplicate_rate'],
+    max_duplicate_rate: ['quality', 'maxDuplicateRate'],
   },
-  SCHEMA_CHANGE: {},
+  SCHEMA_CHANGE: {
+    strictness: ['schema', 'strictness'],
+  },
   SYNC_LAG: {
-    max_lag_minutes: ['ingestion', 'max_lag_minutes'],
+    max_lag_minutes: ['ingestion', 'syncLagToleranceMinutes'],
   },
   FAILED_SYNCS: {
-    lookback_hours: ['ingestion', 'lookback_hours'],
+    failure_tolerance: ['ingestion', 'failureTolerance'],
   },
-  CONNECTOR_SCHEMA_DRIFT: {},
+  CONNECTOR_SCHEMA_DRIFT: {
+    strictness: ['ingestion', 'schemaDriftStrictness'],
+  },
   BI_FRESHNESS_PROXY: {
-    max_stale_hours: ['bi', 'max_stale_hours'],
+    max_stale_hours: ['bi', 'freshnessHours'],
   },
   BI_UPSTREAM_BREAK_RISK: {
-    lookback_hours: ['bi', 'lookback_hours'],
+    strictness: ['bi', 'upstreamBreakStrictness'],
   },
   DAG_LAST_RUN: {
-    max_stale_hours: ['orchestration', 'max_stale_hours'],
+    max_stale_hours: ['orchestration', 'runLatencyMinutes'],
   },
   DAG_SCHEDULE_LAG: {
-    max_lag_minutes: ['orchestration', 'max_lag_minutes'],
+    max_lag_minutes: ['orchestration', 'scheduleLagMinutes'],
   },
   TASK_FAILURE_RATE: {
-    max_failure_pct: ['orchestration', 'max_failure_pct'],
-    lookback_hours: ['orchestration', 'lookback_hours'],
+    max_failure_pct: ['orchestration', 'failureTolerance'],
   },
   DBT_TEST_FAILURES: {
-    include_warnings: ['transform', 'include_warnings'],
+    failure_tolerance: ['transform', 'testFailureTolerance'],
   },
   DBT_MODEL_FRESHNESS: {
-    max_hours: ['transform', 'max_hours'],
+    max_hours: ['transform', 'modelFreshnessHours'],
   },
-  DBT_SOURCE_FRESHNESS: {},
+  DBT_SOURCE_FRESHNESS: {
+    max_hours: ['transform', 'modelFreshnessHours'],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -176,12 +185,9 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
 
       let raw = sectionData[policyField];
 
-      // Convert anomaly_sensitivity to z-score if applicable
-      if (policyField === 'z_score_threshold' && raw === undefined) {
-        const sensitivity = sectionData['anomaly_sensitivity'];
-        if (sensitivity !== undefined && sensitivity !== null) {
-          raw = sensitivityToZscore(Number(sensitivity));
-        }
+      // Convert anomaly sensitivity (0-1) to z-score threshold for comparison
+      if (policyField === 'sensitivity' && raw !== undefined && raw !== null) {
+        raw = sensitivityToZscore(Number(raw));
       }
 
       return raw;
