@@ -74,6 +74,8 @@ class ChatStreamRequest(ChatRequest):
     """Extended request for streaming chat."""
     confirmed_tool_ids: Optional[List[str]] = Field(None, description="Tool use IDs the user has already confirmed")
     pending_tool_call: Optional[PendingToolCall] = Field(None, description="Tool call to execute directly (from confirmation)")
+    confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]] = Field(None, description="Artifacts confirmed by user, keyed by artifact_id")
+    artifact_context: Optional[Dict[str, Any]] = Field(None, description="Context about the artifact being confirmed")
 
 
 class ChatResponse(BaseModel):
@@ -395,6 +397,7 @@ async def chat_stream(
                         messages, context,
                         confirmed_tool_ids=confirmed_ids,
                         pending_tool_call=pending_tc,
+                        confirmed_artifacts=request.confirmed_artifacts,
                     )
                 async for event in stream:
                     if event.event_type == "done":
