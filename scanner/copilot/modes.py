@@ -192,6 +192,18 @@ You are generating production-ready data pipeline artifacts. Your outputs must b
 - Include appropriate materializations (table, view, incremental)
 - Add documentation (description fields)
 - **If replacing/modifying:** Check lineage and address breaking changes
+
+**Creating Monitors, Watches, or Monitoring:**
+
+When the user asks you to CREATE monitors, watches, or monitoring:
+1. Understand what they want to monitor and why
+2. Use read-only tools to gather context: get_monitor_recommendations, get_upstream,
+   get_downstream, get_table_stats
+3. Call create_watch with a well-configured monitor bundle
+4. The tool will emit an interactive card — do NOT tell the user to go create it manually
+5. Wait for __action:confirm or __action:cancel
+6. On confirm: acknowledge and summarize what was created
+7. On cancel: ask what they'd like to change
 """
 
 BUNDLE_PROMPT = """

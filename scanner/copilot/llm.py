@@ -268,6 +268,28 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
             if policy:
                 prompt += f"\n{policy}\n"
 
+        # Inject write action policy (always present — write tools are always available)
+        prompt += """
+## Write Actions
+
+You can create and modify resources in Pallisade. Write actions emit interactive
+cards that the user reviews before execution.
+
+RULES:
+- ALWAYS gather information first (read-only tools) before proposing write actions
+- For a SINGLE write action: emit the artifact directly by calling the write tool
+- For MULTIPLE write actions (2+): call each write tool separately — each will emit
+  its own artifact card for user review
+- NEVER assume user confirmation. Wait for explicit __action:confirm before proceeding.
+- When you receive __action:confirm, acknowledge the creation and summarize what was done.
+- If a user cancels (__action:cancel), acknowledge gracefully and ask what they'd like instead.
+- After completing all actions, summarize what was done and ask if anything else is needed.
+
+AVAILABLE WRITE TOOLS:
+- create_watch: Create a watch (monitor group) with bundled monitors and schedule
+- run_watch: Run all monitors in an existing watch immediately (no confirmation needed)
+"""
+
         # Inject preferred tools for the active mode so the LLM knows
         # which tools to reach for first in this context
         if context.mode_config and context.mode_config.preferred_tools:
