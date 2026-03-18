@@ -1814,19 +1814,33 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 else:
                                     result = await executor.execute(tool_name, tool_input)
 
-                                # Track tool call
-                                all_tool_calls.append({
-                                    "tool": tool_name,
-                                    "input": tool_input,
-                                    "result": result.to_dict(),
-                                })
+                                # Handle artifact proposals from write tools
+                                if isinstance(result, ToolArtifactResult):
+                                    synthetic_text = result.to_synthetic_tool_result()
+                                    all_tool_calls.append({
+                                        "tool": tool_name,
+                                        "input": tool_input,
+                                        "result": {"artifact": result.to_dict()},
+                                    })
+                                    tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_use_id,
+                                        "content": synthetic_text,
+                                    })
+                                else:
+                                    # Track tool call
+                                    all_tool_calls.append({
+                                        "tool": tool_name,
+                                        "input": tool_input,
+                                        "result": result.to_dict(),
+                                    })
 
-                                # Format result for Claude
-                                tool_results.append({
-                                    "type": "tool_result",
-                                    "tool_use_id": tool_use_id,
-                                    "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
-                                })
+                                    # Format result for Claude
+                                    tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_use_id,
+                                        "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
+                                    })
 
                         # Add assistant message with tool use
                         anthropic_messages.append({
@@ -2054,19 +2068,33 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             else:
                                 result = await executor.execute(tool_name, tool_input)
 
-                            # Track tool call
-                            all_tool_calls.append({
-                                "tool": tool_name,
-                                "input": tool_input,
-                                "result": result.to_dict(),
-                            })
+                            # Handle artifact proposals from write tools
+                            if isinstance(result, ToolArtifactResult):
+                                synthetic_text = result.to_synthetic_tool_result()
+                                all_tool_calls.append({
+                                    "tool": tool_name,
+                                    "input": tool_input,
+                                    "result": {"artifact": result.to_dict()},
+                                })
+                                openai_messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": synthetic_text,
+                                })
+                            else:
+                                # Track tool call
+                                all_tool_calls.append({
+                                    "tool": tool_name,
+                                    "input": tool_input,
+                                    "result": result.to_dict(),
+                                })
 
-                            # Add tool result
-                            openai_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
-                            })
+                                # Add tool result
+                                openai_messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
+                                })
 
                         # --- Root cause injection (once, after first evidence round) ---
                         if (
