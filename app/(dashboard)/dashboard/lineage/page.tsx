@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import ReactFlow, {
   Node,
@@ -47,6 +48,9 @@ import {
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
+import { PolicyEditorPanel, type ApplyScope } from '@/components/lineage/PolicyEditorPanel';
+import { PolicyModeToolbar } from '@/components/lineage/PolicyModeToolbar';
+import type { EffectivePolicy, PolicyAssignRequest, PolicyStatus } from '@/types/policy';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import { SingleAssetMonitorModal, type AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
@@ -186,6 +190,61 @@ function LineagePageInner() {
     setMultiMonitorPreselect(preselectedNodeIds);
     setMultiMonitorModalOpen(true);
   }, []);
+
+  // Policy mode state (isolated from normal lineage state)
+  const [policyMode, setPolicyMode] = useState(false);
+  const [policySelectedNodeIds, setPolicySelectedNodeIds] = useState<Set<string>>(new Set());
+  const [nodePolicies, setNodePolicies] = useState<Map<string, EffectivePolicy>>(new Map());
+  const [policySaving, setPolicySaving] = useState(false);
+
+  // Exit policy mode on Escape
+  useEffect(() => {
+    if (!policyMode) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPolicyMode(false);
+        setPolicySelectedNodeIds(new Set());
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [policyMode]);
+
+  // Load existing policy assignments from DB on page load
+  useEffect(() => {
+    if (!lineageData?.nodes?.length) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const nodesPayload = lineageData.nodes.map((n) => ({
+          fqn: n.fullName || n.name,
+          domain: n.layer?.toLowerCase() || 'warehouse',
+          criticality: n.criticality?.toLowerCase() || 'medium',
+        }));
+        const res = await fetch('/api/schedule/policies/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nodes: nodesPayload }),
+        });
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          const policies = data.policies || {};
+          const map = new Map<string, EffectivePolicy>();
+          for (const [fqn, pol] of Object.entries(policies)) {
+            if ((pol as any).status !== 'none') {
+              map.set(fqn, pol as EffectivePolicy);
+            }
+          }
+          if (map.size > 0) setNodePolicies(map);
+        }
+      } catch {
+        // Non-critical — policies will load next time
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [lineageData?.nodes]);
 
   // LLM extraction state
   const [llmExtracting, setLlmExtracting] = useState(false);
@@ -850,6 +909,10 @@ function LineagePageInner() {
             // Visual flags
             isInferred: vn.inferred,
             isOverlay: vn.inferred,
+            // Policy mode data
+            isPolicyMode: policyMode,
+            isPolicySelected: policyMode && policySelectedNodeIds.has(vn.id),
+            policyStatus: (nodePolicies.get(vn.metadata?.fqn || vn.name)?.status as any) || 'none',
           },
         };
       });
@@ -932,6 +995,10 @@ function LineagePageInner() {
         platforms: node.platforms,
         columnCount: node.columns?.length || 0,
         materialization: node.materialization,
+        // Policy mode data
+        isPolicyMode: policyMode,
+        isPolicySelected: policyMode && policySelectedNodeIds.has(node.id),
+        policyStatus: (nodePolicies.get(node.fullName || node.name)?.status as any) || 'none',
       },
     }));
 
@@ -972,7 +1039,7 @@ function LineagePageInner() {
 
     const layouted = layoutGraph(nodes, edges, { direction: 'LR' });
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView]);
+  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView, policyMode, policySelectedNodeIds, nodePolicies]);
 
   // Build control plane flow nodes/edges
   // Uses rendered overview positions when available, falls back to Dagre
@@ -1184,8 +1251,22 @@ function LineagePageInner() {
   const activeFlowNodes = activeTab === 'control-plane' ? cpFlowNodes : flowNodes;
   const activeFlowEdges = activeTab === 'control-plane' ? cpFlowEdges : flowEdges;
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(activeFlowNodes);
+  const [nodes, setNodes, onNodesChangeBase] = useNodesState(activeFlowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(activeFlowEdges);
+
+  // In policy mode, filter out ReactFlow's internal selection changes
+  // so they don't interfere with our custom multi-select
+  const onNodesChange = useCallback(
+    (changes: any[]) => {
+      if (policyMode) {
+        const filtered = changes.filter((c: any) => c.type !== 'select');
+        if (filtered.length > 0) onNodesChangeBase(filtered);
+      } else {
+        onNodesChangeBase(changes);
+      }
+    },
+    [policyMode, onNodesChangeBase]
+  );
 
   useEffect(() => {
     setNodes(activeFlowNodes);
@@ -1195,6 +1276,30 @@ function LineagePageInner() {
   const handleNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
       if (node.id === ORPHAN_GROUP_ID) return; // Ignore clicks on orphan group background
+
+      // Policy mode: manage multi-select
+      // Shift/Cmd/Ctrl+click to add/remove from selection, plain click to replace
+      if (policyMode) {
+        setPolicySelectedNodeIds((prev) => {
+          const next = new Set(prev);
+          const isMultiKey = event.shiftKey || event.metaKey || event.ctrlKey;
+          if (isMultiKey) {
+            // Toggle this node in/out of selection
+            if (next.has(node.id)) {
+              next.delete(node.id);
+            } else {
+              next.add(node.id);
+            }
+          } else {
+            // Plain click: replace selection with this node
+            next.clear();
+            next.add(node.id);
+          }
+          return next;
+        });
+        return;
+      }
+
       if (activeTab === 'control-plane') {
         // Use InspectorPanel for control-plane nodes
         const viewNode = laneOverview?.nodes.find(n => n.id === node.id)
@@ -1226,7 +1331,7 @@ function LineagePageInner() {
       }
       setSelectedEdge(null);
     },
-    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview]
+    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview, policyMode]
   );
 
   const handleEdgeClick = useCallback(
@@ -1300,7 +1405,7 @@ function LineagePageInner() {
         </div>
       )}
       {/* Header */}
-      <div className="px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)]">
+      <div className={`px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)] ${policyMode ? 'ring-1 ring-inset ring-violet-500/20' : ''}`}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-lg font-semibold text-[var(--text)]">Pipeline Lineage</h1>
@@ -1313,6 +1418,23 @@ function LineagePageInner() {
               <span className="text-[12px] text-[var(--muted)]">
                 Last extracted: {formatDate(lineageData.lastExtracted)}
               </span>
+            )}
+            {/* Define Policy button */}
+            {lineageData && lineageData.nodes.length > 0 && !policyMode && (
+              <button
+                onClick={() => {
+                  setPolicyMode(true);
+                  setPolicySelectedNodeIds(new Set());
+                  setSelectedNode(null);
+                  setSelectedEdge(null);
+                }}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 text-[13px] font-medium transition-all"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                Define Policy
+              </button>
             )}
             <button
               onClick={extractWithLLM}
@@ -1397,7 +1519,21 @@ function LineagePageInner() {
           </button>
         </div>
 
-        {/* Stats */}
+        {/* Stats / Policy toolbar */}
+        {policyMode ? (
+          <PolicyModeToolbar
+            selectedCount={policySelectedNodeIds.size}
+            totalNodes={lineageData?.nodes?.length || 0}
+            saving={policySaving}
+            onSaveAll={() => {
+              // TODO: batch save all pending policies
+            }}
+            onExit={() => {
+              setPolicyMode(false);
+              setPolicySelectedNodeIds(new Set());
+            }}
+          />
+        ) : (
         <div className="flex items-center gap-6 mt-4 pt-4 border-t border-[var(--border-faint)]">
           {activeTab === 'control-plane' ? (
             <>
@@ -1433,6 +1569,7 @@ function LineagePageInner() {
             </>
           )}
         </div>
+        )}
       </div>
 
       {/* Error message */}
@@ -1515,6 +1652,10 @@ function LineagePageInner() {
                 type: 'smoothstep',
               }}
               proOptions={{ hideAttribution: true }}
+              // In policy mode: disable ReactFlow's built-in multi-select so shift+click
+              // reaches our handler instead of being consumed by ReactFlow's selection system
+              multiSelectionKeyCode={policyMode ? null : 'Shift'}
+              selectionKeyCode={policyMode ? null : 'Shift'}
             >
               <Controls className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg [&>button]:!bg-[var(--subtle-bg)] [&>button]:!border-[var(--border-medium)] [&>button]:!text-[var(--text-tertiary)]" />
               <MiniMap
@@ -1657,8 +1798,97 @@ function LineagePageInner() {
           />
         )}
 
+        {/* Side panel - Policy editor */}
+        {policyMode && (
+          <PolicyEditorPanel
+            selectedNodeIds={policySelectedNodeIds}
+            allNodes={lineageData?.nodes || []}
+            allEdges={lineageData?.edges || []}
+            stackId={stackId || ''}
+            nodePolicies={nodePolicies}
+            onApply={async (request: PolicyAssignRequest, scope: ApplyScope) => {
+              setPolicySaving(true);
+              try {
+                const res = await fetch('/api/schedule/policies/assign', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(request),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  const count = data.assignments?.length || 0;
+                  toast.success(`Policy applied to ${count} node${count !== 1 ? 's' : ''}`);
+
+                  // Re-fetch resolved policies from DB so local state has full config
+                  try {
+                    const nodesPayload = (lineageData?.nodes || []).map((n) => ({
+                      fqn: n.fullName || n.name,
+                      domain: n.layer?.toLowerCase() || 'warehouse',
+                      criticality: n.criticality?.toLowerCase() || 'medium',
+                    }));
+                    const resolveRes = await fetch('/api/schedule/policies/resolve', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ nodes: nodesPayload }),
+                    });
+                    if (resolveRes.ok) {
+                      const resolveData = await resolveRes.json();
+                      const policies = resolveData.policies || {};
+                      const map = new Map<string, EffectivePolicy>();
+                      for (const [fqn, pol] of Object.entries(policies)) {
+                        if ((pol as any).status !== 'none') {
+                          map.set(fqn, pol as EffectivePolicy);
+                        }
+                      }
+                      setNodePolicies(map);
+                    }
+                  } catch {
+                    // Non-critical — badges still show from assign response
+                    const newPolicies = new Map(nodePolicies);
+                    const profileName = (request as any)._profileName || null;
+                    for (const a of data.assignments || []) {
+                      if (a.nodeFqn) {
+                        newPolicies.set(a.nodeFqn, {
+                          source: 'direct_profile',
+                          profileId: request.profileId,
+                          profileName,
+                          status: 'assigned',
+                          freshness: {}, schema: {}, volume: {}, anomaly: {},
+                          quality: {}, ingestion: {}, bi: {}, orchestration: {}, transform: {},
+                        });
+                      }
+                    }
+                    setNodePolicies(newPolicies);
+                  }
+                } else {
+                  const errText = await res.text().catch(() => '');
+                  let errMsg = `Failed to apply policy (${res.status})`;
+                  try {
+                    const errData = JSON.parse(errText);
+                    errMsg = errData.error || errMsg;
+                    console.error('[Policy] Assignment failed:', res.status, errData);
+                  } catch {
+                    console.error('[Policy] Assignment failed:', res.status, errText.slice(0, 500));
+                  }
+                  toast.error(errMsg);
+                }
+              } catch (err) {
+                console.error('[Policy] Error assigning:', err);
+                toast.error('Failed to apply policy');
+              } finally {
+                setPolicySaving(false);
+              }
+            }}
+            onClose={() => {
+              setPolicyMode(false);
+              setPolicySelectedNodeIds(new Set());
+            }}
+            onClearSelection={() => setPolicySelectedNodeIds(new Set())}
+          />
+        )}
+
         {/* Side panel - Node details */}
-        {activeTab !== 'control-plane' && selectedNode && !selectedEdge && (
+        {!policyMode && activeTab !== 'control-plane' && selectedNode && !selectedEdge && (
           (selectedNode.category === 'dag' || selectedNode.category === 'task') ? (
             <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-sunken)] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
@@ -2053,6 +2283,23 @@ function LineagePageInner() {
               onNodeNavigate={handleNavigateToNode}
               onCreateSingleMonitor={handleCreateSingleMonitor}
               onCreateMultiMonitor={handleCreateMultiMonitor}
+              policyInfo={(() => {
+                const fqn = selectedNode.fullName || selectedNode.name;
+                const p = nodePolicies.get(fqn);
+                if (!p) return null;
+                return {
+                  profileName: p.profileName || null,
+                  status: p.status as 'assigned' | 'inherited' | 'override' | 'none',
+                  source: p.source || undefined,
+                };
+              })()}
+              onEditPolicy={(nodeId) => {
+                setPolicyMode(true);
+                // Find the engine view node ID (without lineage- prefix)
+                const viewNodeId = nodeId.replace('lineage-', '');
+                setPolicySelectedNodeIds(new Set([viewNodeId]));
+                setSelectedNode(null);
+              }}
             />
           )
         )}

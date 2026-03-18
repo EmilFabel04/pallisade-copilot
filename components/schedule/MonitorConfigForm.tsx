@@ -34,7 +34,7 @@ interface MonitorConfigFormProps {
 }
 
 // Legacy constants for warehouse monitor special cases
-const LEGACY_ADVANCED_MONITORS = ['FRESHNESS', 'VOLUME', 'ANOMALY', 'UNIQUENESS', 'CUSTOM_SQL', 'CERTIFICATE', 'LOG_ANALYSIS'];
+const LEGACY_ADVANCED_MONITORS = ['FRESHNESS', 'VOLUME', 'ANOMALY', 'CUSTOM_SQL', 'CERTIFICATE', 'LOG_ANALYSIS'];
 
 export function MonitorConfigForm({
   monitorType,
@@ -114,10 +114,6 @@ export function MonitorConfigForm({
     // Special: ANOMALY defaults
     if (key === 'ANOMALY') {
       defaults.metric = 'row_count';
-    }
-    // Special: UNIQUENESS defaults — check all columns by default
-    if (key === 'UNIQUENESS') {
-      defaults.column = '*';
     }
     onConfigChange(defaults);
   };
@@ -390,53 +386,6 @@ export function MonitorConfigForm({
                   className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
                 />
               </div>
-            </div>
-          )}
-
-          {/* UNIQUENESS */}
-          {(monitorType === 'UNIQUENESS' || monitorType === 'uniqueness') && (
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                  Column
-                </label>
-                <select
-                  value={config.column || '*'}
-                  onChange={(e) => {
-                    if (e.target.value === '*') {
-                      const { column: _col, ...rest } = config;
-                      onConfigChange({ ...rest, column: '*' });
-                    } else if (e.target.value === '__custom__') {
-                      onConfigChange({ ...config, column: '' });
-                    } else {
-                      onConfigChange({ ...config, column: e.target.value });
-                    }
-                  }}
-                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)]"
-                >
-                  <option value="*">All columns (auto-discover)</option>
-                  <option value="__custom__">Specific column...</option>
-                </select>
-                {config.column === '*' && (
-                  <p className="text-[11px] text-[var(--text-faint)] mt-1">
-                    Auto-discovers all columns and checks uniqueness on each one
-                  </p>
-                )}
-              </div>
-              {config.column !== undefined && config.column !== '*' && (
-                <div>
-                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
-                    Column name <span className="text-red-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={config.column || ''}
-                    onChange={(e) => onConfigChange({ ...config, column: e.target.value })}
-                    placeholder="e.g. user_id, email"
-                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--overlay-strong)]"
-                  />
-                </div>
-              )}
             </div>
           )}
 

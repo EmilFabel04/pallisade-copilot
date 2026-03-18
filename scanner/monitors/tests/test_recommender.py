@@ -7,7 +7,8 @@ from ...lineage.graph import (
 from ..recommender import (
     recommend_for_node, get_bundles, is_bi_node,
     MonitorRecommendation, MonitorBundle,
-    FRESHNESS, VOLUME, SCHEMA_CHANGE, NULL_RATE, UNIQUENESS, ANOMALY,
+    FRESHNESS, VOLUME, SCHEMA_CHANGE, NULL_RATE, ANOMALY,
+    NULL_CHECK, UNIQUENESS_CHECK, OUTLIER_DETECTION,
     SYNC_LAG, FAILED_SYNCS, CONNECTOR_SCHEMA_DRIFT,
     DAG_LAST_RUN, DAG_SCHEDULE_LAG,
     DBT_TEST_FAILURES, DBT_MODEL_FRESHNESS, DBT_SOURCE_FRESHNESS,
@@ -81,9 +82,8 @@ class TestDirectRecommendations:
         node = _make_node(criticality="critical")
         recs = recommend_for_node(node)
         keys = _rec_keys(recs)
-        assert NULL_RATE in keys
-        assert UNIQUENESS in keys
-        assert ANOMALY in keys
+        assert NULL_CHECK in keys
+        assert OUTLIER_DETECTION in keys
         # Should also have the base monitors
         assert FRESHNESS in keys
         assert VOLUME in keys
@@ -92,16 +92,17 @@ class TestDirectRecommendations:
         node = _make_node(criticality="high")
         recs = recommend_for_node(node)
         keys = _rec_keys(recs)
-        assert NULL_RATE in keys
-        assert UNIQUENESS in keys
+        assert NULL_CHECK in keys
+        assert OUTLIER_DETECTION in keys
 
-    def test_medium_criticality_no_extra_monitors(self):
+    def test_medium_criticality_no_outlier_detection(self):
+        """Medium-criticality still gets NULL_CHECK/UNIQUENESS_CHECK but not OUTLIER_DETECTION."""
         node = _make_node(criticality="medium")
         recs = recommend_for_node(node)
         keys = _rec_keys(recs)
-        assert NULL_RATE not in keys
-        assert UNIQUENESS not in keys
-        assert ANOMALY not in keys
+        assert NULL_CHECK in keys      # Now recommended for all data assets
+        assert UNIQUENESS_CHECK in keys  # Now recommended for all data assets
+        assert OUTLIER_DETECTION not in keys  # Only for high/critical
 
     def test_ingestion_connector_gets_sync_monitors(self):
         node = _make_node(
@@ -141,7 +142,8 @@ class TestDirectRecommendations:
         assert DAG_LAST_RUN in keys
         assert DAG_SCHEDULE_LAG in keys
 
-    def test_dbt_model_gets_test_freshness(self):
+    def test_dbt_model_gets_data_asset_monitors(self):
+        """dbt models are data assets — get core SQL monitors, not just dbt-specific."""
         node = _make_node(
             node_type=NodeType.MODEL,
             platform_domain=PlatformDomain.TRANSFORM,
@@ -151,8 +153,11 @@ class TestDirectRecommendations:
         )
         recs = recommend_for_node(node)
         keys = _rec_keys(recs)
-        assert DBT_TEST_FAILURES in keys
-        assert DBT_MODEL_FRESHNESS in keys
+        assert FRESHNESS in keys
+        assert VOLUME in keys
+        assert SCHEMA_CHANGE in keys
+        assert NULL_CHECK in keys
+        assert UNIQUENESS_CHECK in keys
 
     def test_bi_dashboard_gets_direct_bi_monitors(self):
         node = _make_node(

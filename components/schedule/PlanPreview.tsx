@@ -76,7 +76,7 @@ const MONITOR_KEY_COLORS: Record<string, string> = {
 };
 
 function MonitorKeyBadge({ monitorKey }: { monitorKey: string }) {
-  const color = MONITOR_KEY_COLORS[monitorKey] || 'bg-white/10 text-white/50';
+  const color = MONITOR_KEY_COLORS[monitorKey] || 'bg-[var(--overlay-medium)] text-[var(--muted)]';
   return (
     <span
       className={cn(
@@ -110,7 +110,7 @@ function GroupCard({
   monitorToggles,
   onToggleMonitor,
 }: GroupCardProps) {
-  const familyColor = FAMILY_COLORS[group.family] || 'bg-white/10 text-white/50';
+  const familyColor = FAMILY_COLORS[group.family] || 'bg-[var(--overlay-medium)] text-[var(--muted)]';
   const familyLabel = FAMILY_LABELS[group.family] || group.family;
   const coveragePct = Math.round(group.coverage_pct * 100);
 

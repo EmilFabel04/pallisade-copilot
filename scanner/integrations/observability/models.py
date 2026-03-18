@@ -114,7 +114,7 @@ class CheckType(Enum):
             "freshness": cls.FRESHNESS,
             "volume": cls.VOLUME,
             "null_percentage": cls.NULLS,
-            "distinct_count": cls.UNIQUENESS,
+            "distinct_count": cls.ANOMALY,
             "distribution": cls.DISTRIBUTION,
             "custom_sql": cls.CUSTOM_SQL,
         }

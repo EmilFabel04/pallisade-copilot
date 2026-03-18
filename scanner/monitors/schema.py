@@ -125,8 +125,12 @@ class SchemaMonitor(BaseMonitor):
 
     def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
+        self.mode: str = self.config.get("mode", "change_detection")
         self.baseline_columns: Optional[List[Dict[str, str]]] = self.config.get(
             "baseline_columns"
+        )
+        self.expected_types: Optional[Dict[str, str]] = self.config.get(
+            "expected_types"
         )
         self.fail_on_added = self.config.get("fail_on_column_added", False)
         self.fail_on_removed = self.config.get("fail_on_column_removed", True)
@@ -169,6 +173,9 @@ class SchemaMonitor(BaseMonitor):
         query_results: List[Dict[str, Any]],
         target_fqn: str,
     ) -> MonitorResult:
+        if self.mode == "type_validation":
+            return self._evaluate_type_validation(query_results, target_fqn)
+
         if not query_results:
             return MonitorResult(
                 monitor_type=self.monitor_type,
@@ -418,6 +425,110 @@ class SchemaMonitor(BaseMonitor):
                     f"Breakdown: {', '.join(f'{v} {k}' for k, v in severity_counts.items())}."
                 ),
             },
+        )
+
+    def _evaluate_type_validation(
+        self,
+        query_results: List[Dict[str, Any]],
+        target_fqn: str,
+    ) -> MonitorResult:
+        """Validate column data types against expected_types mapping.
+
+        Used when mode="type_validation" (Data Type Validation monitor).
+        """
+        monitor_type_label = "data_type_validation"
+
+        if not query_results:
+            return MonitorResult(
+                monitor_type=monitor_type_label,
+                target_fqn=target_fqn,
+                status=MonitorStatus.ERROR,
+                message="No columns found — table may not exist.",
+            )
+
+        current_columns = {
+            row["column_name"].lower(): self._normalize_type(
+                row.get("data_type", "")
+            )
+            for row in query_results
+        }
+
+        # First-run / no expected types: snapshot current types as baseline
+        if not self.expected_types:
+            return MonitorResult(
+                monitor_type=monitor_type_label,
+                target_fqn=target_fqn,
+                status=MonitorStatus.PASS,
+                message=(
+                    f"Data type baseline established with "
+                    f"{len(current_columns)} columns."
+                ),
+                details={
+                    "column_count": len(current_columns),
+                    "current_types": current_columns,
+                    "is_baseline_run": True,
+                },
+            )
+
+        # Compare current types against expected
+        mismatches: List[Dict[str, Any]] = []
+        missing_columns: List[str] = []
+
+        for col_name, expected_type in self.expected_types.items():
+            col_lower = col_name.lower()
+            normalized_expected = self._normalize_type(expected_type)
+            actual_type = current_columns.get(col_lower)
+
+            if actual_type is None:
+                missing_columns.append(col_name)
+                continue
+
+            if actual_type != normalized_expected:
+                mismatches.append({
+                    "column": col_name,
+                    "expected_type": normalized_expected,
+                    "actual_type": actual_type,
+                })
+
+        details: Dict[str, Any] = {
+            "mismatches": mismatches,
+            "missing_columns": missing_columns,
+            "checked_columns": len(self.expected_types),
+            "current_column_count": len(current_columns),
+        }
+
+        if not mismatches and not missing_columns:
+            return MonitorResult(
+                monitor_type=monitor_type_label,
+                target_fqn=target_fqn,
+                status=MonitorStatus.PASS,
+                message=(
+                    f"Data type validation passed: all "
+                    f"{len(self.expected_types)} column types match."
+                ),
+                details=details,
+            )
+
+        issues = []
+        if mismatches:
+            cols = ", ".join(
+                f"{m['column']} (expected {m['expected_type']}, "
+                f"got {m['actual_type']})"
+                for m in mismatches
+            )
+            issues.append(f"{len(mismatches)} type mismatch(es): {cols}")
+        if missing_columns:
+            issues.append(
+                f"{len(missing_columns)} expected column(s) missing: "
+                f"{', '.join(missing_columns)}"
+            )
+
+        return MonitorResult(
+            monitor_type=monitor_type_label,
+            target_fqn=target_fqn,
+            status=MonitorStatus.FAIL,
+            message=f"Data type validation failed: {'; '.join(issues)}.",
+            details=details,
         )
 
 

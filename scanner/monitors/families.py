@@ -90,7 +90,7 @@ MONITOR_FAMILIES: Dict[str, MonitorFamilyDefinition] = {
     "data_drift": MonitorFamilyDefinition(
         key="data_drift",
         label="Data Drift",
-        description="Schema changes, volume anomalies, uniqueness, and null rate checks across data assets.",
+        description="Schema changes, null checks, uniqueness checks, and outlier detection across data assets.",
         eligible_domains=["warehouse", "transform", "ingestion"],
         eligible_asset_kinds=["table", "view", "model", "dataset"],
         watch_type="data_drift",

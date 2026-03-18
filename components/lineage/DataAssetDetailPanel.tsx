@@ -60,6 +60,12 @@ interface MonitorRecommendation {
   already_monitored: boolean;
 }
 
+interface PolicyInfo {
+  profileName: string | null;
+  status: 'assigned' | 'inherited' | 'override' | 'none';
+  source?: string;
+}
+
 interface DataAssetDetailPanelProps {
   node: UnifiedLineageNode;
   allNodes: UnifiedLineageNode[];
@@ -69,6 +75,8 @@ interface DataAssetDetailPanelProps {
   onNodeNavigate: (nodeId: string) => void;
   onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
   onCreateMultiMonitor?: (preselectedNodeIds: string[]) => void;
+  policyInfo?: PolicyInfo | null;
+  onEditPolicy?: (nodeId: string) => void;
 }
 
 // ─── Collapsible Section ───────────────────────────────────────────
@@ -246,6 +254,8 @@ export function DataAssetDetailPanel({
   onNodeNavigate,
   onCreateSingleMonitor,
   onCreateMultiMonitor,
+  policyInfo,
+  onEditPolicy,
 }: DataAssetDetailPanelProps) {
   const [blastRadius, setBlastRadius] = useState<BlastRadiusResult | null>(null);
   const [blastLoading, setBlastLoading] = useState(false);
@@ -1325,6 +1335,53 @@ export function DataAssetDetailPanel({
             <div>
               <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Owner</label>
               <p className="text-[13px] text-[var(--text)] mt-1">{node.owner}</p>
+            </div>
+          )}
+        </div>
+
+        {/* ─── Monitoring Policy ────────────────────────────── */}
+        <div className="border-t border-[var(--subtle-border)] pt-3">
+          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Monitoring Policy</label>
+          {policyInfo && policyInfo.status !== 'none' ? (
+            <div className="mt-2 p-2.5 rounded-lg border border-violet-500/30 bg-violet-500/10">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-violet-400" />
+                  <span className="text-[13px] font-medium text-violet-300">
+                    {policyInfo.profileName || 'Policy Assigned'}
+                  </span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 capitalize">
+                  {policyInfo.status}
+                </span>
+              </div>
+              {policyInfo.source && (
+                <p className="text-[11px] text-[var(--muted)] mt-1">{policyInfo.source}</p>
+              )}
+              {onEditPolicy && (
+                <button
+                  onClick={() => onEditPolicy(node.id)}
+                  className="mt-2 text-[11px] text-violet-400 hover:text-violet-300 hover:underline flex items-center gap-1"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  Edit Policy
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
+              <p className="text-[12px] text-[var(--muted)]">No policy assigned</p>
+              {onEditPolicy && (
+                <button
+                  onClick={() => onEditPolicy(node.id)}
+                  className="mt-1.5 text-[11px] text-violet-400 hover:text-violet-300 hover:underline flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Policy
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -375,7 +375,7 @@ function RecommendationsTab({
             {rec.closes_gaps.map((g) => (
               <span
                 key={g}
-                className="rounded bg-green-950/50 px-1.5 py-0.5 text-[10px] text-green-400"
+                className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] text-green-600 dark:text-green-400"
               >
                 {g.replace(/_/g, " ")}
               </span>

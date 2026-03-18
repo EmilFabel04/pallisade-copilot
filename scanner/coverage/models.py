@@ -51,8 +51,14 @@ class CoverageDimension(str, Enum):
     NULL_RATE_MONITOR = "null_rate_monitor"
     UNIQUENESS_CHECK = "uniqueness_check"
     REFERENTIAL_INTEGRITY = "referential_integrity"
-    DISTRIBUTION_MONITOR = "distribution_monitor"
+    RANGE_VALIDATION_CHECK = "range_validation_check"
+    ACCEPTED_VALUES_CHECK = "accepted_values_check"
+    DATE_CONSISTENCY_CHECK = "date_consistency_check"
     CUSTOM_SQL_CHECK = "custom_sql_check"
+    OUTLIER_DETECTION = "outlier_detection"
+
+    # Legacy (kept for backward compat)
+    DISTRIBUTION_MONITOR = "distribution_monitor"
     ANOMALY_DETECTION = "anomaly_detection"
 
     # Lineage dimensions
@@ -83,11 +89,21 @@ class MonitorType(str, Enum):
     FRESHNESS = "freshness"
     VOLUME = "volume"
     SCHEMA_CHANGE = "schema_change"
-    NULL_RATE = "null_rate"
-    UNIQUENESS = "uniqueness"
-    DISTRIBUTION = "distribution"
     REFERENTIAL = "referential"
     CUSTOM_SQL = "custom_sql"
+
+    # New canonical warehouse monitors
+    NULL_CHECK = "null_check"
+    UNIQUENESS_CHECK = "uniqueness_check"
+    RANGE_VALIDATION = "range_validation"
+    ACCEPTED_VALUES = "accepted_values"
+    DATE_CONSISTENCY = "date_consistency"
+    DATA_TYPE_VALIDATION = "data_type_validation"
+    OUTLIER_DETECTION = "outlier_detection"
+
+    # Legacy (deprecated — kept for backward compat)
+    NULL_RATE = "null_rate"
+    DISTRIBUTION = "distribution"
     ANOMALY = "anomaly"
 
 
@@ -113,9 +129,11 @@ CATEGORY_DIMENSIONS: Dict[CoverageCategory, List[CoverageDimension]] = {
         CoverageDimension.NULL_RATE_MONITOR,
         CoverageDimension.UNIQUENESS_CHECK,
         CoverageDimension.REFERENTIAL_INTEGRITY,
-        CoverageDimension.DISTRIBUTION_MONITOR,
+        CoverageDimension.RANGE_VALIDATION_CHECK,
+        CoverageDimension.ACCEPTED_VALUES_CHECK,
+        CoverageDimension.DATE_CONSISTENCY_CHECK,
         CoverageDimension.CUSTOM_SQL_CHECK,
-        CoverageDimension.ANOMALY_DETECTION,
+        CoverageDimension.OUTLIER_DETECTION,
     ],
     CoverageCategory.LINEAGE: [
         CoverageDimension.UPSTREAM_LINKED,
@@ -147,8 +165,10 @@ NODE_TYPE_APPLICABLE_DIMENSIONS: Dict[str, List[CoverageDimension]] = {
         CoverageDimension.NULL_RATE_MONITOR,
         CoverageDimension.UNIQUENESS_CHECK,
         CoverageDimension.REFERENTIAL_INTEGRITY,
-        CoverageDimension.DISTRIBUTION_MONITOR,
-        CoverageDimension.ANOMALY_DETECTION,
+        CoverageDimension.RANGE_VALIDATION_CHECK,
+        CoverageDimension.ACCEPTED_VALUES_CHECK,
+        CoverageDimension.DATE_CONSISTENCY_CHECK,
+        CoverageDimension.OUTLIER_DETECTION,
         CoverageDimension.UPSTREAM_LINKED,
         CoverageDimension.DOWNSTREAM_LINKED,
         CoverageDimension.COLUMN_LINEAGE_MAPPED,
@@ -176,8 +196,10 @@ NODE_TYPE_APPLICABLE_DIMENSIONS: Dict[str, List[CoverageDimension]] = {
         CoverageDimension.COLUMN_TYPE_VALIDATION,
         CoverageDimension.NULL_RATE_MONITOR,
         CoverageDimension.UNIQUENESS_CHECK,
-        CoverageDimension.DISTRIBUTION_MONITOR,
-        CoverageDimension.ANOMALY_DETECTION,
+        CoverageDimension.RANGE_VALIDATION_CHECK,
+        CoverageDimension.ACCEPTED_VALUES_CHECK,
+        CoverageDimension.DATE_CONSISTENCY_CHECK,
+        CoverageDimension.OUTLIER_DETECTION,
         CoverageDimension.UPSTREAM_LINKED,
         CoverageDimension.DOWNSTREAM_LINKED,
         CoverageDimension.COLUMN_LINEAGE_MAPPED,

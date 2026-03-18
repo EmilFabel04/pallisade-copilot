@@ -525,8 +525,6 @@ class SchedulerService:
             col = config.get("column", "")
             metric = config.get("metric", "value")
             return f"{col}.{metric}" if col else metric
-        if monitor_type == "uniqueness":
-            return "uniqueness_pct"
         if monitor_type == "schema":
             return "schema_change_count"
         return "value"
@@ -573,12 +571,6 @@ class SchedulerService:
                 metric = config.get("metric", "value")
                 name = f"{col}.{metric}" if col else metric
                 metrics.append({"metric_name": name, "value": float(primary_value), "details": base_details})
-            elif monitor_type == "uniqueness":
-                metrics.append({"metric_name": "uniqueness_pct", "value": float(primary_value), "details": base_details})
-                # Record distinct_count if available
-                distinct = details.get("distinct_count")
-                if distinct is not None:
-                    metrics.append({"metric_name": "distinct_count", "value": float(distinct), "details": base_details})
             elif monitor_type == "schema_change":
                 metrics.append({"metric_name": "schema_change_count", "value": float(primary_value), "details": base_details})
             elif monitor_type == "referential":

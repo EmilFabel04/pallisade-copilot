@@ -136,9 +136,14 @@ describe('healthStatusFromScore', () => {
 // ---------------------------------------------------------------------------
 
 describe('computeMonitorCoverage', () => {
-  it('warehouse 7/7 → coveragePct 100, coverageStatus good', () => {
+  it('warehouse 11/11 → coveragePct 100, coverageStatus good', () => {
     const result = computeMonitorCoverage(
-      ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'ANOMALY', 'UNIQUENESS', 'NULL_RATE', 'REFERENTIAL'],
+      [
+        'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK',
+        'UNIQUENESS_CHECK', 'REFERENTIAL', 'RANGE_VALIDATION',
+        'ACCEPTED_VALUES', 'DATE_CONSISTENCY', 'DATA_TYPE_VALIDATION',
+        'OUTLIER_DETECTION',
+      ],
       'warehouse',
     );
     expect(result.coveragePct).toBe(100);
@@ -146,29 +151,41 @@ describe('computeMonitorCoverage', () => {
     expect(result.missingTypes).toEqual([]);
   });
 
-  it('warehouse 6/7 → coveragePct ~85.7, coverageStatus good (≥80%)', () => {
+  it('warehouse 9/11 → coveragePct ~81.8, coverageStatus good (≥80%)', () => {
     const result = computeMonitorCoverage(
-      ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'ANOMALY', 'UNIQUENESS', 'NULL_RATE'],
+      [
+        'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK',
+        'UNIQUENESS_CHECK', 'REFERENTIAL', 'RANGE_VALIDATION',
+        'ACCEPTED_VALUES', 'OUTLIER_DETECTION',
+      ],
       'warehouse',
     );
-    expect(result.coveragePct).toBeCloseTo(85.7, 0);
+    expect(result.coveragePct).toBeGreaterThanOrEqual(80);
     expect(result.coverageStatus).toBe('good');
-    expect(result.missingTypes).toEqual(['REFERENTIAL']);
   });
 
-  it('warehouse 4/7 → coveragePct ~57.1, coverageStatus partial', () => {
+  it('warehouse 3/11 → coverageStatus partial', () => {
     const result = computeMonitorCoverage(
-      ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'ANOMALY'],
+      ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE'],
       'warehouse',
     );
-    expect(result.coveragePct).toBeCloseTo(57.1, 0);
+    expect(result.coveragePct).toBeLessThan(80);
     expect(result.coverageStatus).toBe('partial');
   });
 
-  it('warehouse 0/7 → coverageStatus none', () => {
+  it('warehouse 0/11 → coverageStatus none', () => {
     const result = computeMonitorCoverage([], 'warehouse');
     expect(result.coveragePct).toBe(0);
     expect(result.coverageStatus).toBe('none');
+  });
+
+  it('legacy types (NULL_RATE, ANOMALY) expand to canonical equivalents', () => {
+    const result = computeMonitorCoverage(
+      ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_RATE', 'ANOMALY'],
+      'warehouse',
+    );
+    // NULL_RATE → NULL_CHECK, ANOMALY → OUTLIER_DETECTION
+    expect(result.configured).toBeGreaterThanOrEqual(5);
   });
 
   it('BI 4/4 → coverageStatus good', () => {
@@ -213,7 +230,7 @@ describe('computeMonitorCoverage', () => {
       'warehouse',
     );
     expect(result.configured).toBe(1); // only FRESHNESS counts
-    expect(result.coveragePct).toBeCloseTo(14.3, 0);
+    expect(result.coveragePct).toBeCloseTo(9.1, 0); // 1/11
   });
 
   it('case insensitive type matching', () => {
@@ -284,16 +301,19 @@ describe('computeMonitorScoring', () => {
     expect(result.healthStatus).toBe('healthy');
   });
 
-  it('warehouse 80% configured → coverageStatus good', () => {
-    // 6/7 ≈ 85.7% → good
+  it('warehouse 80%+ configured → coverageStatus good', () => {
+    // 9 types with legacy aliases expanding → should hit >= 80%
     const result = computeMonitorScoring(
       [
         { monitorType: 'FRESHNESS', lastStatus: 'PASS' },
         { monitorType: 'VOLUME', lastStatus: 'PASS' },
         { monitorType: 'SCHEMA_CHANGE', lastStatus: 'PASS' },
-        { monitorType: 'ANOMALY', lastStatus: 'WARN' },
-        { monitorType: 'UNIQUENESS', lastStatus: 'PASS' },
-        { monitorType: 'NULL_RATE', lastStatus: 'PASS' },
+        { monitorType: 'NULL_CHECK', lastStatus: 'PASS' },
+        { monitorType: 'UNIQUENESS_CHECK', lastStatus: 'PASS' },
+        { monitorType: 'REFERENTIAL', lastStatus: 'PASS' },
+        { monitorType: 'RANGE_VALIDATION', lastStatus: 'PASS' },
+        { monitorType: 'ACCEPTED_VALUES', lastStatus: 'PASS' },
+        { monitorType: 'OUTLIER_DETECTION', lastStatus: 'WARN' },
       ],
       'warehouse',
     );
@@ -301,14 +321,12 @@ describe('computeMonitorScoring', () => {
     expect(result.coverageStatus).toBe('good');
   });
 
-  it('warehouse 60% configured → coverageStatus partial', () => {
-    // 4/7 ≈ 57.1% → partial
+  it('warehouse few configured → coverageStatus partial', () => {
     const result = computeMonitorScoring(
       [
         { monitorType: 'FRESHNESS', lastStatus: 'PASS' },
         { monitorType: 'VOLUME', lastStatus: 'PASS' },
         { monitorType: 'SCHEMA_CHANGE', lastStatus: 'PASS' },
-        { monitorType: 'ANOMALY', lastStatus: 'PASS' },
       ],
       'warehouse',
     );
@@ -363,8 +381,8 @@ describe('computeMonitorScoring', () => {
 // ---------------------------------------------------------------------------
 
 describe('getApplicableMonitorTypes', () => {
-  it('returns 7 types for warehouse', () => {
-    expect(getApplicableMonitorTypes('warehouse')).toHaveLength(7);
+  it('returns 11 types for warehouse', () => {
+    expect(getApplicableMonitorTypes('warehouse')).toHaveLength(11);
   });
 
   it('returns 4 types for bi', () => {

@@ -86,6 +86,7 @@ def create_app() -> FastAPI:
     from .routers.drivers import router as drivers_router
     from .routers.presets import router as presets_router
     from .routers.plans import router as plans_router
+    from .routers.policies import router as policies_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -122,6 +123,9 @@ def create_app() -> FastAPI:
 
     # Monitoring Plans API
     app.include_router(plans_router, prefix="/api/v1", tags=["Plans"])
+
+    # Pipeline Monitoring Policies API
+    app.include_router(policies_router, prefix="/api/v1", tags=["Policies"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

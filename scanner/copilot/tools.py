@@ -1002,12 +1002,12 @@ class ToolRegistry:
                 ToolParameter(
                     "monitor_type", "string",
                     "Filter by monitor type: 'freshness', 'volume', 'schema_change', "
-                    "'null_rate', 'uniqueness', 'distribution', 'anomaly', or 'all'.",
+                    "'null_rate', 'distribution', 'anomaly', or 'all'.",
                     required=False,
                     default="all",
                     enum=[
                         "all", "freshness", "volume", "schema_change",
-                        "null_rate", "uniqueness", "distribution", "anomaly",
+                        "null_rate", "distribution", "anomaly",
                     ],
                 ),
                 ToolParameter(

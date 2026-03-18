@@ -22,7 +22,11 @@ from .volume import VolumeMonitor
 from .schema import SchemaMonitor
 from .anomaly import AnomalyMonitor
 from .referential import ReferentialIntegrityMonitor
-from .uniqueness import UniquenessMonitor
+from .null_check import NullCheckMonitor
+from .uniqueness_check import UniquenessCheckMonitor
+from .range_validation import RangeValidationMonitor
+from .accepted_values import AcceptedValuesMonitor
+from .date_consistency import DateConsistencyMonitor
 from .explainer import enrich_result
 from .infrastructure import INFRA_MONITOR_TYPES, INFRA_MONITOR_REGISTRY
 from .bi import BI_MONITOR_TYPES, BI_MONITOR_REGISTRY
@@ -39,19 +43,30 @@ MONITOR_REGISTRY: Dict[str, type] = {
     "schema_change": SchemaMonitor,
     "anomaly": AnomalyMonitor,
     "referential": ReferentialIntegrityMonitor,
-    "uniqueness": UniquenessMonitor,
+    "null_check": NullCheckMonitor,
+    "uniqueness_check": UniquenessCheckMonitor,
+    "range_validation": RangeValidationMonitor,
+    "accepted_values": AcceptedValuesMonitor,
+    "date_consistency": DateConsistencyMonitor,
+    # data_type_validation uses SchemaMonitor with mode="type_validation"
+    "data_type_validation": SchemaMonitor,
 }
 
-# Map UI-only monitor types to real backend implementations.
-# Each entry is (backend_type, default_config_overrides).
 # Maximum number of columns to scan in multi-column anomaly mode.
 MAX_MULTI_COLUMNS = 50
 
-MONITOR_ROUTING: Dict[str, tuple] = {
-    "null_rate": ("anomaly", {"metric": "null_rate", "column": "*"}),
-    # "uniqueness" is now a first-class monitor in MONITOR_REGISTRY
+# Legacy routing: old UI-only monitor types → new canonical types.
+# Existing monitors saved in DB with these types continue to execute.
+LEGACY_ROUTING: Dict[str, tuple] = {
+    "null_rate": ("null_check", {}),
+    "uniqueness": ("uniqueness_check", {}),
     "distribution": ("anomaly", {"metric": "avg", "column": "*"}),
+    "outlier_detection": ("anomaly", {"column": "*"}),
 }
+
+# Kept for backward compat — callers that reference MONITOR_ROUTING
+# directly still get routed correctly.
+MONITOR_ROUTING: Dict[str, tuple] = LEGACY_ROUTING
 
 
 class MonitorExecutor:
@@ -577,19 +592,29 @@ class MonitorExecutor:
     def resolve_monitor_type(
         monitor_type: str, config: Dict[str, Any] | None = None
     ) -> tuple:
-        """Resolve a monitor type, applying routing for UI-only types.
+        """Resolve a monitor type, applying routing for legacy UI types.
 
         Returns (resolved_type, merged_config).
         """
         config = dict(config) if config else {}
         key = monitor_type.lower()
 
-        routing = MONITOR_ROUTING.get(key)
+        # Legacy routing: old type names → new canonical types
+        routing = LEGACY_ROUTING.get(key)
         if routing:
             backend_type, default_config = routing
-            # Merge: default_config provides fallbacks, user config wins
             merged = {**default_config, **config}
+            logger.debug(
+                "[MonitorRouting] Legacy type routed",
+                original=key,
+                resolved=backend_type,
+            )
             return backend_type, merged
+
+        # data_type_validation is SchemaMonitor with mode override
+        if key == "data_type_validation":
+            config.setdefault("mode", "type_validation")
+            return "data_type_validation", config
 
         return key, config
 
@@ -599,7 +624,7 @@ class MonitorExecutor:
     ) -> Optional[BaseMonitor]:
         """Factory method to create a monitor by type name.
 
-        Handles routing for UI-only types (null_rate, uniqueness, distribution).
+        Handles routing for legacy UI types and the new canonical set.
         """
         resolved_type, merged_config = MonitorExecutor.resolve_monitor_type(
             monitor_type, config

@@ -29,8 +29,13 @@ export type CoverageDimension =
   | "null_rate_monitor"
   | "uniqueness_check"
   | "referential_integrity"
-  | "distribution_monitor"
+  | "range_validation_check"
+  | "accepted_values_check"
+  | "date_consistency_check"
   | "custom_sql_check"
+  | "outlier_detection"
+  // Legacy (kept for backward compat)
+  | "distribution_monitor"
   | "anomaly_detection"
   | "upstream_linked"
   | "downstream_linked"
@@ -46,11 +51,19 @@ export type MonitorType =
   | "freshness"
   | "volume"
   | "schema_change"
-  | "null_rate"
-  | "uniqueness"
-  | "distribution"
   | "referential"
   | "custom_sql"
+  // New canonical types
+  | "null_check"
+  | "uniqueness_check"
+  | "range_validation"
+  | "accepted_values"
+  | "date_consistency"
+  | "data_type_validation"
+  | "outlier_detection"
+  // Legacy (kept for backward compat)
+  | "null_rate"
+  | "distribution"
   | "anomaly";
 
 // ---------------------------------------------------------------------------

@@ -34,12 +34,17 @@ DIMENSION_TO_MONITOR: Dict[CoverageDimension, MonitorType] = {
     CoverageDimension.ROW_COUNT_MONITOR: MonitorType.VOLUME,
     CoverageDimension.VOLUME_ANOMALY: MonitorType.VOLUME,
     CoverageDimension.SCHEMA_CHANGE_DETECTION: MonitorType.SCHEMA_CHANGE,
-    CoverageDimension.NULL_RATE_MONITOR: MonitorType.NULL_RATE,
-    CoverageDimension.UNIQUENESS_CHECK: MonitorType.UNIQUENESS,
+    CoverageDimension.NULL_RATE_MONITOR: MonitorType.NULL_CHECK,
+    CoverageDimension.UNIQUENESS_CHECK: MonitorType.UNIQUENESS_CHECK,
     CoverageDimension.REFERENTIAL_INTEGRITY: MonitorType.REFERENTIAL,
-    CoverageDimension.DISTRIBUTION_MONITOR: MonitorType.DISTRIBUTION,
+    CoverageDimension.RANGE_VALIDATION_CHECK: MonitorType.RANGE_VALIDATION,
+    CoverageDimension.ACCEPTED_VALUES_CHECK: MonitorType.ACCEPTED_VALUES,
+    CoverageDimension.DATE_CONSISTENCY_CHECK: MonitorType.DATE_CONSISTENCY,
     CoverageDimension.CUSTOM_SQL_CHECK: MonitorType.CUSTOM_SQL,
-    CoverageDimension.ANOMALY_DETECTION: MonitorType.ANOMALY,
+    CoverageDimension.OUTLIER_DETECTION: MonitorType.OUTLIER_DETECTION,
+    # Legacy dimensions → new canonical types
+    CoverageDimension.DISTRIBUTION_MONITOR: MonitorType.OUTLIER_DETECTION,
+    CoverageDimension.ANOMALY_DETECTION: MonitorType.OUTLIER_DETECTION,
 }
 
 # SQL templates for tech-agnostic monitor recommendations.
@@ -57,16 +62,45 @@ MONITOR_SQL_TEMPLATES: Dict[MonitorType, str] = {
         "WHERE table_schema = '{schema}' AND table_name = '{table}' "
         "ORDER BY ordinal_position"
     ),
-    MonitorType.NULL_RATE: (
+    MonitorType.NULL_CHECK: (
         "SELECT '{column}' AS column_name, "
         "CAST(SUM(CASE WHEN {column} IS NULL THEN 1 ELSE 0 END) AS FLOAT) "
         "/ NULLIF(COUNT(*), 0) AS null_rate "
         "FROM {fqn}"
     ),
-    MonitorType.UNIQUENESS: (
+    MonitorType.UNIQUENESS_CHECK: (
+        "SELECT '{column}' AS column_name, "
+        "COUNT(*) AS total_rows, COUNT(DISTINCT {column}) AS distinct_count, "
+        "1.0 - CAST(COUNT(DISTINCT {column}) AS FLOAT) / NULLIF(COUNT(*), 0) "
+        "AS duplicate_rate FROM {fqn}"
+    ),
+    MonitorType.RANGE_VALIDATION: (
+        "SELECT '{column}' AS column_name, "
+        "MIN({column}) AS min_val, MAX({column}) AS max_val, "
+        "COUNT(CASE WHEN {column} < {min_value} OR {column} > {max_value} "
+        "THEN 1 END) AS violations FROM {fqn}"
+    ),
+    MonitorType.ACCEPTED_VALUES: (
+        "SELECT {column}, COUNT(*) AS cnt "
+        "FROM {fqn} GROUP BY {column} ORDER BY cnt DESC LIMIT 100"
+    ),
+    MonitorType.DATE_CONSISTENCY: (
         "SELECT COUNT(*) AS total_rows, "
-        "COUNT(DISTINCT {column}) AS distinct_count, "
-        "COUNT(*) - COUNT(DISTINCT {column}) AS duplicate_count "
+        "SUM(CASE WHEN {left_column} > {right_column} THEN 1 ELSE 0 END) "
+        "AS violations FROM {fqn}"
+    ),
+    MonitorType.OUTLIER_DETECTION: (
+        "SELECT CAST({timestamp_column} AS DATE) AS bucket, "
+        "COUNT(*) AS row_count "
+        "FROM {fqn} "
+        "WHERE {timestamp_column} >= CURRENT_DATE - INTERVAL '30 days' "
+        "GROUP BY CAST({timestamp_column} AS DATE) ORDER BY bucket"
+    ),
+    # Legacy types (backward compat)
+    MonitorType.NULL_RATE: (
+        "SELECT '{column}' AS column_name, "
+        "CAST(SUM(CASE WHEN {column} IS NULL THEN 1 ELSE 0 END) AS FLOAT) "
+        "/ NULLIF(COUNT(*), 0) AS null_rate "
         "FROM {fqn}"
     ),
     MonitorType.DISTRIBUTION: (
@@ -203,6 +237,66 @@ GAP_DESCRIPTIONS: Dict[CoverageDimension, Dict[str, str]] = {
         "recommendation": (
             "Add uniqueness checks on primary key columns and "
             "any columns expected to be unique."
+        ),
+    },
+    CoverageDimension.RANGE_VALIDATION_CHECK: {
+        "title": "No range validation",
+        "description": (
+            "No monitor is checking that numeric column values fall "
+            "within expected bounds."
+        ),
+        "impact": (
+            "Out-of-range values can indicate data corruption, "
+            "unit conversion errors, or upstream ETL bugs."
+        ),
+        "recommendation": (
+            "Add range validation monitors for columns with known "
+            "valid bounds (e.g., percentages 0-100, prices > 0)."
+        ),
+    },
+    CoverageDimension.ACCEPTED_VALUES_CHECK: {
+        "title": "No accepted values check",
+        "description": (
+            "No monitor is verifying that categorical columns contain "
+            "only expected values."
+        ),
+        "impact": (
+            "Unexpected values in status/type columns can break "
+            "downstream aggregations and conditional logic."
+        ),
+        "recommendation": (
+            "Add accepted values checks on columns with a known set "
+            "of valid values (e.g., status, country, category)."
+        ),
+    },
+    CoverageDimension.DATE_CONSISTENCY_CHECK: {
+        "title": "No date consistency check",
+        "description": (
+            "No monitor is verifying date column relationships "
+            "(e.g., start_date <= end_date)."
+        ),
+        "impact": (
+            "Inconsistent date values can cause incorrect duration "
+            "calculations, broken SCD2 records, and logic errors."
+        ),
+        "recommendation": (
+            "Add date consistency rules for columns with expected "
+            "temporal relationships."
+        ),
+    },
+    CoverageDimension.OUTLIER_DETECTION: {
+        "title": "No outlier detection",
+        "description": (
+            "No statistical outlier detection is configured for "
+            "numeric column metrics on this asset."
+        ),
+        "impact": (
+            "Subtle data drift, metric anomalies, and distribution "
+            "shifts will go undetected until business impact occurs."
+        ),
+        "recommendation": (
+            "Add outlier detection using Z-score/MAD analysis "
+            "on key numeric columns with at least 30 days of history."
         ),
     },
     CoverageDimension.UPSTREAM_LINKED: {
@@ -511,17 +605,29 @@ class GapAnalyzer:
                 f"Detect schema changes (added/removed columns, type "
                 f"changes) for {gap.node_name}."
             ),
-            MonitorType.NULL_RATE: (
+            MonitorType.NULL_CHECK: (
                 f"Monitor null rates across columns in {gap.node_name} "
                 f"and alert when rates exceed thresholds."
             ),
-            MonitorType.UNIQUENESS: (
-                f"Verify uniqueness constraints on key columns in "
-                f"{gap.node_name}."
+            MonitorType.UNIQUENESS_CHECK: (
+                f"Verify uniqueness of primary key columns in "
+                f"{gap.node_name} and detect duplicate rows."
             ),
-            MonitorType.DISTRIBUTION: (
-                f"Monitor value distribution changes in {gap.node_name} "
-                f"columns to detect data drift."
+            MonitorType.RANGE_VALIDATION: (
+                f"Validate that numeric columns in {gap.node_name} "
+                f"fall within expected bounds."
+            ),
+            MonitorType.ACCEPTED_VALUES: (
+                f"Verify that categorical columns in {gap.node_name} "
+                f"contain only expected values."
+            ),
+            MonitorType.DATE_CONSISTENCY: (
+                f"Check date column relationships in {gap.node_name} "
+                f"(e.g., start_date <= end_date)."
+            ),
+            MonitorType.DATA_TYPE_VALIDATION: (
+                f"Verify column data types in {gap.node_name} match "
+                f"expected type definitions."
             ),
             MonitorType.REFERENTIAL: (
                 f"Verify referential integrity between {gap.node_name} "
@@ -530,9 +636,19 @@ class GapAnalyzer:
             MonitorType.CUSTOM_SQL: (
                 f"Run custom SQL assertions against {gap.node_name}."
             ),
+            MonitorType.OUTLIER_DETECTION: (
+                f"Statistical outlier detection on numeric metrics for "
+                f"{gap.node_name} using Z-score/MAD analysis."
+            ),
+            # Legacy types
+            MonitorType.NULL_RATE: (
+                f"Monitor null rates across columns in {gap.node_name}."
+            ),
+            MonitorType.DISTRIBUTION: (
+                f"Monitor value distribution changes in {gap.node_name}."
+            ),
             MonitorType.ANOMALY: (
-                f"Statistical anomaly detection across metrics for "
-                f"{gap.node_name} using Z-score analysis."
+                f"Statistical anomaly detection for {gap.node_name}."
             ),
         }
         return descs.get(monitor_type, f"Monitor {gap.node_name}.")
@@ -554,8 +670,18 @@ class GapAnalyzer:
                 "fail_on_type_change": True,
                 "fail_on_column_added": False,
             },
+            MonitorType.NULL_CHECK: {"max_null_rate": 0.05},
+            MonitorType.UNIQUENESS_CHECK: {"max_duplicate_rate": 0.01},
+            MonitorType.RANGE_VALIDATION: {},
+            MonitorType.ACCEPTED_VALUES: {},
+            MonitorType.DATE_CONSISTENCY: {},
+            MonitorType.DATA_TYPE_VALIDATION: {"mode": "type_validation"},
+            MonitorType.OUTLIER_DETECTION: {
+                "anomaly_threshold": 3.0,
+                "lookback_days": 30,
+            },
+            # Legacy
             MonitorType.NULL_RATE: {"max_null_rate": 0.05},
-            MonitorType.UNIQUENESS: {"max_duplicate_rate": 0.0},
             MonitorType.DISTRIBUTION: {"lookback_days": 30},
             MonitorType.ANOMALY: {
                 "anomaly_threshold": 3.0,

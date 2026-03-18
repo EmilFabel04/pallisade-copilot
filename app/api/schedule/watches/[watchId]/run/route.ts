@@ -28,7 +28,6 @@ const MONITOR_TYPE_CATEGORY: Record<string, string> = {
   TASK_FAILURE_RATE: 'orchestration_failure',
   VOLUME: 'quality_anomaly',
   NULL_RATE: 'quality_anomaly',
-  UNIQUENESS: 'quality_anomaly',
   DISTRIBUTION: 'quality_anomaly',
   ANOMALY: 'quality_anomaly',
   REFERENTIAL: 'quality_anomaly',

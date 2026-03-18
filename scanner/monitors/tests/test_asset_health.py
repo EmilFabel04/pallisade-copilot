@@ -98,24 +98,34 @@ class TestHealthStatusFromScore:
 class TestComputeAssetCoverage:
     def test_warehouse_full_coverage(self):
         result = compute_asset_coverage(
-            {"FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "ANOMALY", "UNIQUENESS", "NULL_RATE", "REFERENTIAL"},
+            {
+                "FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "NULL_CHECK",
+                "UNIQUENESS_CHECK", "REFERENTIAL", "RANGE_VALIDATION",
+                "ACCEPTED_VALUES", "DATE_CONSISTENCY", "DATA_TYPE_VALIDATION",
+                "OUTLIER_DETECTION",
+            },
             "warehouse",
         )
         assert result["coveragePct"] == 100
         assert result["coverageStatus"] == "good"
         assert result["missingTypes"] == []
 
-    def test_warehouse_6_of_7_good(self):
+    def test_warehouse_core_monitors_good(self):
+        """Core monitors (9 of 11) hit >= 80% threshold."""
         result = compute_asset_coverage(
-            {"FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "ANOMALY", "UNIQUENESS", "NULL_RATE"},
+            {
+                "FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "NULL_CHECK",
+                "UNIQUENESS_CHECK", "REFERENTIAL", "RANGE_VALIDATION",
+                "ACCEPTED_VALUES", "OUTLIER_DETECTION",
+            },
             "warehouse",
         )
         assert result["coveragePct"] >= 80
         assert result["coverageStatus"] == "good"
 
-    def test_warehouse_4_of_7_partial(self):
+    def test_warehouse_few_monitors_partial(self):
         result = compute_asset_coverage(
-            {"FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "ANOMALY"},
+            {"FRESHNESS", "VOLUME", "SCHEMA_CHANGE"},
             "warehouse",
         )
         assert result["coveragePct"] < 80
@@ -125,6 +135,15 @@ class TestComputeAssetCoverage:
         result = compute_asset_coverage(set(), "warehouse")
         assert result["coveragePct"] == 0
         assert result["coverageStatus"] == "none"
+
+    def test_legacy_type_aliases_expand(self):
+        """Legacy types (NULL_RATE, ANOMALY) expand to canonical equivalents."""
+        result = compute_asset_coverage(
+            {"FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "NULL_RATE", "ANOMALY"},
+            "warehouse",
+        )
+        # NULL_RATE → NULL_CHECK, ANOMALY → OUTLIER_DETECTION
+        assert result["configured"] >= 5
 
     def test_bi_full(self):
         result = compute_asset_coverage(

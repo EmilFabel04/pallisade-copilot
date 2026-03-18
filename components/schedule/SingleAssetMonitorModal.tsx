@@ -52,7 +52,6 @@ const MONITOR_TYPE_LABELS: Record<string, string> = {
   VOLUME: 'Volume',
   SCHEMA_CHANGE: 'Schema Change',
   NULL_RATE: 'Null Rate',
-  UNIQUENESS: 'Uniqueness',
   DISTRIBUTION: 'Distribution',
   CUSTOM_SQL: 'Custom SQL',
   ANOMALY: 'Anomaly',

@@ -210,6 +210,11 @@ export interface UnifiedLineageNode {
   columns?: Array<{ name: string; type?: string }>;
   sqlDefinition?: string;         // SQL definition from raw_metadata
   materialization?: string;       // dbt materialization type
+
+  // Policy state (populated when policies have been resolved)
+  policyProfileName?: string;     // Name of assigned/inherited profile
+  policySource?: string;          // Resolution source (direct_profile, branch, builtin, etc.)
+  policyStatus?: 'assigned' | 'inherited' | 'override' | 'none';
 }
 
 // Evidence record for a lineage edge (from engine)

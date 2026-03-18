@@ -57,7 +57,6 @@ const MONITOR_COLORS: Record<string, string> = {
   DBT_MODEL_FRESHNESS: 'bg-pink-500/15 text-pink-400 border-pink-500/30',
   DBT_SOURCE_FRESHNESS: 'bg-pink-500/15 text-pink-400 border-pink-500/30',
   NULL_RATE: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-  UNIQUENESS: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
   DISTRIBUTION: 'bg-teal-500/15 text-teal-400 border-teal-500/30',
   ANOMALY: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
   REFERENTIAL: 'bg-lime-500/15 text-lime-400 border-lime-500/30',
@@ -72,6 +71,12 @@ const MONITOR_COLORS: Record<string, string> = {
   SERVER_HEALTH: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
   CERTIFICATE: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
   LOG_ANALYSIS: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  NULL_CHECK: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  UNIQUENESS_CHECK: 'bg-teal-500/15 text-teal-400 border-teal-500/30',
+  RANGE_VALIDATION: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+  ACCEPTED_VALUES: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
+  DATE_CONSISTENCY: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+  OUTLIER_DETECTION: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
   CUSTOM_SQL: 'bg-white/10 text-white/50 border-white/20',
 };
 
@@ -110,7 +115,7 @@ const PRESETS: Preset[] = [
   {
     key: 'data_quality',
     label: 'Data Quality',
-    description: 'Schema drift, null rates, uniqueness & volume anomalies',
+    description: 'Schema drift, null rates, anomaly detection & volume checks',
     families: ['data_drift'],
     iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4',
   },
@@ -1227,7 +1232,7 @@ export function MultiMonitorModal({
                             {(() => {
                               const toolNodes = selectedNodesWithMonitors.filter((n) => !!n.meta.subNodeIds?.length);
                               const hasDataNodes = selectedNodesWithMonitors.some((n) => !n.meta.subNodeIds?.length);
-                              const dataKeys = ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_RATE', 'UNIQUENESS', 'DISTRIBUTION', 'CUSTOM_SQL', 'ANOMALY'];
+                              const dataKeys = ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_RATE', 'DISTRIBUTION', 'CUSTOM_SQL', 'ANOMALY'];
                               const keys: string[] = [];
                               if (hasDataNodes) keys.push(...dataKeys);
                               // Add domain-specific tool monitors for each selected tool domain

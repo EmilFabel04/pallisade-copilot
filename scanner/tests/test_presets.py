@@ -235,25 +235,23 @@ class TestDataDriftScopeConfig:
         assert "ingestion" in cfg["domainFilters"]
 
     def test_data_drift_recipe_includes_quality_monitors(self):
-        """Data drift recipe should include quality-focused monitors."""
+        """Data drift recipe should include quality-focused monitors (new canonical types)."""
         anchor = _make_node("x", "x", "x", PlatformDomain.WAREHOUSE)
         recipe = _recipe_for_watch_type("data_drift", anchor)
         monitor_keys = [r[0] for r in recipe]
         assert "SCHEMA_CHANGE" in monitor_keys
         assert "VOLUME" in monitor_keys
-        assert "NULL_RATE" in monitor_keys
-        assert "UNIQUENESS" in monitor_keys
+        assert "NULL_CHECK" in monitor_keys
+        assert "UNIQUENESS_CHECK" in monitor_keys
         assert "FRESHNESS" in monitor_keys
-        assert "DISTRIBUTION" in monitor_keys
-        assert "ANOMALY" in monitor_keys
+        assert "OUTLIER_DETECTION" in monitor_keys
 
     def test_data_drift_recipe_includes_drift_monitors(self):
         anchor = _make_node("x", "x", "x", PlatformDomain.WAREHOUSE)
         recipe = _recipe_for_watch_type("data_drift", anchor)
         monitor_keys = [r[0] for r in recipe]
         assert "CONNECTOR_SCHEMA_DRIFT" in monitor_keys
-        assert "UNIQUENESS" in monitor_keys
-        assert "NULL_RATE" in monitor_keys
+        assert "NULL_CHECK" in monitor_keys
 
 
 # ---------------------------------------------------------------------------

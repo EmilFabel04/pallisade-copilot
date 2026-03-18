@@ -279,13 +279,16 @@ class CoverageScorer:
     def _eval_column_type_validation(
         self, node, fqn, monitors, ext_checks, contract
     ) -> DimensionScore:
-        # Covered if we have schema info (columns) from any source.
+        # Covered if we have schema info (columns) from any source
+        # or an explicit data_type_validation monitor.
         has_columns = bool(getattr(node, "columns", None))
+        has_monitor = "data_type_validation" in monitors
+        covered = has_columns or has_monitor
         return DimensionScore(
             dimension=CoverageDimension.COLUMN_TYPE_VALIDATION,
-            covered=has_columns,
-            score=1.0 if has_columns else 0.0,
-            source=node.platform if has_columns else None,
+            covered=covered,
+            score=1.0 if covered else 0.0,
+            source=("pallisade_monitor" if has_monitor else node.platform) if covered else None,
         )
 
     def _eval_null_rate(
@@ -293,6 +296,7 @@ class CoverageScorer:
     ) -> DimensionScore:
         covered = (
             "null_rate" in monitors
+            or "null_check" in monitors
             or "NULLS" in ext_checks
             or any(c in ext_checks for c in ("nulls", "null_rate", "not_null"))
             or bool(contract.get("maxNullRate"))
@@ -309,9 +313,15 @@ class CoverageScorer:
     ) -> DimensionScore:
         covered = (
             "uniqueness" in monitors
+            or "uniqueness_check" in monitors
             or "UNIQUENESS" in ext_checks
             or any(c in ext_checks for c in ("uniqueness", "unique", "distinct"))
             or bool(contract.get("maxDuplicateRate"))
+            or any(
+                m.get("config", {}).get("metric") == "distinct_count"
+                for m in monitors.values()
+                if isinstance(m, dict)
+            )
         )
         return DimensionScore(
             dimension=CoverageDimension.UNIQUENESS_CHECK,
@@ -341,8 +351,10 @@ class CoverageScorer:
     def _eval_distribution(
         self, node, fqn, monitors, ext_checks, contract
     ) -> DimensionScore:
+        # Legacy dimension — also satisfied by outlier_detection
         covered = (
             "distribution" in monitors
+            or "outlier_detection" in monitors
             or "DISTRIBUTION" in ext_checks
             or any(
                 c in ext_checks
@@ -374,8 +386,10 @@ class CoverageScorer:
     def _eval_anomaly_detection(
         self, node, fqn, monitors, ext_checks, contract
     ) -> DimensionScore:
+        # Legacy dimension — also satisfied by outlier_detection
         covered = (
             "anomaly" in monitors
+            or "outlier_detection" in monitors
             or "ANOMALY" in ext_checks
             or any(
                 c in ext_checks
@@ -477,6 +491,63 @@ class CoverageScorer:
             covered=has_contract,
             score=1.0 if has_contract else 0.0,
             source="data_contract" if has_contract else None,
+        )
+
+    # ------------------------------------------------------------------
+    # New canonical dimension evaluators
+    # ------------------------------------------------------------------
+
+    def _eval_range_validation(
+        self, node, fqn, monitors, ext_checks, contract
+    ) -> DimensionScore:
+        covered = "range_validation" in monitors
+        return DimensionScore(
+            dimension=CoverageDimension.RANGE_VALIDATION_CHECK,
+            covered=covered,
+            score=1.0 if covered else 0.0,
+            source="pallisade_monitor" if covered else None,
+        )
+
+    def _eval_accepted_values(
+        self, node, fqn, monitors, ext_checks, contract
+    ) -> DimensionScore:
+        covered = "accepted_values" in monitors
+        return DimensionScore(
+            dimension=CoverageDimension.ACCEPTED_VALUES_CHECK,
+            covered=covered,
+            score=1.0 if covered else 0.0,
+            source="pallisade_monitor" if covered else None,
+        )
+
+    def _eval_date_consistency(
+        self, node, fqn, monitors, ext_checks, contract
+    ) -> DimensionScore:
+        covered = "date_consistency" in monitors
+        return DimensionScore(
+            dimension=CoverageDimension.DATE_CONSISTENCY_CHECK,
+            covered=covered,
+            score=1.0 if covered else 0.0,
+            source="pallisade_monitor" if covered else None,
+        )
+
+    def _eval_outlier_detection(
+        self, node, fqn, monitors, ext_checks, contract
+    ) -> DimensionScore:
+        covered = (
+            "outlier_detection" in monitors
+            or "anomaly" in monitors
+            or any(
+                c in ext_checks
+                for c in ("anomaly", "anomaly_detection", "column_anomalies")
+            )
+        )
+        return DimensionScore(
+            dimension=CoverageDimension.OUTLIER_DETECTION,
+            covered=covered,
+            score=1.0 if covered else 0.0,
+            source=self._find_source(monitors, ext_checks, "anomaly") or (
+                "pallisade_monitor" if "outlier_detection" in monitors else None
+            ),
         )
 
     # Map of dimension -> evaluator method.
@@ -588,8 +659,13 @@ CoverageScorer._dimension_evaluators = {
     CoverageDimension.NULL_RATE_MONITOR: CoverageScorer._eval_null_rate,
     CoverageDimension.UNIQUENESS_CHECK: CoverageScorer._eval_uniqueness,
     CoverageDimension.REFERENTIAL_INTEGRITY: CoverageScorer._eval_referential,
-    CoverageDimension.DISTRIBUTION_MONITOR: CoverageScorer._eval_distribution,
+    CoverageDimension.RANGE_VALIDATION_CHECK: CoverageScorer._eval_range_validation,
+    CoverageDimension.ACCEPTED_VALUES_CHECK: CoverageScorer._eval_accepted_values,
+    CoverageDimension.DATE_CONSISTENCY_CHECK: CoverageScorer._eval_date_consistency,
     CoverageDimension.CUSTOM_SQL_CHECK: CoverageScorer._eval_custom_sql,
+    CoverageDimension.OUTLIER_DETECTION: CoverageScorer._eval_outlier_detection,
+    # Legacy dimensions (kept for backward compat)
+    CoverageDimension.DISTRIBUTION_MONITOR: CoverageScorer._eval_distribution,
     CoverageDimension.ANOMALY_DETECTION: CoverageScorer._eval_anomaly_detection,
     CoverageDimension.UPSTREAM_LINKED: CoverageScorer._eval_upstream_linked,
     CoverageDimension.DOWNSTREAM_LINKED: CoverageScorer._eval_downstream_linked,

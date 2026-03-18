@@ -30,10 +30,14 @@ export const APPLICABLE_MONITORS: Record<AssetCategory, string[]> = {
     'FRESHNESS',
     'VOLUME',
     'SCHEMA_CHANGE',
-    'ANOMALY',
-    'UNIQUENESS',
-    'NULL_RATE',
+    'NULL_CHECK',
+    'UNIQUENESS_CHECK',
     'REFERENTIAL',
+    'RANGE_VALIDATION',
+    'ACCEPTED_VALUES',
+    'DATE_CONSISTENCY',
+    'DATA_TYPE_VALIDATION',
+    'OUTLIER_DETECTION',
   ],
   bi: [
     'BI_FRESHNESS_PROXY',
@@ -61,6 +65,14 @@ export const APPLICABLE_MONITORS: Record<AssetCategory, string[]> = {
     'CERTIFICATE',
     'LOG_ANALYSIS',
   ],
+};
+
+/** Legacy type → canonical type mapping for coverage matching. */
+const LEGACY_TYPE_ALIASES: Record<string, string> = {
+  NULL_RATE: 'NULL_CHECK',
+  UNIQUENESS: 'UNIQUENESS_CHECK',
+  ANOMALY: 'OUTLIER_DETECTION',
+  DISTRIBUTION: 'OUTLIER_DETECTION',
 };
 
 /** Warehouse coverage uses an 80 % threshold for "good"; others require 100 %. */
@@ -203,6 +215,10 @@ export function computeMonitorCoverage(
   }
 
   const configuredSet = new Set(configuredTypes.map(t => t.toUpperCase()));
+  // Expand legacy types to their canonical equivalents
+  for (const [legacy, canonical] of Object.entries(LEGACY_TYPE_ALIASES)) {
+    if (configuredSet.has(legacy)) configuredSet.add(canonical);
+  }
   const configured = applicableTypes.filter(t => configuredSet.has(t)).length;
   const available = applicableTypes.length;
   const coveragePct = Math.round((configured / available) * 1000) / 10; // one decimal

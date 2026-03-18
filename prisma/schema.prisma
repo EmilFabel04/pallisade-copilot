@@ -163,6 +163,10 @@ model Organization {
   // Notifications
   notificationEvents NotificationEvent[]
 
+  // Pipeline Monitoring Policies
+  policyProfiles    PolicyProfile[]
+  policyAssignments PolicyAssignment[]
+
   @@index([domain])
 }
 
@@ -801,6 +805,91 @@ enum Criticality {
   HIGH // Important, fix within 24h
   MEDIUM // Standard priority
   LOW // Best effort
+}
+
+// ============================================
+// PIPELINE MONITORING POLICIES
+// ============================================
+// Monitoring Policy is a SEPARATE concept from DataContract.
+// - Monitoring Policy = lightweight operational expectations (freshness, strictness,
+//   sensitivity). Cross-domain (warehouse, ingestion, BI, orchestration, transform).
+//   Used to drive monitor defaults and auto-config. No lifecycle/compliance tracking.
+// - DataContract = governance/compliance artifact. Warehouse-table-specific. Has
+//   lifecycle (DRAFT/ACTIVE/VIOLATED/DEPRECATED), ownership, violation history.
+
+// Reusable monitoring expectation template.
+// Users can assign these profiles to assets/nodes on the lineage graph.
+model PolicyProfile {
+  id          String  @id @default(cuid())
+  name        String                      // "Critical SLA", "Standard", "Relaxed"
+  description String?
+  isBuiltIn   Boolean @default(false)     // System-provided, non-deletable
+
+  // Scope: which node types this profile targets (null = any)
+  targetDomain String?                    // "warehouse"|"ingestion"|"bi"|"orchestration"|"transform"|null
+  criticality  String?                    // Maps to Criticality enum. null = any.
+
+  // Threshold configs (Json blobs, domain-specific sections)
+  freshnessConfig     Json? // { enabled, maxHours, warningHours }
+  schemaConfig        Json? // { enabled, strictness: "strict"|"warn"|"ignore", allowEvolution }
+  volumeConfig        Json? // { enabled, minRows, maxRows, growthRateThreshold }
+  anomalyConfig       Json? // { enabled, sensitivity: 0.0-1.0, lookbackDays }
+  qualityConfig       Json? // { enabled, maxNullRate, maxDuplicateRate }
+  ingestionConfig     Json? // { syncLagToleranceMinutes, failureTolerance, schemaDriftStrictness }
+  biConfig            Json? // { freshnessHours, contentHealthEnabled, upstreamBreakStrictness }
+  orchestrationConfig Json? // { runLatencyMinutes, scheduleLagMinutes, failureTolerance }
+  transformConfig     Json? // { testFailureTolerance, modelFreshnessHours }
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+
+  assignments PolicyAssignment[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+// Links a PolicyProfile to a target (node, domain, or criticality tier).
+// Each target can have at most one assignment per assignment type.
+// Assignment types:
+//   "direct"             — explicit per-node assignment (highest precedence)
+//   "branch"             — applies to all downstream of branchRootFqn
+//   "criticality_default"— default for a (domain, criticality) pair
+//   "domain_default"     — default for an entire domain
+model PolicyAssignment {
+  id             String @id @default(cuid())
+
+  profileId String
+  profile   PolicyProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  // Target — exactly one group is set depending on assignmentType
+  nodeFqn         String? // For "direct": asset FQN (durable across graph rebuilds)
+  nodeDomain      String? // For "domain_default" and "criticality_default"
+  nodeCriticality String? // For "criticality_default" only
+  branchRootFqn   String? // For "branch": root FQN, applies to all downstream
+
+  // Assignment scope
+  assignmentType String // "direct"|"domain_default"|"criticality_default"|"branch"
+
+  // Per-asset overrides (sparse — only set fields override the profile)
+  overrides Json?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId String
+
+  // Uniqueness: one assignment per target per type
+  @@unique([organizationId, assignmentType, nodeFqn])
+  @@unique([organizationId, assignmentType, branchRootFqn])
+  @@unique([organizationId, assignmentType, nodeDomain, nodeCriticality])
+
+  @@index([organizationId])
+  @@index([nodeFqn])
+  @@index([nodeDomain])
+  @@index([branchRootFqn])
 }
 
 // ============================================
@@ -2941,6 +3030,9 @@ model Monitor {
   lastAlertAt     DateTime? // When the last alert was sent (for suppression window)
   timezone        String?   @default("UTC")
 
+  // Policy override tracking
+  policyOverrides String[]  // Config field keys overridden by user (e.g. ["max_hours"])
+
   // Metadata
   createdBy  String?
   source     String? // "pallisade", "elementary", "monte_carlo", etc.
@@ -3060,15 +3152,25 @@ model CoverageSnapshot {
 }
 
 enum MonitorKind {
+  // Warehouse data quality — canonical monitor set
   FRESHNESS
   VOLUME
   SCHEMA_CHANGE
-  NULL_RATE
-  UNIQUENESS
-  DISTRIBUTION
   REFERENTIAL
   CUSTOM_SQL
-  ANOMALY
+  ANOMALY              // Backend for Outlier Detection
+  NULL_CHECK           // Null rate monitoring (replaces NULL_RATE)
+  UNIQUENESS_CHECK     // Duplicate detection (replaces UNIQUENESS)
+  RANGE_VALIDATION     // Numeric bounds checking
+  ACCEPTED_VALUES      // Categorical value set validation
+  DATE_CONSISTENCY     // Cross-column date assertions
+  DATA_TYPE_VALIDATION // Column type validation
+  OUTLIER_DETECTION    // Alias for ANOMALY in user-facing catalog
+  // Legacy warehouse types — kept for backward compatibility
+  NULL_RATE            // Deprecated: use NULL_CHECK
+  UNIQUENESS           // Deprecated: use UNIQUENESS_CHECK
+  DISTRIBUTION         // Deprecated: use OUTLIER_DETECTION
+  // Infrastructure monitors
   CERTIFICATE      // Infrastructure: TLS/SSL cert expiry
   SERVER_HEALTH    // Infrastructure: CPU, memory, disk
   LOG_ANALYSIS     // Infrastructure: log file error scanning

@@ -182,6 +182,7 @@ def preview_monitoring_plan(
     families: List[str],
     manual_selections: Optional[Dict[str, List[str]]] = None,
     existing_monitor_fqns: Optional[Set[str]] = None,
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> MonitoringPlanPreview:
     """
     Generate a full monitoring plan preview without persisting anything.
@@ -221,6 +222,12 @@ def preview_monitoring_plan(
     eligibility = get_family_eligibility(scope_nodes)
     eligibility_dicts = [e.to_dict() for e in eligibility]
 
+    # Resolve policies for all scope nodes (uses DB assignments if provided, else builtin)
+    resolved_policies = policy_map
+    if resolved_policies is None:
+        from .policy_resolver import build_policy_map
+        resolved_policies = build_policy_map(scope_nodes)
+
     if mode == "recommended":
         return _preview_recommended(
             graph=graph,
@@ -230,6 +237,7 @@ def preview_monitoring_plan(
             selected_families=families,
             existing_fqns=existing_fqns,
             eligibility_dicts=eligibility_dicts,
+            policy_map=resolved_policies,
         )
     else:
         return _preview_manual(
@@ -239,6 +247,7 @@ def preview_monitoring_plan(
             manual_selections=manual_selections or {},
             existing_fqns=existing_fqns,
             eligibility_dicts=eligibility_dicts,
+            policy_map=resolved_policies,
         )
 
 
@@ -254,6 +263,7 @@ def _preview_recommended(
     selected_families: List[str],
     existing_fqns: Set[str],
     eligibility_dicts: List[Dict[str, Any]],
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> MonitoringPlanPreview:
     """Generate preview for recommended mode."""
     # Resolve families (expand full_coverage if needed)
@@ -303,6 +313,7 @@ def _preview_recommended(
             watch_type=watch_type,
             existing_fqns=cumulative_fqns,
             preferred_anchor_domains=preferred_domains,
+            policy_map=policy_map,
         )
 
         total_dedup += plan.dedup_count
@@ -371,6 +382,7 @@ def _preview_manual(
     manual_selections: Dict[str, List[str]],
     existing_fqns: Set[str],
     eligibility_dicts: List[Dict[str, Any]],
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> MonitoringPlanPreview:
     """Generate preview for manual mode."""
     from .recommender import MonitorRecommendation, _build_config_hints
@@ -409,7 +421,7 @@ def _preview_manual(
                 source="manual",
                 reason=f"Manually selected {mon_type} for {node.name}",
                 priority=2,
-                config_hints=_build_config_hints(node, mon_type),
+                config_hints=_build_config_hints(node, mon_type, policy=(policy_map or {}).get(node.fqn)),
                 integration_type=node.platform or "",
                 already_monitored=already_monitored,
             ))

@@ -149,8 +149,17 @@ def infer_watch_type(node: LineageNode) -> str:
 # Priority scoring
 # ---------------------------------------------------------------------------
 
-def _node_priority_score(node: LineageNode, depth_from_anchor: int) -> float:
-    """Score a node for inclusion in the watch scope. Higher = more important."""
+def _node_priority_score(
+    node: LineageNode,
+    depth_from_anchor: int,
+    policy_status: Optional[str] = None,
+) -> float:
+    """Score a node for inclusion in the watch scope. Higher = more important.
+
+    Args:
+        policy_status: One of "assigned", "override", "inherited", "none", or None.
+            Nodes with explicit policy assignments score higher.
+    """
     score = (10 - min(depth_from_anchor, 10)) * 3.0
 
     crit_scores = {"critical": 20, "high": 15, "medium": 5, "low": 0}
@@ -159,6 +168,12 @@ def _node_priority_score(node: LineageNode, depth_from_anchor: int) -> float:
     score += min(node.downstream_count, 20)
 
     if _domain(node) == "warehouse":
+        score += 5
+
+    # Policy-aware priority bonus
+    if policy_status in ("assigned", "override"):
+        score += 10
+    elif policy_status == "inherited":
         score += 5
 
     return score
@@ -257,11 +272,10 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
         return [
             ("SCHEMA_CHANGE", 1, 5, lambda n, d: _is_data_asset(n)),
             ("VOLUME", 1, 5, lambda n, d: _is_data_asset(n)),
-            ("NULL_RATE", 2, 4, lambda n, d: _is_data_asset(n)),
-            ("UNIQUENESS", 2, 4, lambda n, d: _is_data_asset(n)),
+            ("NULL_CHECK", 2, 4, lambda n, d: _is_data_asset(n)),
+            ("UNIQUENESS_CHECK", 2, 3, lambda n, d: _is_data_asset(n)),
             ("FRESHNESS", 2, 3, lambda n, d: _is_data_asset(n)),
-            ("DISTRIBUTION", 3, 3, lambda n, d: _is_data_asset(n)),
-            ("ANOMALY", 3, 3, lambda n, d: _is_data_asset(n)),
+            ("OUTLIER_DETECTION", 3, 3, lambda n, d: _is_data_asset(n)),
             ("CONNECTOR_SCHEMA_DRIFT", 2, 2, lambda n, d: _domain(n) == "ingestion" and _kind(n) in _CONNECTOR_KINDS),
         ]
 
@@ -397,7 +411,6 @@ def _recipe_for_watch_type(watch_type: str, anchor: LineageNode) -> List[RecipeE
             ("SCHEMA_CHANGE", 2, 5, lambda n, d: _is_data_asset(n)),
             ("VOLUME", 2, 4, lambda n, d: _is_data_asset(n)),
             ("NULL_RATE", 3, 4, lambda n, d: _is_data_asset(n)),
-            ("UNIQUENESS", 3, 4, lambda n, d: _is_data_asset(n)),
             ("DISTRIBUTION", 3, 3, lambda n, d: _is_data_asset(n)),
             ("ANOMALY", 3, 3, lambda n, d: _is_data_asset(n)),
             # Orchestration / control plane
@@ -445,6 +458,8 @@ def build_watch_scope(
     watch_type: str,
     scope_config: Optional[Dict[str, Any]] = None,
     existing_monitor_fqns: Optional[Set[str]] = None,
+    policy_statuses: Optional[Dict[str, str]] = None,
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> ScopeResult:
     """
     Build the scope for a group monitor.
@@ -540,8 +555,9 @@ def build_watch_scope(
         filtered = [(n, d) for n, d in filtered if _is_visible_node(n)]
 
     # Phase 3: Priority scoring
+    _ps = policy_statuses or {}
     scored = [
-        (n, d, _node_priority_score(n, d))
+        (n, d, _node_priority_score(n, d, _ps.get(n.id)))
         for n, d in filtered
     ]
     scored.sort(key=lambda x: x[2], reverse=True)
@@ -636,7 +652,7 @@ def build_watch_scope(
                     source=source,
                     reason=_build_reason(mon_key, node, anchor, depth),
                     priority=priority,
-                    config_hints=_build_config_hints(node, mon_key),
+                    config_hints=_build_config_hints(node, mon_key, policy=(policy_map or {}).get(node.fqn)),
                     integration_type=node.platform or "",
                     already_monitored=already_monitored,
                 ))
@@ -705,8 +721,7 @@ def _build_reason(mon_key: str, node: LineageNode, anchor: LineageNode, depth: i
         "VOLUME": "row count anomaly",
         "SCHEMA_CHANGE": "schema change",
         "NULL_RATE": "null spikes",
-        "UNIQUENESS": "key degradation",
-        "ANOMALY": "metric anomaly",
+        "ANOMALY": "column-level anomaly",
         "SYNC_LAG": "sync lag",
         "FAILED_SYNCS": "sync failure",
         "CONNECTOR_SCHEMA_DRIFT": "schema drift",

@@ -105,6 +105,7 @@ def partition_scope(
     max_monitors: int = MAX_MONITORS_PER_GROUP,
     existing_fqns: Optional[Set[str]] = None,
     preferred_anchor_domains: Optional[List[str]] = None,
+    policy_map: Optional[Dict[str, Any]] = None,
 ) -> PartitionPlan:
     """
     Partition a set of in-scope nodes into topology-aware groups.
@@ -202,6 +203,7 @@ def partition_scope(
             watch_type=watch_type,
             scope_config=scope_config,
             existing_monitor_fqns=cumulative_fqns,
+            policy_map=policy_map,
         )
 
         # Cross-partition dedup

@@ -18,10 +18,14 @@ APPLICABLE_MONITORS: Dict[str, List[str]] = {
         "FRESHNESS",
         "VOLUME",
         "SCHEMA_CHANGE",
-        "ANOMALY",
-        "UNIQUENESS",
-        "NULL_RATE",
+        "NULL_CHECK",
+        "UNIQUENESS_CHECK",
         "REFERENTIAL",
+        "RANGE_VALIDATION",
+        "ACCEPTED_VALUES",
+        "DATE_CONSISTENCY",
+        "DATA_TYPE_VALIDATION",
+        "OUTLIER_DETECTION",
     ],
     "bi": [
         "BI_FRESHNESS_PROXY",
@@ -49,6 +53,14 @@ APPLICABLE_MONITORS: Dict[str, List[str]] = {
         "CERTIFICATE",
         "LOG_ANALYSIS",
     ],
+}
+
+# Legacy type → canonical type mapping for coverage matching.
+_LEGACY_TYPE_ALIASES: Dict[str, str] = {
+    "NULL_RATE": "NULL_CHECK",
+    "UNIQUENESS": "UNIQUENESS_CHECK",
+    "ANOMALY": "OUTLIER_DETECTION",
+    "DISTRIBUTION": "OUTLIER_DETECTION",
 }
 
 _WAREHOUSE_GOOD_THRESHOLD = 80  # percent
@@ -175,11 +187,16 @@ def compute_asset_coverage(
         }
 
     upper_configured = {t.upper() for t in configured_types}
-    configured_count = sum(1 for t in applicable if t in upper_configured)
+    # Expand legacy types to their canonical equivalents
+    expanded = set(upper_configured)
+    for legacy, canonical in _LEGACY_TYPE_ALIASES.items():
+        if legacy in upper_configured:
+            expanded.add(canonical)
+    configured_count = sum(1 for t in applicable if t in expanded)
     available_count = len(applicable)
     pct = round(configured_count / available_count * 100, 1)
 
-    missing = [t for t in applicable if t not in upper_configured]
+    missing = [t for t in applicable if t not in expanded]
 
     if configured_count == 0:
         status = "none"
