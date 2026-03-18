@@ -39,6 +39,12 @@ class ExecuteTaskRequest(BaseModel):
     integration_config: Optional[Dict[str, Any]] = Field(
         None, description="Pre-fetched integration config (avoids DB lookup)"
     )
+    policy_config: Optional[Dict[str, Any]] = Field(
+        None, description="Resolved policy thresholds for the target asset"
+    )
+    policy_overrides: Optional[List[str]] = Field(
+        None, description="Config field keys explicitly overridden by user"
+    )
 
 
 class ExecuteTaskResponse(BaseModel):
@@ -95,6 +101,8 @@ async def execute_task(request: ExecuteTaskRequest):
         "integrationId": request.integration_id,
         "organizationId": request.organization_id,
         "integrationConfig": request.integration_config,
+        "policyConfig": request.policy_config,
+        "policyOverrides": request.policy_overrides,
     }
 
     try:
