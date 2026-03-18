@@ -133,77 +133,39 @@ def _guess_timestamp_column(node: LineageNode) -> Optional[str]:
     return None
 
 
-from scanner.monitors.policy_config import sensitivity_to_zscore as _sensitivity_to_zscore
+from scanner.monitors.policy_config import (
+    sensitivity_to_zscore as _sensitivity_to_zscore,
+    POLICY_TO_MONITOR_CONFIG,
+)
 
 
 def _build_config_hints(node: LineageNode, monitor_key: str, policy: Any = None) -> Dict[str, Any]:
     """Build prefilled config hints based on node metadata, monitor type, and optional policy.
 
     When a policy (EffectivePolicy) is provided, its values take precedence over
-    hardcoded defaults. Auto-config and baselines still complement policy — policy
-    informs defaults/strictness, it does not force static values.
+    hardcoded defaults. Uses the shared POLICY_TO_MONITOR_CONFIG mapping to
+    translate policy fields to monitor config fields.
     """
     hints: Dict[str, Any] = {}
 
-    # --- Policy-driven overrides (highest precedence for threshold defaults) ---
+    # --- Policy-driven overrides via shared mapping ---
     if policy:
-        if monitor_key == "FRESHNESS":
-            if getattr(policy, "freshness_max_hours", None):
-                hints["freshness_hours"] = policy.freshness_max_hours
-            if getattr(policy, "freshness_warning_hours", None):
-                hints["warning_hours"] = policy.freshness_warning_hours
-        elif monitor_key == "SCHEMA_CHANGE":
-            if getattr(policy, "schema_strictness", None):
-                hints["strictness"] = policy.schema_strictness
-        elif monitor_key == "VOLUME":
-            if getattr(policy, "volume_growth_threshold", None):
-                hints["growth_rate_threshold"] = policy.volume_growth_threshold
-            if getattr(policy, "volume_min_rows", None):
-                hints["min_rows"] = policy.volume_min_rows
-            if getattr(policy, "volume_max_rows", None):
-                hints["max_rows"] = policy.volume_max_rows
-        elif monitor_key == "ANOMALY":
-            if getattr(policy, "anomaly_sensitivity", None):
-                # Convert 0-1 sensitivity scale to z-score threshold.
-                # Higher sensitivity → lower z-score threshold → more alerts.
-                # 0.99 → 2.0, 0.95 → 3.0, 0.90 → 3.5, 0.80 → 4.0
-                sens = policy.anomaly_sensitivity
-                hints["anomaly_threshold"] = _sensitivity_to_zscore(sens)
-            if getattr(policy, "anomaly_lookback_days", None):
-                hints["lookback_days"] = policy.anomaly_lookback_days
-        elif monitor_key in ("NULL_RATE", "NULL_CHECK"):
-            if getattr(policy, "quality_max_null_rate", None):
-                hints["max_null_rate"] = policy.quality_max_null_rate
-        elif monitor_key == "UNIQUENESS_CHECK":
-            if getattr(policy, "quality_max_duplicate_rate", None):
-                hints["max_duplicate_rate"] = policy.quality_max_duplicate_rate
-        elif monitor_key in ("OUTLIER_DETECTION", "ANOMALY"):
-            # Same logic as ANOMALY above — sensitivity → z-score
-            if getattr(policy, "anomaly_sensitivity", None):
-                sens = policy.anomaly_sensitivity
-                hints["anomaly_threshold"] = _sensitivity_to_zscore(sens)
-            if getattr(policy, "anomaly_lookback_days", None):
-                hints["lookback_days"] = policy.anomaly_lookback_days
-        elif monitor_key == "DATA_TYPE_VALIDATION":
-            if getattr(policy, "schema_strictness", None):
-                hints["strictness"] = policy.schema_strictness
-        elif monitor_key == "SYNC_LAG":
-            if getattr(policy, "sync_lag_tolerance_minutes", None):
-                hints["max_lag_minutes"] = policy.sync_lag_tolerance_minutes
-        elif monitor_key == "CONNECTOR_SCHEMA_DRIFT":
-            if getattr(policy, "schema_drift_strictness", None):
-                hints["strictness"] = policy.schema_drift_strictness
-        elif monitor_key == "BI_FRESHNESS_PROXY":
-            if getattr(policy, "bi_freshness_hours", None):
-                hints["max_stale_hours"] = policy.bi_freshness_hours
-        elif monitor_key == "BI_UPSTREAM_BREAK_RISK":
-            if getattr(policy, "upstream_break_strictness", None):
-                hints["strictness"] = policy.upstream_break_strictness
-        elif monitor_key in ("DAG_LAST_RUN", "DAG_SCHEDULE_LAG"):
-            if getattr(policy, "run_latency_minutes", None):
-                hints["max_latency_minutes"] = policy.run_latency_minutes
-            if getattr(policy, "schedule_lag_minutes", None):
-                hints["max_schedule_lag_minutes"] = policy.schedule_lag_minutes
+        mapping = POLICY_TO_MONITOR_CONFIG.get(monitor_key.upper(), {})
+        # Also check aliases (NULL_RATE → NULL_CHECK, etc.)
+        if not mapping and monitor_key == "NULL_RATE":
+            mapping = POLICY_TO_MONITOR_CONFIG.get("NULL_CHECK", {})
+        if not mapping and monitor_key == "DATA_TYPE_VALIDATION":
+            mapping = POLICY_TO_MONITOR_CONFIG.get("SCHEMA_CHANGE", {})
+
+        for policy_field, target in mapping.items():
+            policy_val = getattr(policy, policy_field, None)
+            if policy_val is None:
+                continue
+            if isinstance(target, tuple):
+                config_field, converter = target
+                hints[config_field] = converter(policy_val)
+            else:
+                hints[target] = policy_val
 
     if monitor_key in (FRESHNESS, VOLUME, OUTLIER_DETECTION):
         ts_col = _guess_timestamp_column(node)

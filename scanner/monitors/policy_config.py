@@ -134,74 +134,73 @@ def is_less_strict(field: str, policy_value: Any, override_value: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 # Converter: treat the policy field as anomaly_sensitivity (0-1) and convert to z-score
-_anomaly_conv: Callable[[float], float] = sensitivity_to_zscore
 
+# Keys are EffectivePolicy attribute names (what getattr(policy, ...) uses).
+# Values are config field names, or (config_field, converter_func) tuples.
 POLICY_TO_MONITOR_CONFIG: Dict[str, Dict[str, Any]] = {
     # ----- Warehouse SQL monitors -----
     "FRESHNESS": {
-        "max_hours": "max_hours",
-        "warning_hours": "warning_hours",
+        "freshness_max_hours": "max_hours",
+        "freshness_warning_hours": "warning_hours",
     },
     "VOLUME": {
-        "min_rows": "min_rows",
-        "max_rows": "max_rows",
-        "growth_threshold": "growth_threshold",
+        "volume_min_rows": "min_rows",
+        "volume_max_rows": "max_rows",
+        "volume_growth_threshold": "growth_rate_threshold",
     },
     "OUTLIER_DETECTION": {
-        # policy sends sensitivity (0-1); config expects z-score threshold
-        "anomaly_threshold": ("anomaly_threshold", _anomaly_conv),
-        "lookback_days": "lookback_days",
+        "anomaly_sensitivity": ("anomaly_threshold", sensitivity_to_zscore),
+        "anomaly_lookback_days": "lookback_days",
     },
     "ANOMALY": {
-        # Legacy alias for OUTLIER_DETECTION
-        "anomaly_threshold": ("anomaly_threshold", _anomaly_conv),
-        "lookback_days": "lookback_days",
+        "anomaly_sensitivity": ("anomaly_threshold", sensitivity_to_zscore),
+        "anomaly_lookback_days": "lookback_days",
     },
     "NULL_CHECK": {
-        "max_null_rate": "max_null_rate",
+        "quality_max_null_rate": "max_null_rate",
     },
     "UNIQUENESS_CHECK": {
-        "max_duplicate_rate": "max_duplicate_rate",
+        "quality_max_duplicate_rate": "max_duplicate_rate",
     },
     "SCHEMA_CHANGE": {
-        "strictness": "strictness",
+        "schema_strictness": "strictness",
     },
     # ----- Ingestion monitors -----
     "SYNC_LAG": {
-        "sync_lag_minutes": "lag_tolerance_minutes",
+        "sync_lag_tolerance_minutes": "max_lag_minutes",
     },
     "FAILED_SYNCS": {
         "failure_tolerance": "failure_tolerance",
     },
     "CONNECTOR_SCHEMA_DRIFT": {
-        "strictness": "strictness",
+        "schema_drift_strictness": "strictness",
     },
     # ----- BI / Reporting monitors -----
     "BI_FRESHNESS_PROXY": {
-        "max_hours": "max_hours",
+        "bi_freshness_hours": "max_stale_hours",
     },
     "BI_UPSTREAM_BREAK_RISK": {
-        "strictness": "strictness",
+        "upstream_break_strictness": "strictness",
     },
     # ----- Orchestration monitors -----
     "DAG_LAST_RUN": {
-        "run_latency_minutes": "run_latency_minutes",
+        "run_latency_minutes": "max_latency_minutes",
     },
     "DAG_SCHEDULE_LAG": {
-        "schedule_lag_minutes": "schedule_lag_minutes",
+        "schedule_lag_minutes": "max_schedule_lag_minutes",
     },
     "TASK_FAILURE_RATE": {
-        "failure_tolerance": "failure_tolerance",
+        "orch_failure_tolerance": "max_failure_pct",
     },
     # ----- Transformation / dbt monitors -----
     "DBT_TEST_FAILURES": {
-        "failure_tolerance": "failure_tolerance",
+        "test_failure_tolerance": "failure_tolerance",
     },
     "DBT_MODEL_FRESHNESS": {
-        "max_hours": "max_hours",
+        "model_freshness_hours": "max_hours",
     },
     "DBT_SOURCE_FRESHNESS": {
-        "max_hours": "max_hours",
+        "model_freshness_hours": "max_hours",
     },
 }
 

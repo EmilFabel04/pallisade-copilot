@@ -73,7 +73,7 @@ class TestPolicyDrivenHints:
         node = _make_node()
         policy = EffectivePolicy(freshness_max_hours=4, freshness_warning_hours=2)
         hints = _build_config_hints(node, "FRESHNESS", policy=policy)
-        assert hints["freshness_hours"] == 4
+        assert hints["max_hours"] == 4
         assert hints["warning_hours"] == 2
 
     def test_schema_change_uses_policy_strictness(self):
@@ -147,15 +147,24 @@ class TestPolicyDrivenHints:
         hints = _build_config_hints(node, "BI_UPSTREAM_BREAK_RISK", policy=policy)
         assert hints["strictness"] == "strict"
 
-    def test_dag_monitors_use_policy(self):
+    def test_dag_last_run_uses_policy(self):
         node = _make_node(
             platform_domain=PlatformDomain.ORCHESTRATION,
             asset_kind=AssetKind.JOB,
             name="my_dag",
         )
-        policy = EffectivePolicy(run_latency_minutes=15, schedule_lag_minutes=5)
+        policy = EffectivePolicy(run_latency_minutes=15)
         hints = _build_config_hints(node, "DAG_LAST_RUN", policy=policy)
         assert hints["max_latency_minutes"] == 15
+
+    def test_dag_schedule_lag_uses_policy(self):
+        node = _make_node(
+            platform_domain=PlatformDomain.ORCHESTRATION,
+            asset_kind=AssetKind.JOB,
+            name="my_dag",
+        )
+        policy = EffectivePolicy(schedule_lag_minutes=5)
+        hints = _build_config_hints(node, "DAG_SCHEDULE_LAG", policy=policy)
         assert hints["max_schedule_lag_minutes"] == 5
 
     def test_policy_with_no_relevant_fields_no_effect(self):

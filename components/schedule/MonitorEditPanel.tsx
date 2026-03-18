@@ -4,6 +4,11 @@ import { useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { MONITOR_CATALOG } from '@/types/monitor-catalog';
 import { PolicyFieldBadge } from './PolicyFieldBadge';
+import {
+  POLICY_FIELD_MAP,
+  getPolicyValueForField,
+  isLessStrictClient,
+} from '@/lib/policy-utils';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,125 +40,7 @@ interface MonitorEditPanelProps {
   onSave: (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => Promise<void>;
 }
 
-// ---------------------------------------------------------------------------
-// Policy field mapping: monitorType -> { configField -> [policySection, policyField] }
-// ---------------------------------------------------------------------------
-
-type PolicyFieldMap = Record<string, Record<string, [string, string]>>;
-
-// Maps: configField (snake_case, what monitors store) →
-//   [policySection, policySectionField (camelCase, what resolve returns)]
-const POLICY_FIELD_MAP: PolicyFieldMap = {
-  FRESHNESS: {
-    max_hours: ['freshness', 'maxHours'],
-    warning_hours: ['freshness', 'warningHours'],
-  },
-  VOLUME: {
-    min_rows: ['volume', 'minRows'],
-    max_rows: ['volume', 'maxRows'],
-    growth_rate_threshold: ['volume', 'growthRateThreshold'],
-  },
-  OUTLIER_DETECTION: {
-    anomaly_threshold: ['anomaly', 'sensitivity'],
-    lookback_days: ['anomaly', 'lookbackDays'],
-  },
-  ANOMALY: {
-    anomaly_threshold: ['anomaly', 'sensitivity'],
-    lookback_days: ['anomaly', 'lookbackDays'],
-  },
-  NULL_CHECK: {
-    max_null_rate: ['quality', 'maxNullRate'],
-  },
-  UNIQUENESS_CHECK: {
-    max_duplicate_rate: ['quality', 'maxDuplicateRate'],
-  },
-  SCHEMA_CHANGE: {
-    strictness: ['schema', 'strictness'],
-  },
-  SYNC_LAG: {
-    max_lag_minutes: ['ingestion', 'syncLagToleranceMinutes'],
-  },
-  FAILED_SYNCS: {
-    failure_tolerance: ['ingestion', 'failureTolerance'],
-  },
-  CONNECTOR_SCHEMA_DRIFT: {
-    strictness: ['ingestion', 'schemaDriftStrictness'],
-  },
-  BI_FRESHNESS_PROXY: {
-    max_stale_hours: ['bi', 'freshnessHours'],
-  },
-  BI_UPSTREAM_BREAK_RISK: {
-    strictness: ['bi', 'upstreamBreakStrictness'],
-  },
-  DAG_LAST_RUN: {
-    max_stale_hours: ['orchestration', 'runLatencyMinutes'],
-  },
-  DAG_SCHEDULE_LAG: {
-    max_lag_minutes: ['orchestration', 'scheduleLagMinutes'],
-  },
-  TASK_FAILURE_RATE: {
-    max_failure_pct: ['orchestration', 'failureTolerance'],
-  },
-  DBT_TEST_FAILURES: {
-    failure_tolerance: ['transform', 'testFailureTolerance'],
-  },
-  DBT_MODEL_FRESHNESS: {
-    max_hours: ['transform', 'modelFreshnessHours'],
-  },
-  DBT_SOURCE_FRESHNESS: {
-    max_hours: ['transform', 'modelFreshnessHours'],
-  },
-};
-
-// ---------------------------------------------------------------------------
-// Client-side sensitivity -> z-score conversion (mirrors Python backend)
-// Piecewise linear: 0.99->2.0, 0.95->3.0, 0.90->3.5, 0.80->4.0, 0.50->5.0
-// ---------------------------------------------------------------------------
-
-function sensitivityToZscore(sensitivity: number): number {
-  if (sensitivity >= 0.99) return 2.0;
-  if (sensitivity >= 0.95) {
-    // 0.95–0.99 → 2.0–3.0
-    return 2.0 + (0.99 - sensitivity) / (0.99 - 0.95) * (3.0 - 2.0);
-  }
-  if (sensitivity >= 0.90) {
-    // 0.90–0.95 → 3.0–3.5
-    return 3.0 + (0.95 - sensitivity) / (0.95 - 0.90) * (3.5 - 3.0);
-  }
-  if (sensitivity >= 0.80) {
-    // 0.80–0.90 → 3.5–4.0
-    return 3.5 + (0.90 - sensitivity) / (0.90 - 0.80) * (4.0 - 3.5);
-  }
-  // 0.50–0.80 → 4.0–5.0
-  return 4.0 + (0.80 - sensitivity) / (0.80 - 0.50) * (5.0 - 4.0);
-}
-
-// ---------------------------------------------------------------------------
-// Client-side "is less strict" detection
-// ---------------------------------------------------------------------------
-
-function isLessStrictClient(fieldKey: string, currentValue: any, policyValue: any): boolean {
-  if (currentValue === null || currentValue === undefined) return false;
-  if (policyValue === null || policyValue === undefined) return false;
-
-  const cur = Number(currentValue);
-  const pol = Number(policyValue);
-
-  if (Number.isNaN(cur) || Number.isNaN(pol)) return false;
-
-  // Fields where higher = less strict (thresholds, lag, hours)
-  const higherIsLessStrict = [
-    'max_hours', 'max_null_rate', 'max_duplicate_rate', 'max_lag_minutes',
-    'max_stale_hours', 'max_failure_pct', 'lookback_hours', 'anomaly_threshold',
-  ];
-  // Fields where lower = less strict (min bounds)
-  const lowerIsLessStrict = ['min_rows'];
-
-  if (higherIsLessStrict.includes(fieldKey)) return cur > pol;
-  if (lowerIsLessStrict.includes(fieldKey)) return cur < pol;
-
-  return false;
-}
+// POLICY_FIELD_MAP, getPolicyValueForField, isLessStrictClient imported from @/lib/policy-utils
 
 // ---------------------------------------------------------------------------
 // Component
@@ -172,27 +59,12 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
   const profileName = resolvedPolicy?.profileName;
   const fieldMap = POLICY_FIELD_MAP[monitor.monitorType] || {};
 
-  // Get policy value for a config field key
+  // Get policy value for a config field key (delegates to shared util)
   const getPolicyValue = useCallback(
     (fieldKey: string): any => {
-      if (!resolvedPolicy) return undefined;
-      const mapping = fieldMap[fieldKey];
-      if (!mapping) return undefined;
-
-      const [section, policyField] = mapping;
-      const sectionData = resolvedPolicy[section];
-      if (!sectionData || typeof sectionData !== 'object') return undefined;
-
-      let raw = sectionData[policyField];
-
-      // Convert anomaly sensitivity (0-1) to z-score threshold for comparison
-      if (policyField === 'sensitivity' && raw !== undefined && raw !== null) {
-        raw = sensitivityToZscore(Number(raw));
-      }
-
-      return raw;
+      return getPolicyValueForField(monitor.monitorType, fieldKey, resolvedPolicy);
     },
-    [resolvedPolicy, fieldMap],
+    [monitor.monitorType, resolvedPolicy],
   );
 
   // Update a single config field and track overrides
