@@ -4,6 +4,13 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
+import { PolicyFieldBadge } from './PolicyFieldBadge';
+import { getMonitorDefinition } from '@/types/monitor-catalog';
+import {
+  POLICY_FIELD_MAP,
+  getPolicyValueForField,
+  isLessStrictClient,
+} from '@/lib/policy-utils';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,6 +21,9 @@ export interface AssetPrefill {
   fqn: string;
   name: string;
   platform?: string;
+  domain?: string;
+  criticality?: string;
+  nodeType?: string;
 }
 
 export interface SingleAssetMonitorModalProps {
@@ -27,20 +37,23 @@ export interface SingleAssetMonitorModalProps {
 interface MonitorRecommendation {
   monitor_key: string;
   target_fqn: string;
+  target_node_id?: string;
   source: string;
   priority: number;
   reason: string;
   already_monitored: boolean;
   config_hints?: Record<string, any>;
+  depth?: number;
 }
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5;
 
 const STEP_LABELS: Record<Step, string> = {
   1: 'Pick Asset',
   2: 'Select Monitors',
-  3: 'Schedule',
-  4: 'Create',
+  3: 'Configure',
+  4: 'Schedule',
+  5: 'Create',
 };
 
 // ---------------------------------------------------------------------------
@@ -97,13 +110,18 @@ export function SingleAssetMonitorModal({
   const [selectedMonitors, setSelectedMonitors] = useState<Set<string>>(new Set());
   const [recsLoading, setRecsLoading] = useState(false);
 
-  // Step 3: Schedule
+  // Step 3: Configure & Policy
+  const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [monitorConfigs, setMonitorConfigs] = useState<Record<number, { config: Record<string, any>; overrides: string[] }>>({});
+
+  // Step 4: Schedule
   const [schedule, setSchedule] = useState('0 */6 * * *');
   const [timezone, setTimezone] = useState(
     Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
   );
 
-  // Step 4: Alerts & Create
+  // Step 5: Alerts & Create
   const [alertChannels, setAlertChannels] = useState<string[]>([]);
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'WARN', 'ERROR']);
   const [watchName, setWatchName] = useState('');
@@ -119,6 +137,8 @@ export function SingleAssetMonitorModal({
       setSearchResults([]);
       setRecommendations([]);
       setSelectedMonitors(new Set());
+      setResolvedPolicies({});
+      setMonitorConfigs({});
       setWatchName(asset ? `Monitors — ${asset.name}` : '');
       setCreating(false);
     }
@@ -156,6 +176,52 @@ export function SingleAssetMonitorModal({
     }
   }, [stackId, selectedAsset]);
 
+  // Fetch policies when entering step 3
+  const fetchPolicies = useCallback(async () => {
+    if (!selectedAsset) return;
+    setPolicyLoading(true);
+    try {
+      const res = await fetch('/api/schedule/policies/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nodes: [{ fqn: selectedAsset.fqn, domain: selectedAsset.domain, criticality: selectedAsset.criticality }],
+          stackId,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setResolvedPolicies(data.policies || {});
+      }
+    } catch (err) {
+      console.warn('[SingleAssetMonitor] Policy resolve failed:', err);
+    } finally {
+      setPolicyLoading(false);
+    }
+  }, [selectedAsset, stackId]);
+
+  // Initialize configs from recommendations + policy
+  const initConfigs = useCallback(() => {
+    const policy = resolvedPolicies[selectedAsset?.fqn || ''];
+    const configs: Record<number, { config: Record<string, any>; overrides: string[] }> = {};
+    recommendations.forEach((rec, i) => {
+      if (!selectedMonitors.has(`${i}`)) return;
+      const baseConfig = { ...(rec.config_hints || {}) };
+      // Fill policy defaults for fields not already in config_hints
+      if (policy) {
+        const fieldMap = POLICY_FIELD_MAP[rec.monitor_key] || {};
+        for (const fieldKey of Object.keys(fieldMap)) {
+          if (!(fieldKey in baseConfig)) {
+            const policyVal = getPolicyValueForField(rec.monitor_key, fieldKey, policy);
+            if (policyVal != null) baseConfig[fieldKey] = policyVal;
+          }
+        }
+      }
+      configs[i] = { config: baseConfig, overrides: [] };
+    });
+    setMonitorConfigs(configs);
+  }, [recommendations, selectedMonitors, resolvedPolicies, selectedAsset]);
+
   // Search assets
   const handleSearch = useCallback(async () => {
     if (!stackId || !searchQuery.trim()) return;
@@ -175,6 +241,9 @@ export function SingleAssetMonitorModal({
           fqn: r.fqn || r.name,
           name: r.name,
           platform: r.platform,
+          domain: r.domain,
+          criticality: r.criticality,
+          nodeType: r.nodeType || r.node_type,
         }));
         setSearchResults(results);
       }
@@ -187,19 +256,31 @@ export function SingleAssetMonitorModal({
 
   // Step navigation
   const goToStep = useCallback(
-    (target: Step) => {
+    async (target: Step) => {
       if (target === 2) fetchRecommendations();
+      if (target === 3) {
+        await fetchPolicies();
+        // initConfigs will be called via effect when policies load
+      }
       setStep(target);
     },
-    [fetchRecommendations],
+    [fetchRecommendations, fetchPolicies],
   );
+
+  // Initialize configs when policies finish loading (entering step 3)
+  useEffect(() => {
+    if (step === 3 && !policyLoading) {
+      initConfigs();
+    }
+  }, [step, policyLoading, initConfigs]);
 
   const canGoNext = useMemo(() => {
     switch (step) {
       case 1: return selectedAsset !== null;
       case 2: return selectedMonitors.size > 0;
-      case 3: return schedule.trim().length > 0;
-      case 4: return watchName.trim().length > 0;
+      case 3: return true; // configure step is always valid
+      case 4: return schedule.trim().length > 0;
+      case 5: return watchName.trim().length > 0;
       default: return false;
     }
   }, [step, selectedAsset, selectedMonitors, schedule, watchName]);
@@ -214,51 +295,97 @@ export function SingleAssetMonitorModal({
     });
   }, []);
 
-  // Create watch
+  // Update a config field for a monitor
+  const handleConfigChange = useCallback((recIdx: number, fieldKey: string, value: any) => {
+    setMonitorConfigs((prev) => {
+      const mc = prev[recIdx] || { config: {}, overrides: [] };
+      const newConfig = { ...mc.config, [fieldKey]: value };
+      // Track overrides: check if value differs from policy
+      const policy = resolvedPolicies[selectedAsset?.fqn || ''];
+      const rec = recommendations[recIdx];
+      const policyVal = rec ? getPolicyValueForField(rec.monitor_key, fieldKey, policy) : undefined;
+      let newOverrides = [...mc.overrides];
+      if (policyVal !== undefined && String(value) !== String(policyVal)) {
+        if (!newOverrides.includes(fieldKey)) newOverrides.push(fieldKey);
+      } else {
+        newOverrides = newOverrides.filter((k) => k !== fieldKey);
+      }
+      return { ...prev, [recIdx]: { config: newConfig, overrides: newOverrides } };
+    });
+  }, [resolvedPolicies, selectedAsset, recommendations]);
+
+  // Reset a config field to policy value
+  const handleResetField = useCallback((recIdx: number, fieldKey: string) => {
+    const policy = resolvedPolicies[selectedAsset?.fqn || ''];
+    const rec = recommendations[recIdx];
+    if (!rec) return;
+    const policyVal = getPolicyValueForField(rec.monitor_key, fieldKey, policy);
+    if (policyVal !== undefined) {
+      handleConfigChange(recIdx, fieldKey, policyVal);
+    }
+  }, [resolvedPolicies, selectedAsset, recommendations, handleConfigChange]);
+
+  // Create plan via 3-step pipeline
   const handleCreate = useCallback(async () => {
-    if (!stackId || !selectedAsset) return;
+    if (!selectedAsset) return;
     setCreating(true);
     try {
-      const monitors = recommendations
-        .filter((_, i) => selectedMonitors.has(`${i}`))
-        .map((rec) => ({
-          name: `${rec.monitor_key} — ${rec.target_fqn}`,
-          monitorType: rec.monitor_key,
-          targetFqn: rec.target_fqn,
-          config: rec.config_hints || {},
-          priority: rec.priority,
-        }));
+      const selectedRecs = recommendations
+        .map((rec, i) => ({ rec, origIdx: i }))
+        .filter(({ origIdx }) => selectedMonitors.has(`${origIdx}`))
+        .map(({ rec, origIdx }) => {
+          const mc = monitorConfigs[origIdx];
+          return {
+            monitor_key: rec.monitor_key,
+            target_fqn: rec.target_fqn,
+            target_node_id: rec.target_node_id,
+            config_hints: mc ? mc.config : (rec.config_hints || {}),
+            depth: rec.depth || 0,
+            priority: rec.priority || 1,
+          };
+        });
 
-      const res = await fetch('/api/schedule/watches', {
+      const groups = [{
+        anchor_name: selectedAsset.name,
+        anchor_fqn: selectedAsset.fqn,
+        anchor_id: selectedAsset.nodeId,
+        anchor_node_type: selectedAsset.nodeType || 'table',
+        anchor_platform: selectedAsset.platform || 'unknown',
+        watch_type: 'pipeline_health',
+        recommendations: selectedRecs,
+      }];
+
+      const res = await fetch('/api/schedule/plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: watchName,
-          watchType: 'custom_watch',
-          anchorFqn: selectedAsset.fqn,
-          anchorNodeId: selectedAsset.nodeId,
+          scopeType: 'asset',
+          scopeConfig: { nodeIds: [selectedAsset.nodeId] },
+          mode: 'manual',
+          families: [],
           schedule,
           timezone,
           alertChannels,
           alertOnStatus,
-          monitors,
+          groups,
         }),
       });
 
-      if (res.ok) {
-        onComplete();
-        onClose();
-      } else {
+      if (!res.ok) {
         const err = await res.json();
-        console.error('[SingleAssetMonitor] create error:', err);
+        throw new Error(err.error || 'Failed to create monitors');
       }
-    } catch (err) {
+
+      onComplete();
+      onClose();
+    } catch (err: any) {
       console.error('[SingleAssetMonitor] create error:', err);
     } finally {
       setCreating(false);
     }
   }, [
-    stackId, selectedAsset, recommendations, selectedMonitors,
+    selectedAsset, recommendations, selectedMonitors, monitorConfigs,
     watchName, schedule, timezone, alertChannels, alertOnStatus,
     onComplete, onClose,
   ]);
@@ -282,7 +409,7 @@ export function SingleAssetMonitorModal({
               Single Asset Monitor
             </h2>
             <div className="flex items-center gap-1">
-              {([1, 2, 3, 4] as Step[]).map((s) => (
+              {([1, 2, 3, 4, 5] as Step[]).map((s) => (
                 <span
                   key={s}
                   className={cn(
@@ -469,8 +596,124 @@ export function SingleAssetMonitorModal({
             </div>
           )}
 
-          {/* Step 3: Schedule */}
+          {/* Step 3: Configure & Policy */}
           {step === 3 && (
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-[14px] font-medium text-[var(--text)]">
+                  Configure & Policy
+                </h3>
+                <p className="text-[12px] text-[var(--muted)] mt-1">
+                  Configure monitor settings. Policy defaults are pre-filled.
+                </p>
+              </div>
+
+              {policyLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="p-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] animate-pulse">
+                      <div className="h-4 w-40 rounded bg-[var(--muted)]/20 mb-2" />
+                      <div className="h-8 w-full rounded bg-[var(--muted)]/15" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                recommendations
+                  .map((rec, origIdx) => ({ rec, origIdx }))
+                  .filter(({ origIdx }) => selectedMonitors.has(`${origIdx}`))
+                  .map(({ rec, origIdx }) => {
+                    const mc = monitorConfigs[origIdx] || { config: {}, overrides: [] };
+                    const catalogDef = getMonitorDefinition(rec.monitor_key);
+                    const policy = resolvedPolicies[selectedAsset?.fqn || ''];
+                    const policyFieldMap = POLICY_FIELD_MAP[rec.monitor_key] || {};
+
+                    // Get fields to show: from catalog config_schema, falling back to policy-mapped fields
+                    const schemaFields = catalogDef?.config_schema || [];
+                    const policyFieldKeys = Object.keys(policyFieldMap);
+                    // Fields from catalog that have policy mapping, or all policy-mapped fields if no catalog
+                    const fieldsToRender = schemaFields.length > 0
+                      ? schemaFields.filter((f) => !f.advanced)
+                      : policyFieldKeys.map((key) => ({
+                          key,
+                          label: key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                          type: 'number' as const,
+                        }));
+
+                    return (
+                      <div key={origIdx} className="border border-[var(--border)] rounded-lg p-3">
+                        <h4 className="font-medium text-[13px] text-[var(--text)] mb-3">
+                          {MONITOR_TYPE_LABELS[rec.monitor_key] || rec.monitor_key}
+                          <span className="text-[11px] text-[var(--muted)] font-normal ml-2">
+                            {rec.target_fqn}
+                          </span>
+                        </h4>
+
+                        {fieldsToRender.length === 0 ? (
+                          <p className="text-[12px] text-[var(--muted)]">No configurable fields.</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {fieldsToRender.map((field) => {
+                              const policyVal = getPolicyValueForField(rec.monitor_key, field.key, policy);
+                              const currentVal = mc.config[field.key];
+                              const isOverridden = mc.overrides.includes(field.key);
+                              const lessStrict = isLessStrictClient(field.key, currentVal, policyVal);
+                              const hasPolicyMapping = policyVal !== undefined;
+
+                              return (
+                                <div key={field.key} className="space-y-1">
+                                  <div className="flex items-center gap-2">
+                                    <label className="text-[12px] font-medium text-[var(--text)]">
+                                      {field.label}
+                                    </label>
+                                    {hasPolicyMapping && (
+                                      <PolicyFieldBadge
+                                        fieldKey={field.key}
+                                        currentValue={currentVal}
+                                        policyValue={policyVal}
+                                        isOverridden={isOverridden}
+                                        isLessStrict={lessStrict}
+                                        onReset={() => handleResetField(origIdx, field.key)}
+                                      />
+                                    )}
+                                  </div>
+                                  {field.type === 'select' && 'options' in field && field.options ? (
+                                    <select
+                                      value={currentVal ?? ''}
+                                      onChange={(e) => handleConfigChange(origIdx, field.key, e.target.value)}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-[13px] focus:outline-none focus:border-[var(--accent)]"
+                                    >
+                                      <option value="">—</option>
+                                      {field.options.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type={field.type === 'number' ? 'number' : 'text'}
+                                      value={currentVal ?? ''}
+                                      onChange={(e) => handleConfigChange(
+                                        origIdx,
+                                        field.key,
+                                        field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value,
+                                      )}
+                                      placeholder={'placeholder' in field ? field.placeholder : undefined}
+                                      className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-[13px] focus:outline-none focus:border-[var(--accent)]"
+                                    />
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+          )}
+
+          {/* Step 4: Schedule */}
+          {step === 4 && (
             <div className="space-y-6">
               <div>
                 <h3 className="text-[14px] font-medium text-[var(--text)]">
@@ -501,8 +744,8 @@ export function SingleAssetMonitorModal({
             </div>
           )}
 
-          {/* Step 4: Alerts & Create */}
-          {step === 4 && (
+          {/* Step 5: Alerts & Create */}
+          {step === 5 && (
             <div className="space-y-6">
               <div>
                 <h3 className="text-[14px] font-medium text-[var(--text)]">
@@ -563,7 +806,7 @@ export function SingleAssetMonitorModal({
             {step === 1 || (step === 2 && prefill) ? 'Cancel' : 'Back'}
           </button>
 
-          {step < 4 ? (
+          {step < 5 ? (
             <button
               onClick={() => goToStep((step + 1) as Step)}
               disabled={!canGoNext}
