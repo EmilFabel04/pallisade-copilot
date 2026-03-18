@@ -842,11 +842,11 @@ class ToolExecutor:
             return ToolResult(success=False, error=str(e))
 
     async def _execute_confirmed_create_watch(self, data: Dict[str, Any]) -> ToolResult:
-        """Actually create the watch via Next.js API."""
+        """Create standalone monitors via the tasks API (no watch group)."""
         import aiohttp
-
         import os
-        url = f"{self.context.base_url}/api/schedule/watches"
+
+        base_url = self.context.base_url
         headers = {
             "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
             "X-Organization-Id": self.context.org_id,
@@ -857,7 +857,6 @@ class ToolExecutor:
         policy_configs = {}
         try:
             from scanner.monitors.policy_resolver import build_policy_map
-            # Build minimal node-like objects for policy resolution
             target_fqns = set()
             for mon in data.get("monitors", []):
                 fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
@@ -865,10 +864,10 @@ class ToolExecutor:
                     target_fqns.add(fqn)
 
             if target_fqns and hasattr(self.context, 'graph') and self.context.graph:
-                nodes_for_policy = []
-                for node in self.context.graph.nodes:
-                    if hasattr(node, 'fqn') and node.fqn in target_fqns:
-                        nodes_for_policy.append(node)
+                nodes_for_policy = [
+                    node for node in self.context.graph.nodes
+                    if hasattr(node, 'fqn') and node.fqn in target_fqns
+                ]
                 if nodes_for_policy:
                     policy_map = build_policy_map(nodes_for_policy)
                     for fqn, policy in policy_map.items():
@@ -882,54 +881,68 @@ class ToolExecutor:
                             }.items() if v is not None
                         }
         except Exception as e:
-            logger.warning(f"[CreateWatch] Policy resolution failed (non-fatal): {e}")
+            logger.warning(f"[CreateMonitor] Policy resolution failed (non-fatal): {e}")
 
-        # Map monitors from LLM snake_case to API camelCase, merging policy config
+        schedule = data.get("schedule", "0 * * * *")
+        timezone = data.get("timezone", "UTC")
         raw_monitors = data.get("monitors", [])
-        mapped_monitors = []
-        for mon in raw_monitors:
-            target_fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
-            base_config = mon.get("config", {})
-            # Merge policy config (policy provides defaults, explicit config overrides)
-            if target_fqn in policy_configs:
-                merged_config = {**policy_configs[target_fqn], **base_config}
-            else:
-                merged_config = base_config
-            mapped_monitors.append({
-                "monitorType": mon.get("monitorType") or mon.get("monitor_type"),
-                "targetFqn": target_fqn,
-                "config": merged_config,
-                "name": mon.get("name"),
-            })
+        created = []
+        errors = []
 
-        body = {
-            "name": data.get("name"),
-            "watchType": data.get("watchType") or data.get("watch_type"),
-            "anchorFqn": data.get("anchorFqn") or data.get("anchor_fqn"),
-            "monitors": mapped_monitors,
-            "schedule": data.get("schedule"),
-            "timezone": data.get("timezone", "UTC"),
-        }
+        async with aiohttp.ClientSession() as session:
+            for mon in raw_monitors:
+                target_fqn = mon.get("targetFqn") or mon.get("target_fqn") or ""
+                monitor_type = mon.get("monitorType") or mon.get("monitor_type") or ""
+                base_config = mon.get("config", {})
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=body, headers=headers) as resp:
-                    if resp.status not in (200, 201):
-                        error_body = await resp.text()
-                        return ToolResult(success=False, error=f"Watch creation failed ({resp.status}): {error_body}")
-                    result = await resp.json()
-                    watch = result.get("watch", {})
-                    return ToolResult(
-                        success=True,
-                        data={
-                            "watchId": watch.get("id"),
-                            "name": watch.get("name"),
-                            "monitorCount": watch.get("monitorCount", len(data.get("monitors", []))),
-                            "message": f"Watch '{watch.get('name')}' created with {watch.get('monitorCount', 0)} monitors.",
-                        }
-                    )
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to create watch: {str(e)}")
+                # Merge policy config (policy provides defaults, explicit config overrides)
+                if target_fqn in policy_configs:
+                    merged_config = {**policy_configs[target_fqn], **base_config}
+                else:
+                    merged_config = base_config
+
+                monitor_name = mon.get("name") or f"{monitor_type} — {target_fqn}"
+
+                body = {
+                    "name": monitor_name,
+                    "taskMode": "structured",
+                    "monitorType": monitor_type,
+                    "targetFqn": target_fqn,
+                    "config": merged_config,
+                    "schedule": schedule,
+                    "timezone": timezone,
+                }
+
+                try:
+                    url = f"{base_url}/api/schedule/tasks"
+                    async with session.post(url, json=body, headers=headers) as resp:
+                        if resp.status not in (200, 201):
+                            error_body = await resp.text()
+                            errors.append(f"{monitor_type} on {target_fqn}: {error_body}")
+                        else:
+                            result = await resp.json()
+                            task = result.get("task", {})
+                            created.append({
+                                "id": task.get("id"),
+                                "name": task.get("name"),
+                                "monitorType": task.get("monitorType"),
+                                "targetFqn": task.get("targetFqn"),
+                            })
+                except Exception as e:
+                    errors.append(f"{monitor_type} on {target_fqn}: {str(e)}")
+
+        if errors and not created:
+            return ToolResult(success=False, error=f"Monitor creation failed: {'; '.join(errors)}")
+
+        return ToolResult(
+            success=True,
+            data={
+                "created": created,
+                "monitorCount": len(created),
+                "errors": errors if errors else None,
+                "message": f"Created {len(created)} monitor(s)" + (f" ({len(errors)} failed)" if errors else ""),
+            }
+        )
 
     async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """Execute a specific tool."""
