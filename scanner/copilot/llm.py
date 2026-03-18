@@ -1005,6 +1005,59 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     }],
                 })
 
+            # Pre-execute confirmed artifacts before LLM call
+            if confirmed_artifacts:
+                for art_id, art_data in list(confirmed_artifacts.items()):
+                    art_tool = art_data.get("tool_name", "")
+                    if not art_tool:
+                        continue
+                    logger.info(f"[Stream/Anthropic] Pre-executing confirmed artifact '{art_id}' for tool '{art_tool}'")
+                    art_use_id = f"toolu_artifact_{art_id}"
+
+                    yield StreamEvent("tool_call_start", {
+                        "tool_use_id": art_use_id,
+                        "tool_name": art_tool,
+                        "arguments": art_data,
+                    })
+
+                    try:
+                        art_result = await executor.execute_confirmed(art_tool, art_data)
+                    except Exception as e:
+                        art_result = ToolResult(success=False, error=str(e))
+
+                    yield StreamEvent("tool_call_result", {
+                        "tool_use_id": art_use_id,
+                        "tool_name": art_tool,
+                        "result": art_result.to_dict(),
+                    })
+
+                    all_tool_calls.append({
+                        "tool": art_tool,
+                        "input": art_data,
+                        "result": art_result.to_dict(),
+                    })
+
+                    # Inject into messages so LLM can summarize what happened
+                    anthropic_messages.append({
+                        "role": "assistant",
+                        "content": [{
+                            "type": "tool_use",
+                            "id": art_use_id,
+                            "name": art_tool,
+                            "input": art_data,
+                        }],
+                    })
+                    anthropic_messages.append({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": art_use_id,
+                            "content": json.dumps(art_result.to_dict(), default=_safe_json_default),
+                        }],
+                    })
+                # Clear so the in-loop guard doesn't re-execute
+                confirmed_artifacts = None
+
             for iteration in range(max_tool_iterations):
                 yield StreamEvent("iteration_start", {
                     "iteration": iteration + 1,
@@ -1375,6 +1428,59 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     "tool_call_id": ptc_id,
                     "content": json.dumps(result.to_dict(), default=_safe_json_default),
                 })
+
+            # Pre-execute confirmed artifacts before LLM call
+            if confirmed_artifacts:
+                for art_id, art_data in list(confirmed_artifacts.items()):
+                    art_tool = art_data.get("tool_name", "")
+                    if not art_tool:
+                        continue
+                    logger.info(f"[Stream/OpenAI] Pre-executing confirmed artifact '{art_id}' for tool '{art_tool}'")
+                    art_use_id = f"call_artifact_{art_id}"
+
+                    yield StreamEvent("tool_call_start", {
+                        "tool_use_id": art_use_id,
+                        "tool_name": art_tool,
+                        "arguments": art_data,
+                    })
+
+                    try:
+                        art_result = await executor.execute_confirmed(art_tool, art_data)
+                    except Exception as e:
+                        art_result = ToolResult(success=False, error=str(e))
+
+                    yield StreamEvent("tool_call_result", {
+                        "tool_use_id": art_use_id,
+                        "tool_name": art_tool,
+                        "result": art_result.to_dict(),
+                    })
+
+                    all_tool_calls.append({
+                        "tool": art_tool,
+                        "input": art_data,
+                        "result": art_result.to_dict(),
+                    })
+
+                    # Inject into messages so LLM can summarize what happened
+                    openai_messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{
+                            "id": art_use_id,
+                            "type": "function",
+                            "function": {
+                                "name": art_tool,
+                                "arguments": json.dumps(art_data, default=_safe_json_default),
+                            },
+                        }],
+                    })
+                    openai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": art_use_id,
+                        "content": json.dumps(art_result.to_dict(), default=_safe_json_default),
+                    })
+                # Clear so the in-loop guard doesn't re-execute
+                confirmed_artifacts = None
 
             for iteration in range(max_tool_iterations):
                 yield StreamEvent("iteration_start", {
