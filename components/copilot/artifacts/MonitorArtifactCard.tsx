@@ -57,6 +57,7 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel, onE
   const isExecuting = status === 'executing';
   const isCompleted = status === 'completed';
   const isFailed = status === 'failed';
+  const isCancelled = status === 'cancelled';
 
   return (
     <div className="border border-border rounded-lg p-4 my-2 bg-card">
@@ -98,6 +99,11 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel, onE
         {isFailed && (
           <Badge className="bg-red-500/20 text-red-400">
             <X className="h-3 w-3 mr-1" /> Failed
+          </Badge>
+        )}
+        {isCancelled && (
+          <Badge className="bg-gray-500/20 text-gray-400">
+            <X className="h-3 w-3 mr-1" /> Cancelled
           </Badge>
         )}
       </div>

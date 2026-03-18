@@ -229,14 +229,26 @@ function AssistantPageInner() {
     abort: abortStreaming,
   } = useStreamingChat();
 
+  // Helper to update an artifact's status across all messages
+  const updateArtifactStatus = useCallback((artifactId: string, status: UIArtifact['status']) => {
+    setMessages(prev => prev.map(msg => ({
+      ...msg,
+      artifacts: msg.artifacts?.map(a =>
+        a.artifact_id === artifactId ? { ...a, status } : a
+      ),
+    })));
+  }, []);
+
   const handleArtifactConfirm = useCallback(async (artifactId: string, editedData?: Record<string, any>) => {
     // Search in streaming message first, then in finalized messages
     const artifact = streamingMessage?.artifacts.find(a => a.artifact_id === artifactId)
       || messages.flatMap(m => m.artifacts || []).find(a => a.artifact_id === artifactId);
     if (!artifact) return;
 
+    // Immediately update card to "executing" state
+    updateArtifactStatus(artifactId, 'executing');
+
     const toolName = artifact.tool_name || 'create_watch';
-    // Always include artifact data so the confirmed handler has the fields it needs
     const dataToSend = editedData || artifact.data;
     const actionMessage = `__action:confirm:${artifactId}:${toolName}:${JSON.stringify(dataToSend)}`;
 
@@ -247,14 +259,20 @@ function AssistantPageInner() {
         mode: selectedMode,
         pipelineStackId: selectedPipelineId || undefined,
       });
+      // Update card to "completed" after successful execution
+      updateArtifactStatus(artifactId, 'completed');
     } catch (err) {
       console.error('Artifact confirm failed:', err);
+      updateArtifactStatus(artifactId, 'failed');
       clearStreamingMessage();
       setIsLoading(false);
     }
-  }, [streamingMessage, messages, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage]);
+  }, [streamingMessage, messages, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage, updateArtifactStatus]);
 
   const handleArtifactCancel = useCallback(async (artifactId: string) => {
+    // Immediately update card to "cancelled" state
+    updateArtifactStatus(artifactId, 'cancelled');
+
     const actionMessage = `__action:cancel:${artifactId}`;
     try {
       await sendStreamingMessage(actionMessage, {
@@ -268,7 +286,7 @@ function AssistantPageInner() {
       clearStreamingMessage();
       setIsLoading(false);
     }
-  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage]);
+  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage, updateArtifactStatus]);
 
   const handleArtifactEdit = useCallback((artifact: UIArtifact) => {
     setEditingArtifact(artifact);

@@ -456,8 +456,9 @@ async function handleStreamingChat(
     select: { role: true, content: true },
   });
 
-  // Save user message (only on first call, not on confirmation resumes)
-  if (!confirmed_tool_ids || confirmed_tool_ids.length === 0) {
+  // Save user message (skip for confirmation/cancel actions and tool resumes)
+  const isActionMessage = rawMessage.startsWith('__action:');
+  if (!isActionMessage && (!confirmed_tool_ids || confirmed_tool_ids.length === 0)) {
     await prisma.copilotMessage.create({
       data: {
         sessionId: chatSession.id,
