@@ -853,11 +853,22 @@ class ToolExecutor:
             "Content-Type": "application/json",
         }
 
+        # Map monitors from LLM snake_case to API camelCase
+        raw_monitors = data.get("monitors", [])
+        mapped_monitors = []
+        for mon in raw_monitors:
+            mapped_monitors.append({
+                "monitorType": mon.get("monitorType") or mon.get("monitor_type"),
+                "targetFqn": mon.get("targetFqn") or mon.get("target_fqn"),
+                "config": mon.get("config", {}),
+                "name": mon.get("name"),
+            })
+
         body = {
             "name": data.get("name"),
-            "watchType": data.get("watchType"),
-            "anchorFqn": data.get("anchorFqn"),
-            "monitors": data.get("monitors", []),
+            "watchType": data.get("watchType") or data.get("watch_type"),
+            "anchorFqn": data.get("anchorFqn") or data.get("anchor_fqn"),
+            "monitors": mapped_monitors,
             "schedule": data.get("schedule"),
             "timezone": data.get("timezone", "UTC"),
         }
@@ -5737,9 +5748,19 @@ class ToolExecutor:
         name = arguments.get("name", "Untitled Watch")
         watch_type = arguments.get("watch_type", "custom_watch")
         anchor_fqn = arguments.get("anchor_fqn", "")
-        monitors = arguments.get("monitors", [])
+        raw_monitors = arguments.get("monitors", [])
         schedule = arguments.get("schedule", "0 */6 * * *")
         timezone = arguments.get("timezone", "UTC")
+
+        # Normalize monitors to camelCase for the API and card display
+        monitors = []
+        for mon in raw_monitors:
+            monitors.append({
+                "monitorType": mon.get("monitorType") or mon.get("monitor_type"),
+                "targetFqn": mon.get("targetFqn") or mon.get("target_fqn"),
+                "config": mon.get("config", {}),
+                "name": mon.get("name"),
+            })
 
         confirmation_tier = "modal" if len(monitors) >= 5 else "inline"
 
