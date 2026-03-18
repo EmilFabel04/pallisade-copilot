@@ -201,29 +201,21 @@ export function SingleAssetMonitorModal({
   }, [selectedAsset, stackId]);
 
   // Initialize configs from recommendations + policy
+  // Policy values always win as defaults — user edits create overrides
   const initConfigs = useCallback(() => {
     const policy = resolvedPolicies[selectedAsset?.fqn || ''];
     const configs: Record<number, { config: Record<string, any>; overrides: string[] }> = {};
     recommendations.forEach((rec, i) => {
       if (!selectedMonitors.has(`${i}`)) return;
       const baseConfig = { ...(rec.config_hints || {}) };
-      const overrides: string[] = [];
-      // Fill policy defaults for fields not already in config_hints
       if (policy) {
         const fieldMap = POLICY_FIELD_MAP[rec.monitor_key] || {};
         for (const fieldKey of Object.keys(fieldMap)) {
           const policyVal = getPolicyValueForField(rec.monitor_key, fieldKey, policy);
-          if (policyVal == null) continue;
-          if (!(fieldKey in baseConfig)) {
-            // No config_hint — use policy default
-            baseConfig[fieldKey] = policyVal;
-          } else if (String(baseConfig[fieldKey]) !== String(policyVal)) {
-            // config_hint differs from policy — mark as pre-existing override
-            overrides.push(fieldKey);
-          }
+          if (policyVal != null) baseConfig[fieldKey] = policyVal;
         }
       }
-      configs[i] = { config: baseConfig, overrides };
+      configs[i] = { config: baseConfig, overrides: [] };
     });
     setMonitorConfigs(configs);
   }, [recommendations, selectedMonitors, resolvedPolicies, selectedAsset]);
