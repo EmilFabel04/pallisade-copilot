@@ -23,6 +23,7 @@ class ToolCategory(Enum):
     KNOWLEDGE = "knowledge"
     OBSERVABILITY = "observability"
     COVERAGE = "coverage"
+    POLICY = "policy"
     CHANGE_PLAN = "change_plan"
     ONBOARDING = "onboarding"
     INFRASTRUCTURE = "infrastructure"
@@ -1061,6 +1062,55 @@ class ToolRegistry:
                 "SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT", "DATABRICKS",
                 "SQLSERVER", "AZURE_SQL", "AZURE_SYNAPSE",
             },
+        ))
+
+        self._register(Tool(
+            name="create_watch",
+            description=(
+                "Create a watch (monitor group) for a data asset. A watch bundles "
+                "multiple monitors (freshness, volume, schema_change, anomaly, etc.) "
+                "with a shared schedule and alert configuration. Returns an interactive "
+                "card for the user to review and confirm before creation."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter("name", "string", "Name for the watch (e.g., 'Orders Pipeline Health')"),
+                ToolParameter("watch_type", "string", "Type of watch",
+                              enum=["pipeline_health", "dashboard_shield", "source_guard",
+                                    "model_quality", "data_drift", "custom_watch"]),
+                ToolParameter("anchor_fqn", "string", "Fully qualified name of the anchor asset (e.g., 'analytics.public.orders')"),
+                ToolParameter("monitors", "array", "Array of monitors to include",
+                              items={
+                                  "type": "object",
+                                  "properties": {
+                                      "monitor_type": {"type": "string", "enum": [
+                                          "FRESHNESS", "VOLUME", "SCHEMA_CHANGE", "ANOMALY",
+                                          "NULL_CHECK", "UNIQUENESS_CHECK", "RANGE_VALIDATION",
+                                          "ACCEPTED_VALUES", "DATE_CONSISTENCY"
+                                      ]},
+                                      "target_fqn": {"type": "string", "description": "Target table FQN"},
+                                      "config": {"type": "object", "description": "Monitor-specific config"},
+                                  },
+                                  "required": ["monitor_type", "target_fqn"],
+                              }),
+                ToolParameter("schedule", "string", "Cron schedule (e.g., '0 */6 * * *' for every 6 hours)"),
+                ToolParameter("timezone", "string", "Timezone for schedule (e.g., 'UTC', 'America/New_York')",
+                              required=False, default="UTC"),
+            ],
+            requires_confirmation=False,  # Confirmation handled by artifact flow, NOT the old tool_confirmation_required path
+        ))
+
+        self._register(Tool(
+            name="run_watch",
+            description=(
+                "Run all monitors in an existing watch immediately. Returns health score, "
+                "individual monitor results, and failure categories. Does not require confirmation."
+            ),
+            category=ToolCategory.COVERAGE,
+            parameters=[
+                ToolParameter("watch_id", "string", "The ID of the watch to run"),
+            ],
+            requires_confirmation=False,
         ))
 
         # ==========================================
