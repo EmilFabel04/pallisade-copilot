@@ -17,7 +17,7 @@ import {
 import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { TaskRun } from '@/types/schedule';
 import { RunHistoryTable } from './RunHistoryTable';
-import MonitorEditPanel from './MonitorEditPanel';
+import { MonitorEditPanel } from './MonitorEditPanel';
 
 interface WatchDetailPanelProps {
   watch: WatchSummary;
@@ -395,7 +395,7 @@ export function WatchDetailPanel({
                             policyOverrides: mon.policyOverrides || [],
                           }}
                           resolvedPolicy={mon.resolvedPolicy || null}
-                          onSave={async (monitorId, config, policyOverrides) => {
+                          onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
                             await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
                               method: 'PUT',
                               headers: { 'Content-Type': 'application/json' },

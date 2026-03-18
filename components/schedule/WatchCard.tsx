@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WatchSummary } from '@/types/health-watch';
-import WatchEditModal from './WatchEditModal';
+import { WatchEditModal } from './WatchEditModal';
 import {
   WATCH_TYPE_LABELS,
   HEALTH_STATUS_COLORS,
@@ -235,7 +235,7 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
             alertOnStatus: watch.alertOnStatus || [],
             enabled: watch.enabled,
           }}
-          onSave={async (data) => {
+          onSave={async (data: Record<string, any>) => {
             await fetch(`/api/schedule/watches/${watch.id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },

@@ -402,6 +402,8 @@ export interface WatchSummary {
   lastHealthAt?: string;
   presetGroupId?: string;
   presetKey?: string;
+  alertChannels?: string[];
+  alertOnStatus?: string[];
   monitors: Array<{
     id: string;
     name: string;
