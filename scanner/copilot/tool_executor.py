@@ -5731,7 +5731,7 @@ class ToolExecutor:
 
     async def _execute_create_watch(self, arguments: Dict[str, Any]) -> "ToolArtifactResult":
         """Propose creating a watch — returns artifact for user confirmation, does not execute."""
-        from scanner.copilot.artifacts import ToolArtifactResult
+        from .artifacts import ToolArtifactResult
 
         name = arguments.get("name", "Untitled Watch")
         watch_type = arguments.get("watch_type", "custom_watch")
