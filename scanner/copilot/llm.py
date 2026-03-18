@@ -28,6 +28,7 @@ except ImportError:
 from .context_builder import CopilotContext
 from .tools import get_tool_registry, ToolResult
 from .tool_executor import ToolExecutor
+from .artifacts import ToolArtifactResult, WRITE_TOOLS
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ class StreamEvent:
         tool_call_start         — LLM wants to call a tool
         tool_call_result        — Tool execution finished
         tool_confirmation_required — Destructive tool needs user approval
+        ui_artifact             — Write tool proposing an action (rendered as interactive card)
         iteration_start         — New LLM iteration beginning
         done                    — Stream complete
         error                   — Error occurred
@@ -826,6 +828,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
         system_prompt_override: Optional[str] = None,
+        confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """
         Stream a chat response as SSE events.
@@ -841,12 +844,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             confirmed_tool_ids: Tool use IDs or names the user has already approved
             pending_tool_call: Tool call to execute directly (from confirmation flow)
             system_prompt_override: If provided, use this instead of build_system_prompt()
+            confirmed_artifacts: Artifacts the user has confirmed for execution
         """
         if self.provider == "anthropic":
             async for event in self._chat_anthropic_stream(
                 messages, context, max_tool_iterations, confirmed_tool_ids,
                 pending_tool_call=pending_tool_call,
                 system_prompt_override=system_prompt_override,
+                confirmed_artifacts=confirmed_artifacts,
             ):
                 yield event
         elif self.provider == "openai":
@@ -854,6 +859,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 messages, context, max_tool_iterations, confirmed_tool_ids,
                 pending_tool_call=pending_tool_call,
                 system_prompt_override=system_prompt_override,
+                confirmed_artifacts=confirmed_artifacts,
             ):
                 yield event
         else:
@@ -867,6 +873,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
         system_prompt_override: Optional[str] = None,
+        confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream chat with Anthropic Claude via SSE events."""
         if not self.anthropic_client:
@@ -1076,6 +1083,34 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             })
                             return
 
+                        # Check if this is a confirmed artifact being executed
+                        if tool_name in WRITE_TOOLS and confirmed_artifacts:
+                            matched_art = False
+                            for art_id, art_data in list(confirmed_artifacts.items()):
+                                if art_data.get("tool_name") == tool_name:
+                                    logger.info(f"[Stream/Anthropic] Executing confirmed artifact '{art_id}' for tool '{tool_name}'")
+                                    result = await executor.execute_confirmed(tool_name, art_data)
+                                    yield StreamEvent("tool_call_result", {
+                                        "tool_use_id": tool_use_id,
+                                        "tool_name": tool_name,
+                                        "result": result.to_dict(),
+                                    })
+                                    all_tool_calls.append({
+                                        "tool": tool_name,
+                                        "input": tool_input,
+                                        "result": result.to_dict(),
+                                    })
+                                    tool_results.append({
+                                        "type": "tool_result",
+                                        "tool_use_id": tool_use_id,
+                                        "content": json.dumps(result.to_dict(), default=_safe_json_default),
+                                    })
+                                    confirmed_artifacts.pop(art_id, None)
+                                    matched_art = True
+                                    break
+                            if matched_art:
+                                continue
+
                         # Auto-execute safe tool
                         logger.info(f"[Stream/Anthropic] Executing tool: {tool_name}")
                         try:
@@ -1094,23 +1129,41 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             from scanner.copilot.tools import ToolResult
                             result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
 
-                        all_tool_calls.append({
-                            "tool": tool_name,
-                            "input": tool_input,
-                            "result": result.to_dict(),
-                        })
+                        # Check if the result is an artifact proposal (write tool returning ToolArtifactResult)
+                        if isinstance(result, ToolArtifactResult):
+                            artifact_data = result.to_dict()
+                            yield StreamEvent("ui_artifact", artifact_data)
 
-                        yield StreamEvent("tool_call_result", {
-                            "tool_use_id": tool_use_id,
-                            "tool_name": tool_name,
-                            "result": result.to_dict(),
-                        })
+                            synthetic_text = result.to_synthetic_tool_result()
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": synthetic_text,
+                            })
+                            all_tool_calls.append({
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "arguments": tool_input,
+                                "result": {"artifact": artifact_data},
+                            })
+                        else:
+                            all_tool_calls.append({
+                                "tool": tool_name,
+                                "input": tool_input,
+                                "result": result.to_dict(),
+                            })
 
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": tool_use_id,
-                            "content": json.dumps(result.to_dict(), default=_safe_json_default),
-                        })
+                            yield StreamEvent("tool_call_result", {
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "result": result.to_dict(),
+                            })
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": json.dumps(result.to_dict(), default=_safe_json_default),
+                            })
 
                     # Append to conversation and continue loop
                     anthropic_messages.append({
@@ -1190,6 +1243,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
         system_prompt_override: Optional[str] = None,
+        confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Stream chat with OpenAI GPT via SSE events."""
         if not self.openai_client:
@@ -1471,6 +1525,34 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             })
                             return
 
+                        # Check if this is a confirmed artifact being executed
+                        if tool_name in WRITE_TOOLS and confirmed_artifacts:
+                            matched_art = False
+                            for art_id, art_data in list(confirmed_artifacts.items()):
+                                if art_data.get("tool_name") == tool_name:
+                                    logger.info(f"[Stream/OpenAI] Executing confirmed artifact '{art_id}' for tool '{tool_name}'")
+                                    result = await executor.execute_confirmed(tool_name, art_data)
+                                    yield StreamEvent("tool_call_result", {
+                                        "tool_use_id": tool_use_id,
+                                        "tool_name": tool_name,
+                                        "result": result.to_dict(),
+                                    })
+                                    all_tool_calls.append({
+                                        "tool": tool_name,
+                                        "input": tool_input,
+                                        "result": result.to_dict(),
+                                    })
+                                    openai_messages.append({
+                                        "role": "tool",
+                                        "tool_call_id": tool_use_id,
+                                        "content": json.dumps(result.to_dict(), default=_safe_json_default),
+                                    })
+                                    confirmed_artifacts.pop(art_id, None)
+                                    matched_art = True
+                                    break
+                            if matched_art:
+                                continue
+
                         logger.info(f"[Stream/OpenAI] Executing tool: {tool_name}")
                         try:
                             if tool_name.startswith("mcp_") and mcp_manager:
@@ -1488,23 +1570,41 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             from scanner.copilot.tools import ToolResult
                             result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
 
-                        all_tool_calls.append({
-                            "tool": tool_name,
-                            "input": tool_input,
-                            "result": result.to_dict(),
-                        })
+                        # Check if the result is an artifact proposal (write tool returning ToolArtifactResult)
+                        if isinstance(result, ToolArtifactResult):
+                            artifact_data = result.to_dict()
+                            yield StreamEvent("ui_artifact", artifact_data)
 
-                        yield StreamEvent("tool_call_result", {
-                            "tool_use_id": tool_use_id,
-                            "tool_name": tool_name,
-                            "result": result.to_dict(),
-                        })
+                            synthetic_text = result.to_synthetic_tool_result()
+                            openai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": synthetic_text,
+                            })
+                            all_tool_calls.append({
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "arguments": tool_input,
+                                "result": {"artifact": artifact_data},
+                            })
+                        else:
+                            all_tool_calls.append({
+                                "tool": tool_name,
+                                "input": tool_input,
+                                "result": result.to_dict(),
+                            })
 
-                        openai_messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_use_id,
-                            "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
-                        })
+                            yield StreamEvent("tool_call_result", {
+                                "tool_use_id": tool_use_id,
+                                "tool_name": tool_name,
+                                "result": result.to_dict(),
+                            })
+
+                            openai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
+                            })
 
                     # --- Root cause injection (once, after first evidence round) ---
                     if (
