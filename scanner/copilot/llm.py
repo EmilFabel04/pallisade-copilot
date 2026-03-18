@@ -1067,6 +1067,11 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             "content": json.dumps(art_result.to_dict(), default=_safe_json_default),
                         }],
                     })
+                # Tell the LLM the action is done — do NOT re-call the tool
+                anthropic_messages.append({
+                    "role": "user",
+                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitors have already been created.",
+                })
                 # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
 
@@ -1491,6 +1496,11 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "tool_call_id": art_use_id,
                         "content": json.dumps(art_result.to_dict(), default=_safe_json_default),
                     })
+                # Tell the LLM the action is done — do NOT re-call the tool
+                openai_messages.append({
+                    "role": "user",
+                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitors have already been created.",
+                })
                 # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
 

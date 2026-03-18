@@ -889,13 +889,21 @@ function AssistantPageInner() {
 
     // Only add to messages if there's actual content or tool calls
     if (streamingMessage.content || mappedToolCalls.length > 0) {
+      // Filter out artifacts that already exist in prior messages (prevents duplicates from confirmation streams)
+      const existingArtifactIds = new Set(
+        messages.flatMap(m => m.artifacts || []).map(a => a.artifact_id)
+      );
+      const newArtifacts = (streamingMessage.artifacts || []).filter(
+        a => !existingArtifactIds.has(a.artifact_id)
+      );
+
       const aiMessage: Message = {
         id: streamingMessage.id,
         role: 'assistant',
         content: streamingMessage.content,
         timestamp: new Date(),
         toolCalls: mappedToolCalls,
-        artifacts: streamingMessage.artifacts,
+        artifacts: newArtifacts,
       };
 
       setMessages(prev => [...prev, aiMessage]);

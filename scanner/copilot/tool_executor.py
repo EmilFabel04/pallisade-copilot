@@ -930,8 +930,11 @@ class ToolExecutor:
     async def _execute_confirmed_create_watch(self, data: Dict[str, Any]) -> ToolResult:
         """Create monitors via the unified 3-step pipeline."""
         anchor_fqn = data.get("anchorFqn") or data.get("anchor_fqn") or ""
-        node_id = self._resolve_fqn_to_node_id(anchor_fqn)
+        node_id = data.get("nodeId") or data.get("node_id") or self._resolve_fqn_to_node_id(anchor_fqn)
         monitors = data.get("monitors", [])
+
+        if not monitors:
+            return ToolResult(success=False, error="No monitors specified")
 
         # Normalize monitor types
         monitor_types = []
@@ -939,19 +942,45 @@ class ToolExecutor:
             mt = mon.get("monitorType") or mon.get("monitor_type") or ""
             monitor_types.append(mt)
 
+        # Step 1: Try preview, but fall back to building groups from artifact data
+        groups = []
         try:
-            # Step 1: Preview
-            manual_selections = {node_id: monitor_types} if node_id else {}
-            preview = await self._call_fastapi("/api/v1/monitors/plans/preview", {
-                "scope_type": "asset",
-                "scope_config": {"nodeIds": [node_id]} if node_id else {},
-                "mode": "manual",
-                "manual_selections": manual_selections,
-                "families": [],
-            })
+            if node_id:
+                manual_selections = {node_id: monitor_types}
+                preview = await self._call_fastapi("/api/v1/monitors/plans/preview", {
+                    "scope_type": "asset",
+                    "scope_config": {"nodeIds": [node_id]},
+                    "mode": "manual",
+                    "manual_selections": manual_selections,
+                    "families": [],
+                })
+                groups = preview.get("groups", [])
         except Exception as e:
-            logger.error(f"[CreateMonitor] Preview failed: {e}")
-            return ToolResult(success=False, error=f"Preview failed: {e}")
+            logger.warning(f"[CreateMonitor] Preview failed (using fallback): {e}")
+
+        # Fallback: build groups directly from the confirmed artifact data
+        if not groups:
+            recs = []
+            for mon in monitors:
+                mt = mon.get("monitorType") or mon.get("monitor_type") or ""
+                tfqn = mon.get("targetFqn") or mon.get("target_fqn") or anchor_fqn
+                recs.append({
+                    "monitor_key": mt,
+                    "target_fqn": tfqn,
+                    "target_node_id": node_id,
+                    "config_hints": mon.get("config", {}),
+                    "depth": 0,
+                    "priority": 1,
+                })
+            groups = [{
+                "anchor_name": data.get("name", anchor_fqn.split(".")[-1] if anchor_fqn else "Monitor"),
+                "anchor_fqn": anchor_fqn,
+                "anchor_id": node_id,
+                "anchor_node_type": "table",
+                "anchor_platform": "unknown",
+                "watch_type": data.get("watchType") or "pipeline_health",
+                "recommendations": recs,
+            }]
 
         # Step 2: Policy resolve (non-fatal)
         policies = {}
@@ -964,7 +993,6 @@ class ToolExecutor:
             logger.warning(f"[CreateMonitor] Policy resolve failed (non-fatal): {e}")
 
         # Merge policy into groups
-        groups = preview.get("groups", [])
         if policies:
             groups = self._merge_policy_into_groups(groups, policies)
 
@@ -984,13 +1012,17 @@ class ToolExecutor:
             logger.error(f"[CreateMonitor] Plan creation failed: {e}")
             return ToolResult(success=False, error=f"Monitor creation failed: {e}")
 
+        total = result.get("totalMonitors", len(monitors))
+        if total == 0:
+            return ToolResult(success=False, error="Plan was created but contains 0 monitors — check monitor types and target FQNs")
+
         return ToolResult(
             success=True,
             data={
                 "planId": result.get("id"),
                 "name": result.get("name"),
-                "monitorCount": result.get("totalMonitors", len(monitors)),
-                "message": f"Created {result.get('totalMonitors', 0)} monitor(s) in plan '{result.get('name')}'",
+                "monitorCount": total,
+                "message": f"Created {total} monitor(s) in plan '{result.get('name')}'",
             }
         )
 
