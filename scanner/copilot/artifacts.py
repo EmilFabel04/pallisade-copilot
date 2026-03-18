@@ -1,7 +1,7 @@
 """Artifact types for agentic copilot write actions."""
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 # Tools that require user confirmation before execution (server-side guard).

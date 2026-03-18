@@ -19,7 +19,7 @@ def test_tool_artifact_result_to_dict():
     assert d["confirmation_tier"] == "inline"
     assert d["editable_fields"] == ["schedule", "monitors"]
     assert d["data"]["name"] == "Orders Freshness"
-    assert "tool_name" in d  # Must include tool_name for confirmation routing
+    assert d["tool_name"] == "create_watch"  # Must include tool_name for confirmation routing
 
 
 def test_tool_artifact_result_synthetic_text():
