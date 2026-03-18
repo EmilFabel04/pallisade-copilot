@@ -830,6 +830,57 @@ class ToolExecutor:
                 error=str(e)
             )
     
+    async def execute_confirmed(self, tool_name: str, confirmed_data: Dict[str, Any]) -> ToolResult:
+        """Execute a confirmed write action by calling the Next.js API."""
+        handler = getattr(self, f"_execute_confirmed_{tool_name}", None)
+        if not handler:
+            return ToolResult(success=False, error=f"No confirmed handler for {tool_name}")
+        try:
+            return await handler(confirmed_data)
+        except Exception as e:
+            logger.exception(f"Error executing confirmed {tool_name}")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_confirmed_create_watch(self, data: Dict[str, Any]) -> ToolResult:
+        """Actually create the watch via Next.js API."""
+        import aiohttp
+
+        url = f"{self.context.base_url}/api/schedule/watches"
+        headers = {
+            "Authorization": f"Bearer {self.context.auth_token}",
+            "X-Organization-Id": self.context.org_id,
+            "Content-Type": "application/json",
+        }
+
+        body = {
+            "name": data.get("name"),
+            "watchType": data.get("watchType"),
+            "anchorFqn": data.get("anchorFqn"),
+            "monitors": data.get("monitors", []),
+            "schedule": data.get("schedule"),
+            "timezone": data.get("timezone", "UTC"),
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=body, headers=headers) as resp:
+                    if resp.status not in (200, 201):
+                        error_body = await resp.text()
+                        return ToolResult(success=False, error=f"Watch creation failed ({resp.status}): {error_body}")
+                    result = await resp.json()
+                    watch = result.get("watch", {})
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "watchId": watch.get("id"),
+                            "name": watch.get("name"),
+                            "monitorCount": watch.get("monitorCount", len(data.get("monitors", []))),
+                            "message": f"Watch '{watch.get('name')}' created with {watch.get('monitorCount', 0)} monitors.",
+                        }
+                    )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Failed to create watch: {str(e)}")
+
     async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """Execute a specific tool."""
         
