@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+import { Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { MonitoringPlanSummary, HealthStatus } from '@/types/health-watch';
 import {
@@ -7,6 +9,7 @@ import {
   HEALTH_STATUS_COLORS,
   HEALTH_STATUS_LABELS,
 } from '@/types/health-watch';
+import { WatchEditModal } from './WatchEditModal';
 
 interface MonitoringPlanCardProps {
   plan: MonitoringPlanSummary;
@@ -18,7 +21,7 @@ interface MonitoringPlanCardProps {
 
 const MODE_COLORS: Record<string, string> = {
   recommended: 'bg-blue-500/15 text-blue-400',
-  manual: 'bg-white/10 text-white/50',
+  manual: 'bg-[var(--overlay-medium)] text-[var(--muted)]',
 };
 
 const SCOPE_TYPE_LABELS: Record<string, string> = {
@@ -54,6 +57,7 @@ export function MonitoringPlanCard({
   onRunAll,
   onDelete,
 }: MonitoringPlanCardProps) {
+  const [showEditModal, setShowEditModal] = useState(false);
   const hasRun = plan.passCount > 0 || plan.warnCount > 0 || plan.failCount > 0 || plan.errorCount > 0;
 
   const healthStatus: HealthStatus | null =
@@ -159,6 +163,13 @@ export function MonitoringPlanCard({
             </svg>
           </button>
           <button
+            onClick={() => setShowEditModal(true)}
+            className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors opacity-0 group-hover:opacity-100"
+            title="Edit plan settings"
+          >
+            <Settings size={14} />
+          </button>
+          <button
             onClick={() => onToggleEnabled(!plan.enabled)}
             className={cn(
               'relative w-8 h-[18px] rounded-full transition-colors',
@@ -260,7 +271,7 @@ export function MonitoringPlanCard({
               key={family}
               className={cn(
                 'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                FAMILY_COLORS[family] || 'bg-white/10 text-white/50'
+                FAMILY_COLORS[family] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
               )}
             >
               {FAMILY_LABELS[family] || family.replace(/_/g, ' ')}
@@ -288,6 +299,29 @@ export function MonitoringPlanCard({
           </span>
         )}
       </div>
+
+      {/* Edit modal */}
+      {showEditModal && (
+        <WatchEditModal
+          watch={{
+            id: plan.id,
+            name: plan.name,
+            schedule: plan.schedule,
+            timezone: plan.timezone,
+            alertChannels: plan.alertChannels || [],
+            alertOnStatus: plan.alertOnStatus || [],
+            enabled: plan.enabled,
+          }}
+          onSave={async (data: Record<string, any>) => {
+            await fetch(`/api/schedule/plans/${plan.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data),
+            });
+          }}
+          onClose={() => setShowEditModal(false)}
+        />
+      )}
     </div>
   );
 }
