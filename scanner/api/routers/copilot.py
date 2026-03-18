@@ -4,7 +4,8 @@ Co-Pilot API Router
 API endpoints for the data pipeline co-pilot.
 """
 
-from fastapi import APIRouter, HTTPException, Header, Depends
+import os
+from fastapi import APIRouter, HTTPException, Header, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
@@ -116,6 +117,7 @@ class OpenLineageEventRequest(BaseModel):
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    raw_request: Request,
     x_organization_id: str = Header(..., alias="X-Organization-Id"),
 ):
     """
@@ -203,7 +205,9 @@ async def chat(
             engine_graph=engine_graph,
             intent_result=intent_result,
         )
-        
+        context.base_url = os.environ.get("NEXTJS_BASE_URL", "http://localhost:3000")
+        context.auth_token = raw_request.headers.get("Authorization", "").replace("Bearer ", "")
+
         # Log the context
         logger.info(f"Built context with integration_types: {context.integration_types}")
         logger.info(f"Available tools: {context.available_tools}")
@@ -246,6 +250,7 @@ async def chat(
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatStreamRequest,
+    raw_request: Request,
     x_organization_id: str = Header(..., alias="X-Organization-Id"),
 ):
     """
@@ -321,6 +326,8 @@ async def chat_stream(
             engine_graph=engine_graph,
             intent_result=intent_result,
         )
+        context.base_url = os.environ.get("NEXTJS_BASE_URL", "http://localhost:3000")
+        context.auth_token = raw_request.headers.get("Authorization", "").replace("Bearer ", "")
 
         llm = CopilotLLM(model=request.model)
 

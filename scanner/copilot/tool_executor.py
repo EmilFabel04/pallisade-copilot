@@ -5,7 +5,7 @@ Executes tools against the appropriate integration adapters.
 Routes tool calls to the correct backend based on user's integrations.
 """
 
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Union
 import logging
 import json
 import asyncio
@@ -794,7 +794,7 @@ class ToolExecutor:
 
         return None
     
-    async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
+    async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """
         Execute a tool with the given arguments.
         
@@ -830,7 +830,7 @@ class ToolExecutor:
                 error=str(e)
             )
     
-    async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> ToolResult:
+    async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """Execute a specific tool."""
         
         # Route to appropriate handler
@@ -5673,3 +5673,71 @@ class ToolExecutor:
             return ToolResult(success=False, error=f"Service listing failed: {e}")
         finally:
             adapter.disconnect()
+
+    # ==========================================
+    # WRITE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_create_watch(self, arguments: Dict[str, Any]) -> "ToolArtifactResult":
+        """Propose creating a watch — returns artifact for user confirmation, does not execute."""
+        from scanner.copilot.artifacts import ToolArtifactResult
+
+        name = arguments.get("name", "Untitled Watch")
+        watch_type = arguments.get("watch_type", "custom_watch")
+        anchor_fqn = arguments.get("anchor_fqn", "")
+        monitors = arguments.get("monitors", [])
+        schedule = arguments.get("schedule", "0 */6 * * *")
+        timezone = arguments.get("timezone", "UTC")
+
+        confirmation_tier = "modal" if len(monitors) >= 5 else "inline"
+
+        return ToolArtifactResult(
+            artifact_type="watch_preview",
+            action="create",
+            data={
+                "name": name,
+                "watchType": watch_type,
+                "anchorFqn": anchor_fqn,
+                "monitors": monitors,
+                "schedule": schedule,
+                "timezone": timezone,
+            },
+            editable_fields=["name", "schedule", "timezone", "monitors"],
+            confirmation_tier=confirmation_tier,
+            tool_name="create_watch",
+        )
+
+    async def _execute_run_watch(self, arguments: Dict[str, Any]) -> ToolResult:
+        """Run all monitors in a watch immediately via Next.js API."""
+        import aiohttp
+
+        watch_id = arguments.get("watch_id")
+        if not watch_id:
+            return ToolResult(success=False, error="watch_id is required")
+
+        url = f"{self.context.base_url}/api/schedule/watches/{watch_id}/run"
+        headers = {
+            "Authorization": f"Bearer {self.context.auth_token}",
+            "X-Organization-Id": self.context.org_id,
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        return ToolResult(success=False, error=f"Watch run failed ({resp.status}): {body}")
+                    data = await resp.json()
+                    watch = data.get("watch", {})
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "watchId": watch_id,
+                            "healthScore": watch.get("healthScore"),
+                            "summary": watch.get("summary", "Watch run completed"),
+                            "failureGroups": watch.get("failureGroups", []),
+                        }
+                    )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Failed to run watch: {str(e)}")

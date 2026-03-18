@@ -188,6 +188,10 @@ class CopilotContext:
     # Pipeline context (if discussing specific pipeline)
     pipeline_stack_id: Optional[str] = None
     focused_node_ids: List[str] = field(default_factory=list)
+
+    # For write tools that call Next.js API endpoints
+    base_url: str = ""
+    auth_token: str = ""
     referenced_entities: List[str] = field(default_factory=list)
 
     # Pre-fetched warehouse schema (tables and columns)
