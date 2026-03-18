@@ -80,10 +80,6 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
         {/* Left: Name + type + health */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            {/* Shield icon */}
-            <svg className="w-3.5 h-3.5 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
             <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{watch.name}</h3>
             {healthStatus && (
               <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', healthColor)}>
@@ -97,14 +93,6 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
             )}
           </div>
           <div className="flex items-center gap-3 text-[12px] text-[var(--muted)]">
-            <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', watchTypeColor)}>
-              {WATCH_TYPE_LABELS[watch.watchType] || watch.watchType}
-            </span>
-            {watch.presetKey && (
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-blue-500/10 text-blue-400">
-                preset
-              </span>
-            )}
             <span className="flex items-center gap-1">
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
