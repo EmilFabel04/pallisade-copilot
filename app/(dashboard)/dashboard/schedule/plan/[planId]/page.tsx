@@ -16,6 +16,7 @@ import {
 import { MonitorEditPanel } from '@/components/schedule/MonitorEditPanel';
 import { WatchEditModal } from '@/components/schedule/WatchEditModal';
 import { Settings } from 'lucide-react';
+import { getMonitorPolicyStatus } from '@/lib/policy-utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -390,8 +391,9 @@ export default function PlanDetailPage() {
                   : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
                 const isExpanded = expandedMonitorId === mon.id;
                 const monPolicy = mon.targetFqn ? resolvedPolicies[mon.targetFqn] : null;
-                const monOverrides = mon.policyOverrides || [];
-                const hasOverrides = monOverrides.length > 0;
+                const policyStatus = getMonitorPolicyStatus(
+                  mon.monitorType || '', mon.config || {}, monPolicy
+                );
                 return (
                   <div
                     key={mon.id}
@@ -421,20 +423,28 @@ export default function PlanDetailPage() {
                         </div>
                       </div>
                       {/* Policy badge on the row */}
-                      {monPolicy && monPolicy.status !== 'none' && (
+                      {policyStatus.status === 'violation' && (
                         <span
-                          className={cn(
-                            'px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0',
-                            hasOverrides
-                              ? 'bg-amber-500/15 text-amber-400'
-                              : 'bg-violet-500/15 text-violet-400'
-                          )}
-                          title={hasOverrides
-                            ? `${monOverrides.length} field(s) overridden from ${monPolicy.profileName || 'policy'}`
-                            : `Following ${monPolicy.profileName || 'policy'}`
-                          }
+                          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-red-500/15 text-red-400"
+                          title={`${policyStatus.violationFields.length} field(s) less strict than ${monPolicy?.profileName || 'policy'}: ${policyStatus.violationFields.join(', ')}`}
                         >
-                          {hasOverrides ? 'Override' : monPolicy.profileName || 'Policy'}
+                          Policy violation
+                        </span>
+                      )}
+                      {policyStatus.status === 'override' && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-amber-500/15 text-amber-400"
+                          title={`${policyStatus.overriddenFields.length} field(s) overridden from ${monPolicy?.profileName || 'policy'}: ${policyStatus.overriddenFields.join(', ')}`}
+                        >
+                          Override
+                        </span>
+                      )}
+                      {policyStatus.status === 'policy' && (
+                        <span
+                          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-violet-500/15 text-violet-400"
+                          title={`Following ${monPolicy?.profileName || 'policy'}`}
+                        >
+                          {monPolicy?.profileName || 'Policy'}
                         </span>
                       )}
                       {mon.lastRunAt && (

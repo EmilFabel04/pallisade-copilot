@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import type { ScheduledTask, TaskRun } from '@/types/schedule';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
+import { getMonitorPolicyStatus } from '@/lib/policy-utils';
 
 type FilterStatus = 'all' | 'passing' | 'failing' | 'disabled';
 
@@ -405,13 +406,23 @@ export default function SchedulePage() {
                       onDelete={() => handleDeletePlan(plan.id)}
                       policyMonitorCount={
                         (plan.monitorGroups || []).flatMap((g) => g.monitors || [])
-                          .filter((m) => m.targetFqn && resolvedPolicies[m.targetFqn] && resolvedPolicies[m.targetFqn].status !== 'none')
-                          .length
+                          .filter((m) => {
+                            const ps = getMonitorPolicyStatus(
+                              (m as any).monitorType || '', (m as any).config || {},
+                              m.targetFqn ? resolvedPolicies[m.targetFqn] : null
+                            );
+                            return ps.status !== 'none';
+                          }).length
                       }
                       overrideMonitorCount={
                         (plan.monitorGroups || []).flatMap((g) => g.monitors || [])
-                          .filter((m) => ((m as any).policyOverrides || []).length > 0)
-                          .length
+                          .filter((m) => {
+                            const ps = getMonitorPolicyStatus(
+                              (m as any).monitorType || '', (m as any).config || {},
+                              m.targetFqn ? resolvedPolicies[m.targetFqn] : null
+                            );
+                            return ps.status === 'override' || ps.status === 'violation';
+                          }).length
                       }
                     />
                   ))}
