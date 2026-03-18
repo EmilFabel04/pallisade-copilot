@@ -18,6 +18,8 @@ import { OnboardingBanner } from '@/components/copilot';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
 import { ToolConfirmation } from '@/components/copilot/ToolConfirmation';
 import { ToolIcon } from '@/components/icons/ToolIcon';
+import ArtifactRenderer from '@/components/copilot/ArtifactRenderer';
+import { UIArtifact } from '@/types/artifacts';
 
 type ToolCall = {
   id?: string;
@@ -32,6 +34,7 @@ type Message = {
   content: string;
   timestamp: Date;
   toolCalls?: ToolCall[];
+  artifacts?: UIArtifact[];
 };
 
 type ChatSession = {
@@ -216,6 +219,7 @@ function AssistantPageInner() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const promptProcessed = useRef(false);
   const [confirmationLoading, setConfirmationLoading] = useState(false);
+  const [editingArtifact, setEditingArtifact] = useState<UIArtifact | null>(null);
 
   // Streaming chat hook
   const {
@@ -224,6 +228,38 @@ function AssistantPageInner() {
     sendMessage: sendStreamingMessage,
     abort: abortStreaming,
   } = useStreamingChat();
+
+  const handleArtifactConfirm = useCallback(async (artifactId: string, editedData?: Record<string, any>) => {
+    const artifact = streamingMessage?.artifacts.find(a => a.artifact_id === artifactId);
+    if (!artifact) return;
+
+    const toolName = artifact.tool_name || 'create_watch';
+    const actionMessage = editedData
+      ? `__action:confirm:${artifactId}:${toolName}:${JSON.stringify(editedData)}`
+      : `__action:confirm:${artifactId}:${toolName}`;
+
+    await sendStreamingMessage(actionMessage, {
+      sessionId: sessionId || undefined,
+      model: selectedModel,
+      mode: selectedMode,
+      pipelineStackId: selectedPipelineId || undefined,
+    });
+  }, [streamingMessage, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage]);
+
+  const handleArtifactCancel = useCallback(async (artifactId: string) => {
+    const actionMessage = `__action:cancel:${artifactId}`;
+    await sendStreamingMessage(actionMessage, {
+      sessionId: sessionId || undefined,
+      model: selectedModel,
+      mode: selectedMode,
+      pipelineStackId: selectedPipelineId || undefined,
+    });
+  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage]);
+
+  const handleArtifactEdit = useCallback((artifact: UIArtifact) => {
+    setEditingArtifact(artifact);
+    // TODO: Open side panel with MonitorConfigForm (Phase 1 deferred)
+  }, []);
 
   // Sidebar resize constants
   const minSidebarWidth = 200;
@@ -827,6 +863,7 @@ function AssistantPageInner() {
         content: streamingMessage.content,
         timestamp: new Date(),
         toolCalls: mappedToolCalls,
+        artifacts: streamingMessage.artifacts,
       };
 
       setMessages(prev => [...prev, aiMessage]);
@@ -1472,6 +1509,15 @@ function AssistantPageInner() {
                           </div>
                         );
                       })()}
+                      {/* Artifacts on completed messages */}
+                      {message.artifacts && message.artifacts.length > 0 && (
+                        <ArtifactRenderer
+                          artifacts={message.artifacts}
+                          onConfirm={handleArtifactConfirm}
+                          onCancel={handleArtifactCancel}
+                          onEdit={handleArtifactEdit}
+                        />
+                      )}
                     </div>
                     {message.role === 'user' && (
                       <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
@@ -1607,6 +1653,16 @@ function AssistantPageInner() {
                           onConfirm={handleConfirmTool}
                           onDeny={handleDenyTool}
                           isLoading={confirmationLoading}
+                        />
+                      )}
+
+                      {/* Artifact cards */}
+                      {streamingMessage.artifacts && streamingMessage.artifacts.length > 0 && (
+                        <ArtifactRenderer
+                          artifacts={streamingMessage.artifacts}
+                          onConfirm={handleArtifactConfirm}
+                          onCancel={handleArtifactCancel}
+                          onEdit={handleArtifactEdit}
                         />
                       )}
                     </div>

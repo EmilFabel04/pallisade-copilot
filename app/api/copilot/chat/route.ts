@@ -375,7 +375,7 @@ async function handleStreamingChat(
   user: { id: string; organizationId: string },
 ) {
   const {
-    message,
+    message: rawMessage,
     sessionId,
     pipeline_stack_id,
     pipelineStackId,
@@ -386,6 +386,45 @@ async function handleStreamingChat(
     confirmed_tool_ids,
     pending_tool_call,
   } = body;
+
+  // Parse __action:* messages
+  let confirmedArtifacts: Record<string, any> | undefined;
+  let displayMessage = rawMessage;
+  let message = rawMessage;
+
+  if (rawMessage.startsWith('__action:confirm:')) {
+    // Format: __action:confirm:<artifactId>:<toolName>[:<editedDataJSON>]
+    const withoutPrefix = rawMessage.slice('__action:confirm:'.length);
+    const firstColon = withoutPrefix.indexOf(':');
+    const artifactId = firstColon === -1 ? withoutPrefix : withoutPrefix.slice(0, firstColon);
+    const rest = firstColon === -1 ? '' : withoutPrefix.slice(firstColon + 1);
+
+    const secondColon = rest.indexOf(':');
+    const toolName = secondColon === -1 ? rest : rest.slice(0, secondColon);
+    const jsonPart = secondColon === -1 ? '' : rest.slice(secondColon + 1);
+
+    let editedData: Record<string, any> | undefined;
+    if (jsonPart) {
+      try {
+        editedData = JSON.parse(jsonPart);
+      } catch (e) {
+        // No valid JSON, treat as confirm without edits
+      }
+    }
+
+    confirmedArtifacts = {
+      [artifactId]: {
+        _tool_name: toolName,
+        ...(editedData || {}),
+      },
+    };
+    displayMessage = `Confirmed: ${toolName.replace(/_/g, ' ')} (${artifactId})`;
+    message = displayMessage;
+  } else if (rawMessage.startsWith('__action:cancel:')) {
+    const artifactId = rawMessage.split(':')[2];
+    displayMessage = `Cancelled action ${artifactId}`;
+    message = displayMessage;
+  }
 
   const effectivePipelineStackId = pipelineStackId || pipeline_stack_id;
 
@@ -423,7 +462,7 @@ async function handleStreamingChat(
       data: {
         sessionId: chatSession.id,
         role: 'USER',
-        content: message,
+        content: displayMessage,
       },
     });
   }
@@ -433,7 +472,7 @@ async function handleStreamingChat(
       role: m.role.toLowerCase() as 'user' | 'assistant',
       content: m.content,
     })),
-    { role: 'user' as const, content: message },
+    { role: 'user' as const, content: displayMessage },
   ];
 
   // Resolve all integration credentials (from Integration table, with legacy PipelineNode fallback)
@@ -490,6 +529,7 @@ async function handleStreamingChat(
       lineage: lineageData,
       confirmed_tool_ids: confirmed_tool_ids || [],
       pending_tool_call: pending_tool_call || null,
+      confirmed_artifacts: confirmedArtifacts,
     }),
   });
 
