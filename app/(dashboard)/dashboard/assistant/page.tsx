@@ -179,8 +179,7 @@ function AssistantPageInner() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(256);
-  const [isResizing, setIsResizing] = useState(false);
+  const sidebarWidth = 256;
   const [selectedMode, setSelectedMode] = useState('ask');
   const selectedModel = 'gpt-5.2';
   const [thinkingStep, setThinkingStep] = useState(0);
@@ -279,50 +278,6 @@ function AssistantPageInner() {
     setArtifactStatus(artifactId, 'cancelled');
   }, [setArtifactStatus]);
 
-
-  // Sidebar resize constants
-  const minSidebarWidth = 200;
-  const maxSidebarWidth = 400;
-
-  // Handle sidebar resize
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsResizing(true);
-  }, []);
-
-  // Resize effect - handles mouse move and mouse up
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = Math.min(maxSidebarWidth, Math.max(minSidebarWidth, e.clientX));
-      setSidebarWidth(newWidth);
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-      localStorage.setItem('chat-sidebar-width', String(sidebarWidth));
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isResizing, sidebarWidth]);
-
-  // Load saved sidebar width
-  useEffect(() => {
-    const savedWidth = localStorage.getItem('chat-sidebar-width');
-    if (savedWidth) {
-      const width = parseInt(savedWidth);
-      if (!isNaN(width)) {
-        setSidebarWidth(Math.min(maxSidebarWidth, Math.max(minSidebarWidth, width)));
-      }
-    }
-  }, []);
 
   // Load mode from localStorage on client
   useEffect(() => {
@@ -1252,9 +1207,8 @@ function AssistantPageInner() {
         {/* Chat History Sidebar */}
         <div
           className={cn(
-            'flex-shrink-0 overflow-hidden relative',
+            'flex-shrink-0 overflow-hidden relative transition-[width] duration-200',
             !showHistory && 'w-0',
-            isResizing ? '' : 'transition-[width] duration-200'
           )}
           style={{ width: showHistory ? sidebarWidth : 0 }}
         >
@@ -1318,16 +1272,6 @@ function AssistantPageInner() {
             </ScrollArea>
           </div>
 
-          {/* Resize Handle */}
-          {showHistory && (
-            <div
-              className={cn(
-                "absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10 transition-colors",
-                isResizing ? "bg-violet-500" : "hover:bg-violet-500/50"
-              )}
-              onMouseDown={handleResizeStart}
-            />
-          )}
         </div>
 
         {/* Main Chat Area */}
