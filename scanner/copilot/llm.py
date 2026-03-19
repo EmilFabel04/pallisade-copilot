@@ -1075,6 +1075,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
 
+            has_artifact = False
             for iteration in range(max_tool_iterations):
                 yield StreamEvent("iteration_start", {
                     "iteration": iteration + 1,
@@ -1238,6 +1239,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "arguments": tool_input,
                                 "result": {"artifact": artifact_data},
                             })
+                            has_artifact = True
                         else:
                             all_tool_calls.append({
                                 "tool": tool_name,
@@ -1256,6 +1258,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "tool_use_id": tool_use_id,
                                 "content": json.dumps(result.to_dict(), default=_safe_json_default),
                             })
+
+                    # If an artifact was emitted, stop iterating — the user needs to confirm
+                    if has_artifact:
+                        break
 
                     # Append to conversation and continue loop
                     anthropic_messages.append({
@@ -1504,6 +1510,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
 
+            has_artifact = False
             for iteration in range(max_tool_iterations):
                 yield StreamEvent("iteration_start", {
                     "iteration": iteration + 1,
@@ -1737,6 +1744,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "arguments": tool_input,
                                 "result": {"artifact": artifact_data},
                             })
+                            has_artifact = True
                         else:
                             all_tool_calls.append({
                                 "tool": tool_name,
@@ -1755,6 +1763,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "tool_call_id": tool_use_id,
                                 "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
                             })
+
+                    # If an artifact was emitted, stop iterating — the user needs to confirm
+                    if has_artifact:
+                        break
 
                     # --- Root cause injection (once, after first evidence round) ---
                     if (
