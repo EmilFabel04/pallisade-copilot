@@ -352,7 +352,7 @@ export function MultiMonitorModal({
   // Reset state when modal opens
   useEffect(() => {
     if (open) {
-      setStep(1);
+      setStep(preselectedNodeIds?.length ? 2 : 1);
       setSelectedNodeIds(preselectedNodeIds || []);
       setPreview(null);
       setMonitorChecks({});
@@ -494,6 +494,13 @@ export function MultiMonitorModal({
       setPreviewLoading(false);
     }
   }, [stackId, resolvedGraphNodeIds]);
+
+  // Auto-fetch preview when opening directly at step 2 (e.g. from lineage asset panel)
+  useEffect(() => {
+    if (open && step === 2 && !preview && !previewLoading && resolvedGraphNodeIds.length > 0) {
+      fetchFullPreview();
+    }
+  }, [open, step, preview, previewLoading, resolvedGraphNodeIds, fetchFullPreview]);
 
   // ---- Set of visible monitor keys after tool/data split filtering ----
   const visibleMonitorKeys = useMemo(() => {
