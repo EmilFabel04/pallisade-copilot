@@ -301,7 +301,7 @@ export default function EditContractModal({ source, pipelineContract, onClose, o
                   {INHERITANCE_CONFIG[effective.inheritanceState].label}
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-x-4 gap-y-3 text-xs">
+              <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
                 <PreviewField label="Owner" value={effective.ownerUser || effective.ownerTeam} />
                 <PreviewField label="Contact" value={effective.contactChannel} />
                 <PreviewField label="SLA Tier" value={effective.slaTier} />
@@ -365,8 +365,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function PreviewField({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
-    <div>
-      <span className="text-[var(--text-faint)] block mb-0.5">{label}</span>
+    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className="text-[var(--text-faint)]">{label}:</span>
       <span className={value ? 'text-[var(--text-secondary)] font-medium' : 'text-[var(--text-faint)] italic'}>
         {value || 'not set'}
       </span>
