@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta } from './NodeSelectionSurface';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
+import { ColumnPicker } from './ColumnPicker';
 import { getMonitorDefinition, DOMAIN_MONITOR_MAP } from '@/types/monitor-catalog';
 import type { MonitoringPlanPreview } from '@/types/health-watch';
 
@@ -317,6 +318,7 @@ export function MultiMonitorModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [monitorChecks, setMonitorChecks] = useState<Record<string, boolean>>({});
+  const [monitorConfigs, setMonitorConfigs] = useState<Record<string, Record<string, any>>>({});
 
   // AI Prompt tab state
   const [aiPrompt, setAiPrompt] = useState('');
@@ -724,10 +726,19 @@ export function MultiMonitorModal({
         const filteredGroups = preview.groups
           .map((g) => ({
             ...g,
-            recommendations: g.recommendations.filter((rec) => {
-              const key = `${rec.target_node_id}::${rec.monitor_key}`;
-              return monitorChecks[key] ?? false;
-            }),
+            recommendations: g.recommendations
+              .filter((rec) => {
+                const key = `${rec.target_node_id}::${rec.monitor_key}`;
+                return monitorChecks[key] ?? false;
+              })
+              .map((rec) => {
+                const key = `${rec.target_node_id}::${rec.monitor_key}`;
+                const extraConfig = monitorConfigs[key];
+                if (extraConfig) {
+                  return { ...rec, config_hints: { ...(rec.config_hints || {}), ...extraConfig } };
+                }
+                return rec;
+              }),
           }))
           .filter((g) => g.recommendations.length > 0);
 
@@ -1128,14 +1139,32 @@ export function MultiMonitorModal({
                                       {monitors.map((mon) => {
                                         const checkKey = `${mon.targetNodeId}::${mon.key}`;
                                         const checked = monitorChecks[checkKey] ?? false;
+                                        const isOutlier = mon.key === 'OUTLIER_DETECTION' || mon.key === 'ANOMALY';
                                         return (
-                                          <MonitorCard
-                                            key={checkKey}
-                                            mon={mon}
-                                            checked={checked}
-                                            onToggle={() => toggleMonitor(mon.targetNodeId, mon.key)}
-                                            showTarget={!!meta.subNodeIds}
-                                          />
+                                          <div key={checkKey}>
+                                            <MonitorCard
+                                              mon={mon}
+                                              checked={checked}
+                                              onToggle={() => toggleMonitor(mon.targetNodeId, mon.key)}
+                                              showTarget={!!meta.subNodeIds}
+                                            />
+                                            {checked && isOutlier && mon.targetFqn && (
+                                              <div className="ml-7 mt-1 mb-2">
+                                                <label className="text-[10px] text-[var(--muted)] uppercase tracking-wide mb-1 block">Column to monitor</label>
+                                                <ColumnPicker
+                                                  targetFqn={mon.targetFqn}
+                                                  stackId={stackId}
+                                                  value={monitorConfigs[checkKey]?.column || ''}
+                                                  onChange={(col) => setMonitorConfigs(prev => ({
+                                                    ...prev,
+                                                    [checkKey]: { ...(prev[checkKey] || {}), column: col },
+                                                  }))}
+                                                  numericOnly
+                                                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)]"
+                                                />
+                                              </div>
+                                            )}
+                                          </div>
                                         );
                                       })}
                                     </div>

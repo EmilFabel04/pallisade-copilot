@@ -6,6 +6,7 @@ import { UIArtifact } from '@/types/artifacts';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, Loader2, Pencil } from 'lucide-react';
+import { ColumnPicker } from '@/components/schedule/ColumnPicker';
 
 interface MonitorArtifactCardProps {
   artifact: UIArtifact;
@@ -67,10 +68,26 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(data.name || 'Monitor');
   const [editSchedule, setEditSchedule] = useState(data.schedule || '0 */6 * * *');
+  const [editColumn, setEditColumn] = useState('');
+
+  const hasAnomalyMonitor = (data.monitors || []).some(
+    (m: any) => (m.monitor_type || m.monitorType || '').toUpperCase() === 'ANOMALY'
+  );
 
   const handleConfirmWithEdits = () => {
     if (isEditing) {
-      onConfirm(artifact.artifact_id, { ...data, name: editName, schedule: editSchedule });
+      const editedData = { ...data, name: editName, schedule: editSchedule };
+      // Inject column into anomaly monitor configs
+      if (editColumn && hasAnomalyMonitor && editedData.monitors) {
+        editedData.monitors = editedData.monitors.map((m: any) => {
+          const mt = (m.monitor_type || m.monitorType || '').toUpperCase();
+          if (mt === 'ANOMALY') {
+            return { ...m, config: { ...(m.config || {}), column: editColumn } };
+          }
+          return m;
+        });
+      }
+      onConfirm(artifact.artifact_id, editedData);
     } else {
       onConfirm(artifact.artifact_id);
     }
@@ -153,6 +170,18 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
           )}
           {data.timezone && data.timezone !== 'UTC' && <span>({data.timezone})</span>}
         </div>
+        {isEditing && hasAnomalyMonitor && data.anchorFqn && (
+          <div className="mt-2">
+            <label className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1 block">Column to monitor for outliers</label>
+            <ColumnPicker
+              targetFqn={data.anchorFqn}
+              value={editColumn}
+              onChange={setEditColumn}
+              numericOnly
+              className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
+            />
+          </div>
+        )}
         {data.monitors && data.monitors.length > 0 && (
           <div className="flex gap-2 flex-wrap mt-1">
             {data.monitors.map((m: any, i: number) => (
