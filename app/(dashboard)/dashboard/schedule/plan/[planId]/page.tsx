@@ -65,6 +65,7 @@ export default function PlanDetailPage() {
   const [showPlanEditModal, setShowPlanEditModal] = useState(false);
   const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
   const [runningMonitorIds, setRunningMonitorIds] = useState<Set<string>>(new Set());
+  const [runStartedAt, setRunStartedAt] = useState<string | null>(null);
 
   // Fetch plan data (initialLoad controls whether full-page spinner shows)
   const fetchPlan = useCallback(async (initialLoad = false) => {
@@ -161,40 +162,51 @@ export default function PlanDetailPage() {
     if (!plan) return;
     const allMons = (plan.monitorGroups || []).flatMap((g: any) => g.monitors || []);
     const monIds = allMons.map((m: any) => m.id);
+    const startTime = new Date().toISOString();
     setRunningMonitorIds(new Set(monIds));
+    setRunStartedAt(startTime);
 
     // Fire the plan-level run endpoint (non-blocking)
-    fetch(`/api/schedule/plans/${planId}/run`, { method: 'POST' })
-      .then(() => {
-        // Poll for updated results
-        const poll = setInterval(async () => {
-          await fetchPlan();
-          setRunningMonitorIds((prev) => {
-            if (prev.size === 0) {
-              clearInterval(poll);
-              return prev;
-            }
-            // Check which monitors have completed (have a recent lastRunAt)
-            const currentMons = (plan.monitorGroups || []).flatMap((g: any) => g.monitors || []);
-            const stillRunning = new Set<string>();
-            for (const id of prev) {
-              const mon = currentMons.find((m: any) => m.id === id);
-              if (mon && !mon.lastRunAt) stillRunning.add(id);
-            }
-            if (stillRunning.size === 0) clearInterval(poll);
-            return stillRunning;
-          });
-        }, 3000);
-        // Safety: stop polling after 2 minutes
-        setTimeout(() => {
-          setRunningMonitorIds(new Set());
-        }, 120000);
-      })
-      .catch((err) => {
-        console.error('[PlanDetail] Run all failed:', err);
-        setRunningMonitorIds(new Set());
-      });
-  }, [plan, planId, fetchPlan]);
+    fetch(`/api/schedule/plans/${planId}/run`, { method: 'POST' }).catch((err) => {
+      console.error('[PlanDetail] Run all failed:', err);
+    });
+
+    // Poll for updated results — check which monitors have completed since startTime
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/schedule/plans/${planId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setPlan(data.plan);
+        setAggregate(data.aggregate);
+
+        // Check which monitors have run since we started
+        const currentMons = (data.plan?.monitorGroups || []).flatMap((g: any) => g.monitors || []);
+        const stillRunning = new Set<string>();
+        for (const id of monIds) {
+          const mon = currentMons.find((m: any) => m.id === id);
+          // Still running if no lastRunAt or lastRunAt is before we started
+          if (!mon?.lastRunAt || new Date(mon.lastRunAt) < new Date(startTime)) {
+            stillRunning.add(id);
+          }
+        }
+        setRunningMonitorIds(stillRunning);
+        if (stillRunning.size === 0) {
+          clearInterval(poll);
+          setRunStartedAt(null);
+        }
+      } catch {
+        // Keep polling
+      }
+    }, 3000);
+
+    // Safety: stop polling after 2 minutes
+    setTimeout(() => {
+      clearInterval(poll);
+      setRunningMonitorIds(new Set());
+      setRunStartedAt(null);
+    }, 120000);
+  }, [plan, planId]);
 
   // Delete plan
   const handleDelete = useCallback(async () => {
@@ -231,15 +243,20 @@ export default function PlanDetailPage() {
     (g.monitors || []).map((m: any) => ({ ...m, groupName: g.name, groupId: g.id }))
   );
 
-  const healthStatus: HealthStatus | null =
-    aggregate?.healthScore != null ? healthStatusFromScore(aggregate.healthScore) : null;
-
   const totalMonitors = aggregate?.totalMonitors || allMonitors.length;
   const passCount = aggregate?.passCount || 0;
   const warnCount = aggregate?.warnCount || 0;
   const failCount = aggregate?.failCount || 0;
   const errorCount = aggregate?.errorCount || 0;
   const pendingCount = totalMonitors - passCount - warnCount - failCount - errorCount;
+  const ranCount = passCount + warnCount + failCount + errorCount;
+
+  // Compute health from actual results (pass=100, warn=50, fail/error=0)
+  const computedHealth = ranCount > 0
+    ? Math.round(((passCount * 100) + (warnCount * 50)) / ranCount)
+    : null;
+  const healthStatus: HealthStatus | null =
+    computedHealth != null ? healthStatusFromScore(computedHealth) : null;
 
   return (
     <div className="flex flex-col h-full bg-[var(--surface-inset)]">
