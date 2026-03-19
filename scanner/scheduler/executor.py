@@ -1410,10 +1410,10 @@ class TaskExecutor:
                 {"role": "user", "content": prompt},
             ]
             response_text = ""
-            for _ in range(5):
-                api_kwargs = {
+            for iteration in range(5):
+                api_kwargs: Dict[str, Any] = {
                     "model": "gpt-5-mini",
-                    "max_completion_tokens": 1024,
+                    "max_completion_tokens": 2048,
                     "messages": messages,
                 }
                 if tools:
@@ -1426,10 +1426,19 @@ class TaskExecutor:
 
                 msg = choice.message
 
-                # Check if LLM wants to call tools
-                if choice.finish_reason == "tool_calls" and msg.tool_calls:
-                    # Append assistant message with tool calls
-                    messages.append(msg)
+                # Check if LLM wants to call tools (check both finish_reason and tool_calls presence)
+                if msg.tool_calls:
+                    # Serialize the assistant message properly for the conversation
+                    assistant_msg: Dict[str, Any] = {"role": "assistant", "content": msg.content or ""}
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                        }
+                        for tc in msg.tool_calls
+                    ]
+                    messages.append(assistant_msg)
                     for tool_call in msg.tool_calls:
                         if tool_call.function.name == "query_warehouse":
                             try:
@@ -1471,11 +1480,28 @@ class TaskExecutor:
                 response_text = msg.content or ""
                 break
 
+            # If loop ended with tool calls but no final text, force a final call without tools
+            if not response_text:
+                messages.append({
+                    "role": "user",
+                    "content": "Now provide your final assessment as JSON: {\"status\": \"PASS\"|\"WARN\"|\"FAIL\", \"message\": \"summary\", \"details\": {}}",
+                })
+                try:
+                    final_resp = client.chat.completions.create(
+                        model="gpt-5-mini",
+                        max_completion_tokens=1024,
+                        messages=messages,
+                    )
+                    if final_resp.choices:
+                        response_text = final_resp.choices[0].message.content or ""
+                except Exception as e:
+                    logger.warning(f"[Executor] Final assessment call failed: {e}")
+
             if not response_text:
                 return {
                     "status": "ERROR",
                     "message": "AI monitor did not produce a final assessment after querying the warehouse.",
-                    "details": {"iterations": 5},
+                    "details": {"iterations": iteration + 1},
                 }
 
             # Try to parse LLM response as JSON for structured result
