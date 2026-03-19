@@ -285,42 +285,17 @@ export function MonitoringPlanCard({
         )}
       </div>
 
-      {/* Family tags */}
-      {plan.families.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1">
-          {plan.families.map((family) => (
-            <span
-              key={family}
-              className={cn(
-                'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                FAMILY_COLORS[family] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
-              )}
-            >
-              {FAMILY_LABELS[family] || family.replace(/_/g, ' ')}
-            </span>
-          ))}
-        </div>
-      )}
-
       {/* Footer */}
-      <div className="flex items-center gap-3 mt-2 text-[11px] text-[var(--text-faint)]">
-        <span
-          className={cn(
-            'px-1.5 py-0.5 rounded text-[10px] font-medium',
-            'bg-[var(--overlay-medium)] text-[var(--muted)]'
-          )}
-        >
-          {SCOPE_TYPE_LABELS[plan.scopeType] || plan.scopeType}
-        </span>
-        {plan.anchorFqn && (
+      {plan.anchorFqn && (
+        <div className="mt-2 text-[11px] text-[var(--text-faint)]">
           <span
             className="truncate max-w-[250px] font-mono"
             title={plan.anchorFqn}
           >
             {plan.anchorFqn}
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Edit modal */}
       {showEditModal && (
