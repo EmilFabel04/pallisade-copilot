@@ -66,10 +66,10 @@ export default function PlanDetailPage() {
   const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
   const [runningMonitorIds, setRunningMonitorIds] = useState<Set<string>>(new Set());
 
-  // Fetch plan data
-  const fetchPlan = useCallback(async () => {
+  // Fetch plan data (initialLoad controls whether full-page spinner shows)
+  const fetchPlan = useCallback(async (initialLoad = false) => {
     if (!planId) return;
-    setLoading(true);
+    if (initialLoad) setLoading(true);
     try {
       const res = await fetch(`/api/schedule/plans/${planId}`);
       if (res.ok) {
@@ -107,12 +107,12 @@ export default function PlanDetailPage() {
     } catch (err) {
       console.error('[PlanDetail] Failed to fetch plan:', err);
     } finally {
-      setLoading(false);
+      if (initialLoad) setLoading(false);
     }
   }, [planId]);
 
   useEffect(() => {
-    fetchPlan();
+    fetchPlan(true);
   }, [fetchPlan]);
 
   // Fetch runs for a specific monitor
@@ -525,7 +525,7 @@ export default function PlanDetailPage() {
                                   body: JSON.stringify({ config, policyOverrides }),
                                 });
                                 setEditingMonitorId(null);
-                                fetchPlan();
+                                await fetchPlan();
                               }}
                             />
                           </div>
