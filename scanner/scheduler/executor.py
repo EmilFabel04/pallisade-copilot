@@ -1358,12 +1358,16 @@ class TaskExecutor:
             client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
             # Build a system message that instructs the LLM to act as a monitor
+            target_fqn = task.get("targetFqn", "")
+            fqn_context = f"\nTarget table: {target_fqn}" if target_fqn and "." in target_fqn else ""
             system_msg = (
                 "You are a data quality monitor. Execute the user's check instruction "
                 "against the data pipeline. Use the query_warehouse tool to run SQL queries "
-                "and inspect the data. After analysis, respond with a JSON object "
-                'containing: {"status": "PASS"|"WARN"|"FAIL", "message": "explanation", '
-                '"details": {}}. Only respond with valid JSON.'
+                "and inspect the data. You MUST run at least one query to validate the check. "
+                "After analysis, respond with a JSON object "
+                'containing: {"status": "PASS"|"WARN"|"FAIL", "message": "one sentence summary of what was checked and the result", '
+                '"details": {"queries_run": N, "findings": "..."}}. Only respond with valid JSON.'
+                f"{fqn_context}"
             )
 
             # Get integration config for warehouse access
@@ -1467,6 +1471,13 @@ class TaskExecutor:
                 response_text = msg.content or ""
                 break
 
+            if not response_text:
+                return {
+                    "status": "ERROR",
+                    "message": "AI monitor did not produce a final assessment after querying the warehouse.",
+                    "details": {"iterations": 5},
+                }
+
             # Try to parse LLM response as JSON for structured result
             try:
                 # Strip markdown code fences if present
@@ -1483,8 +1494,8 @@ class TaskExecutor:
                 # LLM didn't return JSON — treat as informational PASS
                 return {
                     "status": "PASS",
-                    "message": response_text[:500],
-                    "details": {"raw_response": response_text},
+                    "message": response_text[:500] if response_text.strip() else "Check completed (no structured result from AI)",
+                    "details": {"raw_response": response_text} if response_text.strip() else {},
                 }
 
         except Exception as e:
