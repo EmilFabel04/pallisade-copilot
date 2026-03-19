@@ -1091,7 +1091,14 @@ class ToolRegistry:
                                           "ACCEPTED_VALUES", "DATE_CONSISTENCY"
                                       ]},
                                       "target_fqn": {"type": "string", "description": "Target table FQN"},
-                                      "config": {"type": "object", "description": "Monitor-specific config"},
+                                      "config": {"type": "object", "description": (
+                                          "Monitor-specific config. "
+                                          "ANOMALY requires: {column, metric} where metric is one of "
+                                          "null_rate, distinct_count, min, max, avg, sum, stddev, zero_rate. "
+                                          "FRESHNESS: {timestamp_column, max_hours}. "
+                                          "VOLUME: {min_rows, max_rows}. "
+                                          "SCHEMA_CHANGE: no required config."
+                                      )},
                                   },
                                   "required": ["monitor_type", "target_fqn"],
                               }),

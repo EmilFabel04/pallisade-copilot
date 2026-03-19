@@ -168,6 +168,11 @@ class AnomalyMonitor(BaseMonitor):
     # Public interface
     # ---------------------------------------------------------------
 
+    @property
+    def needs_configuration(self) -> bool:
+        """Return True if this monitor is missing required config (e.g. column)."""
+        return self.mode == "distribution" and not self.column
+
     def build_query(
         self,
         database: str,

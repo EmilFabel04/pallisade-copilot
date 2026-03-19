@@ -55,7 +55,10 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const def = MONITOR_CATALOG.find((m) => m.key === monitor.monitorType);
+  // Map legacy/LLM monitor types to catalog keys
+  const TYPE_ALIASES: Record<string, string> = { ANOMALY: 'OUTLIER_DETECTION' };
+  const catalogKey = TYPE_ALIASES[monitor.monitorType] || monitor.monitorType;
+  const def = MONITOR_CATALOG.find((m) => m.key === catalogKey);
   const profileName = resolvedPolicy?.profileName;
   const fieldMap = POLICY_FIELD_MAP[monitor.monitorType] || {};
 
@@ -146,9 +149,9 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
 
       {/* Policy status banner */}
       {resolvedPolicy && (
-        <div className="flex items-center justify-between px-3 py-2 bg-violet-500/[0.06] border border-violet-500/[0.12] rounded-lg">
+        <div className="flex items-center justify-between px-3 py-2 bg-slate-500/[0.06] border border-slate-500/[0.12] rounded-lg">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] text-violet-400 font-medium">
+            <span className="text-[11px] text-slate-400 font-medium">
               {profileName ? `Policy: ${profileName}` : 'Policy applied'}
             </span>
             {hasPolicyOverrides && (
@@ -161,7 +164,7 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
             <button
               type="button"
               onClick={handleResetAll}
-              className="text-[11px] text-violet-400 hover:text-violet-300 underline underline-offset-2 transition-colors"
+              className="text-[11px] text-slate-400 hover:text-slate-300 underline underline-offset-2 transition-colors"
             >
               Reset all to policy
             </button>
@@ -250,7 +253,7 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
                       type="checkbox"
                       checked={!!currentValue}
                       onChange={(e) => handleFieldChange(field.key, e.target.checked)}
-                      className="w-4 h-4 rounded border-[var(--overlay-strong)] bg-[var(--overlay-bg)] text-violet-500 focus:ring-violet-500/30 focus:ring-offset-0"
+                      className="w-4 h-4 rounded border-[var(--overlay-strong)] bg-[var(--overlay-bg)] text-slate-500 focus:ring-slate-500/30 focus:ring-offset-0"
                     />
                     <span className="text-[12px] text-[var(--text-tertiary)]">
                       {field.placeholder || field.label}
@@ -303,7 +306,7 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 text-[13px] font-medium transition-colors disabled:opacity-50"
+          className="px-4 py-2 rounded-lg bg-slate-500/20 hover:bg-slate-500/30 text-slate-300 text-[13px] font-medium transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Save changes'}
         </button>

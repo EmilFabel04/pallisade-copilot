@@ -280,6 +280,7 @@ Say "monitor", "monitoring group", or "monitor configuration".
 
 RULES:
 - ALWAYS gather information first (read-only tools) before proposing monitors
+- For ANOMALY/outlier monitors: Create the monitor without a column — it will show "Needs config" in the Tasks page where the user can pick the column. If the user tells you the column name, include it in config as {column, metric}.
 - For a SINGLE monitor: call create_watch directly (it creates a monitoring group)
 - For MULTIPLE monitors (2+): call create_watch separately for each
 - NEVER assume user confirmation. Wait for explicit __action:confirm before proceeding.

@@ -442,6 +442,9 @@ export default function PlanDetailPage() {
                 const policyStatus = getMonitorPolicyStatus(
                   mon.monitorType || '', mon.config || {}, monPolicy
                 );
+                const monType = (mon.monitorType || '').toUpperCase();
+                const needsConfig = (monType === 'ANOMALY' || monType === 'OUTLIER_DETECTION')
+                  && !(mon.config as Record<string, any>)?.column;
                 return (
                   <div
                     key={mon.id}
@@ -493,10 +496,15 @@ export default function PlanDetailPage() {
                       )}
                       {policyStatus.status === 'policy' && (
                         <span
-                          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-violet-500/15 text-violet-400"
+                          className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-slate-500/15 text-slate-400"
                           title={`Following ${monPolicy?.profileName || 'policy'}`}
                         >
                           {monPolicy?.profileName || 'Policy'}
+                        </span>
+                      )}
+                      {needsConfig && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 bg-amber-500/15 text-amber-400 animate-pulse">
+                          Needs config
                         </span>
                       )}
                       {mon.lastRunAt && (
@@ -518,9 +526,9 @@ export default function PlanDetailPage() {
                             onClick={() => setEditingMonitorId(
                               editingMonitorId === mon.id ? null : mon.id
                             )}
-                            className="text-[11px] text-[var(--muted)] hover:text-[var(--text-secondary)] underline"
+                            className={`text-[11px] underline ${needsConfig ? 'text-amber-400 hover:text-amber-300 font-medium' : 'text-[var(--muted)] hover:text-[var(--text-secondary)]'}`}
                           >
-                            {editingMonitorId === mon.id ? 'Close editor' : 'Edit config'}
+                            {editingMonitorId === mon.id ? 'Close editor' : needsConfig ? 'Configure required fields' : 'Edit config'}
                           </button>
                         </div>
                         {editingMonitorId === mon.id && (

@@ -429,6 +429,18 @@ class TaskExecutor:
         # Create monitor instance from resolved config
         monitor = monitor_cls(config=config) if config else monitor_cls()
 
+        # Check if monitor needs user configuration before it can run
+        if hasattr(monitor, 'needs_configuration') and monitor.needs_configuration:
+            return {
+                "status": "WARN",
+                "message": "Monitor needs configuration before it can run. Please edit the monitor config to set required fields (e.g. column for outlier detection).",
+                "change": "Needs configuration",
+                "metric": "config",
+                "current": "Not configured",
+                "baseline": "N/A",
+                "status_reason": "Monitor requires additional configuration (e.g. column) before it can execute.",
+            }
+
         # Get warehouse query function — use pre-fetched config or look up by ID/org
         integration_config = task.get("integrationConfig") or await self._get_integration_config(
             task.get("integrationId"), task.get("organizationId"),

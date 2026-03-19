@@ -272,6 +272,7 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
     supports_baselines: true,
     auto_configurable: true,
     config_schema: [
+      { key: 'column', label: 'Column', type: 'text', placeholder: 'e.g. revenue, order_count', required: true },
       {
         key: 'metric',
         label: 'Metric',
@@ -285,7 +286,6 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
           { value: 'stddev', label: 'Std Dev' },
           { value: 'zero_rate', label: 'Zero Rate' },
         ],
-        advanced: true,
       },
       { key: 'anomaly_threshold', label: 'Z-score threshold', type: 'number', placeholder: '3.0', advanced: true },
       { key: 'lookback_days', label: 'Lookback days', type: 'number', placeholder: '30', advanced: true },
