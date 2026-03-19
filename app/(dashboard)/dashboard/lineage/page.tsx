@@ -182,8 +182,9 @@ function LineagePageInner() {
   const [promptModalOpen, setPromptModalOpen] = useState(false);
 
   const handleCreateSingleMonitor = useCallback((prefill: AssetPrefill) => {
-    setSingleAssetPrefill(prefill);
-    setSingleAssetModalOpen(true);
+    // Open MultiMonitorModal with the asset pre-selected
+    setMultiMonitorPreselect([prefill.nodeId]);
+    setMultiMonitorModalOpen(true);
   }, []);
 
   const handleCreateMultiMonitor = useCallback((preselectedNodeIds: string[]) => {

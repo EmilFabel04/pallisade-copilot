@@ -22,7 +22,7 @@ export interface MultiMonitorModalProps {
 }
 
 type Step = 1 | 2 | 3;
-type ConfigTab = 'presets' | 'ai-prompt' | 'manual';
+type ConfigTab = 'presets' | 'ai-prompt';
 
 interface MonitorOption {
   key: string;        // "FRESHNESS", etc.
@@ -202,18 +202,13 @@ const TOOL_ONLY_MONITOR_KEYS = new Set([
 const CONFIG_TABS: { key: ConfigTab; label: string; icon: string }[] = [
   {
     key: 'presets',
-    label: 'Presets',
+    label: 'Monitors',
     icon: 'M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm0 8a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zm12 0a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z',
   },
   {
     key: 'ai-prompt',
     label: 'AI Prompt',
     icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z',
-  },
-  {
-    key: 'manual',
-    label: 'Manual',
-    icon: 'M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4',
   },
 ];
 
@@ -1225,142 +1220,6 @@ export function MultiMonitorModal({
               )}
 
               {/* ---- Manual Tab ---- */}
-              {configTab === 'manual' && (
-                <div className="flex-1 overflow-y-auto px-6 py-6">
-                  <div className="space-y-6">
-                    <div>
-                      <h3 className="text-[15px] font-medium text-[var(--text)] mb-1">
-                        Add monitors manually
-                      </h3>
-                      <p className="text-[12px] text-[var(--muted)]">
-                        Pick a specific monitor type and target to add individual monitors.
-                      </p>
-                    </div>
-
-                    {/* Add monitor form */}
-                    <div className="p-5 rounded-lg border border-[var(--border)] bg-[var(--surface)] space-y-5">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-                        <div>
-                          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Monitor Type</label>
-                          <select
-                            value={manualMonitorType}
-                            onChange={(e) => setManualMonitorType(e.target.value)}
-                            className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2.5 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
-                          >
-                            {(() => {
-                              const toolNodes = selectedNodesWithMonitors.filter((n) => !!n.meta.subNodeIds?.length);
-                              const hasDataNodes = selectedNodesWithMonitors.some((n) => !n.meta.subNodeIds?.length);
-                              const dataKeys = ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_RATE', 'DISTRIBUTION', 'CUSTOM_SQL', 'ANOMALY'];
-                              const keys: string[] = [];
-                              if (hasDataNodes) keys.push(...dataKeys);
-                              // Add domain-specific tool monitors for each selected tool domain
-                              const seenDomains = new Set<string>();
-                              for (const n of toolNodes) {
-                                const domain = n.meta.domain || '';
-                                if (seenDomains.has(domain)) continue;
-                                seenDomains.add(domain);
-                                const domainSet = DOMAIN_MONITOR_MAP[domain];
-                                if (domainSet) keys.push(...domainSet);
-                              }
-                              if (keys.length === 0) keys.push(...dataKeys); // fallback
-                              return keys;
-                            })().map((key) => {
-                              const def = getMonitorDefinition(key);
-                              return (
-                                <option key={key} value={key}>
-                                  {def?.label || key}
-                                </option>
-                              );
-                            })}
-                          </select>
-                          {(() => {
-                            const def = getMonitorDefinition(manualMonitorType);
-                            return def?.description ? (
-                              <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">{def.description}</p>
-                            ) : null;
-                          })()}
-                        </div>
-                        <div className="md:col-span-2">
-                          <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Target FQN</label>
-                          <div className="flex gap-3">
-                            <input
-                              value={manualTargetFqn}
-                              onChange={(e) => setManualTargetFqn(e.target.value)}
-                              placeholder="dataset.schema.table"
-                              className="flex-1 bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2.5 text-[13px] text-[var(--text)] placeholder-[var(--muted)]/50 focus:outline-none focus:border-[var(--accent)]"
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && manualMonitorType && manualTargetFqn.trim()) {
-                                  addManualMonitor();
-                                }
-                              }}
-                            />
-                            <button
-                              onClick={addManualMonitor}
-                              disabled={!manualMonitorType || !manualTargetFqn.trim()}
-                              className={cn(
-                                'px-5 py-2.5 rounded-lg text-[13px] font-medium transition-colors shrink-0',
-                                manualMonitorType && manualTargetFqn.trim()
-                                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90'
-                                  : 'bg-[var(--muted)]/20 text-[var(--muted)] cursor-not-allowed',
-                              )}
-                            >
-                              + Add
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Added manual monitors list */}
-                    {manualMonitors.length > 0 && (
-                      <div className="space-y-2">
-                        <h4 className="text-[13px] font-medium text-[var(--text)]">
-                          Added monitors ({manualMonitors.length})
-                        </h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                          {manualMonitors.map((m) => {
-                            const def = getMonitorDefinition(m.monitorType);
-                            return (
-                              <div
-                                key={m.id}
-                                className={cn(
-                                  'flex items-center gap-3 p-3 rounded-lg border',
-                                  MONITOR_COLORS[m.monitorType] || 'bg-[var(--surface)] border-[var(--border)]',
-                                )}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <span className="text-[12px] font-medium">{def?.label || m.monitorType}</span>
-                                  {def?.description && (
-                                    <p className="text-[10px] opacity-60 mt-0.5">{def.description}</p>
-                                  )}
-                                  <p className="text-[11px] opacity-70 font-mono truncate mt-1">{m.targetFqn}</p>
-                                </div>
-                                <button
-                                  onClick={() => removeManualMonitor(m.id)}
-                                  className="p-1 hover:bg-white/10 rounded transition-colors shrink-0"
-                                >
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Also show preset monitors if any are checked */}
-                    {checkedCount > 0 && (
-                      <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
-                        <p className="text-[11px] text-[var(--muted)]">
-                          + {checkedCount} monitors from Presets tab will also be included
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
