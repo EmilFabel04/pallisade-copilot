@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { MONITOR_CATALOG } from '@/types/monitor-catalog';
 import { PolicyFieldBadge } from './PolicyFieldBadge';
+import { ColumnPicker } from './ColumnPicker';
 import {
   POLICY_FIELD_MAP,
   getPolicyValueForField,
@@ -202,7 +203,15 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
                   )}
                 </div>
 
-                {field.type === 'text' && (
+                {field.type === 'text' && field.key === 'column' && monitor.targetFqn ? (
+                  <ColumnPicker
+                    targetFqn={monitor.targetFqn}
+                    value={currentValue ?? ''}
+                    onChange={(v) => handleFieldChange(field.key, v || undefined)}
+                    numericOnly={catalogKey === 'OUTLIER_DETECTION'}
+                    className={inputClass}
+                  />
+                ) : field.type === 'text' && (
                   <input
                     type="text"
                     value={currentValue ?? ''}
