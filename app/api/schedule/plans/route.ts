@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { createWatchInTransaction } from '@/lib/watch-helpers';
+import { POLICY_FIELD_MAP, getPolicyValueForField } from '@/lib/policy-utils';
 
 // GET /api/schedule/plans - List all monitoring plans
 export async function GET(request: NextRequest) {
@@ -176,6 +177,69 @@ export async function POST(request: NextRequest) {
     }
     if (!mode) {
       return NextResponse.json({ error: 'mode is required' }, { status: 400 });
+    }
+
+    // ---- Server-side policy merge ----
+    // Resolve policies for all target FQNs and merge into config_hints
+    // so monitors are created with policy-correct defaults regardless of caller.
+    const targetFqns = new Set<string>();
+    for (const group of groups || []) {
+      for (const rec of group.recommendations || []) {
+        if (rec.target_fqn) targetFqns.add(rec.target_fqn);
+      }
+    }
+
+    let resolvedPolicies: Record<string, any> = {};
+    if (targetFqns.size > 0) {
+      try {
+        const scannerUrl = process.env.SCANNER_API_URL || 'http://localhost:8000';
+        const policyRes = await fetch(`${scannerUrl}/api/v1/policies/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            nodes: Array.from(targetFqns).map((fqn) => ({ fqn, domain: '', criticality: '' })),
+            _assignments: (await prisma.policyAssignment.findMany({
+              where: { organizationId },
+              include: { profile: true },
+            })).map((a) => ({
+              id: a.id, profileId: a.profileId, assignmentType: a.assignmentType,
+              nodeFqn: a.nodeFqn, nodeDomain: a.nodeDomain, nodeCriticality: a.nodeCriticality,
+              branchRootFqn: a.branchRootFqn, overrides: a.overrides,
+            })),
+            _profiles: Object.fromEntries(
+              (await prisma.policyProfile.findMany({ where: { organizationId } }))
+                .map((p) => [p.id, p])
+            ),
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (policyRes.ok) {
+          const policyData = await policyRes.json();
+          resolvedPolicies = policyData.policies || {};
+        }
+      } catch (err) {
+        console.warn('[Plans] Policy resolve failed (non-fatal), proceeding without policy merge:', err);
+      }
+    }
+
+    // Merge policy values into each recommendation's config_hints (policy wins)
+    if (Object.keys(resolvedPolicies).length > 0) {
+      for (const group of groups || []) {
+        for (const rec of group.recommendations || []) {
+          const policy = resolvedPolicies[rec.target_fqn];
+          if (!policy) continue;
+          const fieldMap = POLICY_FIELD_MAP[rec.monitor_key];
+          if (!fieldMap) continue;
+          const hints = rec.config_hints || {};
+          for (const fieldKey of Object.keys(fieldMap)) {
+            const policyVal = getPolicyValueForField(rec.monitor_key, fieldKey, policy);
+            if (policyVal != null) {
+              hints[fieldKey] = policyVal;
+            }
+          }
+          rec.config_hints = hints;
+        }
+      }
     }
 
     const result = await prisma.$transaction(async (tx) => {
