@@ -2302,8 +2302,8 @@ html.light body::before { opacity: 0.015; }
 
 /* Unified page loading spinner */
 .red-spinner {
-  border: 2px solid rgb(239 68 68 / 0.3);
-  border-top-color: rgb(239 68 68);
+  border: 2px solid var(--overlay-strong, rgb(148 163 184 / 0.3));
+  border-top-color: var(--accent, rgb(148 163 184));
   border-radius: 9999px;
   animation: red-spinner-spin 0.8s linear infinite;
 }
