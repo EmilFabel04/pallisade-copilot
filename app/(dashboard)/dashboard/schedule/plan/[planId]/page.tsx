@@ -64,6 +64,7 @@ export default function PlanDetailPage() {
   const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
   const [showPlanEditModal, setShowPlanEditModal] = useState(false);
   const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
+  const [runningMonitorIds, setRunningMonitorIds] = useState<Set<string>>(new Set());
 
   // Fetch plan data
   const fetchPlan = useCallback(async () => {
@@ -155,15 +156,45 @@ export default function PlanDetailPage() {
     }
   }, [planId, fetchPlan]);
 
-  // Run all monitors
+  // Run all monitors (fire-and-forget, runs in background)
   const handleRunAll = useCallback(async () => {
     if (!plan) return;
-    const allMonitors = (plan.monitorGroups || []).flatMap((g: any) => g.monitors || []);
-    for (const mon of allMonitors) {
-      fetch(`/api/schedule/tasks/${mon.id}/run`, { method: 'POST' }).catch(() => {});
-    }
-    setTimeout(fetchPlan, 2000);
-  }, [plan, fetchPlan]);
+    const allMons = (plan.monitorGroups || []).flatMap((g: any) => g.monitors || []);
+    const monIds = allMons.map((m: any) => m.id);
+    setRunningMonitorIds(new Set(monIds));
+
+    // Fire the plan-level run endpoint (non-blocking)
+    fetch(`/api/schedule/plans/${planId}/run`, { method: 'POST' })
+      .then(() => {
+        // Poll for updated results
+        const poll = setInterval(async () => {
+          await fetchPlan();
+          setRunningMonitorIds((prev) => {
+            if (prev.size === 0) {
+              clearInterval(poll);
+              return prev;
+            }
+            // Check which monitors have completed (have a recent lastRunAt)
+            const currentMons = (plan.monitorGroups || []).flatMap((g: any) => g.monitors || []);
+            const stillRunning = new Set<string>();
+            for (const id of prev) {
+              const mon = currentMons.find((m: any) => m.id === id);
+              if (mon && !mon.lastRunAt) stillRunning.add(id);
+            }
+            if (stillRunning.size === 0) clearInterval(poll);
+            return stillRunning;
+          });
+        }, 3000);
+        // Safety: stop polling after 2 minutes
+        setTimeout(() => {
+          setRunningMonitorIds(new Set());
+        }, 120000);
+      })
+      .catch((err) => {
+        console.error('[PlanDetail] Run all failed:', err);
+        setRunningMonitorIds(new Set());
+      });
+  }, [plan, planId, fetchPlan]);
 
   // Delete plan
   const handleDelete = useCallback(async () => {
@@ -275,8 +306,8 @@ export default function PlanDetailPage() {
               )}
             />
           </button>
-          <Button variant="ghost" size="sm" onClick={handleRunAll}>
-            Run All
+          <Button variant="ghost" size="sm" onClick={handleRunAll} disabled={runningMonitorIds.size > 0}>
+            {runningMonitorIds.size > 0 ? `Running (${runningMonitorIds.size})...` : 'Run All'}
           </Button>
           <Button
             variant="ghost"
@@ -404,9 +435,13 @@ export default function PlanDetailPage() {
                       onClick={() => handleToggleMonitor(mon.id)}
                       className="flex items-center gap-3 p-3 w-full text-left hover:bg-[var(--hover-bg)] transition-colors"
                     >
-                      <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
-                        {mon.lastStatus || 'NEW'}
-                      </span>
+                      {runningMonitorIds.has(mon.id) ? (
+                        <div className="w-4 h-4 shrink-0 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
+                          {mon.lastStatus || 'NEW'}
+                        </span>
+                      )}
                       <div className="flex-1 min-w-0">
                         <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>
                         <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
