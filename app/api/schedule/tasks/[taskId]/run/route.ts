@@ -362,8 +362,8 @@ export async function POST(
       body: JSON.stringify({
         task_id: task.id,
         name: task.name,
-        task_mode: task.taskMode || 'structured',
-        prompt: task.prompt,
+        task_mode: task.taskMode || (task.monitorType === 'AI_PROMPT' ? 'prompt' : 'structured'),
+        prompt: task.prompt || (monitorConfig as any)?.prompt,
         monitor_type: task.monitorType,
         target_fqn: task.targetFqn,
         config: monitorConfig,
@@ -427,20 +427,24 @@ export async function POST(
       data: updateData,
     });
 
-    // Fire-and-forget notification
-    const pipelineStack = await prisma.pipelineStack.findFirst({
-      where: { organizationId },
-      select: { id: true },
-    });
-    if (status === 'FAIL' || status === 'ERROR') {
-      notifyEvents.monitorFailed(
-        organizationId, pipelineStack?.id, (session.user as any).id,
-        task.name, task.id, result.message || 'Monitor check failed',
-      );
-    } else if (status === 'PASS') {
-      notifyEvents.monitorPassed(
-        organizationId, pipelineStack?.id, task.name, task.id,
-      );
+    // Fire-and-forget notification (skip when running as part of a group —
+    // the bundle endpoint sends one collective notification instead)
+    const isGrouped = request.nextUrl.searchParams.get('grouped') === 'true';
+    if (!isGrouped) {
+      const pipelineStack = await prisma.pipelineStack.findFirst({
+        where: { organizationId },
+        select: { id: true },
+      });
+      if (status === 'FAIL' || status === 'ERROR') {
+        notifyEvents.monitorFailed(
+          organizationId, pipelineStack?.id, (session.user as any).id,
+          task.name, task.id, result.message || 'Monitor check failed',
+        );
+      } else if (status === 'PASS') {
+        notifyEvents.monitorPassed(
+          organizationId, pipelineStack?.id, task.name, task.id,
+        );
+      }
     }
 
     return NextResponse.json({ run, result });

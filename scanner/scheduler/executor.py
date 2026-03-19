@@ -267,8 +267,9 @@ class TaskExecutor:
             Dict with keys: status, value, threshold, message, details, sql_executed
         """
         task_mode = task.get("taskMode", "structured")
+        monitor_type_raw = (task.get("monitorType") or "").lower()
 
-        if task_mode == "prompt":
+        if task_mode == "prompt" or monitor_type_raw == "ai_prompt":
             return await self._execute_prompt(task)
 
         # Check if this is a tool monitor (Fivetran/Airflow/dbt) before
@@ -1341,7 +1342,8 @@ class TaskExecutor:
 
     async def _execute_prompt(self, task: Dict[str, Any]) -> Dict[str, Any]:
         """Run an LLM prompt-based check."""
-        prompt = task.get("prompt", "")
+        config = task.get("config") or {}
+        prompt = task.get("prompt") or config.get("prompt", "")
         if not prompt:
             return {
                 "status": "ERROR",
