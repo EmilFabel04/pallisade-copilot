@@ -301,21 +301,21 @@ export default function EditContractModal({ source, pipelineContract, onClose, o
                   {INHERITANCE_CONFIG[effective.inheritanceState].label}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+              <div className="grid grid-cols-3 gap-x-4 gap-y-3 text-xs">
                 <PreviewField label="Owner" value={effective.ownerUser || effective.ownerTeam} />
                 <PreviewField label="Contact" value={effective.contactChannel} />
                 <PreviewField label="SLA Tier" value={effective.slaTier} />
                 <PreviewField label="Freshness" value={effective.expectedFreshnessMinutes ? `${effective.expectedFreshnessMinutes}m` : null} />
                 <PreviewField label="Extraction Freq" value={effective.expectedExtractionFrequencyMinutes ? `${effective.expectedExtractionFrequencyMinutes}m` : null} />
-                {Object.keys(effective.toolOverrides).length > 0 && (
-                  <div className="col-span-2 mt-1 pt-1 border-t border-[var(--subtle-border)]">
-                    <span className="text-[var(--text-faint)]">Tool overrides: </span>
-                    <span className="text-[var(--text-secondary)]">
-                      {Object.entries(effective.toolOverrides).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
-                    </span>
-                  </div>
-                )}
               </div>
+              {Object.keys(effective.toolOverrides).length > 0 && (
+                <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] text-xs">
+                  <span className="text-[var(--text-faint)]">Tool overrides: </span>
+                  <span className="text-[var(--text-secondary)] break-all">
+                    {Object.entries(effective.toolOverrides).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -365,9 +365,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function PreviewField({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
-    <div className="flex items-baseline gap-1.5">
-      <span className="text-[var(--text-faint)]">{label}:</span>
-      <span className={value ? 'text-[var(--text-secondary)]' : 'text-[var(--text-faint)] italic'}>
+    <div>
+      <span className="text-[var(--text-faint)] block mb-0.5">{label}</span>
+      <span className={value ? 'text-[var(--text-secondary)] font-medium' : 'text-[var(--text-faint)] italic'}>
         {value || 'not set'}
       </span>
     </div>
