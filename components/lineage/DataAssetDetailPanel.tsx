@@ -161,7 +161,7 @@ function RelationshipItem({
           {shortName}
         </span>
         {edge.lineageLevel && edge.lineageLevel !== 'table' && (
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 shrink-0">
+          <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-300 shrink-0">
             {edge.lineageLevel}
           </span>
         )}
@@ -908,33 +908,20 @@ export function DataAssetDetailPanel({
                   </span>
                 </div>
 
-                <div className="space-y-1.5">
-                  {onCreateMultiMonitor && (
-                    <button
-                      onClick={() => onCreateMultiMonitor([node.id.replace(/^lineage-/, '')])}
-                      className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all text-[10px] text-purple-300 font-medium"
-                    >
-                      <ShieldCheck className="w-3 h-3" />
-                      Set Up Monitoring
-                    </button>
-                  )}
-                  <div className="flex gap-1.5">
-                    {onCreateSingleMonitor && (
-                      <button
-                        onClick={() => onCreateSingleMonitor({
-                          nodeId: node.id.replace(/^lineage-/, ''),
-                          fqn: node.fullName || node.name,
-                          name: node.tableName || node.name,
-                          platform: node.platforms?.[0],
-                        })}
-                        className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
-                      >
-                        <Plus className="w-3 h-3" />
-                        Create Monitor
-                      </button>
-                    )}
-                  </div>
-                </div>
+                {onCreateSingleMonitor && (
+                  <button
+                    onClick={() => onCreateSingleMonitor({
+                      nodeId: node.id.replace(/^lineage-/, ''),
+                      fqn: node.fullName || node.name,
+                      name: node.tableName || node.name,
+                      platform: node.platforms?.[0],
+                    })}
+                    className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
+                  >
+                    <Plus className="w-3 h-3" />
+                    Create Monitor
+                  </button>
+                )}
               </div>
             );
           }
@@ -949,33 +936,20 @@ export function DataAssetDetailPanel({
                 </span>
               </div>
 
-              <div className="space-y-1.5">
-                {onCreateMultiMonitor && (
-                  <button
-                    onClick={() => onCreateMultiMonitor([node.id.replace(/^lineage-/, '')])}
-                    className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all text-[10px] text-purple-300 font-medium"
-                  >
-                    <ShieldCheck className="w-3 h-3" />
-                    Set Up Monitoring
-                  </button>
-                )}
-                <div className="flex gap-1.5">
-                  {onCreateSingleMonitor && (
-                    <button
-                      onClick={() => onCreateSingleMonitor({
-                        nodeId: node.id.replace(/^lineage-/, ''),
-                        fqn: node.fullName || node.name,
-                        name: node.tableName || node.name,
-                        platform: node.platforms?.[0],
-                      })}
-                      className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
-                    >
-                      <Plus className="w-3 h-3" />
-                      Create Monitor
-                    </button>
-                  )}
-                </div>
-              </div>
+              {onCreateSingleMonitor && (
+                <button
+                  onClick={() => onCreateSingleMonitor({
+                    nodeId: node.id.replace(/^lineage-/, ''),
+                    fqn: node.fullName || node.name,
+                    name: node.tableName || node.name,
+                    platform: node.platforms?.[0],
+                  })}
+                  className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
+                >
+                  <Plus className="w-3 h-3" />
+                  Create Monitor
+                </button>
+              )}
             </div>
           );
         })()}
@@ -1343,15 +1317,15 @@ export function DataAssetDetailPanel({
         <div className="border-t border-[var(--subtle-border)] pt-3">
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Monitoring Policy</label>
           {policyInfo && policyInfo.status !== 'none' ? (
-            <div className="mt-2 p-2.5 rounded-lg border border-violet-500/30 bg-violet-500/10">
+            <div className="mt-2 p-2.5 rounded-lg border border-slate-500/30 bg-slate-500/10">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-violet-400" />
-                  <span className="text-[13px] font-medium text-violet-300">
+                  <ShieldCheck className="w-4 h-4 text-slate-400" />
+                  <span className="text-[13px] font-medium text-slate-300">
                     {policyInfo.profileName || 'Policy Assigned'}
                   </span>
                 </div>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 capitalize">
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-300 capitalize">
                   {policyInfo.status}
                 </span>
               </div>
@@ -1361,7 +1335,7 @@ export function DataAssetDetailPanel({
               {onEditPolicy && (
                 <button
                   onClick={() => onEditPolicy(node.id)}
-                  className="mt-2 text-[11px] text-violet-400 hover:text-violet-300 hover:underline flex items-center gap-1"
+                  className="mt-2 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
                 >
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -1376,7 +1350,7 @@ export function DataAssetDetailPanel({
               {onEditPolicy && (
                 <button
                   onClick={() => onEditPolicy(node.id)}
-                  className="mt-1.5 text-[11px] text-violet-400 hover:text-violet-300 hover:underline flex items-center gap-1"
+                  className="mt-1.5 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" />
                   Add Policy

@@ -219,7 +219,7 @@ function AssistantPageInner() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const promptProcessed = useRef(false);
   const [confirmationLoading, setConfirmationLoading] = useState(false);
-  const [editingArtifact, setEditingArtifact] = useState<UIArtifact | null>(null);
+
 
   // Streaming chat hook
   const {
@@ -229,8 +229,10 @@ function AssistantPageInner() {
     abort: abortStreaming,
   } = useStreamingChat();
 
-  // Helper to update an artifact's status across all messages
-  const updateArtifactStatus = useCallback((artifactId: string, status: UIArtifact['status']) => {
+
+  // Helper to update artifact status in both streaming and finalized messages
+  const setArtifactStatus = useCallback((artifactId: string, status: UIArtifact['status']) => {
+    // Update in finalized messages
     setMessages(prev => prev.map(msg => ({
       ...msg,
       artifacts: msg.artifacts?.map(a =>
@@ -239,6 +241,9 @@ function AssistantPageInner() {
     })));
   }, []);
 
+  // Track whether we're in a background confirmation (suppress UI streaming block)
+  const confirmingArtifactRef = useRef<string | null>(null);
+
   const handleArtifactConfirm = useCallback(async (artifactId: string, editedData?: Record<string, any>) => {
     // Search in streaming message first, then in finalized messages
     const artifact = streamingMessage?.artifacts.find(a => a.artifact_id === artifactId)
@@ -246,7 +251,8 @@ function AssistantPageInner() {
     if (!artifact) return;
 
     // Immediately update card to "executing" state
-    updateArtifactStatus(artifactId, 'executing');
+    setArtifactStatus(artifactId, 'executing');
+    confirmingArtifactRef.current = artifactId;
 
     const toolName = artifact.tool_name || 'create_watch';
     const dataToSend = editedData || artifact.data;
@@ -260,38 +266,19 @@ function AssistantPageInner() {
         pipelineStackId: selectedPipelineId || undefined,
       });
       // Update card to "completed" after successful execution
-      updateArtifactStatus(artifactId, 'completed');
+      setArtifactStatus(artifactId, 'completed');
     } catch (err) {
       console.error('Artifact confirm failed:', err);
-      updateArtifactStatus(artifactId, 'failed');
-      clearStreamingMessage();
-      setIsLoading(false);
+      setArtifactStatus(artifactId, 'failed');
+    } finally {
+      confirmingArtifactRef.current = null;
     }
-  }, [streamingMessage, messages, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage, updateArtifactStatus]);
+  }, [streamingMessage, messages, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, setArtifactStatus]);
 
   const handleArtifactCancel = useCallback(async (artifactId: string) => {
-    // Immediately update card to "cancelled" state
-    updateArtifactStatus(artifactId, 'cancelled');
+    setArtifactStatus(artifactId, 'cancelled');
+  }, [setArtifactStatus]);
 
-    const actionMessage = `__action:cancel:${artifactId}`;
-    try {
-      await sendStreamingMessage(actionMessage, {
-        sessionId: sessionId || undefined,
-        model: selectedModel,
-        mode: selectedMode,
-        pipelineStackId: selectedPipelineId || undefined,
-      });
-    } catch (err) {
-      console.error('Artifact cancel failed:', err);
-      clearStreamingMessage();
-      setIsLoading(false);
-    }
-  }, [sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, clearStreamingMessage, updateArtifactStatus]);
-
-  const handleArtifactEdit = useCallback((artifact: UIArtifact) => {
-    setEditingArtifact(artifact);
-    // TODO: Open side panel with MonitorConfigForm (Phase 1 deferred)
-  }, []);
 
   // Sidebar resize constants
   const minSidebarWidth = 200;
@@ -751,9 +738,15 @@ function AssistantPageInner() {
       });
       if (response.ok) {
         setSessions(prev => prev.filter(s => s.id !== id));
-        if (sessionId === id) {
-          startNewChat();
-        }
+        // Use functional setter to read the latest sessionId and reset if it matches
+        setSessionId(prev => {
+          if (prev === id) {
+            setMessages([]);
+            setInput('');
+            return null;
+          }
+          return prev;
+        });
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
@@ -1403,10 +1396,11 @@ function AssistantPageInner() {
             <ScrollArea className="h-full px-4 py-3">
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                <Avatar className="w-14 h-14 mb-3">
-                  <AvatarImage src="/pallisade_scoutt.svg" alt="Scout" />
-                  <AvatarFallback className="text-xl">AI</AvatarFallback>
-                </Avatar>
+                <div className="w-14 h-14 mb-3 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                  <svg className="w-7 h-7 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                  </svg>
+                </div>
                 <h2 className="text-base font-semibold mb-1">How can I help?</h2>
                 <p className="text-xs text-[var(--muted)] max-w-sm mb-4">
                   Query your warehouse, explore lineage, debug pipelines.
@@ -1436,10 +1430,11 @@ function AssistantPageInner() {
                 {messages.map((message) => (
                   <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
                     {message.role === 'assistant' && (
-                      <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                        <AvatarImage src="/pallisade_scoutt.svg" alt="AI" />
-                        <AvatarFallback className="text-[10px]">AI</AvatarFallback>
-                      </Avatar>
+                      <div className="w-6 h-6 flex-shrink-0 mt-0.5 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                        <svg className="w-3.5 h-3.5 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                        </svg>
+                      </div>
                     )}
                     <div className={cn(
                       'max-w-[85%] min-w-0',
@@ -1504,8 +1499,6 @@ function AssistantPageInner() {
                       {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (() => {
                         const changePlanTools = message.toolCalls.filter(tc => isChangePlanTool(tc.name));
                         const regularTools = message.toolCalls.filter(tc => !isChangePlanTool(tc.name));
-                        const lastThreeNames = regularTools.slice(-3).map(tc => tc.name).join(', ');
-
                         return (
                           <div className="space-y-2 mt-2">
                             {changePlanTools.map((toolCall, idx) => {
@@ -1541,11 +1534,6 @@ function AssistantPageInner() {
                                 />
                               );
                             })}
-                            {regularTools.length > 0 && (
-                              <div className="text-[10px] text-[var(--text-faint)]">
-                                Used {regularTools.length} tool{regularTools.length !== 1 ? 's' : ''} · {lastThreeNames}
-                              </div>
-                            )}
                           </div>
                         );
                       })()}
@@ -1555,7 +1543,7 @@ function AssistantPageInner() {
                           artifacts={message.artifacts}
                           onConfirm={handleArtifactConfirm}
                           onCancel={handleArtifactCancel}
-                          onEdit={handleArtifactEdit}
+
                         />
                       )}
                     </div>
@@ -1569,13 +1557,14 @@ function AssistantPageInner() {
                   </div>
                 ))}
 
-                {/* Streaming message display */}
-                {streamingMessage && (
+                {/* Streaming message display (hidden during background artifact confirmation) */}
+                {streamingMessage && !confirmingArtifactRef.current && (
                   <div className="flex gap-2">
-                    <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                      <AvatarImage src="/pallisade_scoutt.svg" alt="AI" />
-                      <AvatarFallback className="text-[10px]">AI</AvatarFallback>
-                    </Avatar>
+                    <div className="w-6 h-6 flex-shrink-0 mt-0.5 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                      </svg>
+                    </div>
                     <div className="min-w-0 flex-1">
                       <div className="px-1 py-1">
                         {streamingMessage.content ? (
@@ -1648,38 +1637,13 @@ function AssistantPageInner() {
                               return null;
                             })}
 
-                            {/* Regular tool calls as compact chips */}
+                            {/* Regular tool calls as compact status */}
                             {regularCalls.length > 0 && (
-                              <div>
-                                {hiddenCount > 0 && (
-                                  <div className="text-[10px] text-[var(--text-faint)] mb-1">
-                                    +{hiddenCount} more tool{hiddenCount !== 1 ? 's' : ''} executed
-                                  </div>
-                                )}
-                                <div className="flex flex-wrap gap-1">
-                                  {visibleCalls.map((tc) => (
-                                    <div
-                                      key={tc.id}
-                                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-md text-[10px]"
-                                    >
-                                      {tc.isExecuting ? (
-                                        <div className="w-2.5 h-2.5 red-spinner flex-shrink-0" />
-                                      ) : tc.result?.success ? (
-                                        <svg className="w-2.5 h-2.5 text-emerald-400/60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                        </svg>
-                                      ) : tc.result?.error ? (
-                                        <svg className="w-2.5 h-2.5 text-red-400/60 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                        </svg>
-                                      ) : null}
-                                      <span className="text-[var(--text-faint)] truncate max-w-[120px]">
-                                        {tc.name}
-                                        {tc.isExecuting && <span className="ml-0.5 opacity-60">...</span>}
-                                      </span>
-                                    </div>
-                                  ))}
-                                </div>
+                              <div className="text-[10px] text-[var(--text-faint)]">
+                                {regularCalls.some(tc => tc.isExecuting)
+                                  ? 'Working...'
+                                  : `Completed ${regularCalls.length} step${regularCalls.length !== 1 ? 's' : ''}`
+                                }
                               </div>
                             )}
                           </div>
@@ -1702,7 +1666,7 @@ function AssistantPageInner() {
                           artifacts={streamingMessage.artifacts}
                           onConfirm={handleArtifactConfirm}
                           onCancel={handleArtifactCancel}
-                          onEdit={handleArtifactEdit}
+
                         />
                       )}
                     </div>
@@ -1710,12 +1674,13 @@ function AssistantPageInner() {
                 )}
 
                 {/* Fallback: show old spinner if loading but no streaming message yet */}
-                {isLoading && !streamingMessage && (
+                {isLoading && !streamingMessage && !confirmingArtifactRef.current && (
                   <div className="flex gap-2">
-                    <Avatar className="w-6 h-6 flex-shrink-0">
-                      <AvatarImage src="/pallisade_scoutt.svg" alt="AI" />
-                      <AvatarFallback className="text-[10px]">AI</AvatarFallback>
-                    </Avatar>
+                    <div className="w-6 h-6 flex-shrink-0 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                      </svg>
+                    </div>
                     <div className="px-1 py-1">
                       <div className="flex items-center gap-2">
                         <span className="text-violet-400 text-sm font-mono">

@@ -1070,10 +1070,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 # Tell the LLM the action is done — do NOT re-call the tool
                 anthropic_messages.append({
                     "role": "user",
-                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitors have already been created.",
+                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitor has already been created.",
                 })
                 # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
+                # Limit to 1 iteration so LLM can only summarize, not call tools again
+                max_tool_iterations = 1
+                # Remove all tools so LLM can only produce text (no duplicate create_watch)
+                tools = []
 
             has_artifact = False
             for iteration in range(max_tool_iterations):
@@ -1505,10 +1509,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 # Tell the LLM the action is done — do NOT re-call the tool
                 openai_messages.append({
                     "role": "user",
-                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitors have already been created.",
+                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitor has already been created.",
                 })
                 # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
+                # Limit to 1 iteration so LLM can only summarize, not call tools again
+                max_tool_iterations = 1
+                # Remove all tools so LLM can only produce text (no duplicate create_watch)
+                tools = []
 
             has_artifact = False
             for iteration in range(max_tool_iterations):

@@ -505,7 +505,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   return (
     <div
       className={`relative rounded-lg border min-w-[160px] max-w-[220px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02] overflow-hidden ${
-        isPolicySelected ? 'ring-[3px] ring-violet-500' : ''
+        isPolicySelected ? 'ring-[3px] ring-slate-500' : ''
       }`}
       style={{
         borderColor: isInferred ? '#F59E0B60' : borderColor,
@@ -514,8 +514,6 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
         borderStyle: (data.isOverlay || isInferred || (isPolicyMode && policyStatus === 'none')) ? 'dashed' : 'solid',
       }}
     >
-      {/* Policy badge */}
-      <PolicyBadge status={policyStatus} />
       {/* Split color strip for multi-platform nodes (e.g., dbt + BigQuery) */}
       {isMultiPlatform && (
         <div className="flex h-1.5">
@@ -537,7 +535,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
           }}
         />
 
-        {/* Header with icon, type and status */}
+        {/* Header with icon, type, policy badge and status */}
         <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <div style={{ color: primaryColor }}>{getDataAssetIcon(data.category)}</div>
@@ -558,60 +556,63 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
               </span>
             )}
           </div>
-          {/* Status indicators */}
-          <div className="flex items-center gap-1">
-            {data.freshnessStatus === 'fresh' && (
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Fresh" />
-            )}
-            {isStale && (
-              <div className="flex items-center" title={`Stale (${data.freshnessHours}h ago)`}>
-                <Clock className="w-3 h-3 text-amber-400" />
-              </div>
-            )}
-            {hasCritical && (
-              <div className="flex items-center" title={`${data.issues?.critical} critical issues`}>
-                <AlertCircle className="w-3 h-3 text-red-400" />
-              </div>
-            )}
-            {!hasCritical && hasHigh && (
-              <div className="flex items-center" title={`${data.issues?.high} high severity issues`}>
-                <AlertCircle className="w-3 h-3 text-amber-400" />
-              </div>
-            )}
-            {!hasIssues && !isStale && !data.monitorStatus && data.freshnessStatus !== 'unknown' && (
-              <CheckCircle className="w-3 h-3 text-emerald-400" />
-            )}
-            {/* Monitor status dot */}
-            {data.monitorStatus && (
+          {/* Policy badge (inline, right side) */}
+          <PolicyBadge status={policyStatus} />
+        </div>
+
+        {/* Status indicators row */}
+        <div className="flex items-center gap-1 mb-1">
+          {data.freshnessStatus === 'fresh' && (
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Fresh" />
+          )}
+          {isStale && (
+            <div className="flex items-center" title={`Stale (${data.freshnessHours}h ago)`}>
+              <Clock className="w-3 h-3 text-amber-400" />
+            </div>
+          )}
+          {hasCritical && (
+            <div className="flex items-center" title={`${data.issues?.critical} critical issues`}>
+              <AlertCircle className="w-3 h-3 text-red-400" />
+            </div>
+          )}
+          {!hasCritical && hasHigh && (
+            <div className="flex items-center" title={`${data.issues?.high} high severity issues`}>
+              <AlertCircle className="w-3 h-3 text-amber-400" />
+            </div>
+          )}
+          {!hasIssues && !isStale && !data.monitorStatus && data.freshnessStatus !== 'unknown' && (
+            <CheckCircle className="w-3 h-3 text-emerald-400" />
+          )}
+          {/* Monitor status dot */}
+          {data.monitorStatus && (
+            <div
+              className="flex items-center"
+              title={[
+                data.monitorStatus.failing > 0 && `${data.monitorStatus.failing} failing`,
+                data.monitorStatus.error > 0 && `${data.monitorStatus.error} error`,
+                data.monitorStatus.warning > 0 && `${data.monitorStatus.warning} warning`,
+                data.monitorStatus.passing > 0 && `${data.monitorStatus.passing} passing`,
+              ].filter(Boolean).join(', ')}
+            >
               <div
-                className="flex items-center"
-                title={[
-                  data.monitorStatus.failing > 0 && `${data.monitorStatus.failing} failing`,
-                  data.monitorStatus.error > 0 && `${data.monitorStatus.error} error`,
-                  data.monitorStatus.warning > 0 && `${data.monitorStatus.warning} warning`,
-                  data.monitorStatus.passing > 0 && `${data.monitorStatus.passing} passing`,
-                ].filter(Boolean).join(', ')}
-              >
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    monitorFailing ? 'ring-1 ring-red-400/50' :
-                    monitorWarning ? 'ring-1 ring-amber-400/50' : ''
-                  }`}
-                  style={{
-                    backgroundColor: monitorFailing ? '#EF4444' :
-                      monitorWarning ? '#F59E0B' :
-                      data.monitorStatus.worstStatus === 'PASS' ? '#10B981' : '#6B7280',
-                  }}
-                />
-              </div>
-            )}
-            {/* Upstream failure indicator */}
-            {data.hasUpstreamFailure && !monitorFailing && (
-              <div title="Upstream monitor failure">
-                <AlertCircle className="w-3 h-3 text-red-300/50" />
-              </div>
-            )}
-          </div>
+                className={`w-2 h-2 rounded-full ${
+                  monitorFailing ? 'ring-1 ring-red-400/50' :
+                  monitorWarning ? 'ring-1 ring-amber-400/50' : ''
+                }`}
+                style={{
+                  backgroundColor: monitorFailing ? '#EF4444' :
+                    monitorWarning ? '#F59E0B' :
+                    data.monitorStatus.worstStatus === 'PASS' ? '#10B981' : '#6B7280',
+                }}
+              />
+            </div>
+          )}
+          {/* Upstream failure indicator */}
+          {data.hasUpstreamFailure && !monitorFailing && (
+            <div title="Upstream monitor failure">
+              <AlertCircle className="w-3 h-3 text-red-300/50" />
+            </div>
+          )}
         </div>
 
         {/* Name */}

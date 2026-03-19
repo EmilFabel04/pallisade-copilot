@@ -166,7 +166,7 @@ function StrictnessSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full px-2 py-1.5 text-[12px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[var(--text)] focus:border-violet-500/50 focus:outline-none"
+        className="mt-1 w-full px-2 py-1.5 text-[12px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[var(--text)] focus:border-slate-500/50 focus:outline-none"
       >
         <option value="strict">Strict</option>
         <option value="warn">Warn</option>
@@ -191,7 +191,7 @@ function ToleranceSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full px-2 py-1.5 text-[12px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[var(--text)] focus:border-violet-500/50 focus:outline-none"
+        className="mt-1 w-full px-2 py-1.5 text-[12px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[var(--text)] focus:border-slate-500/50 focus:outline-none"
       >
         <option value="strict">Strict</option>
         <option value="normal">Normal</option>
@@ -226,7 +226,7 @@ function NumberInput({
           onChange={(e) => onChange(Number(e.target.value))}
           min={min}
           max={max}
-          className="w-full px-2 py-1.5 text-[12px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[var(--text)] focus:border-violet-500/50 focus:outline-none"
+          className="w-full px-2 py-1.5 text-[12px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-md text-[var(--text)] focus:border-slate-500/50 focus:outline-none"
         />
         {suffix && <span className="text-[11px] text-[var(--muted)] whitespace-nowrap">{suffix}</span>}
       </div>
@@ -372,8 +372,8 @@ export function PolicyEditorPanel({
 
   if (selectedNodeIds.size === 0) {
     return (
-      <div className="w-80 border-l border-violet-500/20 bg-[var(--surface-sunken)] p-4 flex flex-col items-center justify-center text-center h-full">
-        <svg className="w-12 h-12 text-violet-400/30 mb-3" viewBox="0 0 24 24" fill="currentColor">
+      <div className="w-80 border-l border-slate-500/20 bg-[var(--surface-sunken)] p-4 flex flex-col items-center justify-center text-center h-full">
+        <svg className="w-12 h-12 text-slate-400/30 mb-3" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
         <p className="text-[13px] text-[var(--muted)]">
@@ -387,12 +387,12 @@ export function PolicyEditorPanel({
   }
 
   return (
-    <div className="w-80 border-l border-violet-500/20 bg-[var(--surface-sunken)] flex flex-col h-full">
+    <div className="w-80 border-l border-slate-500/20 bg-[var(--surface-sunken)] flex flex-col h-full">
       {/* Header (sticky) */}
       <div className="p-4 border-b border-[var(--subtle-border)] flex-shrink-0">
         <div className="flex items-center justify-between mb-2">
           <h3 className="text-[14px] font-semibold text-[var(--text)] flex items-center gap-2">
-            <svg className="w-4 h-4 text-violet-400" viewBox="0 0 24 24" fill="currentColor">
+            <svg className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
             Policy Editor
@@ -404,7 +404,7 @@ export function PolicyEditorPanel({
           </button>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-[12px] text-violet-300 font-medium">
+          <span className="text-[12px] text-slate-300 font-medium">
             {selectedNodeIds.size} node{selectedNodeIds.size !== 1 ? 's' : ''} selected
           </span>
           <button
@@ -422,7 +422,7 @@ export function PolicyEditorPanel({
         {currentPolicy && selectedNodeIds.size === 1 && (
           <div className="mt-2 px-2 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <span className="text-[11px] text-[var(--muted)]">Current: </span>
-            <span className="text-[11px] text-violet-300 font-medium">
+            <span className="text-[11px] text-slate-300 font-medium">
               {currentPolicy.profileName || 'Default'} ({currentPolicy.source})
             </span>
           </div>
@@ -437,7 +437,7 @@ export function PolicyEditorPanel({
           <select
             value={selectedProfileId}
             onChange={(e) => handleProfileChange(e.target.value)}
-            className="mt-1 w-full px-3 py-2 text-[13px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:border-violet-500/50 focus:outline-none"
+            className="mt-1 w-full px-3 py-2 text-[13px] bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:border-slate-500/50 focus:outline-none"
           >
             <option value="">Select a profile...</option>
             {profiles.map((p) => (
@@ -706,7 +706,7 @@ export function PolicyEditorPanel({
                   name="scope"
                   checked={applyScope === 'selected'}
                   onChange={() => setApplyScope('selected')}
-                  className="accent-violet-500"
+                  className="accent-slate-500"
                 />
                 <span className="text-[12px] text-[var(--text)]">
                   Apply to selected nodes ({selectedNodeIds.size})
@@ -719,7 +719,7 @@ export function PolicyEditorPanel({
                     name="scope"
                     checked={applyScope === 'downstream'}
                     onChange={() => setApplyScope('downstream')}
-                    className="accent-violet-500"
+                    className="accent-slate-500"
                   />
                   <span className="text-[12px] text-[var(--text)]">
                     Apply to downstream ({downstreamCount})
@@ -733,7 +733,7 @@ export function PolicyEditorPanel({
                     name="scope"
                     checked={applyScope === 'all_of_type'}
                     onChange={() => setApplyScope('all_of_type')}
-                    className="accent-violet-500"
+                    className="accent-slate-500"
                   />
                   <span className="text-[12px] text-[var(--text)]">
                     Apply to all {dominantCategory} nodes ({typeCount})
@@ -750,7 +750,7 @@ export function PolicyEditorPanel({
         <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0">
           <button
             onClick={handleApply}
-            className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-violet-500 hover:bg-violet-600 text-white transition-all"
+            className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-slate-500 hover:bg-slate-600 text-white transition-all"
           >
             Apply {selectedProfile?.name || 'Policy'}{hasOverrides ? ' (custom)' : ''} to{' '}
             {applyScope === 'selected'

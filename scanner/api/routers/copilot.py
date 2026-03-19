@@ -372,7 +372,8 @@ async def chat_stream(
                 )
             except Exception:
                 pass
-        if intent_result:
+        # Skip MAAS for artifact confirmations — go straight to standard LLM
+        if intent_result and not request.confirmed_artifacts:
             try:
                 from copilot.maas.config import is_maas_enabled
                 if is_maas_enabled():

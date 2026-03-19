@@ -7,10 +7,9 @@ interface ArtifactRendererProps {
   artifacts: UIArtifact[];
   onConfirm: (artifactId: string, editedData?: Record<string, any>) => void;
   onCancel: (artifactId: string) => void;
-  onEdit: (artifact: UIArtifact) => void;
 }
 
-export default function ArtifactRenderer({ artifacts, onConfirm, onCancel, onEdit }: ArtifactRendererProps) {
+export default function ArtifactRenderer({ artifacts, onConfirm, onCancel }: ArtifactRendererProps) {
   if (!artifacts || artifacts.length === 0) return null;
 
   return (
@@ -25,7 +24,6 @@ export default function ArtifactRenderer({ artifacts, onConfirm, onCancel, onEdi
                 artifact={artifact}
                 onConfirm={onConfirm}
                 onCancel={onCancel}
-                onEdit={onEdit}
               />
             );
           default:

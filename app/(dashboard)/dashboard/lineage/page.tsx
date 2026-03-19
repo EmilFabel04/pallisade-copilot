@@ -1406,7 +1406,7 @@ function LineagePageInner() {
         </div>
       )}
       {/* Header */}
-      <div className={`px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)] ${policyMode ? 'ring-1 ring-inset ring-violet-500/20' : ''}`}>
+      <div className={`px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)] ${policyMode ? 'ring-1 ring-inset ring-slate-500/20' : ''}`}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-lg font-semibold text-[var(--text)]">Pipeline Lineage</h1>
@@ -1429,7 +1429,7 @@ function LineagePageInner() {
                   setSelectedNode(null);
                   setSelectedEdge(null);
                 }}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-violet-500/30 text-violet-300 hover:bg-violet-500/10 text-[13px] font-medium transition-all"
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-500/30 text-slate-300 hover:bg-slate-500/10 text-[13px] font-medium transition-all"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -1461,10 +1461,10 @@ function LineagePageInner() {
 
         {/* LLM extraction progress panel */}
         {llmExtracting && (
-          <div className="mb-4 rounded-xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
+          <div className="mb-4 rounded-xl border border-slate-500/30 bg-slate-500/[0.06] p-4">
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-2 h-2 bg-violet-400 rounded-full animate-pulse" />
-              <span className="text-[13px] font-medium text-violet-300">AI is analyzing your pipeline...</span>
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse" />
+              <span className="text-[13px] font-medium text-slate-300">AI is analyzing your pipeline...</span>
               <span className="ml-auto text-[12px] text-[var(--muted)]">
                 {llmNodeCount} nodes &middot; {llmEdgeCount} edges
               </span>
@@ -1475,7 +1475,7 @@ function LineagePageInner() {
                   entry.type === 'tool' ? 'text-blue-400/70' :
                   entry.type === 'node' ? 'text-emerald-400/70' :
                   entry.type === 'error' ? 'text-red-400/80' :
-                  entry.type === 'complete' ? 'text-violet-300' :
+                  entry.type === 'complete' ? 'text-slate-300' :
                   'text-[var(--muted)]'
                 }`}>
                   <span className="shrink-0 mt-0.5">

@@ -11,13 +11,13 @@ interface PolicyBadgeProps {
 
 const BADGE_STYLES: Record<PolicyStatus, { bg: string; color: string; label: string }> = {
   assigned: {
-    bg: 'rgba(139,92,246,0.20)',
-    color: '#A78BFA',
+    bg: 'rgba(148,163,184,0.20)',
+    color: '#94A3B8',
     label: 'Policy',
   },
   inherited: {
-    bg: 'rgba(167,139,250,0.15)',
-    color: '#A78BFA',
+    bg: 'rgba(148,163,184,0.15)',
+    color: '#94A3B8',
     label: 'Inherited',
   },
   override: {
@@ -42,7 +42,7 @@ export function PolicyBadge({ status, profileName, source }: PolicyBadgeProps) {
 
   return (
     <div
-      className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[9px] font-semibold tracking-wide uppercase whitespace-nowrap"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[9px] font-semibold tracking-wide uppercase whitespace-nowrap"
       style={{
         backgroundColor: style.bg,
         color: style.color,

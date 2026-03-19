@@ -222,19 +222,6 @@ export default function SettingsPage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-[14px] font-medium text-[var(--text)]">Default AI Model</p>
-                  <p className="text-[12px] text-[var(--muted)]">Choose the default model for new chats</p>
-                </div>
-                <select className="px-4 py-2 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] text-[13px] focus:outline-none focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20 transition-all">
-                  <option value="gpt-5.2">GPT-5.2 (Recommended)</option>
-                  <option value="gpt-5.2-mini">GPT-5.2 Mini (Fast)</option>
-                  <option value="claude-sonnet">Claude Sonnet</option>
-                  <option value="claude-haiku">Claude Haiku (Fast)</option>
-                  <option value="claude-opus">Claude Opus (Powerful)</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-between">
-                <div>
                   <p className="text-[14px] font-medium text-[var(--text)]">Light Mode</p>
                   <p className="text-[12px] text-[var(--muted)]">Use a lighter background</p>
                 </div>
