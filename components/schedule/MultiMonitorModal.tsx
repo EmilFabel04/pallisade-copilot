@@ -673,16 +673,19 @@ export function MultiMonitorModal({
 
       if (configTab === 'ai-prompt') {
         // AI Prompt mode → wrap in a plan via POST /api/schedule/plans
+        // Use selected node FQN as target, fall back to plan name
+        const selectedMeta = allNodeMeta.find(n => selectedNodeIds.includes(n.id));
+        const targetFqn = selectedMeta?.fqn || planName;
         const groups = [{
           anchor_name: planName,
-          anchor_fqn: planName,
-          anchor_id: 'ai_prompt',
+          anchor_fqn: targetFqn,
+          anchor_id: selectedMeta?.id || 'ai_prompt',
           anchor_node_type: 'prompt',
-          anchor_platform: 'ai',
+          anchor_platform: selectedMeta?.platform || 'ai',
           watch_type: 'custom_watch',
           recommendations: [{
             monitor_key: 'AI_PROMPT',
-            target_fqn: planName,
+            target_fqn: targetFqn,
             config_hints: {
               taskMode: 'prompt',
               prompt: aiPrompt,

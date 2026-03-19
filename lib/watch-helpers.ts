@@ -188,7 +188,8 @@ export async function createWatchInTransaction(
         const created = await tx.monitor.create({
           data: {
             name: mon.name || `${mon.monitorType} — ${mon.targetFqn || 'monitor'}`,
-            taskMode: 'structured',
+            taskMode: mon.monitorType === 'AI_PROMPT' ? 'prompt' : 'structured',
+            prompt: mon.monitorType === 'AI_PROMPT' ? (mon.config?.prompt || null) : null,
             monitorType: mon.monitorType || null,
             targetFqn: mon.targetFqn || null,
             config: Object.keys(taskConfig).length > 0 ? taskConfig : undefined,

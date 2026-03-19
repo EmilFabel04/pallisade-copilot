@@ -222,7 +222,7 @@ export function WatchEditModal({ watch, onSave, onClose }: WatchEditModalProps) 
             type="button"
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-2 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 text-[13px] font-medium transition-colors disabled:opacity-50"
+            className="px-4 py-2 rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--hover-bg)] text-[var(--text)] text-[13px] font-medium border border-[var(--subtle-border)] transition-colors disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save changes'}
           </button>
