@@ -42,6 +42,7 @@ model User {
   copilotSessions  CopilotSession[]
   notificationReads    NotificationRead[]
   notificationsActored NotificationEvent[] @relation("NotificationActor")
+  notificationMutes    NotificationMute[]
   scanSchedules    ScanSchedule[]
   auditLogs        AuditLog[]
   appliedFixes     AppliedFix[]
@@ -162,6 +163,8 @@ model Organization {
 
   // Notifications
   notificationEvents NotificationEvent[]
+  notificationRoutes NotificationRoute[]
+  notificationMutes  NotificationMute[]
 
   // Pipeline Monitoring Policies
   policyProfiles    PolicyProfile[]
@@ -1510,6 +1513,36 @@ model NotificationRead {
 
   @@unique([userId, notificationEventId])
   @@index([userId])
+}
+
+model NotificationRoute {
+  id               String               @id @default(cuid())
+  organizationId   String
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  severity         NotificationSeverity
+  enabled          Boolean              @default(true)
+  notifyOnRecovery Boolean              @default(false)
+  destinations     Json                 @default("[]")
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  @@unique([organizationId, severity])
+  @@index([organizationId])
+}
+
+model NotificationMute {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  eventType      String
+  entityType     String?
+  entityId       String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, userId])
+  @@index([eventType, entityType, entityId])
 }
 
 // ============================================
