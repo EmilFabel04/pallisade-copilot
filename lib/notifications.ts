@@ -115,6 +115,102 @@ export const notifyEvents = {
       actionUrl: `/dashboard/schedule?task=${taskId}`,
     }),
 
+  monitorGroupCompleted: (
+    orgId: string,
+    pipelineId: string | undefined,
+    actorId: string | undefined,
+    groupName: string,
+    groupId: string,
+    summary: { total: number; pass: number; fail: number; warn: number; error: number },
+    health?: { currentHealthScore: number; previousHealthScore: number },
+  ) => {
+    // Derive severity — CRITICAL when health is unhealthy (<40)
+    const severity: 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' =
+      health && health.currentHealthScore < 40
+        ? 'CRITICAL'
+        : summary.fail > 0 || summary.error > 0
+          ? 'ERROR'
+          : summary.warn > 0
+            ? 'WARN'
+            : 'INFO';
+
+    const parts: string[] = [];
+    if (summary.pass > 0) parts.push(`${summary.pass} passed`);
+    if (summary.warn > 0) parts.push(`${summary.warn} warn`);
+    if (summary.fail > 0) parts.push(`${summary.fail} fail`);
+    if (summary.error > 0) parts.push(`${summary.error} error`);
+
+    return notify({
+      organizationId: orgId,
+      pipelineStackId: pipelineId,
+      actorUserId: actorId,
+      eventType: 'monitor.group_completed',
+      severity,
+      title: `Multi-monitor ${groupName} ran: ${parts.join(', ')}`,
+      message: `${groupName}: ${parts.join(', ')} (${summary.total} monitors)`,
+      dedupeKey: `monitor-group:${groupId}`,
+      entityType: 'MONITOR',
+      entityId: groupId,
+      actionUrl: `/dashboard/schedule?group=${groupId}`,
+      metadata: { ...summary, ...(health || {}) },
+    });
+  },
+
+  healthScoreDropped: (
+    orgId: string,
+    pipelineId: string | undefined,
+    actorId: string | undefined,
+    groupName: string,
+    groupId: string,
+    previousScore: number,
+    currentScore: number,
+    severity: 'WARN' | 'ERROR' | 'CRITICAL',
+  ) => {
+    const previousStatus = previousScore >= 90 ? 'healthy' : previousScore >= 70 ? 'degraded' : previousScore >= 40 ? 'at_risk' : 'unhealthy';
+    const currentStatus = currentScore >= 90 ? 'healthy' : currentScore >= 70 ? 'degraded' : currentScore >= 40 ? 'at_risk' : 'unhealthy';
+    return notify({
+      organizationId: orgId,
+      pipelineStackId: pipelineId,
+      actorUserId: actorId,
+      eventType: 'monitor.health_score_dropped',
+      severity,
+      title: `${groupName} health dropped: ${previousStatus} → ${currentStatus}`,
+      message: `Health score fell from ${previousScore.toFixed(0)} to ${currentScore.toFixed(0)}`,
+      dedupeKey: `health-drop:${groupId}`,
+      entityType: 'MONITOR',
+      entityId: groupId,
+      actionUrl: `/dashboard/schedule?group=${groupId}`,
+      metadata: { previousScore, currentScore, previousStatus, currentStatus },
+    });
+  },
+
+  sustainedFailure: (
+    orgId: string,
+    pipelineId: string | undefined,
+    actorId: string | undefined,
+    groupName: string,
+    groupId: string,
+    monitorName: string,
+    monitorId: string,
+    consecutiveFailures: number,
+    severity: 'WARN' | 'ERROR' | 'CRITICAL',
+  ) => {
+    return notify({
+      organizationId: orgId,
+      pipelineStackId: pipelineId,
+      actorUserId: actorId,
+      eventType: 'monitor.sustained_failure',
+      severity,
+      title: `${monitorName} has failed ${consecutiveFailures} times in a row`,
+      message: `Monitor "${monitorName}" in ${groupName} has failed ${consecutiveFailures} consecutive runs`,
+      dedupeKey: `sustained-fail:${monitorId}`,
+      entityType: 'MONITOR',
+      entityId: groupId,
+      actionUrl: `/dashboard/schedule?group=${groupId}`,
+      metadata: { monitorId, monitorName, consecutiveFailures },
+    });
+  },
+
   // ── Integration events ─────────────────────────────────────
 
   integrationCreated: (

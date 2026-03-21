@@ -155,4 +155,87 @@ describe('notifyEvents convenience helpers', () => {
     expect(data.eventType).toBe('lineage.extraction_failed');
     expect(data.severity).toBe('ERROR');
   });
+
+  it('monitorGroupCompleted creates collective notification with summary', async () => {
+    await notifyEvents.monitorGroupCompleted('org-1', 'pipe-1', 'user-1', 'Warehouse Health', 'group-1', {
+      total: 7, pass: 5, fail: 1, warn: 1, error: 0,
+    });
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.eventType).toBe('monitor.group_completed');
+    expect(data.severity).toBe('WARN');
+    expect(data.title).toContain('Multi-monitor Warehouse Health ran');
+    expect(data.title).toContain('5 passed');
+    expect(data.title).toContain('1 fail');
+    expect(data.title).toContain('1 warn');
+    expect(data.dedupeKey).toBe('monitor-group:group-1');
+    expect(data.entityType).toBe('MONITOR');
+    expect(data.entityId).toBe('group-1');
+  });
+
+  it('monitorGroupCompleted sets ERROR severity when failures present', async () => {
+    await notifyEvents.monitorGroupCompleted('org-1', 'pipe-1', 'user-1', 'Test Group', 'group-2', {
+      total: 3, pass: 1, fail: 2, warn: 0, error: 0,
+    });
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.severity).toBe('ERROR');
+  });
+
+  it('monitorGroupCompleted sets INFO severity when all pass', async () => {
+    await notifyEvents.monitorGroupCompleted('org-1', 'pipe-1', 'user-1', 'Clean Group', 'group-3', {
+      total: 5, pass: 5, fail: 0, warn: 0, error: 0,
+    });
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.severity).toBe('INFO');
+  });
+
+  it('monitorGroupCompleted sets CRITICAL severity when health score < 40', async () => {
+    await notifyEvents.monitorGroupCompleted('org-1', 'pipe-1', 'user-1', 'Revenue Watch', 'group-4', {
+      total: 10, pass: 2, fail: 6, warn: 1, error: 1,
+    }, { currentHealthScore: 25, previousHealthScore: 70 });
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.severity).toBe('CRITICAL');
+  });
+
+  it('monitorGroupCompleted keeps ERROR when health >= 40 but has failures', async () => {
+    await notifyEvents.monitorGroupCompleted('org-1', 'pipe-1', 'user-1', 'Watch', 'group-5', {
+      total: 5, pass: 3, fail: 2, warn: 0, error: 0,
+    }, { currentHealthScore: 55, previousHealthScore: 80 });
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.severity).toBe('ERROR');
+  });
+
+  it('monitorGroupCompleted works without health parameter (backward compat)', async () => {
+    await notifyEvents.monitorGroupCompleted('org-1', 'pipe-1', 'user-1', 'Watch', 'group-6', {
+      total: 3, pass: 3, fail: 0, warn: 0, error: 0,
+    });
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.severity).toBe('INFO');
+  });
+
+  it('healthScoreDropped creates notification with correct event type', async () => {
+    await notifyEvents.healthScoreDropped('org-1', 'pipe-1', 'user-1', 'Revenue Watch', 'group-1', 92, 45, 'ERROR');
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.eventType).toBe('monitor.health_score_dropped');
+    expect(data.severity).toBe('ERROR');
+    expect(data.dedupeKey).toBe('health-drop:group-1');
+    expect(data.entityType).toBe('MONITOR');
+  });
+
+  it('sustainedFailure creates notification with monitor info', async () => {
+    await notifyEvents.sustainedFailure('org-1', 'pipe-1', 'user-1', 'Revenue Watch', 'group-1', 'Freshness Check', 'monitor-1', 3, 'CRITICAL');
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.eventType).toBe('monitor.sustained_failure');
+    expect(data.severity).toBe('CRITICAL');
+    expect(data.dedupeKey).toBe('sustained-fail:monitor-1');
+    expect(data.entityType).toBe('MONITOR');
+    expect(data.entityId).toBe('group-1');
+  });
 });
