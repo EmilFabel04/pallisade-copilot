@@ -9,7 +9,7 @@
 
 The notification system currently creates in-app notifications for 13 event types, but:
 
-1. **Missing high-impact events** — health score drops, sustained failures, schema breaks, anomaly spikes, and freshness breaches don't generate notifications
+1. **Missing high-impact events** — health score drops and sustained failures (cross-run patterns) don't generate notifications
 2. **No external platform routing** — monitor group results aren't automatically sent to Slack, PagerDuty, Teams, OpsGenie, or Email based on severity
 3. **No manual forwarding** — users can't forward an in-app notification to an external platform or create a ticket from it
 
@@ -49,26 +49,23 @@ In **Settings → Notifications**, users configure severity-based routing for mo
 
 ### New High-Impact Event Types
 
+These are events that require cross-run context and **cannot** be derived from a single group run result. Monitor-level events like schema breaks, anomaly spikes, and freshness breaches are already captured as monitor results within the group summary — no separate notification needed.
+
 Detected in real-time when watch/group runs complete (no background daemon):
 
 | Event Type | Trigger | Severity Source |
 |---|---|---|
 | `monitor.health_score_dropped` | Watch health transitions downward (e.g., healthy → degraded, degraded → at_risk) | Inherited from underlying failing monitor results |
 | `monitor.sustained_failure` | Same monitor fails 3+ times consecutively (checked via last 3 MonitorRun records per monitor, excluding SKIPPED/RUNNING statuses). Evaluated per-monitor within the group. Threshold (3) is hardcoded for v1. | Inherited from the failing monitor's severity |
-| `monitor.schema_break` | SCHEMA_CHANGE or CONNECTOR_SCHEMA_DRIFT monitor fails | From the monitor result |
-| `monitor.anomaly_spike` | VOLUME, OUTLIER_DETECTION, or quality monitors exceed baseline by >2σ | From the monitor result |
-| `monitor.freshness_breach` | FRESHNESS-family monitor fails (data staleness) | From the monitor result |
 
-All high-impact events fire at the **group level** — the notification includes group summary context. These create in-app notifications and are subject to auto-routing like any group result based on their derived severity.
-
-Note: `integration.health_degraded` is deferred — it would require a separate trigger point outside the group run flow.
+Both events fire at the **group level** — the notification includes group summary context. These create in-app notifications and are subject to auto-routing like any group result based on their derived severity.
 
 ### Notification Dispatch Flow
 
 When a **watch/group run completes**:
 
 1. **In-app notification** — always created via `notifyEvents.monitorGroupCompleted()` (must be wired into watch run route as a prerequisite)
-2. **Detect high-impact events** — check results for health score drops, sustained failures, schema breaks, anomaly spikes, freshness breaches. Create additional in-app notifications for each detected event.
+2. **Detect high-impact events** — check for health score drops (compare current vs previous) and sustained failures (3+ consecutive). Create additional in-app notifications for each detected event.
 3. **Determine severity** — from the underlying monitor run results. CRITICAL when health score < 40 or sustained failures detected.
 4. **Look up routing rules** — query `NotificationRoute` for org + severity
 5. **Check recovery** — if `notifyOnRecovery` is enabled and the group previously had failures but now passes, send a recovery notification
@@ -206,9 +203,6 @@ export async function detectHighImpactEvents(params: {
 Detectors:
 - `detectHealthScoreDrop()` — compares current vs previous health score, maps to health status transitions
 - `detectSustainedFailures()` — queries last 3 `MonitorRun` records per monitor (excluding SKIPPED/RUNNING), checks if all are FAIL/ERROR
-- `detectSchemaBreaks()` — checks for SCHEMA_CHANGE/CONNECTOR_SCHEMA_DRIFT failures in results
-- `detectAnomalySpikes()` — checks for baseline exceedance >2σ in VOLUME/OUTLIER_DETECTION results
-- `detectFreshnessBreaches()` — checks for FRESHNESS-family failures in results
 
 ### Deprecation
 
