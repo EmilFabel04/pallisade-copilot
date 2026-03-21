@@ -163,7 +163,7 @@ describe('notifyEvents convenience helpers', () => {
 
     const data = mockCreate.mock.calls[0][0].data;
     expect(data.eventType).toBe('monitor.group_completed');
-    expect(data.severity).toBe('WARN');
+    expect(data.severity).toBe('ERROR');
     expect(data.title).toContain('Multi-monitor Warehouse Health ran');
     expect(data.title).toContain('5 passed');
     expect(data.title).toContain('1 fail');
