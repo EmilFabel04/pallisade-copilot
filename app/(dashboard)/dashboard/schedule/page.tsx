@@ -43,6 +43,7 @@ export default function SchedulePage() {
   const [selectedTask, setSelectedTask] = useState<ScheduledTask | null>(null);
   const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
+  const [runsVersion, setRunsVersion] = useState(0);
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null);
   const [integrations, setIntegrations] = useState<Array<{ id: string; name: string; type: string }>>([]);
   const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
@@ -131,16 +132,16 @@ export default function SchedulePage() {
       .catch(() => {});
   }, [selectedPipeline?.id]);
 
-  // Fetch runs for selected task
+  // Fetch runs for selected task (uses fetch, not cachedFetch, so runs are always fresh)
   useEffect(() => {
     if (!selectedTask) return;
     setRunsLoading(true);
-    cachedFetch(`/api/schedule/tasks/${selectedTask.id}/runs`)
+    fetch(`/api/schedule/tasks/${selectedTask.id}/runs`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => { if (data) setTaskRuns(data.runs || []); })
       .catch(() => {})
       .finally(() => setRunsLoading(false));
-  }, [selectedTask]);
+  }, [selectedTask, runsVersion]);
 
   // Fetch watch detail
   useEffect(() => {
@@ -213,11 +214,8 @@ export default function SchedulePage() {
         const res = await fetch(`/api/schedule/watches/${watchId}`);
         if (res.ok) { const data = await res.json(); if (data.watch) { setSelectedWatch(data.watch); setWatchDetailMonitors(data.watch.monitors || []); } }
       }
-      // Refetch runs if a task within this watch is selected
-      if (selectedTask) {
-        const r = await fetch(`/api/schedule/tasks/${selectedTask.id}/runs`);
-        if (r.ok) { const d = await r.json(); setTaskRuns(d.runs || []); }
-      }
+      // Trigger runs refetch for any selected task
+      setRunsVersion((v) => v + 1);
     } catch (err) { console.error('[Schedule] Failed to run watch:', err); }
   };
 
@@ -260,11 +258,7 @@ export default function SchedulePage() {
       if (res.ok) {
         invalidateCache('/api/schedule');
         fetchTasks();
-        // Refetch runs for the selected task (run result is already stored by the time POST returns)
-        if (selectedTask?.id === taskId) {
-          const r = await fetch(`/api/schedule/tasks/${taskId}/runs`);
-          if (r.ok) { const d = await r.json(); setTaskRuns(d.runs || []); }
-        }
+        setRunsVersion((v) => v + 1);
       }
     } catch (err) { console.error('[Schedule] Failed to run task:', err); }
   };
