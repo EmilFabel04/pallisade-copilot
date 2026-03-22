@@ -238,4 +238,14 @@ describe('notifyEvents convenience helpers', () => {
     expect(data.entityType).toBe('MONITOR');
     expect(data.entityId).toBe('group-1');
   });
+
+  it('monitorGroupDeleted sets WARN severity', async () => {
+    await notifyEvents.monitorGroupDeleted('org-1', 'pipe-1', 'user-1', 'Revenue Watch', 'group-1');
+
+    const data = mockCreate.mock.calls[0][0].data;
+    expect(data.eventType).toBe('monitor.group_deleted');
+    expect(data.severity).toBe('WARN');
+    expect(data.entityType).toBe('MONITOR');
+    expect(data.entityId).toBe('group-1');
+  });
 });

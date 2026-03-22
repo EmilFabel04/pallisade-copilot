@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
 import { computeNextRun } from '@/lib/cron';
+import { notifyEvents } from '@/lib/notifications';
 
 // GET /api/schedule/watches/[watchId] - Get watch detail
 export async function GET(
@@ -271,6 +272,15 @@ export async function DELETE(
         where: { id: watchId },
       });
     }, { maxWait: 10000, timeout: 30000 });
+
+    // Fire-and-forget notification
+    notifyEvents.monitorGroupDeleted(
+      group.organizationId,
+      group.pipelineStackId ?? undefined,
+      (session.user as any).id ?? undefined, // actorUserId from session
+      group.name,
+      watchId,
+    ).catch(() => {});
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

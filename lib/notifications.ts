@@ -211,6 +211,26 @@ export const notifyEvents = {
     });
   },
 
+  monitorGroupDeleted: (
+    orgId: string,
+    pipelineId: string | undefined,
+    actorId: string | undefined,
+    groupName: string,
+    groupId: string,
+  ) =>
+    notify({
+      organizationId: orgId,
+      pipelineStackId: pipelineId,
+      actorUserId: actorId,
+      eventType: 'monitor.group_deleted',
+      severity: 'WARN',
+      title: `Watch deleted: ${groupName}`,
+      message: `Monitor group "${groupName}" was deleted.`,
+      entityType: 'MONITOR',
+      entityId: groupId,
+      actionUrl: '/dashboard/schedule',
+    }),
+
   // ── Integration events ─────────────────────────────────────
 
   integrationCreated: (
