@@ -20,10 +20,28 @@ export async function GET() {
       return NextResponse.json({ count: 0 });
     }
 
+    // Fetch user's mute rules to exclude muted notifications
+    const mutes = await prisma.notificationMute.findMany({
+      where: {
+        organizationId: user.organizationId,
+        userId: user.id,
+      },
+    });
+
+    // Build mute exclusion conditions
+    const muteExclusions = mutes.map((m) => ({
+      AND: [
+        { eventType: m.eventType },
+        ...(m.entityType ? [{ entityType: m.entityType }] : []),
+        ...(m.entityId ? [{ entityId: m.entityId }] : []),
+      ],
+    }));
+
     const count = await prisma.notificationEvent.count({
       where: {
         organizationId: user.organizationId,
         reads: { none: { userId: user.id } },
+        ...(muteExclusions.length > 0 ? { NOT: { OR: muteExclusions } } : {}),
       },
     });
 
