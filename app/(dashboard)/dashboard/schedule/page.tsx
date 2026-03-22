@@ -207,10 +207,16 @@ export default function SchedulePage() {
   const handleRunWatch = async (watchId: string) => {
     try {
       await fetch(`/api/schedule/watches/${watchId}/run`, { method: 'POST' });
+      invalidateCache('/api/schedule');
       fetchWatches(); fetchTasks();
       if (selectedWatch?.id === watchId) {
         const res = await fetch(`/api/schedule/watches/${watchId}`);
         if (res.ok) { const data = await res.json(); if (data.watch) { setSelectedWatch(data.watch); setWatchDetailMonitors(data.watch.monitors || []); } }
+      }
+      // Refetch runs if a task within this watch is selected
+      if (selectedTask) {
+        const r = await fetch(`/api/schedule/tasks/${selectedTask.id}/runs`);
+        if (r.ok) { const d = await r.json(); setTaskRuns(d.runs || []); }
       }
     } catch (err) { console.error('[Schedule] Failed to run watch:', err); }
   };
@@ -251,7 +257,15 @@ export default function SchedulePage() {
   const handleRunNow = async (taskId: string) => {
     try {
       const res = await fetch(`/api/schedule/tasks/${taskId}/run`, { method: 'POST' });
-      if (res.ok) { fetchTasks(); if (selectedTask?.id === taskId) { const r = await fetch(`/api/schedule/tasks/${taskId}/runs`); if (r.ok) { const d = await r.json(); setTaskRuns(d.runs || []); } } }
+      if (res.ok) {
+        invalidateCache('/api/schedule');
+        fetchTasks();
+        // Refetch runs for the selected task (run result is already stored by the time POST returns)
+        if (selectedTask?.id === taskId) {
+          const r = await fetch(`/api/schedule/tasks/${taskId}/runs`);
+          if (r.ok) { const d = await r.json(); setTaskRuns(d.runs || []); }
+        }
+      }
     } catch (err) { console.error('[Schedule] Failed to run task:', err); }
   };
 
@@ -348,6 +362,7 @@ export default function SchedulePage() {
 
   const groupCount = plans.length + watches.length;
   const hasItems = groupCount > 0 || tasks.length > 0;
+  const initializing = !selectedPipeline?.id && loading;
 
   return (
     <div className="flex flex-col h-full bg-[var(--surface-inset)]">
@@ -372,7 +387,7 @@ export default function SchedulePage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {loading ? (
+        {(loading || initializing) ? (
           <div className="flex items-center justify-center py-20"><div className="w-6 h-6 red-spinner" /></div>
         ) : !hasItems ? (
           <div className="flex flex-col items-center justify-center py-20">

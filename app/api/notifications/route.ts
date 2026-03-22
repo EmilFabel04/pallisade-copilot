@@ -20,22 +20,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ notifications: [], nextCursor: null });
     }
 
-    // Fetch user's mute rules to exclude muted notifications
-    const mutes = await prisma.notificationMute.findMany({
-      where: {
-        organizationId: user.organizationId,
-        userId: user.id,
-      },
-    });
-
-    // Build mute exclusion conditions
-    const muteExclusions = mutes.map((m) => ({
-      AND: [
-        { eventType: m.eventType },
-        ...(m.entityType ? [{ entityType: m.entityType }] : []),
-        ...(m.entityId ? [{ entityId: m.entityId }] : []),
-      ],
-    }));
+    // Fetch user's mute rules to exclude muted notifications (graceful fallback)
+    let muteExclusions: any[] = [];
+    try {
+      const mutes = await prisma.notificationMute.findMany({
+        where: {
+          organizationId: user.organizationId,
+          userId: user.id,
+        },
+      });
+      muteExclusions = mutes.map((m) => ({
+        AND: [
+          { eventType: m.eventType },
+          ...(m.entityType ? [{ entityType: m.entityType }] : []),
+          ...(m.entityId ? [{ entityId: m.entityId }] : []),
+        ],
+      }));
+    } catch (err) {
+      console.warn('[Notifications] Mute query failed, skipping mute filter:', err);
+    }
 
     const params = request.nextUrl.searchParams;
     const severity = params.get('severity');
