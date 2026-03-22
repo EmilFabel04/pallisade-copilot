@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import NotificationCardMenu from './NotificationCardMenu';
 
 export interface NotificationItem {
   id: string;
@@ -92,12 +93,20 @@ export function NotificationCard({
           >
             {notification.title}
           </h3>
-          <span
-            className="text-[11px] text-[var(--text-faint)] flex-shrink-0"
-            title={new Date(notification.createdAt).toLocaleString()}
-          >
-            {relativeTime(notification.createdAt)}
-          </span>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <span
+              className="text-[11px] text-[var(--text-faint)]"
+              title={new Date(notification.createdAt).toLocaleString()}
+            >
+              {relativeTime(notification.createdAt)}
+            </span>
+            <NotificationCardMenu
+              notificationId={notification.id}
+              eventType={notification.eventType}
+              entityType={notification.entityType ?? undefined}
+              entityId={notification.entityId ?? undefined}
+            />
+          </div>
         </div>
 
         <p className="text-[12px] text-[var(--text-tertiary)] mt-0.5 line-clamp-2">
