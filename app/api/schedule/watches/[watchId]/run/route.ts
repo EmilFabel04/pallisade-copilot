@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { notifyEvents } from '@/lib/notifications';
+import { detectHighImpactEvents } from '@/lib/high-impact-events';
+import { routeNotification } from '@/lib/notification-router';
 
 // ---------------------------------------------------------------------------
 // Health aggregation (mirrors scanner/monitors/health.py)
@@ -265,6 +268,81 @@ export async function POST(
     const passCount = signals.filter((r) => r.status === 'PASS').length;
     const failCount = signals.filter((r) => r.status === 'FAIL' || r.status === 'ERROR').length;
     const warnCount = signals.filter((r) => r.status === 'WARN').length;
+
+    // ── Notifications & routing (fire-and-forget) ──────────────
+    const errorCount = signals.filter((r) => r.status === 'ERROR').length;
+    const summaryObj = { total: signals.length, pass: passCount, fail: failCount, warn: warnCount, error: errorCount };
+
+    // Previous health score (from before this run's update)
+    const previousHealthScore = group.healthScore ?? 100;
+
+    // 1. In-app notification (always)
+    notifyEvents.monitorGroupCompleted(
+      group.organizationId,
+      group.pipelineStackId ?? undefined,
+      undefined,
+      group.name,
+      watchId,
+      summaryObj,
+      { currentHealthScore: healthScore, previousHealthScore },
+    ).catch(() => {});
+
+    // 2. Detect high-impact events
+    detectHighImpactEvents({
+      watchId,
+      organizationId: group.organizationId,
+      pipelineStackId: group.pipelineStackId ?? undefined,
+      currentHealthScore: healthScore,
+      previousHealthScore,
+      results: signals.map((s) => ({
+        monitorId: s.monitorId,
+        monitorName: s.monitorName,
+        status: s.status,
+      })),
+    }).then((events) => {
+      for (const event of events) {
+        if (event.eventType === 'monitor.health_score_dropped') {
+          notifyEvents.healthScoreDropped(
+            group.organizationId, group.pipelineStackId ?? undefined, undefined,
+            group.name, watchId,
+            event.previousScore!, event.currentScore!, event.severity,
+          ).catch(() => {});
+        } else if (event.eventType === 'monitor.sustained_failure') {
+          notifyEvents.sustainedFailure(
+            group.organizationId, group.pipelineStackId ?? undefined, undefined,
+            group.name, watchId,
+            event.monitorName!, event.monitorId!, event.consecutiveFailures!, event.severity,
+          ).catch(() => {});
+        }
+        // Route high-impact events to external platforms
+        routeNotification({
+          organizationId: group.organizationId,
+          severity: event.severity,
+          title: event.title,
+          message: event.message,
+          actionUrl: `/dashboard/schedule?group=${watchId}`,
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // 3. Route the group result to external platforms
+    const groupSeverity =
+      healthScore < 40 ? 'CRITICAL' as const
+      : failCount > 0 || errorCount > 0 ? 'ERROR' as const
+      : warnCount > 0 ? 'WARN' as const
+      : 'INFO' as const;
+
+    const isRecovery = previousHealthScore < 70 && healthScore >= 70 && failCount === 0;
+
+    routeNotification({
+      organizationId: group.organizationId,
+      severity: groupSeverity,
+      title: `${group.name}: ${passCount} pass, ${failCount} fail, ${warnCount} warn`,
+      message: `Health score: ${healthScore.toFixed(0)} — ${healthStatus}`,
+      metadata: { ...summaryObj, healthScore, healthStatus },
+      actionUrl: `/dashboard/schedule?group=${watchId}`,
+      isRecovery,
+    }).catch(() => {});
 
     return NextResponse.json({
       watchId,
