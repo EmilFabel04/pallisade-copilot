@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import prisma from '@/lib/db';
+import { notifyEvents } from '@/lib/notifications';
+import { routeNotification } from '@/lib/notification-router';
 
 // POST /api/schedule/plans/[planId]/run - Trigger run for all monitors in all child groups
 export async function POST(
@@ -58,7 +60,7 @@ export async function POST(
       const promises = group.monitors.map(async (monitor) => {
         try {
           const res = await fetch(
-            `${baseUrl}/api/schedule/tasks/${monitor.id}/run`,
+            `${baseUrl}/api/schedule/tasks/${monitor.id}/run?grouped=true`,
             {
               method: 'POST',
               headers: {
@@ -108,6 +110,51 @@ export async function POST(
       (sum, g) => sum + g.monitorsFailed,
       0,
     );
+
+    // Collect all monitor statuses across groups for one collective notification
+    const allStatuses = groupResults.flatMap((g) =>
+      g.monitors.map((m: any) => (m.status || 'ERROR').toUpperCase()),
+    );
+    const passCount = allStatuses.filter((s: string) => s === 'PASS').length;
+    const failCount = allStatuses.filter((s: string) => s === 'FAIL').length;
+    const warnCount = allStatuses.filter((s: string) => s === 'WARN').length;
+    const errorCount = allStatuses.filter((s: string) => s === 'ERROR' || s === 'FAILED').length;
+    const totalMonitors = allStatuses.length;
+
+    const pipelineStack = await prisma.pipelineStack.findFirst({
+      where: { organizationId },
+      select: { id: true },
+    });
+
+    notifyEvents.monitorGroupCompleted(
+      organizationId,
+      pipelineStack?.id,
+      (session.user as any).id,
+      plan.name,
+      planId,
+      {
+        total: totalMonitors,
+        pass: passCount,
+        fail: failCount,
+        warn: warnCount,
+        error: errorCount,
+      },
+    );
+
+    // Route to external platforms based on severity
+    const planSeverity =
+      totalFailed > 0 ? 'ERROR' as const
+      : warnCount > 0 ? 'WARN' as const
+      : 'INFO' as const;
+
+    routeNotification({
+      organizationId: plan.organizationId,
+      severity: planSeverity,
+      title: `Plan "${plan.name}": ${totalFailed} failed, ${passCount} passed`,
+      message: `${groupResults.length} groups run, ${totalTriggered} monitors total`,
+      metadata: { planId, groupsRun: groupResults.length, totalTriggered, totalFailed, totalPassed: passCount },
+      actionUrl: `/dashboard/schedule?plan=${planId}`,
+    }).catch(() => {});
 
     return NextResponse.json({
       planId: plan.id,
