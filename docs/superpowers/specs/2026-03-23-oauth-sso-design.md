@@ -337,7 +337,7 @@ List of providers with connect/disconnect buttons.
 
 ## Testing
 
-- **Unit tests**: `signIn` callback (invite check, SSO enforcement), `jwt` callback (invite redemption, org association)
+- **Unit tests**: `signIn` callback (invite check, SSO enforcement, invite redemption via $transaction), `jwt` callback (reads organizationId, no writes)
 - **Integration tests**: full OAuth flow with mocked providers, account linking, OIDC dynamic provider loading
 - **Edge cases**: last auth method disconnect blocked, SSO enforcement with grace period, OIDC config validation failures, invite-only rejection for new OAuth users
 - **Manual testing**: Google, GitHub, Microsoft OAuth flows end-to-end; OIDC with a test Okta/Auth0 instance
