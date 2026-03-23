@@ -124,39 +124,38 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         include: { organization: true },
       });
 
-      if (!invite) {
-        return '/login?error=NoInvite';
+      if (invite) {
+        // Verify email is verified by the OAuth provider
+        const emailVerified = (profile as any)?.email_verified;
+        if (emailVerified !== true && account?.provider !== 'credentials') {
+          return '/login?error=UnverifiedEmail';
+        }
+
+        // Redeem invite in a transaction
+        const userId = existingUser?.id || user.id;
+        await prisma.$transaction([
+          prisma.teamMember.create({
+            data: {
+              userId: userId as string,
+              organizationId: invite.organizationId,
+              role: invite.role,
+              status: 'ACTIVE',
+              joinedAt: new Date(),
+            },
+          }),
+          prisma.user.update({
+            where: { id: userId as string },
+            data: { organizationId: invite.organizationId },
+          }),
+          prisma.teamInvite.update({
+            where: { id: invite.id },
+            data: { status: 'ACCEPTED', respondedAt: new Date() },
+          }),
+        ]);
       }
 
-      // Verify email is verified by the OAuth provider
-      // GitHub doesn't guarantee email_verified — require explicit true
-      const emailVerified = (profile as any)?.email_verified;
-      if (emailVerified !== true && account?.provider !== 'credentials') {
-        return '/login?error=UnverifiedEmail';
-      }
-
-      // Redeem invite in a transaction
-      const userId = existingUser?.id || user.id;
-      await prisma.$transaction([
-        prisma.teamMember.create({
-          data: {
-            userId: userId as string,
-            organizationId: invite.organizationId,
-            role: invite.role,
-            status: 'ACTIVE',
-            joinedAt: new Date(),
-          },
-        }),
-        prisma.user.update({
-          where: { id: userId as string },
-          data: { organizationId: invite.organizationId },
-        }),
-        prisma.teamInvite.update({
-          where: { id: invite.id },
-          data: { status: 'ACCEPTED', respondedAt: new Date() },
-        }),
-      ]);
-
+      // Allow sign-in — users without an invite go through
+      // onboarding to create their own organization (same as password signup)
       return true;
     },
 
