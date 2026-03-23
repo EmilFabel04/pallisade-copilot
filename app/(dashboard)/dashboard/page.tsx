@@ -6,6 +6,7 @@ import { motion } from 'framer-motion';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { cn } from '@/lib/utils';
 import { cachedFetch } from '@/lib/fetch-cache';
+import { SetupBanner } from '../../../components/dashboard/SetupBanner';
 import {
   MessageSquare,
   Database,
@@ -347,6 +348,7 @@ export default function DashboardPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      <SetupBanner />
       {/* Welcome Section */}
       <motion.div
         initial={{ opacity: 0, y: -8 }}
