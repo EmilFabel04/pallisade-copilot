@@ -71,6 +71,8 @@ The `auth` middleware redirects unauthenticated users to `/login`. Public routes
 
 ### API Route Migration (~83 files)
 
+Performed as a single find-and-replace commit. Auth.js v5 is not backward-compatible with v4 imports, so this is a big-bang migration. Keep `lib/auth.ts` (with only password helpers) for one release cycle as a safety net. Feature-flag the middleware behind `ENABLE_AUTH_MIDDLEWARE=true` during rollout so it can be disabled without a redeploy if issues arise.
+
 Mechanical find-and-replace across all API routes:
 
 ```typescript
@@ -119,17 +121,19 @@ Note: `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` are for **login**. The existin
 
 1. User clicks an OAuth provider button on `/login`
 2. Auth.js completes the OAuth flow and calls the `signIn` callback
-3. **`signIn` callback** checks if the user already exists in the database:
+3. **`signIn` callback** performs all invite checks and org association in a single step:
    - **Existing user with org** → allow sign-in (account linking handled by Prisma adapter)
+   - **Existing user without org** → treat as new user (check for invite below)
    - **New user** → check for a `TeamInvite` with matching email:
-     - **Invite found** → allow sign-in
-     - **No invite** → block sign-in, redirect to `/login?error=NoInvite`
-4. **`jwt` callback** (on first OAuth login with valid invite):
-   - Looks up `TeamInvite` by email
-   - Creates `TeamMember` record with the invited role
-   - Sets `user.organizationId` to the invite's org
-   - Marks invite as accepted (`status: ACCEPTED`, `joinedAt: now`)
-   - Embeds `organizationId` in the JWT
+     - **Invite found** → redeem invite inside a Prisma `$transaction`:
+       1. Create `TeamMember` record with the invited role
+       2. Set `user.organizationId` to the invite's org
+       3. Mark invite as accepted (`status: ACCEPTED`, set `TeamMember.joinedAt: now`)
+       4. Return `true` to allow sign-in
+     - **No invite** → return `false` (redirects to `/login?error=NoInvite`)
+   - For implicit account linking (existing user signs in with a new OAuth provider), verify `profile.email_verified === true` before allowing the link. GitHub does not guarantee email verification — reject unverified emails with `error=UnverifiedEmail`.
+4. **`jwt` callback** reads `organizationId` from the user record (set by `signIn` callback above). Gated on `trigger === 'signIn'` to avoid re-querying on every token refresh.
+   - Does NOT perform any database writes — all mutations happen in `signIn` callback
 
 ### Invite Flow Changes
 
@@ -181,8 +185,12 @@ model Organization {
 ### Enforcement Points
 
 **`signIn` callback:**
+- Look up the user's org via `prisma.user.findUnique({ where: { id: user.id }, include: { organization: true } })`
 - If user's org has `authPolicy: SSO_ONLY` and the provider is `credentials`, block sign-in
+- If `authPolicyGraceUntil` is set and `now() < authPolicyGraceUntil`, allow password login during grace period
+- When grace period expires, enforcement is checked at sign-in time (no background job needed)
 - Redirect to `/login?error=SSORequired`
+- When SSO is enforced, existing JWT sessions from password-authenticated users remain valid until expiry. The grace period should account for this — set it long enough for sessions to cycle.
 
 **Signup page:**
 - If arriving from an invite link whose org is `SSO_ONLY`, hide password fields
@@ -249,25 +257,33 @@ Form fields:
 - `GET /api/organization/oidc` — returns config (client secret masked)
 - `PUT /api/organization/oidc` — create/update config (OWNER only)
 - `DELETE /api/organization/oidc` — remove config (OWNER only)
-- `POST /api/organization/oidc/test` — validate issuer URL and client credentials
-- `POST /api/auth/sso/lookup` — public endpoint: accepts email, returns whether org has OIDC config (no sensitive data exposed, just `{ hasOidc: true, displayName: "Okta" }`)
+- `POST /api/organization/oidc/test` — validate issuer URL (fetch `/.well-known/openid-configuration`) and verify client credentials via a token endpoint request
+- `POST /api/auth/sso/lookup` — public endpoint: accepts email, returns whether org has OIDC config. Returns `{ hasOidc: false }` for unknown domains (never 404) to avoid confirming org existence. Rate-limited (10 req/min per IP).
 
 ### Sign-In Flow
 
 1. User clicks "Sign in with SSO" on `/login`
 2. Email input appears — user enters their email
 3. Frontend calls `POST /api/auth/sso/lookup` with the email
-4. If org has OIDC: frontend sets a cookie `oidc_org_id={orgId}` and calls `signIn('oidc', { callbackUrl })`
-5. Auth.js `providers` function reads the cookie, loads `OrgOidcConfig` from DB, constructs a dynamic OIDC provider
-6. User is redirected to the IdP, authenticates, and returns via callback
-7. Same invite-only checks apply in the `signIn` callback
+4. Backend extracts the email domain, matches against `Organization.domain` (must be set for OIDC-enabled orgs — the OIDC admin UI enforces this). Returns `{ hasOidc: true, displayName: "Okta" }` or `{ hasOidc: false }`.
+5. If org has OIDC: frontend sets a signed, short-lived cookie `oidc_org_id={orgId}` (`SameSite=Lax`, `Secure`, `HttpOnly`, TTL 5 minutes) and calls `signIn('oidc', { callbackUrl })`
+6. Auth.js `providers` function (which receives the request object) parses the cookie, validates the signature, loads `OrgOidcConfig` from DB, constructs a dynamic OIDC provider. The org ID is also encoded in the OAuth `state` parameter as a fallback if the cookie is cleared between redirect and callback.
+7. User is redirected to the IdP, authenticates, and returns via callback
+8. On callback, Auth.js reads the org ID from the `state` parameter (more reliable than cookie for the return trip), reconstructs the OIDC provider config, and completes the flow
+9. Same invite-only checks apply in the `signIn` callback
+
+### Domain Requirement for OIDC
+
+Organizations must have their `domain` field set before enabling OIDC. The OIDC admin UI enforces this — if `Organization.domain` is null, show a prompt to set it first. This is how the SSO lookup resolves email → org.
 
 ### Security
 
-- Client secrets encrypted at rest (AES-256-GCM via `lib/crypto.ts`)
+- Client secrets encrypted at rest (AES-256-GCM via `lib/crypto.ts`). **`ENCRYPTION_KEY` must be set** — the dev fallback key in `lib/crypto.ts` is not acceptable for production OIDC secrets.
 - OIDC config only editable by `OWNER` role
-- SSO lookup endpoint returns minimal info (boolean + display name, no URLs or credentials)
-- State parameter and PKCE handled by Auth.js
+- SSO lookup endpoint returns uniform response shape for unknown domains (prevents org enumeration), rate-limited
+- OIDC org cookie is signed, `HttpOnly`, `Secure`, `SameSite=Lax`, 5-minute TTL
+- State parameter carries org ID as fallback for cookie loss between redirects
+- PKCE handled by Auth.js
 
 ## UI Summary
 
@@ -339,6 +355,7 @@ List of providers with connect/disconnect buttons.
 | `MICROSOFT_CLIENT_ID` | Microsoft Entra ID OAuth |
 | `MICROSOFT_CLIENT_SECRET` | Microsoft Entra ID OAuth |
 | `MICROSOFT_TENANT_ID` | Microsoft Entra ID tenant (use `common` for multi-tenant) |
+| `AUTH_SECRET` | Auth.js v5 preferred name for session secret (alias for `NEXTAUTH_SECRET`) |
 
 ### Existing Variables (unchanged)
 
@@ -346,6 +363,6 @@ List of providers with connect/disconnect buttons.
 |----------|---------|
 | `GITHUB_INTEGRATION_CLIENT_ID` | GitHub repo integration (not login) |
 | `GITHUB_INTEGRATION_CLIENT_SECRET` | GitHub repo integration (not login) |
-| `NEXTAUTH_SECRET` | Session encryption (renamed to `AUTH_SECRET` in v5, both supported) |
+| `NEXTAUTH_SECRET` | Session encryption — add `AUTH_SECRET` as an alias (v5 preferred name). Keep both during migration. |
 | `NEXTAUTH_URL` | Base URL (auto-detected in v5, can be removed) |
-| `ENCRYPTION_KEY` | AES-256-GCM for OIDC client secrets |
+| `ENCRYPTION_KEY` | AES-256-GCM for OIDC client secrets — **required** for per-org OIDC (dev fallback key must not be used in production) |
