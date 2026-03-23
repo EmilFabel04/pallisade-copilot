@@ -76,7 +76,7 @@ export default function MonitorArtifactCard({ artifact, onConfirm, onCancel }: M
 
   const handleConfirmWithEdits = () => {
     if (isEditing) {
-      const editedData = { ...data, name: editName, schedule: editSchedule };
+      const editedData: Record<string, any> = { ...data, name: editName, schedule: editSchedule };
       // Inject column into anomaly monitor configs
       if (editColumn && hasAnomalyMonitor && editedData.monitors) {
         editedData.monitors = editedData.monitors.map((m: any) => {

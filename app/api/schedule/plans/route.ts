@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { createWatchInTransaction } from '@/lib/watch-helpers';
 import { POLICY_FIELD_MAP, getPolicyValueForField } from '@/lib/policy-utils';
@@ -8,7 +7,7 @@ import { POLICY_FIELD_MAP, getPolicyValueForField } from '@/lib/policy-utils';
 // GET /api/schedule/plans - List all monitoring plans
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -132,7 +131,7 @@ export async function POST(request: NextRequest) {
       organizationId = request.headers.get('X-Organization-Id') || undefined;
       userId = 'copilot-system';
     } else {
-      const session = await getServerSession(authOptions);
+      const session = await auth();
       if (!session?.user) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }

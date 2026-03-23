@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { SlackClient } from '@/lib/integrations/slack';
@@ -16,7 +15,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -119,19 +118,19 @@ export async function POST(
       });
     } else if (type === 'jira') {
       const client = new JiraClient({
-        base_url: intConfig.base_url || creds.base_url,
+        site_url: intConfig.site_url || intConfig.base_url || creds.site_url || creds.base_url,
         email: intConfig.email || creds.email,
         api_token: intConfig.api_token || creds.api_token,
+        project_key: config?.project_key || intConfig.project_key,
       });
-      const priorityMap: Record<string, string> = {
+      const priorityMap: Record<string, 'Highest' | 'High' | 'Medium' | 'Low' | 'Lowest'> = {
         CRITICAL: 'Highest', ERROR: 'High', WARN: 'Medium', INFO: 'Low',
       };
       const issue = await client.createIssue({
         summary: notification.title,
         description: notification.message || '',
-        priority: priorityMap[notification.severity] || 'Medium',
+        priority: priorityMap[notification.severity] ?? 'Medium',
         labels: ['pallisade', 'notification'],
-        project_key: config?.project_key || intConfig.project_key,
       });
       return NextResponse.json({ success: true, platform: type, issue });
     } else {

@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { encrypt } from '@/lib/crypto';
 import { SlackClient } from '@/lib/integrations/slack';
@@ -8,7 +7,7 @@ import { SlackClient } from '@/lib/integrations/slack';
 // POST /api/integrations/slack - Save Slack bot token (manual mode)
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -106,7 +105,7 @@ export async function POST(request: NextRequest) {
 // GET /api/integrations/slack - Get Slack integration status
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -160,7 +159,7 @@ export async function GET(request: NextRequest) {
 // PATCH /api/integrations/slack - Update preferences (partial)
 export async function PATCH(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

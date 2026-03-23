@@ -342,8 +342,8 @@ export function FindingLineageCanvas({
         distance: node.distance,
         impactReason: node.impact_reason,
       },
-      selected: node.id === selectedNodeId || 
-                (selectedNodeId && node.name?.toLowerCase().includes(selectedNodeId.toLowerCase())),
+      selected: node.id === selectedNodeId ||
+                !!(selectedNodeId && node.name?.toLowerCase().includes(selectedNodeId.toLowerCase())),
     }));
 
     const edges: Edge[] = graphEdges.map((edge) => {

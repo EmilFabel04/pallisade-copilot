@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { notifyEvents } from '@/lib/notifications';
 import { detectHighImpactEvents } from '@/lib/high-impact-events';
@@ -148,7 +147,7 @@ export async function POST(
   { params }: { params: Promise<{ watchId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -279,7 +278,7 @@ export async function POST(
     // 1. In-app notification (always)
     notifyEvents.monitorGroupCompleted(
       group.organizationId,
-      group.pipelineStackId ?? undefined,
+      undefined,
       undefined,
       group.name,
       watchId,
@@ -291,7 +290,7 @@ export async function POST(
     detectHighImpactEvents({
       watchId,
       organizationId: group.organizationId,
-      pipelineStackId: group.pipelineStackId ?? undefined,
+      pipelineStackId: undefined,
       currentHealthScore: healthScore,
       previousHealthScore,
       results: signals.map((s) => ({
@@ -303,13 +302,13 @@ export async function POST(
       for (const event of events) {
         if (event.eventType === 'monitor.health_score_dropped') {
           notifyEvents.healthScoreDropped(
-            group.organizationId, group.pipelineStackId ?? undefined, undefined,
+            group.organizationId, undefined, undefined,
             group.name, watchId,
             event.previousScore!, event.currentScore!, event.severity,
           ).catch(() => {});
         } else if (event.eventType === 'monitor.sustained_failure') {
           notifyEvents.sustainedFailure(
-            group.organizationId, group.pipelineStackId ?? undefined, undefined,
+            group.organizationId, undefined, undefined,
             group.name, watchId,
             event.monitorName!, event.monitorId!, event.consecutiveFailures!, event.severity,
           ).catch(() => {});

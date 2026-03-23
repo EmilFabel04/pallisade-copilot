@@ -9,8 +9,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { OnboardingStatus } from '@prisma/client';
 
@@ -20,7 +19,7 @@ export async function GET(
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     const _userId = (session?.user as any)?.id;
     const organizationId = (session?.user as any)?.organizationId;
 
@@ -112,7 +111,7 @@ export async function PATCH(
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     const _userId = (session?.user as any)?.id;
     const organizationId = (session?.user as any)?.organizationId;
 
@@ -215,7 +214,7 @@ export async function POST(
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     const _userId = (session?.user as any)?.id;
     const organizationId = (session?.user as any)?.organizationId;
 

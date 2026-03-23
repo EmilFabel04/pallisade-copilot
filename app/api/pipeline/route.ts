@@ -6,8 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { encrypt, decrypt } from '@/lib/crypto';
@@ -125,7 +124,7 @@ function decryptNodeConfig(config: any): Record<string, any> | null {
 // GET - Fetch the user's pipeline stack(s)
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user?.email) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -301,7 +300,7 @@ export async function GET(request: NextRequest) {
 // POST - Save the pipeline stack
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user?.email) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

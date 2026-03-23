@@ -59,7 +59,7 @@ export async function routeNotification(params: RouteParams): Promise<void> {
     if (!route || !route.enabled) return;
     if (params.isRecovery && !route.notifyOnRecovery) return;
 
-    const destinations = (route.destinations || []) as Destination[];
+    const destinations = (route.destinations || []) as unknown as Destination[];
     if (destinations.length === 0) return;
 
     const integrationIds = destinations.map((d) => d.integrationId);

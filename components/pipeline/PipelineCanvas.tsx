@@ -52,6 +52,7 @@ const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
   STORAGE: 850,
   REPORTING: 1000,
   INFRASTRUCTURE: 1150,
+  UNCATEGORIZED: 0,
 };
 
 // Auto-layout algorithm

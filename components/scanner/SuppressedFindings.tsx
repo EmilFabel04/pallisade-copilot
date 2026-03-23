@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactElement } from 'react';
 import { FindingCard } from './FindingCard';
 
 interface Finding {
@@ -45,7 +45,7 @@ function groupBySuppression(findings: Finding[]): Record<string, Finding[]> {
   return groups;
 }
 
-const sourceLabels: Record<string, { label: string; description: string; icon: JSX.Element }> = {
+const sourceLabels: Record<string, { label: string; description: string; icon: ReactElement }> = {
   semantic_classification: {
     label: 'ML Classification',
     description: 'Suppressed because the LLM classified this column type as naturally high-variance',

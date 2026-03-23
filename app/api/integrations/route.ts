@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { encrypt, decrypt } from '@/lib/crypto';
 import { resolveEffectiveContract } from '@/lib/contracts/resolver';
@@ -11,7 +10,7 @@ import { notifyEvents } from '@/lib/notifications';
 // Now includes both legacy Integrations AND Pipeline nodes for compatibility
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -389,7 +388,7 @@ function mapPipelineStatus(status: string): string {
 // POST /api/integrations - Create a new integration
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

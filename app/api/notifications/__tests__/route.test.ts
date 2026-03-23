@@ -13,8 +13,8 @@
 
 const mockUser = { id: 'user-1', organizationId: 'org-1' };
 
-jest.mock('next-auth', () => ({
-  getServerSession: jest.fn().mockResolvedValue({
+jest.mock('@/auth', () => ({
+  auth: jest.fn().mockResolvedValue({
     user: { email: 'test@example.com', id: 'user-1', organizationId: 'org-1' },
   }),
 }));
@@ -38,7 +38,6 @@ jest.mock('@/lib/db', () => ({
   },
 }));
 
-jest.mock('@/lib/auth', () => ({ authOptions: {} }));
 
 // ── Tests ──────────────────────────────────────────────────────────
 
@@ -97,8 +96,8 @@ describe('GET /api/notifications', () => {
   });
 
   it('rejects unauthenticated requests', async () => {
-    const { getServerSession } = require('next-auth');
-    getServerSession.mockResolvedValueOnce(null);
+    const { auth } = require('@/auth');
+    auth.mockResolvedValueOnce(null);
 
     const { GET } = await import('../route');
     const request = new Request('http://localhost/api/notifications');

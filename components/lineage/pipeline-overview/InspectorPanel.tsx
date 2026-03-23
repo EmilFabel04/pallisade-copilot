@@ -103,7 +103,7 @@ function NodeInspector({
   // Tool-level monitor health & coverage scoring
   const toolScoring = useMemo((): MonitorScoringResult | null => {
     if (nodeMonitors.length === 0) return null;
-    const category = resolveAssetCategory(node.layer, node.metadata?.platformDomain as string, node.platform);
+    const category = resolveAssetCategory(node.layer, node.metadata?.platformDomain as string, node.platform ?? undefined);
     if (!category) return null;
     return computeMonitorScoring(
       nodeMonitors.map(m => ({ monitorType: m.monitorType || '', lastStatus: m.lastStatus })),

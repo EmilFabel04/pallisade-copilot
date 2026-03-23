@@ -1,6 +1,5 @@
-import { getServerSession } from 'next-auth';
+import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
-import { authOptions } from '../../lib/auth';
 import prisma from '@/lib/db';
 import { Sidebar } from '../../components/dashboard/Sidebar';
 import { DashboardHeader } from '../../components/dashboard/Header';
@@ -15,7 +14,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
 
   if (!session) {
     redirect('/login');

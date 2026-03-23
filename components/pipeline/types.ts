@@ -52,6 +52,7 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   VERSION_CONTROL: 'Version Control',
   ORCHESTRATION: 'Orchestration',
   INFRASTRUCTURE: 'Infrastructure',
+  UNCATEGORIZED: 'Uncategorized',
 };
 
 // Integration type labels
@@ -552,6 +553,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       ],
     },
   ],
+  UNCATEGORIZED: [],
 };
 
 // Integration definitions (non-pipeline tools for notifications, ticketing, observability)

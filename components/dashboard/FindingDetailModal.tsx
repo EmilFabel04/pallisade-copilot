@@ -14,6 +14,7 @@ interface Finding {
   description?: string;
   table?: string;
   column?: string;
+  dataset?: string;
   has_auto_fix?: boolean;
   auto_fix?: {
     type: string;

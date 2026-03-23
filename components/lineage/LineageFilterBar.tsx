@@ -33,6 +33,7 @@ const LAYER_LABELS: Record<PipelineLayer, string> = {
   REPORTING: 'Reporting',
   STORAGE: 'Storage',
   INFRASTRUCTURE: 'Infrastructure',
+  UNCATEGORIZED: 'Uncategorized',
 };
 
 export function LineageFilterBar({

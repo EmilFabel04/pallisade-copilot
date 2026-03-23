@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { computeNextRun } from '@/lib/cron';
 import { notifyEvents } from '@/lib/notifications';
@@ -11,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ watchId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -147,7 +146,7 @@ export async function PATCH(
   { params }: { params: Promise<{ watchId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -239,7 +238,7 @@ export async function DELETE(
   { params }: { params: Promise<{ watchId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -276,7 +275,7 @@ export async function DELETE(
     // Fire-and-forget notification
     notifyEvents.monitorGroupDeleted(
       group.organizationId,
-      group.pipelineStackId ?? undefined,
+      undefined,
       (session.user as any).id ?? undefined, // actorUserId from session
       group.name,
       watchId,

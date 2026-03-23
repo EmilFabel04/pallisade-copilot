@@ -9,6 +9,7 @@ interface Finding {
   severity: string;
   table?: string;
   column?: string;
+  dataset?: string;
   description?: string;
   scan_type?: string;
 }

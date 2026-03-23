@@ -305,14 +305,14 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
                   
                   {/* Criticality Breakdown */}
                   <div className="mt-3 flex gap-1">
-                    {lineageData?.impact.criticalityBreakdown.critical > 0 && (
+                    {(lineageData?.impact.criticalityBreakdown.critical ?? 0) > 0 && (
                       <span className="px-2 py-1 rounded text-[10px] font-bold bg-red-500/20 text-red-400">
-                        {lineageData.impact.criticalityBreakdown.critical} Critical
+                        {lineageData!.impact.criticalityBreakdown.critical} Critical
                       </span>
                     )}
-                    {lineageData?.impact.criticalityBreakdown.high > 0 && (
+                    {(lineageData?.impact.criticalityBreakdown.high ?? 0) > 0 && (
                       <span className="px-2 py-1 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400">
-                        {lineageData.impact.criticalityBreakdown.high} High
+                        {lineageData!.impact.criticalityBreakdown.high} High
                       </span>
                     )}
                   </div>
@@ -340,12 +340,13 @@ export function FindingLineageModal({ isOpen, onClose, finding }: FindingLineage
                       const assets = groupedAssets[crit];
                       if (!assets || assets.length === 0) return null;
                       
-                      const critConfig = {
+                      const critConfigMap: Record<string, { bg: string; border: string; text: string; label: string }> = {
                         critical: { bg: 'bg-red-500/10', border: 'border-red-500/20', text: 'text-red-400', label: 'Critical' },
                         high: { bg: 'bg-orange-500/10', border: 'border-orange-500/20', text: 'text-orange-400', label: 'High' },
                         medium: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', text: 'text-amber-400', label: 'Medium' },
                         low: { bg: 'bg-slate-500/10', border: 'border-slate-500/20', text: 'text-slate-400', label: 'Low' },
-                      }[crit] || critConfig.medium;
+                      };
+                      const critConfig = critConfigMap[crit] ?? critConfigMap.medium;
                       
                       return (
                         <div key={crit}>
