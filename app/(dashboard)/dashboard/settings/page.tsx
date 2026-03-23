@@ -4,8 +4,10 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { cachedFetch } from '@/lib/fetch-cache';
-import { Settings as SettingsIcon, Plug, Bell, Key, CreditCard, MessageSquare, ClipboardList, Link, AlertTriangle, User, SlidersHorizontal } from 'lucide-react';
+import { Settings as SettingsIcon, Plug, Bell, Key, CreditCard, MessageSquare, ClipboardList, Link, AlertTriangle, User, SlidersHorizontal, Shield } from 'lucide-react';
 import NotificationRoutingSettings from '@/components/settings/NotificationRoutingSettings';
+import ConnectedAccounts from '@/components/settings/ConnectedAccounts';
+import AuthenticationSettings from '@/components/settings/AuthenticationSettings';
 
 interface OAuthIntegration {
   id: string;
@@ -104,6 +106,7 @@ export default function SettingsPage() {
     { id: 'notifications', name: 'Notifications', icon: <Bell size={16} /> },
     { id: 'api', name: 'API Keys', icon: <Key size={16} /> },
     { id: 'billing', name: 'Billing', icon: <CreditCard size={16} /> },
+    { id: 'authentication', name: 'Authentication', icon: <Shield size={16} /> },
   ];
 
   return (
@@ -206,6 +209,11 @@ export default function SettingsPage() {
           >
             Save Changes
           </button>
+
+          {/* Connected Accounts Section */}
+          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
+            <ConnectedAccounts />
+          </div>
         </div>
       )}
 
@@ -402,6 +410,11 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Authentication Tab */}
+      {activeTab === 'authentication' && (
+        <AuthenticationSettings />
       )}
 
       {/* Saved Notification */}
