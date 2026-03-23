@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Button } from '../ui/button';
+import { ToolIcon } from '../icons/ToolIcon';
 
 interface WarehouseStepProps {
   onComplete: (data: { pipelineName: string; warehouseType: string }) => void;
@@ -11,11 +11,11 @@ interface WarehouseStepProps {
 }
 
 const WAREHOUSES = [
-  { id: 'BIGQUERY', name: 'BigQuery', icon: 'BQ' },
-  { id: 'SNOWFLAKE', name: 'Snowflake', icon: 'SF' },
-  { id: 'POSTGRES', name: 'PostgreSQL', icon: 'PG' },
-  { id: 'REDSHIFT', name: 'Redshift', icon: 'RS' },
-  { id: 'DATABRICKS', name: 'Databricks', icon: 'DB' },
+  { id: 'bigquery', name: 'BigQuery' },
+  { id: 'snowflake', name: 'Snowflake' },
+  { id: 'postgres', name: 'PostgreSQL' },
+  { id: 'redshift', name: 'Redshift' },
+  { id: 'databricks', name: 'Databricks' },
 ];
 
 export function WarehouseStep({ onComplete, onSkip, onBack, isLoading }: WarehouseStepProps) {
@@ -26,67 +26,73 @@ export function WarehouseStep({ onComplete, onSkip, onBack, isLoading }: Warehou
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-[var(--text)]">Connect Your Warehouse</h2>
-        <p className="text-[var(--muted)] mt-1">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold">Connect Your Warehouse</h2>
+        <p className="text-[var(--muted)] mt-2">
           Set up your first data connection to start monitoring
         </p>
       </div>
 
-      <div className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-[var(--text)] mb-1.5">
-            Pipeline Name
-          </label>
-          <input
-            type="text"
-            value={pipelineName}
-            onChange={(e) => setPipelineName(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg bg-[var(--surface-sunken)] border border-[var(--subtle-border)] text-[var(--text)] text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:border-transparent"
-            placeholder="e.g., Production Data Stack"
-          />
-        </div>
+      <div className="auth-card">
+        <div className="space-y-5">
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              Pipeline Name
+            </label>
+            <input
+              type="text"
+              value={pipelineName}
+              onChange={(e) => setPipelineName(e.target.value)}
+              className="auth-input w-full"
+              placeholder="e.g., Production Data Stack"
+            />
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-[var(--text)] mb-1.5">
-            Warehouse Type
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {WAREHOUSES.map((wh) => (
-              <button
-                key={wh.id}
-                type="button"
-                onClick={() => setWarehouseType(wh.id)}
-                className={`p-4 rounded-xl text-center transition-colors border ${
-                  warehouseType === wh.id
-                    ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                    : 'bg-[var(--surface-sunken)] text-[var(--text)] border-[var(--subtle-border)] hover:bg-[var(--hover-bg)]'
-                }`}
-              >
-                <div className="text-lg font-bold mb-1">{wh.icon}</div>
-                <div className="text-sm font-medium">{wh.name}</div>
-              </button>
-            ))}
+          <div>
+            <label className="block text-sm font-medium mb-2">
+              Warehouse Type
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {WAREHOUSES.map((wh) => (
+                <button
+                  key={wh.id}
+                  type="button"
+                  onClick={() => setWarehouseType(wh.id)}
+                  className={`p-4 rounded-xl text-center transition-colors border ${
+                    warehouseType === wh.id
+                      ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                      : 'bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:border-[var(--border-medium)]'
+                  }`}
+                >
+                  <div className="flex justify-center mb-2">
+                    <ToolIcon toolType={wh.id} size={32} />
+                  </div>
+                  <div className="text-sm font-medium text-[var(--text)]">{wh.name}</div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
 
-      <p className="text-xs text-[var(--muted)] text-center">
-        You'll configure connection details in the pipeline settings after setup.
-      </p>
+        <p className="text-xs text-[var(--muted)] text-center mt-5">
+          You'll configure connection details in the pipeline settings after setup.
+        </p>
 
-      <div className="flex gap-3">
-        <Button onClick={onBack} variant="secondary" size="lg" className="flex-1">
-          Back
-        </Button>
-        <Button
-          onClick={() => onComplete({ pipelineName: pipelineName.trim(), warehouseType })}
-          disabled={!isValid || isLoading}
-          size="lg"
-          className="flex-1"
-        >
-          {isLoading ? 'Creating...' : 'Continue'}
-        </Button>
+        <div className="flex gap-3 mt-5">
+          <button
+            onClick={onBack}
+            className="btn w-full justify-center flex-1"
+          >
+            Back
+          </button>
+          <button
+            onClick={() => onComplete({ pipelineName: pipelineName.trim(), warehouseType })}
+            disabled={!isValid || isLoading}
+            className="btn btn-elevated w-full justify-center flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isLoading ? 'Creating...' : 'Continue'}
+          </button>
+        </div>
       </div>
 
       <button
