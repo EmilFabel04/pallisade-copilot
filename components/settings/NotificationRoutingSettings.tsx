@@ -6,9 +6,10 @@ import { X, Check } from 'lucide-react';
 
 interface Integration {
   id: string;
+  name: string;
   type: string;
   status: string;
-  metadata?: Record<string, any>;
+  connectionInfo?: string;
 }
 
 interface Destination {
@@ -24,6 +25,13 @@ interface Route {
 }
 
 const SEVERITIES = ['CRITICAL', 'ERROR', 'WARN', 'INFO'];
+
+// Only show notification, alerting, and ticketing platforms — not warehouses, BI tools, etc.
+// Must match IntegrationType enum values in prisma/schema.prisma
+const NOTIFICATION_TYPES = new Set([
+  'SLACK', 'PAGERDUTY', 'OPSGENIE', 'TEAMS',
+  'JIRA', 'CUSTOM_WEBHOOK',
+]);
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: 'bg-red-500/20 text-red-400 border-red-500/30',
   ERROR: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
@@ -56,9 +64,13 @@ export default function NotificationRoutingSettings() {
       })
       .catch(() => {});
 
-    cachedFetch('/api/integrations?layer=notifications')
+    cachedFetch(`/api/integrations/saved?types=${[...NOTIFICATION_TYPES].join(',')}`)
       .then((r) => r.json())
-      .then((data) => setIntegrations((data.integrations || []).filter((i: Integration) => i.status === 'ACTIVE')))
+      .then((data) =>
+        setIntegrations(
+          (data.connections || []).filter((i: Integration) => i.status === 'ACTIVE'),
+        ),
+      )
       .catch(() => {});
   }, []);
 
@@ -102,8 +114,7 @@ export default function NotificationRoutingSettings() {
   const getIntegrationLabel = (id: string) => {
     const int = integrations.find((i) => i.id === id);
     if (!int) return 'Unknown';
-    const name = int.metadata?.teamName || int.metadata?.workspace || int.type;
-    return `${int.type} — ${name}`;
+    return int.name || `${int.type}${int.connectionInfo ? ` — ${int.connectionInfo}` : ''}`;
   };
 
   return (
@@ -174,7 +185,7 @@ export default function NotificationRoutingSettings() {
 
               {integrations.filter(
                 (i) => !route.destinations.some((d) => d.integrationId === i.id),
-              ).length > 0 && (
+              ).length > 0 ? (
                 <select
                   onChange={(e) => {
                     if (e.target.value) addDestination(route.severity, e.target.value);
@@ -190,10 +201,16 @@ export default function NotificationRoutingSettings() {
                     .filter((i) => !route.destinations.some((d) => d.integrationId === i.id))
                     .map((i) => (
                       <option key={i.id} value={i.id}>
-                        {i.type} — {i.metadata?.teamName || i.metadata?.workspace || i.type}
+                        {i.name || i.type}
                       </option>
                     ))}
                 </select>
+              ) : (
+                <span className="text-xs text-[var(--muted)] italic">
+                  {integrations.length === 0
+                    ? 'No notification platforms connected — add one in Integrations'
+                    : 'All platforms already added'}
+                </span>
               )}
             </div>
           </div>

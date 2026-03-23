@@ -131,7 +131,7 @@ function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: 
   const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
   const layerX: Record<PipelineLayer, number> = {
     INGESTION: 120, VERSION_CONTROL: 300, ORCHESTRATION: 300, TRANSFORMATION: 480,
-    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040, INFRASTRUCTURE: 1160,
+    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040, INFRASTRUCTURE: 1160, UNCATEGORIZED: 0,
   };
   return {
     id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

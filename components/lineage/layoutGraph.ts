@@ -13,9 +13,9 @@ import dagre from 'dagre';
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const TOOL_NODE_WIDTH = 240;
-const TOOL_NODE_HEIGHT = 110;
+const TOOL_NODE_HEIGHT = 160;
 const DATA_NODE_WIDTH = 200;
-const DATA_NODE_HEIGHT = 100;
+const DATA_NODE_HEIGHT = 160;
 
 export const ORPHAN_GROUP_ID = '__orphan_group__';
 
@@ -263,7 +263,7 @@ export function layoutGraph(
 
   const opts: Required<LayoutOptions> = {
     direction: options?.direction ?? 'LR',
-    nodesep: options?.nodesep ?? 80,
+    nodesep: options?.nodesep ?? 40,
     ranksep: options?.ranksep ?? 200,
   };
 

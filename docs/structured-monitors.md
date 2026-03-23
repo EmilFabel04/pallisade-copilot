@@ -477,15 +477,30 @@ Several monitors (Null Rate, Uniqueness, Distribution, Volume, Anomaly) use stat
 3. **Confidence scaling** — The system starts cautious (40% confidence after 3 days) and becomes fully confident after 30+ days of data
 4. **Adaptive lookback** — Automatically adjusts how much history to consider
 
-### Alerting
+### Alerting & Notification Routing
 
-When a monitor produces a status you care about (default: FAIL, WARN, ERROR), alerts go out to your configured channels:
+When a monitor produces a status you care about (default: FAIL, WARN, ERROR), alerts are dispatched to your configured platforms. Pallisade supports severity-based routing — you configure which platforms receive alerts at each severity level (CRITICAL, ERROR, WARN, INFO) from **Settings → Notifications**.
 
-- **Email** — Sends details about what failed and why
-- **Slack** — Posts a summary to a channel
-- **Webhook** — Sends a JSON payload to any URL you configure
+**Supported platforms:**
 
-Each monitor can have its own alert channels, so critical monitors can page on-call while informational ones just post to Slack.
+| Platform | What it does |
+|----------|-------------|
+| **Slack** | Posts Block Kit messages to a channel with severity colors, action buttons, and finding summaries |
+| **PagerDuty** | Creates incidents with severity mapping (CRITICAL→critical, ERROR→error, WARN→warning) and supports resolution/acknowledgment |
+| **OpsGenie** | Creates prioritized alerts (CRITICAL→P1, ERROR→P2, WARN→P3, INFO→P4) with team routing and on-call scheduling |
+| **Microsoft Teams** | Sends Adaptive Card messages to a channel via incoming webhook |
+| **Email** | Sends HTML-formatted alerts via Resend or SendGrid with severity-colored headers |
+| **Jira** | Creates issues in a configured project with priority mapping and labels — useful for tracking data quality incidents as tickets |
+| **Custom Webhook** | Sends a JSON payload to any URL you configure |
+
+**How routing works:**
+
+1. Go to **Settings → Notifications** to configure routing rules per severity level
+2. For each severity, add one or more connected notification platforms as destinations
+3. When a monitor (or monitor group) produces a matching severity, the notification router dispatches to all configured destinations for that level
+4. Optionally enable **Notify on recovery** to send a follow-up alert when a previously failing monitor passes again — useful for closing the loop on incidents
+
+Each monitor group can also override alert channels at the group level. In-app notifications always appear in the bell icon regardless of external routing settings.
 
 ---
 

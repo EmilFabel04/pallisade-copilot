@@ -142,7 +142,7 @@ def _is_control_plane_category(category: str, platform: str = "") -> bool:
 
 # Layout constants
 LAYER_SPACING_X = 300  # px between layers (left-to-right)
-NODE_SPACING_Y = 130   # px between nodes within a layer
+NODE_SPACING_Y = 180   # px between nodes within a layer
 CLUSTER_PADDING = 40    # px padding around cluster contents
 PIPELINE_NODE_SPACING_X = 350  # px between pipeline overview nodes
 
@@ -979,7 +979,7 @@ class ViewBuilder:
         5. Skip empty lanes, assign compact x/y positions
         """
         LANE_X_SPACING = 300.0
-        TOOL_Y_SPACING = 80.0
+        TOOL_Y_SPACING = 120.0
 
         # ── Step 1: Discover tools per lane from engine graph ──────────
         # Key: (lane, tool_identity)  →  { platform, display_name, integration_id, asset_count }

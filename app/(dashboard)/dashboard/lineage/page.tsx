@@ -1459,34 +1459,7 @@ function LineagePageInner() {
           </div>
         </div>
 
-        {/* LLM extraction progress panel */}
-        {llmExtracting && (
-          <div className="mb-4 rounded-xl border border-slate-500/30 bg-slate-500/[0.06] p-4">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse" />
-              <span className="text-[13px] font-medium text-slate-300">AI is analyzing your pipeline...</span>
-              <span className="ml-auto text-[12px] text-[var(--muted)]">
-                {llmNodeCount} nodes &middot; {llmEdgeCount} edges
-              </span>
-            </div>
-            <div className="max-h-[160px] overflow-y-auto space-y-1 text-[11px] font-mono">
-              {llmProgress.map((entry, i) => (
-                <div key={i} className={`flex items-start gap-2 ${
-                  entry.type === 'tool' ? 'text-blue-400/70' :
-                  entry.type === 'node' ? 'text-emerald-400/70' :
-                  entry.type === 'error' ? 'text-red-400/80' :
-                  entry.type === 'complete' ? 'text-slate-300' :
-                  'text-[var(--muted)]'
-                }`}>
-                  <span className="shrink-0 mt-0.5">
-                    {entry.type === 'tool' ? '>' : entry.type === 'node' ? '+' : entry.type === 'error' ? '!' : entry.type === 'complete' ? '*' : '-'}
-                  </span>
-                  <span>{entry.message}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Removed: LLM extraction progress panel (always showed 0/0) */}
 
         {/* Tab bar */}
         <div className="flex items-center gap-1 mb-4">
