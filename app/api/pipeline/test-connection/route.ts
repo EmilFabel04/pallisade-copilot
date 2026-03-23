@@ -115,16 +115,128 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ success: false, message: 'Failed to connect to Fivetran' });
         }
 
-      case 'airbyte':
-        testEndpoint = `${SCANNER_API_URL}/api/test/airbyte`;
-        testBody = {
-          host: config.host,
-          api_key: config.api_key,
-          username: config.username,
-          password: config.password,
-          workspace_id: config.workspace_id,
-        };
-        break;
+      case 'airbyte': {
+        let abHost = (config.host || '').replace(/\/+$/, '');
+        if (!abHost) {
+          return NextResponse.json({ success: false, message: 'Airbyte host URL is required' });
+        }
+
+        // Auto-correct common mistake: user enters the dashboard URL instead of the API URL
+        if (abHost.includes('cloud.airbyte.com') && !abHost.includes('api.airbyte.com')) {
+          abHost = 'https://api.airbyte.com';
+        }
+
+        const isCloud = abHost.includes('api.airbyte.com') || abHost.includes('airbyte.com');
+
+        try {
+          if (isCloud) {
+            // Airbyte Cloud uses client credentials → short-lived Bearer token
+            const clientId = config.client_id;
+            const clientSecret = config.client_secret;
+
+            if (!clientId || !clientSecret) {
+              return NextResponse.json({
+                success: false,
+                message: 'Client ID and Client Secret are required for Airbyte Cloud. Create an Application in Settings → Applications.',
+              });
+            }
+
+            // Step 1: Exchange client credentials for access token
+            const tokenRes = await fetch(`${abHost}/v1/applications/token`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                client_id: clientId,
+                client_secret: clientSecret,
+                grant_type: 'client_credentials',
+              }),
+              signal: AbortSignal.timeout(10000),
+            });
+
+            if (!tokenRes.ok) {
+              const errText = await tokenRes.text().catch(() => '');
+              if (tokenRes.status === 401 || tokenRes.status === 403) {
+                return NextResponse.json({ success: false, message: 'Invalid Client ID or Client Secret. Check Settings → Applications in Airbyte Cloud.' });
+              }
+              return NextResponse.json({ success: false, message: `Token exchange failed (${tokenRes.status}): ${errText}` });
+            }
+
+            const tokenData = await tokenRes.json();
+            const accessToken = tokenData.access_token;
+            if (!accessToken) {
+              return NextResponse.json({ success: false, message: 'Token exchange succeeded but no access_token returned' });
+            }
+
+            // Step 2: Use the token to verify workspace access
+            const abHeaders: Record<string, string> = {
+              'Authorization': `Bearer ${accessToken}`,
+              'Accept': 'application/json',
+            };
+
+            const abUrl = config.workspace_id
+              ? `${abHost}/v1/workspaces/${config.workspace_id}`
+              : `${abHost}/v1/workspaces`;
+            const abRes = await fetch(abUrl, {
+              headers: abHeaders,
+              signal: AbortSignal.timeout(10000),
+            });
+
+            const contentType = abRes.headers.get('content-type') || '';
+            if (!contentType.includes('application/json')) {
+              return NextResponse.json({ success: false, message: 'The host URL returned an HTML page instead of JSON. Use https://api.airbyte.com as the host.' });
+            }
+
+            if (abRes.ok) {
+              const abData = await abRes.json();
+              if (config.workspace_id) {
+                const wsName = abData.name || config.workspace_id;
+                return NextResponse.json({ success: true, message: `Connected to Airbyte Cloud workspace: ${wsName}` });
+              }
+              const count = abData.data?.length ?? 0;
+              return NextResponse.json({ success: true, message: `Connected to Airbyte Cloud (${count} workspace${count !== 1 ? 's' : ''})` });
+            } else if (abRes.status === 401 || abRes.status === 403) {
+              return NextResponse.json({ success: false, message: 'Token valid but insufficient permissions for this workspace' });
+            } else {
+              return NextResponse.json({ success: false, message: `Airbyte Cloud API error: ${abRes.status}` });
+            }
+          } else {
+            // Airbyte OSS — hit health endpoint, then optionally list workspaces
+            const abHeaders: Record<string, string> = { 'Accept': 'application/json' };
+            if (config.username && config.password) {
+              abHeaders['Authorization'] = `Basic ${Buffer.from(`${config.username}:${config.password}`).toString('base64')}`;
+            }
+
+            const healthRes = await fetch(`${abHost}/api/v1/health`, {
+              headers: { 'Accept': 'application/json' },
+              signal: AbortSignal.timeout(10000),
+            });
+
+            const healthCt = healthRes.headers.get('content-type') || '';
+            if (!healthRes.ok || !healthCt.includes('application/json')) {
+              return NextResponse.json({ success: false, message: `Cannot reach Airbyte API at ${abHost}. Make sure this is the Airbyte API URL, not the web UI.` });
+            }
+
+            // If workspace_id provided, verify it exists
+            if (config.workspace_id) {
+              const wsRes = await fetch(`${abHost}/api/v1/workspaces/get`, {
+                method: 'POST',
+                headers: { ...abHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceId: config.workspace_id }),
+                signal: AbortSignal.timeout(10000),
+              });
+              if (wsRes.ok) {
+                const wsData = await wsRes.json();
+                return NextResponse.json({ success: true, message: `Connected to Airbyte OSS workspace: ${wsData.name || config.workspace_id}` });
+              }
+            }
+
+            return NextResponse.json({ success: true, message: 'Connected to Airbyte OSS' });
+          }
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : 'Unknown error';
+          return NextResponse.json({ success: false, message: `Failed to connect to Airbyte: ${msg}` });
+        }
+      }
 
       // Transformation tools
       case 'dbt_cloud':

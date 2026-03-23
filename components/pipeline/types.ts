@@ -153,9 +153,12 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       description: 'Open-source data integration', 
       layer: 'INGESTION',
       configFields: [
-        { name: 'host', label: 'Airbyte Host URL', type: 'text', required: true, placeholder: 'https://your-airbyte-instance.com' },
-        { name: 'api_key', label: 'API Key', type: 'password', required: false, placeholder: 'API key (if authentication enabled)' },
+        { name: 'host', label: 'Airbyte Host URL', type: 'text', required: true, placeholder: 'https://api.airbyte.com (Cloud) or http://localhost:8000 (OSS)' },
+        { name: 'client_id', label: 'Client ID', type: 'text', required: false, placeholder: 'Cloud: Settings → Applications → Client ID' },
+        { name: 'client_secret', label: 'Client Secret', type: 'password', required: false, placeholder: 'Cloud: Settings → Applications → Client Secret' },
         { name: 'workspace_id', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Workspace ID' },
+        { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'OSS only: basic auth username' },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'OSS only: basic auth password' },
       ],
     },
     { 
