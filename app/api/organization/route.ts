@@ -10,12 +10,38 @@ export async function PATCH(request: Request) {
 
   const userId = (session.user as any).id;
   const body = await request.json();
-  const { name, companySize, industry, dataTeamSize } = body;
+  const { name, companySize, industry, dataTeamSize, authPolicy, authPolicyGraceUntil } = body;
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { organizationId: true },
   });
+
+  if (body.authPolicy !== undefined) {
+    const member = await prisma.teamMember.findFirst({
+      where: {
+        userId: (session.user as any).id,
+        organizationId: (session.user as any).organizationId,
+        role: 'OWNER',
+      },
+    });
+    if (!member) {
+      return NextResponse.json({ error: 'Only owners can change auth policy' }, { status: 403 });
+    }
+
+    // If enabling SSO_ONLY, check that owner has an OAuth account
+    if (body.authPolicy === 'SSO_ONLY') {
+      const ownerAccounts = await prisma.account.count({
+        where: { userId: (session.user as any).id },
+      });
+      if (ownerAccounts === 0) {
+        return NextResponse.json(
+          { error: 'You must have a linked OAuth account before enabling SSO-only' },
+          { status: 400 }
+        );
+      }
+    }
+  }
 
   let organization;
 
@@ -26,6 +52,8 @@ export async function PATCH(request: Request) {
     if (companySize !== undefined) data.companySize = companySize;
     if (industry !== undefined) data.industry = industry;
     if (dataTeamSize !== undefined) data.dataTeamSize = dataTeamSize;
+    if (authPolicy !== undefined) data.authPolicy = authPolicy;
+    if (authPolicyGraceUntil !== undefined) data.authPolicyGraceUntil = authPolicyGraceUntil;
 
     organization = await prisma.organization.update({
       where: { id: user.organizationId },
@@ -74,10 +102,30 @@ export async function GET(request: Request) {
     where: { id: (session.user as any).id },
     select: {
       organization: {
-        select: { id: true, name: true, companySize: true, industry: true, dataTeamSize: true },
+        select: {
+          id: true,
+          name: true,
+          companySize: true,
+          industry: true,
+          dataTeamSize: true,
+          authPolicy: true,
+          authPolicyGraceUntil: true,
+        },
       },
     },
   });
 
-  return NextResponse.json({ organization: user?.organization || null });
+  const member = await prisma.teamMember.findFirst({
+    where: {
+      userId: (session.user as any).id,
+      organizationId: (session.user as any).organizationId,
+    },
+    select: { role: true },
+  });
+
+  return NextResponse.json({
+    organization: user?.organization
+      ? { ...user.organization, userRole: member?.role || null }
+      : null,
+  });
 }
