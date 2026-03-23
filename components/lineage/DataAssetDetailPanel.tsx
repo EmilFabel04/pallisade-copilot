@@ -483,8 +483,8 @@ export function DataAssetDetailPanel({
               </>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-2 text-[12px]">
-            <div>
+          <div className="flex items-start gap-6 text-[12px]">
+            <div className="whitespace-nowrap">
               <span className="text-[var(--muted)]">Last Updated</span>
               <p className="text-[var(--text)] mt-0.5">
                 {node.lastUpdated
@@ -499,7 +499,7 @@ export function DataAssetDetailPanel({
               </p>
             </div>
             {node.rowCount != null && (
-              <div>
+              <div className="whitespace-nowrap">
                 <span className="text-[var(--muted)]">Row Count</span>
                 <p className="text-[var(--text)] mt-0.5">
                   {node.rowCount.toLocaleString()}
