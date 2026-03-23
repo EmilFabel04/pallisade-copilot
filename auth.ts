@@ -81,8 +81,22 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
   ],
   callbacks: {
     async signIn({ user, account, profile }) {
-      // Credentials provider — handled by authorize(), always allow
+      // Credentials provider — check SSO enforcement before allowing
       if (account?.provider === 'credentials') {
+        // Check SSO enforcement for the user's org
+        const dbUser = await prisma.user.findUnique({
+          where: { id: user.id! },
+          include: { organization: true },
+        });
+
+        if (dbUser?.organization?.authPolicy === 'SSO_ONLY') {
+          // Check grace period
+          const graceUntil = dbUser.organization.authPolicyGraceUntil;
+          if (!graceUntil || new Date() > graceUntil) {
+            return '/login?error=SSORequired';
+          }
+        }
+
         return true;
       }
 
