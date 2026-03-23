@@ -15,6 +15,32 @@ function LoginForm() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [formError, setFormError] = useState('');
+  const [showSsoInput, setShowSsoInput] = useState(false);
+  const [ssoEmail, setSsoEmail] = useState('');
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [ssoError, setSsoError] = useState('');
+
+  const handleSsoLookup = async () => {
+    setSsoLoading(true);
+    setSsoError('');
+    try {
+      const res = await fetch('/api/auth/sso/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: ssoEmail }),
+      });
+      const data = await res.json();
+      if (data.hasOidc) {
+        window.location.href = '/api/auth/oidc/authorize';
+      } else {
+        setSsoError('No SSO provider configured for this email domain.');
+      }
+    } catch {
+      setSsoError('Failed to look up SSO provider.');
+    } finally {
+      setSsoLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,7 +80,14 @@ function LoginForm() {
       <div className="auth-card">
         {(error || formError) && (
           <div className="mb-6 p-4 rounded-lg bg-red-950/40 border border-red-900/40 text-red-400 text-sm">
-            {formError || 'Authentication failed. Please try again.'}
+            {formError ||
+              (error === 'NoInvite'
+                ? 'You need an invitation to join an organization. Contact your admin.'
+                : error === 'SSORequired'
+                ? 'Your organization requires SSO sign-in. Use one of the providers below.'
+                : error === 'UnverifiedEmail'
+                ? 'Your email address is not verified with this provider. Please verify it and try again.'
+                : 'Authentication failed. Please try again.')}
           </div>
         )}
 
@@ -131,7 +164,7 @@ function LoginForm() {
             </div>
           </div>
 
-          <div className="mt-6 grid grid-cols-2 gap-3">
+          <div className="mt-6 grid grid-cols-3 gap-3">
             <button
               onClick={() => signIn('google', { callbackUrl })}
               className="btn btn-secondary justify-center"
@@ -153,6 +186,47 @@ function LoginForm() {
               </svg>
               GitHub
             </button>
+            <button
+              onClick={() => signIn('microsoft-entra-id', { callbackUrl })}
+              className="btn btn-secondary justify-center"
+            >
+              <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M11.4 24H0V12.6h11.4V24zM24 24H12.6V12.6H24V24zM11.4 11.4H0V0h11.4v11.4zM24 11.4H12.6V0H24v11.4z"/>
+              </svg>
+              Microsoft
+            </button>
+          </div>
+
+          <div className="mt-4">
+            {!showSsoInput ? (
+              <button
+                onClick={() => setShowSsoInput(true)}
+                className="btn btn-secondary w-full justify-center"
+              >
+                Sign in with SSO
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <input
+                  type="email"
+                  value={ssoEmail}
+                  onChange={(e) => setSsoEmail(e.target.value)}
+                  placeholder="you@company.com"
+                  className="auth-input"
+                  onKeyDown={(e) => e.key === 'Enter' && ssoEmail && handleSsoLookup()}
+                />
+                {ssoError && (
+                  <p className="text-red-400 text-sm">{ssoError}</p>
+                )}
+                <button
+                  onClick={handleSsoLookup}
+                  disabled={ssoLoading || !ssoEmail}
+                  className="btn btn-elevated w-full justify-center"
+                >
+                  {ssoLoading ? 'Looking up...' : 'Continue with SSO'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
