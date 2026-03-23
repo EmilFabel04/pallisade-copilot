@@ -73,10 +73,22 @@ export const authOptions: NextAuthOptions = {
       : []),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         token.id = user.id;
         token.organizationId = (user as any).organizationId;
+        token.timezone = (user as any).timezone;
+      }
+      // Re-fetch from DB when client calls useSession().update()
+      if (trigger === 'update' && token.id) {
+        const dbUser = await prisma.user.findUnique({
+          where: { id: token.id as string },
+          select: { timezone: true, organizationId: true },
+        });
+        if (dbUser) {
+          token.timezone = dbUser.timezone;
+          token.organizationId = dbUser.organizationId;
+        }
       }
       return token;
     },
@@ -84,6 +96,7 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         (session.user as any).id = token.id;
         (session.user as any).organizationId = token.organizationId;
+        (session.user as any).timezone = token.timezone;
       }
       return session;
     },

@@ -1,6 +1,7 @@
 import { getServerSession } from 'next-auth';
 import { redirect } from 'next/navigation';
 import { authOptions } from '../../lib/auth';
+import prisma from '@/lib/db';
 import { Sidebar } from '../../components/dashboard/Sidebar';
 import { DashboardHeader } from '../../components/dashboard/Header';
 import { SessionProvider } from '../../components/providers/SessionProvider';
@@ -18,6 +19,16 @@ export default async function DashboardLayout({
 
   if (!session) {
     redirect('/login');
+  }
+
+  // Check if user has completed onboarding
+  const user = await prisma.user.findUnique({
+    where: { id: (session.user as any).id },
+    select: { onboardingCompleted: true },
+  });
+
+  if (!user?.onboardingCompleted) {
+    redirect('/onboarding');
   }
 
   return (

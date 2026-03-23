@@ -69,7 +69,7 @@ export default function SignUpPage() {
       if (signInResult?.error) {
         router.push('/login');
       } else {
-        router.push('/dashboard');
+        router.push('/onboarding');
         router.refresh();
       }
     } catch (err) {
