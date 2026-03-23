@@ -24,6 +24,12 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  // Onboarding
+  timezone            String?
+  role                String?
+  onboardingCompleted Boolean   @default(false)
+  onboardingStep      Int       @default(0)
+
   // Relations
   organization   Organization? @relation(fields: [organizationId], references: [id])
   organizationId String?
@@ -101,6 +107,11 @@ model Organization {
   plan      Plan     @default(STARTER)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Company profile
+  companySize  String?
+  industry     String?
+  dataTeamSize String?
 
   // SLO Configuration (default thresholds in hours)
   sloDefaults      Json? // { default: 24, realtime: 1, hourly: 2, daily: 25 }
