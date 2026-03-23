@@ -240,7 +240,9 @@ function engineNodeToUnified(
     || eNode.raw_metadata?.last_updated_at;
   const lastUpdatedStr = lastUpdatedRaw ? String(lastUpdatedRaw) : undefined;
   if (lastUpdatedStr) {
-    const hoursSinceUpdate = (Date.now() - new Date(lastUpdatedStr).getTime()) / (1000 * 60 * 60);
+    // Treat naive timestamps (no Z or +offset) as UTC — Python's utcnow() omits the Z
+    const tsForParsing = lastUpdatedStr.endsWith('Z') || lastUpdatedStr.includes('+') ? lastUpdatedStr : lastUpdatedStr + 'Z';
+    const hoursSinceUpdate = (Date.now() - new Date(tsForParsing).getTime()) / (1000 * 60 * 60);
     if (!isNaN(hoursSinceUpdate)) {
       freshnessHours = Math.round(hoursSinceUpdate);
       freshnessStatus = hoursSinceUpdate <= 24 ? 'fresh' : 'stale';

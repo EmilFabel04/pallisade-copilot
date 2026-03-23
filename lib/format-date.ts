@@ -1,4 +1,18 @@
 /**
+ * Parse a date string, treating naive timestamps (no Z or +offset) as UTC.
+ * Python's datetime.utcnow().isoformat() omits the Z suffix, which causes
+ * browsers to interpret them as local time — this fixes that.
+ */
+function parseAsUTC(date: string | Date): Date {
+  if (date instanceof Date) return date;
+  // If the string has no timezone indicator, append Z to treat as UTC
+  if (date && !date.endsWith('Z') && !date.includes('+') && !/\d{2}:\d{2}$/.test(date.slice(-6))) {
+    return new Date(date + 'Z');
+  }
+  return new Date(date);
+}
+
+/**
  * Format a date/timestamp with the user's timezone.
  * All API responses return UTC; this converts for display.
  */
@@ -9,7 +23,7 @@ export function formatDate(
 ): string {
   if (!date) return 'Unknown';
 
-  const d = typeof date === 'string' ? new Date(date) : date;
+  const d = typeof date === 'string' ? parseAsUTC(date) : date;
   if (isNaN(d.getTime())) return 'Unknown';
 
   const tz = timezone || 'UTC';
@@ -34,7 +48,7 @@ export function formatRelativeTime(
 ): string {
   if (!date) return 'Unknown';
 
-  const d = typeof date === 'string' ? new Date(date) : date;
+  const d = typeof date === 'string' ? parseAsUTC(date) : date;
   if (isNaN(d.getTime())) return 'Unknown';
 
   const now = new Date();

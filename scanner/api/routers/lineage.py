@@ -911,6 +911,8 @@ class EngineNodeResponse(BaseModel):
     criticality: str = "medium"
     canonical_type: Optional[str] = None
     raw_metadata: Dict[str, Any] = {}
+    last_updated: Optional[str] = None
+    observed_at: Optional[str] = None
 
     class Config:
         populate_by_name = True
@@ -986,6 +988,8 @@ def _node_to_engine_response(node) -> EngineNodeResponse:
         criticality=getattr(node, "criticality", "medium") or "medium",
         canonical_type=node.canonical_type,
         raw_metadata=node.raw_metadata or {},
+        last_updated=(node.last_updated.isoformat() + 'Z') if node.last_updated else None,
+        observed_at=(node.observed_at.isoformat() + 'Z') if node.observed_at else None,
     )
 
 
@@ -1003,7 +1007,7 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
             EngineEvidenceResponse(
                 adapter_id=e.adapter_id,
                 source_ref=e.source_ref,
-                observed_at=e.observed_at.isoformat() if e.observed_at else None,
+                observed_at=(e.observed_at.isoformat() + 'Z') if e.observed_at else None,
                 snippet=e.snippet,
             )
             for e in edge.evidence

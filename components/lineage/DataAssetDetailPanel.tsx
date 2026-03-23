@@ -494,7 +494,7 @@ export function DataAssetDetailPanel({
                       : node.freshnessHours < 24
                       ? `${node.freshnessHours}h ago`
                       : `${Math.round(node.freshnessHours / 24)}d ago`
-                    : new Date(node.lastUpdated).toLocaleDateString()
+                    : new Date(node.lastUpdated.endsWith('Z') || node.lastUpdated.includes('+') ? node.lastUpdated : node.lastUpdated + 'Z').toLocaleDateString()
                   : 'Unknown'}
               </p>
             </div>
