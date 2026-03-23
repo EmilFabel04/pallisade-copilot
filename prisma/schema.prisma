@@ -116,7 +116,9 @@ model Organization {
   // SLO Configuration (default thresholds in hours)
   sloDefaults      Json? // { default: 24, realtime: 1, hourly: 2, daily: 25 }
   sloEnabled       Boolean @default(true)
-  alertOnSLOBreach Boolean @default(true)
+  alertOnSLOBreach     Boolean    @default(true)
+  authPolicy           AuthPolicy @default(FLEXIBLE)
+  authPolicyGraceUntil DateTime?
 
   // Relations
   users            User[]
@@ -180,6 +182,9 @@ model Organization {
   // Pipeline Monitoring Policies
   policyProfiles    PolicyProfile[]
   policyAssignments PolicyAssignment[]
+
+  // SSO
+  oidcConfig OrgOidcConfig?
 
   @@index([domain])
 }
@@ -267,6 +272,20 @@ model TeamInvite {
   @@index([email])
 }
 
+model OrgOidcConfig {
+  id              String       @id @default(cuid())
+  organizationId  String       @unique
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  issuerUrl       String
+  clientId        String
+  clientSecret    String
+  scopes          String       @default("openid email profile")
+  displayName     String       @default("SSO")
+  enabled         Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
 enum TeamRole {
   OWNER // Full control, can delete org, transfer ownership
   ADMIN // Manage team, integrations, settings (can't delete org)
@@ -287,6 +306,11 @@ enum InviteStatus {
   DECLINED // User declined
   EXPIRED // Past expiration date
   REVOKED // Admin cancelled
+}
+
+enum AuthPolicy {
+  FLEXIBLE
+  SSO_ONLY
 }
 
 // ============================================
