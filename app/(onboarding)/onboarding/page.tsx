@@ -189,14 +189,17 @@ export default function OnboardingPage() {
 
   if (status === 'loading' || !initialDataLoaded) {
     return (
-      <div className="w-full max-w-lg text-center">
+      <div className="w-full max-w-md text-center">
         <p className="text-[var(--muted)]">Loading...</p>
       </div>
     );
   }
 
   return (
-    <div className="w-full max-w-lg">
+    <div className="w-full max-w-md">
+      <div className="text-center mb-6">
+        <img src="/pallisade_emblem.svg" alt="Pallisade" className="w-14 h-14 mx-auto mb-3" />
+      </div>
       <StepProgress currentStep={currentStep} completedSteps={completedSteps} />
 
       {currentStep === 1 && (

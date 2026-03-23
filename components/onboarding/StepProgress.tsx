@@ -14,27 +14,25 @@ interface StepProgressProps {
 
 export function StepProgress({ currentStep, completedSteps }: StepProgressProps) {
   return (
-    <div className="flex items-center justify-center gap-2 mb-8">
+    <div className="flex items-center justify-center gap-3 mb-8">
       {STEPS.map((step, i) => {
         const isCompleted = step.number <= completedSteps;
         const isCurrent = step.number === currentStep;
         return (
-          <div key={step.number} className="flex items-center gap-2">
+          <div key={step.number} className="flex items-center gap-3">
             {i > 0 && (
               <div
-                className={`w-8 h-px ${
+                className={`w-8 h-[2px] ${
                   step.number <= completedSteps + 1
                     ? 'bg-[var(--accent)]'
-                    : 'bg-[var(--subtle-border)]'
+                    : 'bg-[var(--overlay-medium)]'
                 }`}
               />
             )}
             <div className="flex items-center gap-2">
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${
-                  isCompleted
-                    ? 'bg-[var(--accent)] text-white'
-                    : isCurrent
+                  isCompleted || isCurrent
                     ? 'bg-[var(--accent)] text-white'
                     : 'bg-[var(--overlay-medium)] text-[var(--muted)]'
                 }`}
@@ -42,7 +40,7 @@ export function StepProgress({ currentStep, completedSteps }: StepProgressProps)
                 {isCompleted && step.number < currentStep ? '✓' : step.number}
               </div>
               <span
-                className={`text-xs font-medium hidden sm:inline ${
+                className={`text-[12px] font-medium hidden sm:inline ${
                   isCurrent ? 'text-[var(--text)]' : 'text-[var(--muted)]'
                 }`}
               >
