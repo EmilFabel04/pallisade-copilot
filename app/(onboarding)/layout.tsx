@@ -1,5 +1,5 @@
 import '../globals.css';
-import { SessionProvider } from '../../components/providers/SessionProvider';
+import { OnboardingSessionProvider } from './OnboardingSessionProvider';
 
 export default function OnboardingLayout({
   children,
@@ -22,7 +22,7 @@ export default function OnboardingLayout({
         />
       </div>
       <div className="flex-1 flex items-center justify-center px-4 py-8">
-        <SessionProvider>{children}</SessionProvider>
+        <OnboardingSessionProvider>{children}</OnboardingSessionProvider>
       </div>
     </div>
   );
