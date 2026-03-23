@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 export default function SignUpPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [formData, setFormData] = useState({
     name: '',
@@ -17,6 +18,22 @@ export default function SignUpPage() {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [orgSsoOnly, setOrgSsoOnly] = useState(false);
+
+  const inviteToken = searchParams.get('token');
+
+  useEffect(() => {
+    if (inviteToken) {
+      fetch(`/api/team/invite/check?token=${inviteToken}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.authPolicy === 'SSO_ONLY') {
+            setOrgSsoOnly(true);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [inviteToken]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -146,64 +163,83 @@ export default function SignUpPage() {
             />
           </div>
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium mb-2">
-              Password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              value={formData.password}
-              onChange={handleChange}
-              required
-              className="auth-input"
-              placeholder="At least 8 characters"
-              autoComplete="new-password"
-            />
-          </div>
+          {orgSsoOnly ? (
+            <div className="space-y-4 text-center">
+              <p className="text-sm text-[var(--muted)]">
+                Your organization requires SSO. Sign in with one of the providers below.
+              </p>
+              <button onClick={() => signIn('google', { callbackUrl: '/dashboard' })} className="btn btn-secondary w-full justify-center">
+                Continue with Google
+              </button>
+              <button onClick={() => signIn('github', { callbackUrl: '/dashboard' })} className="btn btn-secondary w-full justify-center">
+                Continue with GitHub
+              </button>
+              <button onClick={() => signIn('microsoft-entra-id', { callbackUrl: '/dashboard' })} className="btn btn-secondary w-full justify-center">
+                Continue with Microsoft
+              </button>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium mb-2">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  value={formData.password}
+                  onChange={handleChange}
+                  required
+                  className="auth-input"
+                  placeholder="At least 8 characters"
+                  autoComplete="new-password"
+                />
+              </div>
 
-          <div>
-            <label htmlFor="confirmPassword" className="block text-sm font-medium mb-2">
-              Confirm password
-            </label>
-            <input
-              id="confirmPassword"
-              name="confirmPassword"
-              type="password"
-              value={formData.confirmPassword}
-              onChange={handleChange}
-              required
-              className="auth-input"
-              placeholder="••••••••"
-              autoComplete="new-password"
-            />
-          </div>
+              <div>
+                <label htmlFor="confirmPassword" className="block text-sm font-medium mb-2">
+                  Confirm password
+                </label>
+                <input
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  type="password"
+                  value={formData.confirmPassword}
+                  onChange={handleChange}
+                  required
+                  className="auth-input"
+                  placeholder="••••••••"
+                  autoComplete="new-password"
+                />
+              </div>
 
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="btn btn-elevated w-full justify-center"
-          >
-            {isLoading ? (
-              <span className="flex items-center gap-2">
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Creating account...
-              </span>
-            ) : (
-              'Create account'
-            )}
-          </button>
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="btn btn-elevated w-full justify-center"
+              >
+                {isLoading ? (
+                  <span className="flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Creating account...
+                  </span>
+                ) : (
+                  'Create account'
+                )}
+              </button>
 
-          <p className="text-xs text-center text-[var(--muted)]">
-            By signing up, you agree to our{' '}
-            <Link href="/terms" className="text-[var(--accent-2)] hover:underline">Terms of Service</Link>
-            {' '}and{' '}
-            <Link href="/privacy" className="text-[var(--accent-2)] hover:underline">Privacy Policy</Link>
-          </p>
+              <p className="text-xs text-center text-[var(--muted)]">
+                By signing up, you agree to our{' '}
+                <Link href="/terms" className="text-[var(--accent-2)] hover:underline">Terms of Service</Link>
+                {' '}and{' '}
+                <Link href="/privacy" className="text-[var(--accent-2)] hover:underline">Privacy Policy</Link>
+              </p>
+            </>
+          )}
         </form>
 
         <p className="mt-8 text-center text-sm text-[var(--muted)]">
