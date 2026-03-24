@@ -19,6 +19,8 @@ export interface MultiMonitorModalProps {
   onComplete: () => void;
   stackId?: string;
   preselectedNodeIds?: string[];
+  /** Pre-built node metadata (skips NodeSelectionSurface loading) */
+  preselectedNodeMeta?: NodeMeta[];
   integrations?: Array<{ id: string; name: string; type: string }>;
 }
 
@@ -301,6 +303,7 @@ export function MultiMonitorModal({
   onComplete,
   stackId,
   preselectedNodeIds,
+  preselectedNodeMeta,
   integrations = [],
 }: MultiMonitorModalProps) {
   const [step, setStep] = useState<Step>(1);
@@ -314,7 +317,7 @@ export function MultiMonitorModal({
 
   // Step 2: Monitor configuration
   const [configTab, setConfigTab] = useState<ConfigTab>('presets');
-  const [preview, setPreview] = useState<MonitoringPlanPreview | null>(null);
+  // preview is derived via useMemo from rawPreview + tool monitor injection (see below)
   const [previewLoading, setPreviewLoading] = useState(false);
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [monitorChecks, setMonitorChecks] = useState<Record<string, boolean>>({});
@@ -356,7 +359,12 @@ export function MultiMonitorModal({
     if (open) {
       setStep(preselectedNodeIds?.length ? 2 : 1);
       setSelectedNodeIds(preselectedNodeIds || []);
-      setPreview(null);
+      // Seed node metadata if provided (skips NodeSelectionSurface requirement)
+      if (preselectedNodeMeta?.length) {
+        setAllNodeMeta(preselectedNodeMeta);
+      }
+      setRawPreview(null);
+      setPreviewFailed(false);
       setMonitorChecks({});
       setActivePreset(null);
       setConfigTab('presets');
@@ -370,12 +378,153 @@ export function MultiMonitorModal({
       setCreating(false);
       setCollapsedNodes(new Set());
     }
-  }, [open, preselectedNodeIds]);
+  }, [open, preselectedNodeIds, preselectedNodeMeta]);
 
-  // Node metadata callback from NodeSelectionSurface
+  // Node metadata callback from NodeSelectionSurface.
+  // Merge with any preselected tool node meta (which has subNodeIds/domain
+  // that the NodeSelectionSurface nodes won't have).
   const handleNodesLoaded = useCallback((nodes: NodeMeta[]) => {
-    setAllNodeMeta(nodes);
-  }, []);
+    if (preselectedNodeMeta?.length) {
+      const surfaceIds = new Set(nodes.map((n) => n.id));
+      const extras = preselectedNodeMeta.filter((pm) => !surfaceIds.has(pm.id));
+      setAllNodeMeta([...extras, ...nodes]);
+    } else {
+      setAllNodeMeta(nodes);
+    }
+  }, [preselectedNodeMeta]);
+
+  // ---- Expand tool node IDs to actual graph node IDs ----
+  const resolvedGraphNodeIds = useMemo(() => {
+    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const nid of selectedNodeIds) {
+      const meta = metaById.get(nid);
+      if (meta?.subNodeIds?.length) {
+        for (const sub of meta.subNodeIds) {
+          if (!seen.has(sub)) {
+            seen.add(sub);
+            ids.push(sub);
+          }
+        }
+      } else {
+        if (!seen.has(nid)) {
+          seen.add(nid);
+          ids.push(nid);
+        }
+      }
+    }
+    return ids;
+  }, [selectedNodeIds, allNodeMeta]);
+
+  // ---- Fetch raw preview from API ----
+  const [rawPreview, setRawPreview] = useState<MonitoringPlanPreview | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+
+  const fetchFullPreview = useCallback(async () => {
+    if (!stackId) return;
+    setPreviewLoading(true);
+    setPreviewFailed(false);
+    const emptyPreview: MonitoringPlanPreview = {
+      scope_type: 'custom', mode: 'recommended', families: ['full_coverage'],
+      groups: [], total_nodes: 0, total_monitors: 0,
+      raw_monitor_count: 0, dedup_count: 0, coverage_pct: 0,
+      warnings: [], family_eligibility: [],
+    };
+    if (resolvedGraphNodeIds.length === 0) {
+      setRawPreview(emptyPreview);
+      setMonitorChecks({});
+      setActivePreset(null);
+      setPreviewLoading(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/schedule/plans/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scopeType: 'custom',
+          scopeConfig: { nodeIds: resolvedGraphNodeIds },
+          mode: 'recommended',
+          families: ['full_coverage'],
+          stackId,
+        }),
+      });
+      if (res.ok) {
+        const data: MonitoringPlanPreview = await res.json();
+        setRawPreview(data);
+      } else {
+        setRawPreview(emptyPreview);
+      }
+      setMonitorChecks({});
+      setActivePreset(null);
+    } catch (err) {
+      console.error('[MultiMonitor] Failed to fetch preview:', err);
+      setRawPreview(emptyPreview);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [stackId, resolvedGraphNodeIds]);
+
+  // ---- Inject synthetic tool monitor groups (always uses current state) ----
+  const preview = useMemo<MonitoringPlanPreview | null>(() => {
+    if (!rawPreview) return null;
+    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
+    const toolGroups: MonitoringPlanPreview['groups'] = [];
+
+    for (const nid of selectedNodeIds) {
+      const meta = metaById.get(nid);
+      if (!meta?.subNodeIds?.length) continue;
+      const domain = meta.domain || '';
+      const domainMonitors = DOMAIN_MONITOR_MAP[domain];
+      if (!domainMonitors) continue;
+
+      const recommendations = [...domainMonitors].map((monKey) => {
+        const def = getMonitorDefinition(monKey);
+        return {
+          monitor_key: monKey,
+          target_fqn: meta.fqn,
+          target_node_id: meta.id,
+          source: 'tool_domain',
+          reason: def?.description || `Recommended for ${domain} tools`,
+          priority: 1,
+          config_hints: {} as Record<string, any>,
+          integration_type: meta.platform || '',
+          already_monitored: false,
+        };
+      });
+
+      toolGroups.push({
+        group_index: rawPreview.groups.length + toolGroups.length,
+        family: `${domain}_ops`,
+        watch_type: 'tool_monitor',
+        anchor_id: meta.id,
+        anchor_name: meta.name,
+        anchor_fqn: meta.fqn,
+        anchor_node_type: 'tool',
+        anchor_platform: meta.platform || '',
+        node_count: 1,
+        monitor_count: recommendations.length,
+        coverage_pct: 100,
+        shared_node_ids: [],
+        recommendations,
+      });
+    }
+
+    if (toolGroups.length === 0) return rawPreview;
+    return {
+      ...rawPreview,
+      groups: [...rawPreview.groups, ...toolGroups],
+      total_monitors: rawPreview.total_monitors + toolGroups.reduce((s, g) => s + g.recommendations.length, 0),
+    };
+  }, [rawPreview, allNodeMeta, selectedNodeIds]);
+
+  // Auto-fetch preview when opening directly at step 2
+  useEffect(() => {
+    if (open && step === 2 && !rawPreview && !previewLoading && !previewFailed) {
+      fetchFullPreview();
+    }
+  }, [open, step, rawPreview, previewLoading, previewFailed, fetchFullPreview]);
 
   // ---- Build per-node monitor map from preview (keyed by node ID) ----
   const nodeMonitorMap = useMemo(() => {
@@ -415,13 +564,23 @@ export function MultiMonitorModal({
       let monitors: MonitorOption[];
 
       if (isToolNode) {
-        // Tool/service node — filter by domain-specific monitor set
+        // Tool/service node — show domain-specific tool monitors.
+        // Synthetic tool monitors are injected under the tool node's own
+        // ID (see injectToolMonitors); sub-nodes may also carry matching
+        // keys from the preview, so deduplicate by monitor key.
         const domain = nm.domain || '';
         const domainMonitors = DOMAIN_MONITOR_MAP[domain];
         const allMons: MonitorOption[] = [];
+        const seenKeys = new Set<string>();
+        // Collect from the tool node's own ID first (synthetic tool monitors)
+        for (const m of nodeMonitorMap.get(nm.id) || []) {
+          if (!seenKeys.has(m.key)) { seenKeys.add(m.key); allMons.push(m); }
+        }
+        // Then from sub-nodes (skip duplicates)
         for (const subId of nm.subNodeIds!) {
-          const subMons = nodeMonitorMap.get(subId) || [];
-          allMons.push(...subMons);
+          for (const m of nodeMonitorMap.get(subId) || []) {
+            if (!seenKeys.has(m.key)) { seenKeys.add(m.key); allMons.push(m); }
+          }
         }
         monitors = domainMonitors
           ? allMons.filter((m) => domainMonitors.has(m.key))
@@ -444,65 +603,7 @@ export function MultiMonitorModal({
     return nodes;
   }, [selectedNodeIds, allNodeMeta, nodeMonitorMap]);
 
-  // ---- Expand tool node IDs to actual graph node IDs ----
-  const resolvedGraphNodeIds = useMemo(() => {
-    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
-    const ids: string[] = [];
-    const seen = new Set<string>();
-    for (const nid of selectedNodeIds) {
-      const meta = metaById.get(nid);
-      if (meta?.subNodeIds?.length) {
-        for (const sub of meta.subNodeIds) {
-          if (!seen.has(sub)) {
-            seen.add(sub);
-            ids.push(sub);
-          }
-        }
-      } else {
-        if (!seen.has(nid)) {
-          seen.add(nid);
-          ids.push(nid);
-        }
-      }
-    }
-    return ids;
-  }, [selectedNodeIds, allNodeMeta]);
-
-  // ---- Fetch preview with full_coverage when entering step 2 ----
-  const fetchFullPreview = useCallback(async () => {
-    if (!stackId || resolvedGraphNodeIds.length === 0) return;
-    setPreviewLoading(true);
-    try {
-      const res = await fetch('/api/schedule/plans/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scopeType: 'custom',
-          scopeConfig: { nodeIds: resolvedGraphNodeIds },
-          mode: 'recommended',
-          families: ['full_coverage'],
-          stackId,
-        }),
-      });
-      if (res.ok) {
-        const data: MonitoringPlanPreview = await res.json();
-        setPreview(data);
-        setMonitorChecks({});
-        setActivePreset(null);
-      }
-    } catch (err) {
-      console.error('[MultiMonitor] Failed to fetch preview:', err);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [stackId, resolvedGraphNodeIds]);
-
-  // Auto-fetch preview when opening directly at step 2 (e.g. from lineage asset panel)
-  useEffect(() => {
-    if (open && step === 2 && !preview && !previewLoading && resolvedGraphNodeIds.length > 0) {
-      fetchFullPreview();
-    }
-  }, [open, step, preview, previewLoading, resolvedGraphNodeIds, fetchFullPreview]);
+  // (resolvedGraphNodeIds, rawPreview, preview, fetchFullPreview moved above nodeMonitorMap)
 
   // ---- Set of visible monitor keys after tool/data split filtering ----
   const visibleMonitorKeys = useMemo(() => {

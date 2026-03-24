@@ -6,8 +6,37 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
+import prisma from '@/lib/db';
+import { decrypt } from '@/lib/crypto';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+
+/**
+ * Resolve the GitHub access token from the GitHub connector node in the same stack.
+ * Used by dbt/airflow nodes that reference repos from the GitHub connector.
+ */
+async function resolveGitHubToken(stackId: string | undefined, organizationId: string): Promise<string | null> {
+  if (!stackId) return null;
+  try {
+    const githubNode = await prisma.pipelineNode.findFirst({
+      where: { stackId, toolType: 'github', stack: { organizationId } },
+      include: { integration: true },
+    });
+    if (!githubNode) return null;
+
+    let config: Record<string, any> = {};
+    if ((githubNode as any).integrationId && (githubNode as any).integration?.credentials) {
+      const intCreds = (githubNode as any).integration.credentials as any;
+      config = intCreds.encrypted ? JSON.parse(decrypt(intCreds.encrypted)) : intCreds;
+    } else if (githubNode.config) {
+      const configJson = githubNode.config as any;
+      config = configJson.encrypted ? JSON.parse(decrypt(configJson.encrypted)) : configJson;
+    }
+    return config.access_token || null;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,7 +49,8 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { toolType, config } = body;
+    const { toolType, config, stackId } = body;
+    const organizationId = (session.user as any).organizationId;
 
     // Route to appropriate test endpoint based on tool type
     let testEndpoint: string;
@@ -445,7 +475,7 @@ export async function POST(request: NextRequest) {
 
           // Try to fetch the repo to validate access
           const branch = config.github_branch || 'main';
-          const token = config.github_token || '';
+          const token = config.github_token || await resolveGitHubToken(stackId, organizationId) || '';
           const headers: Record<string, string> = { 'Accept': 'application/vnd.github.v3+json' };
           if (token) {
             headers['Authorization'] = `Bearer ${token}`;
@@ -551,12 +581,15 @@ export async function POST(request: NextRequest) {
           if (sourceMode === 'github') {
             // GitHub mode — verify we can list the DAG directory
             const repo = config.github_repo;
-            const token = config.github_token;
+            const token = config.github_token || await resolveGitHubToken(stackId, organizationId) || '';
             const branch = config.github_branch || 'main';
             const dagDir = config.dag_directory || 'dags';
 
-            if (!repo || !token) {
-              return NextResponse.json({ success: false, message: 'GitHub repo and token are required for DAG file parsing' });
+            if (!repo) {
+              return NextResponse.json({ success: false, message: 'GitHub repo is required for DAG file parsing' });
+            }
+            if (!token) {
+              return NextResponse.json({ success: false, message: 'No GitHub token found. Configure a GitHub connector first.' });
             }
 
             const ghResponse = await fetch(

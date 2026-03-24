@@ -749,3 +749,19 @@ export const DOMAIN_MONITOR_MAP: Record<string, Set<string>> = {
   bi: new Set(['BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK', 'BI_CONTENT_HEALTH', 'BI_REFRESH_FAILURE']),
   infrastructure: new Set(['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS']),
 };
+
+// ---------------------------------------------------------------------------
+// Asset prefill for monitor creation flows
+// ---------------------------------------------------------------------------
+
+export interface AssetPrefill {
+  nodeId: string;
+  fqn: string;
+  name: string;
+  platform?: string;
+  domain?: string;
+  criticality?: string;
+  nodeType?: string;
+  /** For tool nodes: child asset graph node IDs */
+  subNodeIds?: string[];
+}

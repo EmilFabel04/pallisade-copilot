@@ -907,7 +907,7 @@ class LLMLineageExtractor:
             for tc in self._tool_configs.values():
                 if tc.tool_type.lower() in ("github", "gitlab"):
                     repo = repo or tc.config.get("repo") or tc.config.get("github_repo")
-                    token = token or tc.config.get("token") or tc.config.get("github_token")
+                    token = token or tc.config.get("access_token") or tc.config.get("token") or tc.config.get("github_token")
                     branch = branch or tc.config.get("branch") or tc.config.get("github_branch") or "main"
                     break
 

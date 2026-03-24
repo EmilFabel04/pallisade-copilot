@@ -18,7 +18,7 @@ import {
   Plus,
   Sparkles,
 } from 'lucide-react';
-import type { AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
+import type { AssetPrefill } from '@/types/monitor-catalog';
 import {
   type UnifiedLineageNode,
   type UnifiedLineageEdge,

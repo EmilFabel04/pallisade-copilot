@@ -28,14 +28,14 @@ function ConnectorsTab({ items }: { items: ToolDetailItem[] }) {
     <div className="space-y-2">
       {items.map(item => {
         const syncedTables = (item.metadata?.synced_tables as string[]) || [];
-        const destSchema = item.metadata?.dest_schema || '';
+        const sourceType = item.metadata?.source_type || item.metadata?.service || '';
         return (
           <CardItem key={item.id} item={item}>
             <div className="space-y-1 mt-1">
-              {destSchema && (
+              {sourceType && (
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-[var(--muted)] uppercase">Dest</span>
-                  <span className="text-[11px] text-[var(--text)] font-mono">{destSchema}</span>
+                  <span className="text-[10px] text-[var(--muted)] uppercase">Source</span>
+                  <span className="text-[11px] text-[var(--text)] font-mono capitalize">{sourceType}</span>
                 </div>
               )}
               {syncedTables.length > 0 && (

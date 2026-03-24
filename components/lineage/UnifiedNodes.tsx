@@ -262,21 +262,67 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
           </div>
         </div>
 
-        {/* Asset count */}
-        {data.assetCount !== undefined && (
-          <div className="flex items-center justify-between text-[11px] mb-2">
-            <span className="text-[var(--muted)]">Data Assets</span>
-            <span className="text-[var(--text)] font-semibold">{data.assetCount}</span>
-          </div>
-        )}
-
-        {/* Job count */}
-        {(data.jobCount ?? 0) > 0 && (
-          <div className="flex items-center justify-between text-[11px] mb-2">
-            <span className="text-[var(--muted)]">Jobs</span>
-            <span className="text-[var(--text)] font-semibold">{data.jobCount}</span>
-          </div>
-        )}
+        {/* Asset/job count — platform-relevant label */}
+        {(() => {
+          const toolType = (data.toolType || '').toLowerCase();
+          const layer = (data.layer || '').toUpperCase();
+          // Ingestion tools: show connectors (job count), not raw asset count
+          if (layer === 'INGESTION' || ['fivetran', 'airbyte', 'stitch'].includes(toolType)) {
+            const count = data.jobCount ?? 0;
+            return count > 0 ? (
+              <div className="flex items-center gap-1.5 text-[11px] mb-2">
+                <span className="text-[var(--muted)]">Connectors</span>
+                <span className="text-[var(--text)] font-semibold">{count}</span>
+              </div>
+            ) : null;
+          }
+          // Orchestration tools: show DAGs + Tasks as a combined count
+          if (['airflow', 'dagster', 'prefect', 'n8n'].includes(toolType)) {
+            const label = toolType === 'airflow' ? 'DAGs & Tasks' : 'Workflows';
+            const count = data.assetCount ?? 0;
+            return count > 0 ? (
+              <div className="flex items-center gap-1.5 text-[11px] mb-2">
+                <span className="text-[var(--muted)]">{label}</span>
+                <span className="text-[var(--text)] font-semibold">{count}</span>
+              </div>
+            ) : null;
+          }
+          // VCS tools: show repos
+          if (['github', 'gitlab', 'bitbucket'].includes(toolType)) {
+            return data.assetCount !== undefined && data.assetCount > 0 ? (
+              <div className="flex items-center gap-1.5 text-[11px] mb-2">
+                <span className="text-[var(--muted)]">Repos</span>
+                <span className="text-[var(--text)] font-semibold">{data.assetCount}</span>
+              </div>
+            ) : null;
+          }
+          // BI/reporting tools: show dashboards
+          if (['metabase', 'looker', 'tableau', 'powerbi'].includes(toolType)) {
+            return data.assetCount !== undefined ? (
+              <div className="flex items-center gap-1.5 text-[11px] mb-2">
+                <span className="text-[var(--muted)]">Dashboards</span>
+                <span className="text-[var(--text)] font-semibold">{data.assetCount}</span>
+              </div>
+            ) : null;
+          }
+          // Default: Data Assets + Jobs — inline row
+          return (
+            <div className="flex items-center gap-4 text-[11px] mb-2">
+              {data.assetCount !== undefined && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[var(--muted)]">Assets</span>
+                  <span className="text-[var(--text)] font-semibold">{data.assetCount}</span>
+                </div>
+              )}
+              {(data.jobCount ?? 0) > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[var(--muted)]">Jobs</span>
+                  <span className="text-[var(--text)] font-semibold">{data.jobCount}</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Health bar */}
         {total > 0 && (

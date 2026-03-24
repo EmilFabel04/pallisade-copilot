@@ -279,6 +279,15 @@ export default function PipelinePage() {
       try {
         const res = await fetch(`/api/integrations/${record.id}`, { method: 'DELETE' });
         if (!res.ok) throw new Error('delete failed');
+        // Clear config on nodes that referenced this integration so they show as disconnected
+        setStack(prev => ({
+          ...prev,
+          nodes: prev.nodes.map(n =>
+            (n as any).integrationId === record.id || n.toolType === connector.id
+              ? { ...n, config: null, status: 'PENDING' as const }
+              : n
+          ),
+        }));
         await fetchIntegrations();
         toast.success(`${connector.name} disconnected`);
       } catch {
@@ -295,6 +304,15 @@ export default function PipelinePage() {
       const nextEdges = stack.edges.filter((e) => e.sourceId !== node.id && e.targetId !== node.id);
       const nextStack: PipelineStack = { ...stack, nodes: nextNodes, edges: nextEdges };
       setStack(nextStack);
+      // Delete the associated integration record if one exists — await to ensure
+      // it's gone before the pipeline save invalidates cache and triggers refetch
+      const intRecord = integrationRecords.find((r) => r.connectorId === connector.id);
+      if (intRecord) {
+        setIntegrationRecords(prev => prev.filter(r => r.connectorId !== connector.id));
+        try {
+          await fetch(`/api/integrations/${intRecord.id}`, { method: 'DELETE' });
+        } catch {}
+      }
       await savePipeline(nextStack, true);
       setDisconnecting(null);
       toast.success(`${connector.name} removed from pipeline`);

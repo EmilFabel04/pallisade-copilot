@@ -314,6 +314,8 @@ export async function POST(
           owner: ghNodeConfig.owner || ghNodeConfig.org || '',
           repo: ghNodeConfig.repo || '',
           managed_tools: managedToolTypes,
+          // Pass token so LiveGithubAdapter can fetch & classify repos
+          ...(githubAttachment ? { access_token: githubAttachment.token } : {}),
         },
         integration_id: ghNodeConfig._integration_id || (githubNode as any).integrationId || undefined,
         layer: 'VERSION_CONTROL',

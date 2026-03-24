@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { cn } from '@/lib/utils';
 import type { RenderedViewResponse, ViewNode, ViewEdge, PipelineLaneName } from '../types';
 import { LANE_COLORS, LANE_LABELS } from '../types';
 import { LAYER_COLORS, LAYER_LABELS, type PipelineLayer } from '@/components/pipeline/types';
@@ -15,7 +16,7 @@ import {
 } from './types';
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
-import type { AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
+import type { AssetPrefill } from '@/types/monitor-catalog';
 import { computeMonitorScoring, resolveAssetCategory, type MonitorScoringResult } from '@/lib/monitor-scoring';
 
 // Role badges shown when functional role differs from the lane name.
@@ -263,55 +264,63 @@ function NodeInspector({
         </div>
       )}
 
-      {/* Monitor this tool */}
-      {onCreateSingleMonitor && (() => {
-        const platform = (node.platform || '').toLowerCase();
-        const layer = (node.layer || '').toUpperCase();
-        const toolName = node.name || platform;
-
-        // Deterministic monitor suggestions per tool type
-        const suggestions: Array<{ key: string; label: string }> = [];
-        if (['fivetran', 'airbyte', 'stitch', 'hevo', 'meltano'].some(t => platform.includes(t)) || layer === 'INGESTION') {
-          suggestions.push({ key: 'SYNC_LAG', label: 'Sync Lag' });
-          suggestions.push({ key: 'FAILED_SYNCS', label: 'Failed Syncs' });
-        } else if (['airflow', 'dagster', 'prefect', 'n8n', 'argo'].some(t => platform.includes(t)) || layer === 'ORCHESTRATION') {
-          suggestions.push({ key: 'DAG_LAST_RUN', label: 'DAG Last Run' });
-          suggestions.push({ key: 'DAG_SCHEDULE_LAG', label: 'Schedule Lag' });
-        } else if (['dbt', 'dbt_cloud', 'dbt_core'].some(t => platform.includes(t)) || layer === 'TRANSFORMATION') {
-          suggestions.push({ key: 'DBT_TEST_FAILURES', label: 'Test Failures' });
-          suggestions.push({ key: 'DBT_MODEL_FRESHNESS', label: 'Model Freshness' });
-        }
-
-        if (suggestions.length === 0) return null;
-
-        return (
-          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-            <div className="text-[10px] text-[var(--muted)] uppercase tracking-wide mb-2">Monitor This Tool</div>
-            <div className="space-y-1.5">
-              {suggestions.map(s => (
-                <button
-                  key={s.key}
-                  onClick={() => onCreateSingleMonitor({
-                    nodeId: node.id,
-                    fqn: (node.metadata?.fqn as string) || node.name,
-                    name: toolName,
-                    platform: node.platform || undefined,
-                  })}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg bg-blue-500/8 border border-blue-500/15 hover:bg-blue-500/15 transition-all text-[11px] text-blue-300 hover:text-blue-200 flex items-center gap-2"
-                >
-                  <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                  </svg>
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
-
       {/* Detail content */}
       {loading && <LoadingState />}
+
+      {/* Create monitors for this tool (after details load so subNodeIds are available) */}
+      {onCreateSingleMonitor && (
+        <button
+          disabled={loading}
+          onClick={() => {
+            const platform = (node.platform || '').toLowerCase();
+            const layer = (node.layer || '').toUpperCase();
+            let domain = 'warehouse';
+            if (['fivetran', 'airbyte', 'stitch', 'hevo', 'meltano'].some(t => platform.includes(t)) || layer === 'INGESTION') domain = 'ingestion';
+            else if (['airflow', 'dagster', 'prefect', 'n8n', 'argo'].some(t => platform.includes(t)) || layer === 'ORCHESTRATION') domain = 'orchestration';
+            else if (['dbt', 'dbt_cloud', 'dbt_core'].some(t => platform.includes(t)) || layer === 'TRANSFORMATION') domain = 'transform';
+            else if (['metabase', 'looker', 'tableau', 'powerbi'].some(t => platform.includes(t)) || layer === 'REPORTING') domain = 'bi';
+            else if (layer === 'INFRASTRUCTURE' || ['linux', 'server', 'docker', 'kubernetes', 'k8s', 'aws', 'gcp', 'azure', 'terraform', 'nginx', 'redis', 'kafka'].some(t => platform.includes(t))) domain = 'infrastructure';
+            // Extract child asset node IDs for tool nodes.
+            // Prefer IDs from fetched tool details (details.groups) since
+            // node.metadata.subNodes may be empty or truncated.
+            let subNodeIds: string[] = [];
+            if (details?.groups) {
+              const seen = new Set<string>();
+              for (const items of Object.values(details.groups)) {
+                for (const item of items) {
+                  if (item.id && !seen.has(item.id)) {
+                    seen.add(item.id);
+                    subNodeIds.push(item.id);
+                  }
+                }
+              }
+            }
+            if (subNodeIds.length === 0) {
+              const subNodes: Array<{ id: string }> = node.metadata?.subNodes || [];
+              subNodeIds = subNodes.map((s) => s.id).filter(Boolean);
+            }
+            onCreateSingleMonitor({
+              nodeId: node.id,
+              fqn: (node.metadata?.fqn as string) || node.name,
+              name: node.name || platform,
+              platform: node.platform || undefined,
+              domain,
+              subNodeIds: subNodeIds.length > 0 ? subNodeIds : undefined,
+            });
+          }}
+          className={cn(
+            'w-full text-left px-3 py-2.5 rounded-lg border transition-all text-[12px] font-medium flex items-center gap-2',
+            loading
+              ? 'bg-[var(--accent)]/5 border-[var(--accent)]/10 text-[var(--muted)] cursor-wait'
+              : 'bg-[var(--accent)]/10 border-[var(--accent)]/20 hover:bg-[var(--accent)]/20 text-[var(--text)]',
+          )}
+        >
+          <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          {loading ? 'Loading…' : 'Create Monitors'}
+        </button>
+      )}
 
       {fetchError && (
         <div className="p-3 rounded-lg bg-red-500/5 border border-red-500/10">
@@ -411,7 +420,24 @@ function ToolSummaryRow({ node }: { node: ViewNode }) {
       <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: laneColor }} />
       <div className="flex-1 min-w-0">
         <p className="text-[12px] text-[var(--text)] font-medium truncate">{node.name}</p>
-        <p className="text-[10px] text-[var(--muted)] capitalize">{node.platform} · {meta.assetCount} assets</p>
+        <p className="text-[10px] text-[var(--muted)] capitalize">{node.platform}{(() => {
+          const p = node.platform || '';
+          // Ingestion/orchestration: use jobCount (connectors/DAGs), not raw asset count
+          if (['fivetran', 'airbyte', 'stitch'].includes(p)) {
+            return meta.jobCount > 0 ? ` · ${meta.jobCount} connector${meta.jobCount !== 1 ? 's' : ''}` : '';
+          }
+          if (p === 'airflow') {
+            return meta.jobCount > 0 ? ` · ${meta.jobCount} DAG${meta.jobCount !== 1 ? 's' : ''}` : '';
+          }
+          if (['dagster', 'prefect', 'n8n'].includes(p)) {
+            return meta.jobCount > 0 ? ` · ${meta.jobCount} workflow${meta.jobCount !== 1 ? 's' : ''}` : '';
+          }
+          if (['metabase', 'looker', 'tableau', 'powerbi'].includes(p))
+            return meta.assetCount > 0 ? ` · ${meta.assetCount} dashboards` : '';
+          if (['github', 'gitlab', 'bitbucket'].includes(p))
+            return meta.assetCount > 0 ? ` · ${meta.assetCount} repos` : '';
+          return meta.assetCount > 0 ? ` · ${meta.assetCount} assets` : '';
+        })()}</p>
       </div>
     </div>
   );

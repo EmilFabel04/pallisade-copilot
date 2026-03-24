@@ -89,18 +89,86 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
 
   return (
     <div className="space-y-4">
-      {/* Stats grid */}
+      {/* Stats grid — platform-relevant labels */}
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Assets</label>
-          <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.totalAssets}</p>
-        </div>
-        {summary.jobCount > 0 && (
-          <div>
-            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Jobs</label>
-            <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.jobCount}</p>
-          </div>
-        )}
+        {(() => {
+          const p = (details.platform || '').toLowerCase();
+          // Ingestion: show connectors only
+          if (['fivetran', 'airbyte', 'stitch'].includes(p)) {
+            return summary.jobCount > 0 ? (
+              <div>
+                <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Connectors</label>
+                <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.jobCount}</p>
+              </div>
+            ) : null;
+          }
+          // Orchestration: DAGs/Workflows + Tasks — use tab counts for accuracy
+          if (['airflow', 'dagster', 'prefect', 'n8n'].includes(p)) {
+            const dagLabel = p === 'airflow' ? 'DAGs' : 'Workflows';
+            const dagTab = details.tabs.find(t => t.key === 'dags' || t.key === 'flows' || t.key === 'dags_flows');
+            const taskTab = details.tabs.find(t => t.key === 'tasks');
+            const dagCount = dagTab?.count ?? 0;
+            const taskCount = taskTab?.count ?? 0;
+            return (
+              <>
+                {dagCount > 0 && (
+                  <div>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">{dagLabel}</label>
+                    <p className="text-2xl font-semibold text-[var(--text)] mt-1">{dagCount}</p>
+                  </div>
+                )}
+                {taskCount > 0 && (
+                  <div>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Tasks</label>
+                    <p className="text-2xl font-semibold text-[var(--text)] mt-1">{taskCount}</p>
+                  </div>
+                )}
+              </>
+            );
+          }
+          // BI: dashboards
+          if (['metabase', 'looker', 'tableau', 'powerbi'].includes(p)) {
+            return (
+              <div>
+                <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Dashboards</label>
+                <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.totalAssets}</p>
+              </div>
+            );
+          }
+          // VCS: repos
+          if (['github', 'gitlab', 'bitbucket'].includes(p)) {
+            return summary.totalAssets > 0 ? (
+              <div>
+                <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Repositories</label>
+                <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.totalAssets}</p>
+              </div>
+            ) : null;
+          }
+          // Warehouse / transformation: assets only (no "jobs" — dbt models are assets, not jobs)
+          if (['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks', 'dbt', 'dbt_core'].includes(p)) {
+            return (
+              <div>
+                <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Assets</label>
+                <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.totalAssets}</p>
+              </div>
+            );
+          }
+          // Default: Assets + Jobs
+          return (
+            <>
+              <div>
+                <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Assets</label>
+                <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.totalAssets}</p>
+              </div>
+              {summary.jobCount > 0 && (
+                <div>
+                  <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Jobs</label>
+                  <p className="text-2xl font-semibold text-[var(--text)] mt-1">{summary.jobCount}</p>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {summary.lastRunTs && (

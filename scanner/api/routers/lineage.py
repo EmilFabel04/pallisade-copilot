@@ -2579,6 +2579,21 @@ class InvestigateResponse(BaseModel):
     errors: List[str] = []
 
 
+def _resolve_github_token_from_tool_configs(tool_configs) -> str:
+    """Resolve GitHub access token from sibling GitHub connector in the same scan batch.
+
+    dbt/airflow nodes no longer carry their own github_token — they reference
+    the shared GitHub connector's PAT.
+    """
+    for _tc in tool_configs:
+        if (hasattr(_tc, "tool_type") and _tc.tool_type.lower() == "github"):
+            _cfg = _tc.config if hasattr(_tc, "config") else {}
+            _tok = _cfg.get("access_token") or _cfg.get("token") or _cfg.get("github_token") or ""
+            if _tok:
+                return _tok
+    return ""
+
+
 async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
     """Resolve dbt_core tool configs in-place: parse project files or fetch manifest.
 
@@ -2642,7 +2657,7 @@ async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
 
         # GitHub mode: fetch project files with manifest.json fallback
         elif source_mode == "github":
-            github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token")
+            github_token = tc.config.get("github", {}).get("token") or tc.config.get("github_token") or _resolve_github_token_from_tool_configs(tool_configs)
             github_repo = tc.config.get("github_repo")
             if github_token and github_repo:
                 try:
@@ -2714,6 +2729,7 @@ async def _preprocess_airflow_configs(tool_configs, logger_instance=None) -> Non
             github_config.get("token")
             or cfg.get("github_token")
             or cfg.get("token")
+            or _resolve_github_token_from_tool_configs(tool_configs)
         )
 
         if not github_repo or not github_token:

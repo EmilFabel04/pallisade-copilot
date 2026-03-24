@@ -75,8 +75,9 @@ class CrossToolLineageOrchestrator:
     DBT_TYPES = {"DBT_CLOUD", "DBT_CORE"}
     ORCHESTRATOR_TYPES = {"AIRFLOW", "DAGSTER", "PREFECT"}
     BI_TYPES = {"LOOKER", "TABLEAU", "POWERBI", "METABASE"}
+    VCS_TYPES = {"GITHUB", "GITLAB", "BITBUCKET"}
     # Integration types that don't produce lineage — skip silently
-    SKIP_TYPES = {"N8N", "LINUX_SERVER", "SLACK", "GITHUB", "JIRA"}
+    SKIP_TYPES = {"N8N", "LINUX_SERVER", "SLACK", "JIRA"}
 
     def __init__(
         self,
@@ -191,6 +192,8 @@ class CrossToolLineageOrchestrator:
                 tasks.append(self._extract_orchestrator(integration))
             elif int_type in self.BI_TYPES:
                 tasks.append(self._extract_bi_tool(integration))
+            elif int_type in self.VCS_TYPES:
+                tasks.append(self._extract_vcs(integration))
             elif int_type not in self.SKIP_TYPES:
                 logger.warning(f"Unknown integration type: {int_type}")
 
@@ -601,6 +604,55 @@ class CrossToolLineageOrchestrator:
             edge_count=0,
             duration_ms=duration_ms,
         )
+
+    async def _extract_vcs(self, integration: Dict) -> ExtractionResult:
+        """Extract VCS assets (repos) via the LiveGithubAdapter."""
+        from .engine.adapters.live_github import LiveGithubAdapter
+
+        start_time = datetime.utcnow()
+        int_id = integration.get("id", "unknown")
+        int_type = integration.get("type", "").upper()
+        config = integration.get("config") or {}
+
+        logger.info(f"Extracting VCS assets from {int_type} ({int_id})")
+
+        adapter = LiveGithubAdapter(adapter_id=f"live_{int_type.lower()}")
+        adapter_config = {
+            "namespace": config.get("namespace", "default"),
+            "integration_id": int_id,
+            "owner": config.get("owner") or config.get("org") or "",
+            "repo": config.get("repo") or "",
+            "access_token": config.get("access_token") or config.get("token") or "",
+            "managed_tools": config.get("managed_tools", []),
+            "repos": config.get("repos", []),
+        }
+
+        try:
+            nodes = adapter.discover_assets(adapter_config)
+            graph = LineageGraph()
+            for node in nodes:
+                graph.add_node(node)
+
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            return ExtractionResult(
+                integration_id=int_id,
+                integration_type=int_type,
+                success=True,
+                graph=graph,
+                node_count=len(nodes),
+                edge_count=0,
+                duration_ms=duration_ms,
+            )
+        except Exception as e:
+            duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            logger.error(f"VCS extraction failed for {int_type} ({int_id}): {e}")
+            return ExtractionResult(
+                integration_id=int_id,
+                integration_type=int_type,
+                success=False,
+                error=str(e),
+                duration_ms=duration_ms,
+            )
 
     def _merge_graph(self, source_graph: LineageGraph) -> None:
         """Merge a source graph into the main graph."""

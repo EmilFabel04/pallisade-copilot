@@ -210,8 +210,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         // Upload project folder mode
         { name: 'project_files', label: 'dbt Project Folder', type: 'folder', required: false, helperText: 'Select your dbt project folder (models/, dbt_project.yml, etc.)', showWhen: { field: 'source_mode', value: 'project' } },
         // GitHub repo mode
-        { name: 'github_repo', label: 'Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repository containing your dbt project', showWhen: { field: 'source_mode', value: 'github' } },
-        { name: 'github_token', label: 'GitHub Token', type: 'password', required: false, placeholder: 'ghp_...', helperText: 'Personal access token with repo read access (required for private repos)', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_repo', label: 'Repository', type: 'select', required: false, dynamicOptions: true, optionsEndpoint: 'github-repos', helperText: 'Select from repositories configured in your GitHub connector', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'dbt_project_path', label: 'dbt Project Path', type: 'text', required: false, placeholder: '/ (repo root)', helperText: 'Path to dbt project within the repo (leave empty for root)', showWhen: { field: 'source_mode', value: 'github' } },
         // Common fields
@@ -240,11 +239,10 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'host', label: 'Airflow Host', type: 'text', required: false, placeholder: 'https://your-airflow.com', showWhen: { field: 'source_mode', value: 'api' } },
         { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'Airflow username', showWhen: { field: 'source_mode', value: 'api' } },
         { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'Airflow password', showWhen: { field: 'source_mode', value: 'api' } },
-        { name: 'code_repo', label: 'Code Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repo where your DAG code lives (optional)', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'code_repo', label: 'Code Repository', type: 'select', required: false, dynamicOptions: true, optionsEndpoint: 'github-repos', helperText: 'Select from repositories configured in your GitHub connector', showWhen: { field: 'source_mode', value: 'api' } },
         // GitHub mode fields
-        { name: 'github_repo', label: 'Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repository containing your Airflow DAGs', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_repo', label: 'Repository', type: 'select', required: false, dynamicOptions: true, optionsEndpoint: 'github-repos', helperText: 'Select from repositories configured in your GitHub connector', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
-        { name: 'github_token', label: 'GitHub Token', type: 'password', required: false, placeholder: 'ghp_...', helperText: 'Personal access token with repo read access', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'dag_directory', label: 'DAG Directory', type: 'text', required: false, placeholder: 'dags', helperText: 'Path to DAGs folder in the repo (default: dags)', showWhen: { field: 'source_mode', value: 'github' } },
       ],
     },
@@ -530,7 +528,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       configFields: [
         { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx', helperText: 'Token needs repo access scope. For PR creation, also needs write access.' },
         { name: 'owner', label: 'Repository Owner', type: 'text', required: true, placeholder: 'organization or username' },
-        { name: 'repo', label: 'Repository Name', type: 'text', required: false, placeholder: 'my-dbt-project', helperText: 'Required for PR creation. Leave empty to browse all repos.' },
+        { name: 'repos', label: 'Repositories', type: 'multi-select', required: false, dynamicOptions: true, optionsEndpoint: 'repos', helperText: 'Select repositories to make visible. Other tools (dbt, Airflow) can pick from these.' },
       ],
     },
     {

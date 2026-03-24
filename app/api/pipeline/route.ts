@@ -408,11 +408,21 @@ export async function POST(request: NextRequest) {
       const existingNodeIds = new Set(existingStack.nodes.map(n => n.id));
       const newNodeIds = new Set(nodes.map((n: any) => n.id));
 
-      // Delete removed nodes
+      // Delete removed nodes and their associated integration records
       const nodesToDelete = existingStack.nodes.filter(n => !newNodeIds.has(n.id));
+      const orphanedIntegrationIds = nodesToDelete
+        .map(n => (n as any).integrationId)
+        .filter((id): id is string => !!id);
+
       await prisma.pipelineNode.deleteMany({
         where: { id: { in: nodesToDelete.map(n => n.id) } },
       });
+
+      if (orphanedIntegrationIds.length > 0) {
+        await prisma.integration.deleteMany({
+          where: { id: { in: orphanedIntegrationIds } },
+        });
+      }
 
       // Build lookup for existing nodes' integrationIds
       const existingIntegrationIds = new Map<string, string | null>();

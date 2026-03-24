@@ -203,6 +203,14 @@ class LiveGithubAdapter(BaseLineageAdapter):
         token = config.get("access_token") or config.get("token") or ""
         name = f"GitHub ({owner})" if owner else "GitHub"
 
+        logger.info(
+            "[LiveGithub] discover_assets called: owner=%r, repo=%r, token=%s, "
+            "managed_tools=%r, config_keys=%s",
+            owner, repo, ("present" if token else "MISSING"),
+            config.get("managed_tools", []),
+            list(config.keys()),
+        )
+
         asset_id = generate_asset_id("vcs", "github", namespace, "", owner or "github")
 
         raw_metadata: Dict[str, Any] = {}

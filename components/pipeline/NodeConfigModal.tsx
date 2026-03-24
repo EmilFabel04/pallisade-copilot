@@ -4,25 +4,12 @@
  * Node Configuration Modal
  *
  * Professional modal for configuring node credentials and settings
- * Supports OAuth flow for GitHub
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { PipelineNode, getToolById, LAYER_COLORS, ConfigField } from './types';
-import { Loader2, Check, ExternalLink } from 'lucide-react';
-
-// Tools that support OAuth authentication
-const OAUTH_TOOLS = ['github'];
-// Tools that may need GitHub OAuth for a specific source mode
-const GITHUB_DEPENDENT_TOOLS = ['dbt_core'];
-
-interface GitHubConnectionInfo {
-  connected: boolean;
-  username?: string;
-  repoCount?: number;
-  avatar?: string;
-}
+import { Loader2 } from 'lucide-react';
 
 interface NodeConfigModalProps {
   node: PipelineNode;
@@ -213,6 +200,111 @@ function MultiSelectField({
   );
 }
 
+// Dynamic select field that loads options from an API endpoint
+function DynamicSelectField({
+  field,
+  value = '',
+  onChange,
+  stackId,
+  nodeId,
+  toolType,
+  config,
+}: {
+  field: ConfigField;
+  value: string;
+  onChange: (value: string) => void;
+  stackId?: string;
+  nodeId?: string;
+  toolType?: string;
+  config: Record<string, any>;
+}) {
+  const [options, setOptions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchOptions = useCallback(async () => {
+    if (!field.dynamicOptions || !field.optionsEndpoint) return;
+    if (!stackId || !nodeId) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/pipeline/${stackId}/nodes/${nodeId}/${field.optionsEndpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config, toolType }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const items = data.options || data.datasets || data.schemas || [];
+        setOptions(items);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.error || 'Failed to load options');
+      }
+    } catch {
+      setError('Failed to fetch options');
+    } finally {
+      setLoading(false);
+    }
+  }, [field.dynamicOptions, field.optionsEndpoint, stackId, nodeId, config, toolType]);
+
+  useEffect(() => {
+    fetchOptions();
+  }, [fetchOptions]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-[var(--muted)] text-sm py-3">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Loading {field.optionsEndpoint}...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {options.length > 0 ? (
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+        >
+          <option value="">Select...</option>
+          {options.map(opt => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      ) : (
+        <div>
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={field.placeholder || 'Enter value'}
+            className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+          />
+          {error && <p className="text-xs text-amber-400 mt-1">{error}</p>}
+        </div>
+      )}
+      {field.dynamicOptions && stackId && nodeId && (
+        <button
+          type="button"
+          onClick={fetchOptions}
+          className="text-xs text-[var(--muted)] hover:text-[var(--text)] flex items-center gap-1"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Refresh
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function NodeConfigModal({ node, stackId, onSave, onClose }: NodeConfigModalProps) {
   const tool = getToolById(node.toolType);
   const [config, setConfig] = useState<Record<string, any>>(() => {
@@ -234,61 +326,6 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-
-  // OAuth state for GitHub
-  const isOAuthTool = OAUTH_TOOLS.includes(node.toolType);
-  const isGithubDependentTool = GITHUB_DEPENDENT_TOOLS.includes(node.toolType);
-  const needsGithubForMode = isGithubDependentTool && config.source_mode === 'github';
-  const [useOAuth, setUseOAuth] = useState(isOAuthTool);
-  const [githubInfo, setGithubInfo] = useState<GitHubConnectionInfo | null>(null);
-  const [loadingGithub, setLoadingGithub] = useState(false);
-
-  // Check for existing GitHub OAuth connection
-  useEffect(() => {
-    if (isOAuthTool || needsGithubForMode) {
-      checkGitHubConnection();
-    }
-  }, [isOAuthTool, needsGithubForMode]);
-
-  const checkGitHubConnection = async () => {
-    setLoadingGithub(true);
-    try {
-      const res = await fetch('/api/integrations');
-      if (res.ok) {
-        const data = await res.json();
-        const githubIntegration = data.integrations?.find(
-          (i: any) => i.type === 'GITHUB' && i.status === 'ACTIVE'
-        );
-        if (githubIntegration) {
-          setGithubInfo({
-            connected: true,
-            username: githubIntegration.metadata?.username,
-            repoCount: githubIntegration.metadata?.repoCount,
-            avatar: githubIntegration.metadata?.avatar,
-          });
-          // Pre-fill config with linked integration
-          setConfig(prev => ({
-            ...prev,
-            _integration_id: githubIntegration.id,
-            _oauth_linked: true,
-          }));
-        } else {
-          setGithubInfo({ connected: false });
-        }
-      }
-    } catch (error) {
-      console.error('Failed to check GitHub connection:', error);
-      setGithubInfo({ connected: false });
-    } finally {
-      setLoadingGithub(false);
-    }
-  };
-
-  const handleGitHubConnect = () => {
-    // Store node info in sessionStorage so we can update it after OAuth
-    sessionStorage.setItem('pending_github_node', JSON.stringify({ nodeId: node.id, stackId }));
-    window.location.href = '/api/integrations/oauth/github';
-  };
 
   // Get config fields - use tool's fields or provide a fallback
   const configFields: ConfigField[] = tool?.configFields || [
@@ -371,6 +408,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
         body: JSON.stringify({
           toolType: node.toolType,
           config,
+          stackId,
         }),
       });
 
@@ -449,122 +487,11 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
         {/* Body */}
         <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto">
-          {/* OAuth section for GitHub */}
-          {isOAuthTool && (
-            <div className="mb-6">
-              {loadingGithub ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-[var(--muted)]" />
-                </div>
-              ) : githubInfo?.connected ? (
-                // Already connected via OAuth
-                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                  <div className="flex items-center gap-3">
-                    {githubInfo.avatar ? (
-                      <img src={githubInfo.avatar} alt="" className="w-10 h-10 rounded-full" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-[#24292e] flex items-center justify-center">
-                        <GitHubIcon className="w-5 h-5 text-white" />
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 text-emerald-400 mb-0.5">
-                        <Check className="w-4 h-4" />
-                        <span className="font-medium text-sm">GitHub Connected</span>
-                      </div>
-                      <p className="text-[var(--text)] text-sm">@{githubInfo.username}</p>
-                      <p className="text-xs text-[var(--muted)]">{githubInfo.repoCount} repositories available</p>
-                    </div>
-                    <button
-                      onClick={handleGitHubConnect}
-                      className="text-xs text-[var(--muted)] hover:text-[var(--text)] underline"
-                    >
-                      Reconnect
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                // Not connected - show OAuth button
-                <div className="text-center py-6">
-                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#24292e] flex items-center justify-center">
-                    <GitHubIcon className="w-8 h-8 text-white" />
-                  </div>
-                  <h3 className="text-lg font-medium text-[var(--text)] mb-2">Connect to GitHub</h3>
-                  <p className="text-sm text-[var(--muted)] mb-6 max-w-sm mx-auto">
-                    Sign in with GitHub to access your repositories for creating PRs and tracking changes.
-                  </p>
-
-                  <button
-                    onClick={handleGitHubConnect}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-[#24292e] hover:bg-[#2d3339] text-white font-medium rounded-lg transition-colors"
-                  >
-                    <GitHubIcon className="w-5 h-5" />
-                    Connect with GitHub
-                    <ExternalLink className="w-4 h-4 ml-1 opacity-50" />
-                  </button>
-
-                  <div className="mt-4 pt-4 border-t border-[var(--subtle-border)]">
-                    <button
-                      onClick={() => setUseOAuth(false)}
-                      className="text-xs text-[var(--muted)] hover:text-[var(--text-tertiary)]"
-                    >
-                      Or configure manually with Personal Access Token →
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* GitHub OAuth section for dbt_core in GitHub mode */}
-          {needsGithubForMode && (
-            <div className="mb-4">
-              {loadingGithub ? (
-                <div className="flex items-center justify-center py-4">
-                  <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
-                </div>
-              ) : githubInfo?.connected ? (
-                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                  <div className="flex items-center gap-3">
-                    {githubInfo.avatar ? (
-                      <img src={githubInfo.avatar} alt="" className="w-8 h-8 rounded-full" />
-                    ) : (
-                      <div className="w-8 h-8 rounded-full bg-[#24292e] flex items-center justify-center">
-                        <GitHubIcon className="w-4 h-4 text-white" />
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 text-emerald-400 mb-0.5">
-                        <Check className="w-3.5 h-3.5" />
-                        <span className="font-medium text-xs">GitHub Connected — @{githubInfo.username}</span>
-                      </div>
-                    </div>
-                    <button onClick={handleGitHubConnect} className="text-xs text-[var(--muted)] hover:text-[var(--text)] underline">Reconnect</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)] text-center">
-                  <p className="text-sm text-[var(--muted)] mb-3">
-                    Connect GitHub to read your dbt project files from a repository.
-                  </p>
-                  <button
-                    onClick={handleGitHubConnect}
-                    className="inline-flex items-center gap-2 px-4 py-2 bg-[#24292e] hover:bg-[#2d3339] text-white text-sm font-medium rounded-lg transition-colors"
-                  >
-                    <GitHubIcon className="w-4 h-4" />
-                    Connect with GitHub
-                    <ExternalLink className="w-3 h-3 ml-1 opacity-50" />
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Manual config fields (shown if not using OAuth or if OAuth is connected) */}
-          {(!isOAuthTool || !useOAuth || githubInfo?.connected) && configFields.filter(field => {
+          {/* Config fields */}
+          {configFields.filter(field => {
             // Apply showWhen conditional visibility
             if (field.showWhen) {
-              return config[field.showWhen.field] === field.showWhen.value;
+              if (config[field.showWhen.field] !== field.showWhen.value) return false;
             }
             return true;
           }).map(field => (
@@ -655,6 +582,16 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                 <MultiSelectField
                   field={field}
                   value={config[field.name] || []}
+                  onChange={(value) => handleFieldChange(field.name, value)}
+                  stackId={stackId}
+                  nodeId={node.id}
+                  toolType={node.toolType}
+                  config={config}
+                />
+              ) : field.type === 'select' && field.dynamicOptions ? (
+                <DynamicSelectField
+                  field={field}
+                  value={config[field.name] || ''}
                   onChange={(value) => handleFieldChange(field.name, value)}
                   stackId={stackId}
                   nodeId={node.id}
@@ -760,7 +697,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                 });
                 onSave(cleanConfig);
               }}
-              disabled={!isValid && !(isOAuthTool && githubInfo?.connected)}
+              disabled={!isValid}
               className="px-5 py-2.5 text-sm font-medium rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Save Configuration
@@ -770,14 +707,5 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
       </div>
     </div>,
     document.body,
-  );
-}
-
-// GitHub Icon Component
-function GitHubIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-    </svg>
   );
 }

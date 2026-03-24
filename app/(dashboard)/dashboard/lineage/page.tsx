@@ -53,7 +53,8 @@ import { PolicyModeToolbar } from '@/components/lineage/PolicyModeToolbar';
 import type { EffectivePolicy, PolicyAssignRequest, PolicyStatus } from '@/types/policy';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
-import { SingleAssetMonitorModal, type AssetPrefill } from '@/components/schedule/SingleAssetMonitorModal';
+import type { NodeMeta } from '@/components/schedule/NodeSelectionSurface';
+import type { AssetPrefill } from '@/types/monitor-catalog';
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -177,18 +178,26 @@ function LineagePageInner() {
   // Monitor creation modal states — three paths
   const [multiMonitorModalOpen, setMultiMonitorModalOpen] = useState(false);
   const [multiMonitorPreselect, setMultiMonitorPreselect] = useState<string[]>([]);
-  const [singleAssetModalOpen, setSingleAssetModalOpen] = useState(false);
-  const [singleAssetPrefill, setSingleAssetPrefill] = useState<AssetPrefill | null>(null);
+  const [multiMonitorPreMeta, setMultiMonitorPreMeta] = useState<NodeMeta[] | undefined>(undefined);
   const [promptModalOpen, setPromptModalOpen] = useState(false);
 
   const handleCreateSingleMonitor = useCallback((prefill: AssetPrefill) => {
-    // Open MultiMonitorModal with the asset pre-selected
+    // Route through MultiMonitorModal with the node pre-selected + metadata
     setMultiMonitorPreselect([prefill.nodeId]);
+    setMultiMonitorPreMeta([{
+      id: prefill.nodeId,
+      name: prefill.name,
+      fqn: prefill.fqn,
+      platform: prefill.platform || '',
+      domain: prefill.domain || 'warehouse',
+      subNodeIds: prefill.subNodeIds,
+    }]);
     setMultiMonitorModalOpen(true);
   }, []);
 
   const handleCreateMultiMonitor = useCallback((preselectedNodeIds: string[]) => {
     setMultiMonitorPreselect(preselectedNodeIds);
+    setMultiMonitorPreMeta(undefined); // No pre-built metadata for multi-select
     setMultiMonitorModalOpen(true);
   }, []);
 
@@ -1806,11 +1815,7 @@ function LineagePageInner() {
             stackId={stackId}
             allMonitors={lineageData?.allMonitors}
             onClose={() => setPipelineInspectorTarget(null)}
-            onCreateSingleMonitor={(prefill: any) => handleCreateSingleMonitor({
-              nodeId: prefill.integrationId || '',
-              fqn: prefill.targetFqn || prefill.name,
-              name: prefill.name,
-            })}
+            onCreateSingleMonitor={handleCreateSingleMonitor}
             onCreateMultiMonitor={(nodeIds: string[]) => handleCreateMultiMonitor(nodeIds)}
           />
         )}
@@ -2326,19 +2331,11 @@ function LineagePageInner() {
       {/* Multi Monitor modal */}
       <MultiMonitorModal
         open={multiMonitorModalOpen}
-        onClose={() => setMultiMonitorModalOpen(false)}
+        onClose={() => { setMultiMonitorModalOpen(false); setMultiMonitorPreMeta(undefined); }}
         onComplete={() => invalidateCache('/api/schedule')}
         stackId={stackId || undefined}
         preselectedNodeIds={multiMonitorPreselect}
-      />
-
-      {/* Single Asset Monitor modal */}
-      <SingleAssetMonitorModal
-        open={singleAssetModalOpen}
-        onClose={() => { setSingleAssetModalOpen(false); setSingleAssetPrefill(null); }}
-        onComplete={() => invalidateCache('/api/schedule')}
-        stackId={stackId || undefined}
-        prefill={singleAssetPrefill}
+        preselectedNodeMeta={multiMonitorPreMeta}
       />
 
       {/* AI Prompt Monitor modal */}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { encrypt } from '@/lib/crypto';
 import { notifyEvents } from '@/lib/notifications';
 
@@ -147,6 +148,17 @@ export async function DELETE(
     if (!existing) {
       return NextResponse.json({ error: 'Integration not found' }, { status: 404 });
     }
+
+    // Clear config, integrationId, and reset status on PipelineNodes that reference
+    // this integration so they immediately reflect the disconnected state
+    await prisma.pipelineNode.updateMany({
+      where: { integrationId: id },
+      data: {
+        integrationId: null,
+        config: Prisma.JsonNull,
+        status: 'PENDING',
+      },
+    });
 
     await prisma.integration.delete({
       where: { id },

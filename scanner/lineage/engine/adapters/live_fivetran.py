@@ -192,7 +192,7 @@ class LiveFivetranAdapter(BaseLineageAdapter):
                         "service": service,
                         "connector_id": connector_id_attr,
                         "connector_name": connector_name,
-                        "dest_schema": dest_schema,
+                        "source_type": service,
                         "synced_tables": list(synced_tables),
                         "node_role": "connector_job",
                     },

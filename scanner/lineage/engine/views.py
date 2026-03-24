@@ -947,13 +947,17 @@ class ViewBuilder:
 
     @staticmethod
     def _is_job_like(node: LineageNode) -> bool:
-        """Return True if this graph node should count/display as a job."""
+        """Return True if this graph node should count/display as a job.
+
+        dbt models/seeds/snapshots are data assets, not jobs — they
+        represent the *output* of a build, not the build process itself.
+        Only true operational jobs (Airflow tasks, connector syncs, etc.)
+        should count here.
+        """
         ct = node.canonical_type or ""
         if ct == "job":
             return True
         rm = node.raw_metadata
-        if rm.get("dbt_resource_type") in ("model", "seed", "snapshot"):
-            return True
         if rm.get("is_task") or rm.get("dag_id"):
             return True
         if rm.get("connector_id") or rm.get("sync_id"):
@@ -1291,6 +1295,16 @@ class ViewBuilder:
             if info["asset_count"] > 5 and tool_edge_count < 2:
                 coverage_gaps.append("sparse_lineage")
 
+            # For VCS tools, asset_count is the service node count (1),
+            # not the repo count.  Pull the real repo count from raw_metadata.
+            display_asset_count = info["asset_count"]
+            if get_category(platform) == "version_control":
+                repo_count = 0
+                for gn in graph_nodes:
+                    repo_count += len((gn.raw_metadata or {}).get("repositories", []))
+                if repo_count > 0:
+                    display_asset_count = repo_count
+
             view_nodes.append(ViewNode(
                 id=node_view_id,
                 name=info["display_name"],
@@ -1305,7 +1319,7 @@ class ViewBuilder:
                 needs_mapping=False,
                 metadata={
                     "lane": lane,
-                    "assetCount": info["asset_count"],
+                    "assetCount": display_asset_count,
                     "integrationId": info["integration_id"],
                     "isOrchestrator": info.get("is_orchestrator", False),
                     "isInfra": info.get("is_infra", False),
@@ -2168,6 +2182,7 @@ class ViewBuilder:
         # BigQuery nodes still have "dbt_core" in discovered_platforms).
         tool_nodes_list: List[LineageNode] = []
         tool_node_ids: Set[str] = set()
+        primary_node_ids: Set[str] = set()  # Only direct platform matches (for connections)
         for node in self.graph.nodes.values():
             node_platform = (node.platform or "").lower()
             node_int_id = node.integration_id or ""
@@ -2200,6 +2215,8 @@ class ViewBuilder:
                         continue
                 tool_nodes_list.append(node)
                 tool_node_ids.add(node.id)
+                if primary_match:
+                    primary_node_ids.add(node.id)
 
         # If a role filter was extracted from the ID, narrow to that role's
         # nodes.  Fall back to the full set if filtering would empty it.
@@ -2215,6 +2232,7 @@ class ViewBuilder:
             if filtered:
                 tool_nodes_list = filtered
                 tool_node_ids = {n.id for n in filtered}
+                primary_node_ids = primary_node_ids & tool_node_ids
 
         logger.info(
             "[ToolDetails] %s → platform=%s, integration_id=%s, role_filter=%s, "
@@ -2271,13 +2289,22 @@ class ViewBuilder:
         tabs, groups = self._build_domain_tabs(category, tool_nodes_list, tool_node_ids)
 
         # Build connections (upstream/downstream tools from graph edges)
-        connections = self._build_tool_connections(tool_node_ids)
+        # Use primary_node_ids (direct platform matches only) so that
+        # cross-tool merged nodes (e.g. BigQuery nodes with dbt in
+        # discovered_platforms) are counted as separate tools, not lumped
+        # into this tool.  This ensures dbt→BigQuery→Metabase shows
+        # BigQuery as downstream of dbt, not Metabase.
+        connections = self._build_tool_connections(primary_node_ids or tool_node_ids)
 
-        # For control-plane tools with no graph nodes, use tab group items
-        # as the asset count so the summary doesn't show 0.
+        # For control-plane tools, use tab group items as the asset count.
+        # CP graph nodes are service-level (1 per integration), not
+        # individual assets — the real count lives in the tab groups
+        # (e.g. repos for VCS, DAGs for orchestration).
         total_assets = len(tool_nodes_list)
-        if total_assets == 0 and _is_control_plane_category(category, platform):
-            total_assets = sum(len(items) for items in groups.values())
+        if _is_control_plane_category(category, platform):
+            group_count = sum(len(items) for items in groups.values())
+            if group_count > 0:
+                total_assets = group_count
 
         return {
             "toolId": tool_view_id,
