@@ -1079,6 +1079,7 @@ function LineagePageInner() {
             category: vn.platformDomain as UnifiedNodeCategory || 'warehouse',
             layer: vn.layer as PipelineLayer,
             toolType: vn.platform || vn.originalType,
+            integrationId: vn.metadata?.integrationId,
             assetCount: vn.metadata?.assetCount,
             healthSummary: vn.metadata?.healthSummary,
             jobCount: vn.metadata?.jobCount,
@@ -1112,6 +1113,7 @@ function LineagePageInner() {
           target: ve.targetId,
           type: 'smoothstep',
           animated: hasFlows,
+          data: { isDataFlow: (ve.metadata?.dataFlowCount ?? ve.evidenceCount) > 0 },
           label,
           labelStyle: {
             fontSize: 11,
@@ -1533,11 +1535,21 @@ function LineagePageInner() {
           {activeTab === 'control-plane' ? (
             <>
               <div className="text-center">
-                <div className="text-xl font-semibold text-emerald-400">{cpFlowNodes.length}</div>
+                <div className="text-xl font-semibold text-emerald-400">
+                  {new Set(cpFlowNodes
+                    .filter(n => n.id !== ORPHAN_GROUP_ID)
+                    .map(n => {
+                      const intId = n.data?.integrationId;
+                      return (intId && intId !== '') ? intId : (n.data?.toolType || n.id);
+                    })
+                  ).size}
+                </div>
                 <div className="text-[11px] text-[var(--muted)]">Integrations</div>
               </div>
               <div className="text-center">
-                <div className="text-xl font-semibold text-[var(--text)]">{cpFlowEdges.length}</div>
+                <div className="text-xl font-semibold text-[var(--text)]">
+                  {cpFlowEdges.filter(e => (e as any).data?.isDataFlow).length}
+                </div>
                 <div className="text-[11px] text-[var(--muted)]">Data Flows</div>
               </div>
             </>
