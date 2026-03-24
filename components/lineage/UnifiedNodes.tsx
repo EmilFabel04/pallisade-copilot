@@ -119,6 +119,7 @@ interface DataAssetNodeData {
   isPolicyMode?: boolean;
   isPolicySelected?: boolean;
   policyStatus?: 'assigned' | 'inherited' | 'override' | 'none';
+  policyProfileName?: string | null;
 }
 
 // Get layer icon component
@@ -557,7 +558,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
             )}
           </div>
           {/* Policy badge (inline, right side) */}
-          <PolicyBadge status={policyStatus} />
+          <PolicyBadge status={policyStatus} profileName={data.policyProfileName} />
         </div>
 
         {/* Status indicators row */}

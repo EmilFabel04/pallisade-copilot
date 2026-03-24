@@ -322,11 +322,19 @@ export function DashboardHeader() {
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors"
           >
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-[11px] font-medium">
-              {session?.user?.image ? (
-                <img src={session.user.image} alt="" className="w-full h-full rounded-full object-cover" />
-              ) : (
-                session?.user?.name?.[0]?.toUpperCase() || session?.user?.email?.[0]?.toUpperCase() || 'U'
+            <div className="relative w-7 h-7 rounded-full bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-[11px] font-medium overflow-hidden">
+              {/* Fallback initial — always rendered behind the image */}
+              {session?.user?.name?.[0]?.toUpperCase() || session?.user?.email?.[0]?.toUpperCase() || 'U'}
+              {session?.user?.image && (
+                <img
+                  src={session.user.image}
+                  alt=""
+                  className="absolute inset-0 w-full h-full rounded-full object-cover"
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
               )}
             </div>
             <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">

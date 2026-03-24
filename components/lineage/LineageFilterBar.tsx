@@ -16,6 +16,7 @@ interface LineageFilterBarProps {
     tableNodes: number;
     viewNodes: number;
     modelNodes: number;
+    dashboardNodes?: number;
     dagNodes?: number;
     taskNodes?: number;
   };
@@ -145,7 +146,7 @@ export function LineageFilterBar({
             Data Assets
             {stats && (
               <span className="text-[var(--text-faint)]">
-                ({stats.tableNodes + stats.viewNodes + stats.modelNodes + (stats.dagNodes || 0) + (stats.taskNodes || 0)})
+                ({stats.tableNodes + stats.viewNodes + stats.modelNodes + (stats.dashboardNodes || 0) + (stats.dagNodes || 0) + (stats.taskNodes || 0)})
               </span>
             )}
           </button>

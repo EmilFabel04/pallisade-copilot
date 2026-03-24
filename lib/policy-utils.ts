@@ -149,7 +149,7 @@ export function getMonitorPolicyStatus(
   config: Record<string, any> | null,
   resolvedPolicy: Record<string, any> | null,
 ): { status: MonitorPolicyStatus; overriddenFields: string[]; violationFields: string[] } {
-  if (!resolvedPolicy || !config || resolvedPolicy.status === 'none') {
+  if (!resolvedPolicy || !config || Object.keys(config).length === 0 || resolvedPolicy.status === 'none') {
     return { status: 'none', overriddenFields: [], violationFields: [] };
   }
 

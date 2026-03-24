@@ -648,6 +648,8 @@ function LineagePageInner() {
       } catch {
         console.warn('[LINEAGE] Failed to save snapshot (non-fatal)');
       }
+      // Invalidate cache so fetchLineage gets fresh post-build data
+      invalidateCache(`/api/pipeline/${stackId}/lineage`);
       await fetchLineage();
       await fetchControlPlane();
 
@@ -673,6 +675,8 @@ function LineagePageInner() {
         if (status.status === 'completed') {
           clearInterval(interval);
           setActiveRunId(null);
+          // Invalidate cache so we get fresh post-build data
+          invalidateCache(`/api/pipeline/${stackId}/lineage`);
           // Atomic swap: fetch new views, then update state
           await fetchLineage();
           await fetchControlPlane();
@@ -701,10 +705,19 @@ function LineagePageInner() {
     return nodes;
   }, [lineageData?.nodes, filters, filterIntegrationId]);
 
-  // Build filtered stats from what's actually visible on the graph
+  // Build filtered stats from what's actually visible on the graph.
+  // Nodes can count in multiple categories — e.g. a BigQuery view that is also
+  // a dbt model counts as both a View and a Model.
   const filteredStats = useMemo(() => {
-    // When engine rendered view is available, count from its visible nodes
-    // (excluding job/service/system which are filtered out of the data plane)
+    const _DASHBOARD_CATS = new Set(['dashboard', 'report', 'workbook', 'question']);
+    const _DBT_MODEL_TYPES = new Set(['model', 'seed', 'snapshot']);
+
+    // Helper: check if a ViewNode is also a dbt model (merged node)
+    const _isDbtModel = (vn: ViewNode) => {
+      const dbtType = (vn as any).metadata?.dbtResourceType;
+      return dbtType && _DBT_MODEL_TYPES.has(dbtType);
+    };
+
     if (renderedView && renderedView.nodes.length > 0) {
       const visible = renderedView.nodes.filter(
         (n) =>
@@ -714,11 +727,16 @@ function LineagePageInner() {
           n.canonicalType !== 'system'
       );
       const cats = visible.map((vn) => _viewNodeToCategory(vn));
+      // Models: nodes with dbt metadata OR source/model category
+      const modelCount = visible.filter((vn, i) =>
+        _isDbtModel(vn) || cats[i] === 'model' || cats[i] === 'source'
+      ).length;
       return {
         toolNodes: cats.filter((c) => isToolCategory(c)).length,
         tableNodes: cats.filter((c) => c === 'table').length,
         viewNodes: cats.filter((c) => c === 'view').length,
-        modelNodes: cats.filter((c) => c === 'model' || c === 'source').length,
+        modelNodes: modelCount,
+        dashboardNodes: cats.filter((c) => _DASHBOARD_CATS.has(c)).length,
         dagNodes: cats.filter((c) => c === 'dag').length,
         taskNodes: cats.filter((c) => c === 'task').length,
       };
@@ -730,6 +748,7 @@ function LineagePageInner() {
       viewNodes: filteredNodes.filter((n) => n.category === 'view').length,
       modelNodes: filteredNodes.filter((n) => n.category === 'model' || n.category === 'source')
         .length,
+      dashboardNodes: filteredNodes.filter((n) => _DASHBOARD_CATS.has(n.category)).length,
       dagNodes: filteredNodes.filter((n) => n.category === 'dag').length,
       taskNodes: filteredNodes.filter((n) => n.category === 'task').length,
     };
@@ -914,6 +933,7 @@ function LineagePageInner() {
             isPolicyMode: policyMode,
             isPolicySelected: policyMode && policySelectedNodeIds.has(vn.id),
             policyStatus: (nodePolicies.get(vn.metadata?.fqn || vn.name)?.status as any) || 'none',
+            policyProfileName: nodePolicies.get(vn.metadata?.fqn || vn.name)?.profileName || null,
           },
         };
       });
@@ -1000,6 +1020,7 @@ function LineagePageInner() {
         isPolicyMode: policyMode,
         isPolicySelected: policyMode && policySelectedNodeIds.has(node.id),
         policyStatus: (nodePolicies.get(node.fullName || node.name)?.status as any) || 'none',
+        policyProfileName: nodePolicies.get(node.fullName || node.name)?.profileName || null,
       },
     }));
 
@@ -1513,7 +1534,7 @@ function LineagePageInner() {
             <>
               <div className="text-center">
                 <div className="text-xl font-semibold text-emerald-400">{cpFlowNodes.length}</div>
-                <div className="text-[11px] text-[var(--muted)]">Tools</div>
+                <div className="text-[11px] text-[var(--muted)]">Integrations</div>
               </div>
               <div className="text-center">
                 <div className="text-xl font-semibold text-[var(--text)]">{cpFlowEdges.length}</div>
@@ -1526,14 +1547,24 @@ function LineagePageInner() {
                 <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.tableNodes}</div>
                 <div className="text-[11px] text-[var(--muted)]">Tables</div>
               </div>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.viewNodes}</div>
-                <div className="text-[11px] text-[var(--muted)]">Views</div>
-              </div>
-              <div className="text-center">
-                <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.modelNodes}</div>
-                <div className="text-[11px] text-[var(--muted)]">Models</div>
-              </div>
+              {filteredStats.viewNodes > 0 && (
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.viewNodes}</div>
+                  <div className="text-[11px] text-[var(--muted)]">Views</div>
+                </div>
+              )}
+              {filteredStats.modelNodes > 0 && (
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.modelNodes}</div>
+                  <div className="text-[11px] text-[var(--muted)]">Models</div>
+                </div>
+              )}
+              {filteredStats.dashboardNodes > 0 && (
+                <div className="text-center">
+                  <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.dashboardNodes}</div>
+                  <div className="text-[11px] text-[var(--muted)]">Dashboards</div>
+                </div>
+              )}
               <div className="text-center">
                 <div className="text-xl font-semibold text-[var(--text)]">
                   {flowEdges.length}
@@ -1655,7 +1686,7 @@ function LineagePageInner() {
 
           {/* Legend */}
           {nodes.length > 0 && (
-            <div className="absolute bottom-4 left-4 flex flex-wrap items-center gap-3 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] max-w-md">
+            <div className="absolute bottom-4 left-16 flex flex-wrap items-center gap-3 px-3 py-2 bg-[var(--surface)]/80 backdrop-blur-sm rounded-lg border border-[var(--border-medium)] text-[10px] max-w-md">
               {activeTab === 'control-plane' ? (
                 <>
                   <div className="flex items-center gap-1">
@@ -1780,6 +1811,7 @@ function LineagePageInner() {
             allEdges={lineageData?.edges || []}
             stackId={stackId || ''}
             nodePolicies={nodePolicies}
+            saving={policySaving}
             onApply={async (request: PolicyAssignRequest, scope: ApplyScope) => {
               setPolicySaving(true);
               try {

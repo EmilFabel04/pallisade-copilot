@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
             lastStatus: true,
             lastRunAt: true,
             schedule: true,
+            config: true,
           },
         },
       },
@@ -78,6 +79,7 @@ export async function GET(request: NextRequest) {
           lastStatus: m.lastStatus,
           lastRunAt: m.lastRunAt?.toISOString() ?? null,
           schedule: m.schedule,
+          config: m.config,
         })),
       };
     });

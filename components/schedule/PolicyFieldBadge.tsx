@@ -24,7 +24,7 @@ export function PolicyFieldBadge({
   // State 1: Following policy (not overridden)
   if (!isOverridden) {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 text-[10px] font-medium">
+      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'var(--subtle-bg)', color: 'var(--muted)' }}>
         Policy
         {profileName && (
           <span className="opacity-70">· {profileName}</span>

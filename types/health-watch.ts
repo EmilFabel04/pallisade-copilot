@@ -413,6 +413,7 @@ export interface WatchSummary {
     lastStatus?: string;
     lastRunAt?: string;
     schedule?: string;
+    config?: Record<string, any>;
   }>;
   createdAt: string;
 }

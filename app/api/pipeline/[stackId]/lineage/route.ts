@@ -36,6 +36,13 @@ function resolveNodeConfig(node: any): Record<string, any> | null {
     }
   }
 
+  // OAuth integrations (e.g. GitHub) store token in Integration.accessToken
+  // rather than in the credentials JSON blob — bootstrap config from OAuth fields
+  // so the node isn't skipped as "no config".
+  if (!config && node.integration?.accessToken) {
+    config = {};
+  }
+
   if (!config) return null;
 
   // GitHub OAuth stores token in Integration.accessToken (not in credentials JSON).
@@ -142,7 +149,29 @@ export async function POST(
     );
     let githubAttachment: Record<string, any> | null = null;
     if (githubNode) {
-      const ghConfig = resolveNodeConfig(githubNode);
+      let ghConfig = resolveNodeConfig(githubNode);
+
+      // OAuth tools (GitHub) may not have integrationId on the PipelineNode.
+      // The link is stored as _integration_id in the node config instead.
+      // Resolve the Integration to get the encrypted accessToken.
+      if (ghConfig && !ghConfig.access_token && ghConfig._integration_id) {
+        try {
+          const linkedIntegration = await prisma.integration.findUnique({
+            where: { id: ghConfig._integration_id },
+            select: { accessToken: true, metadata: true },
+          });
+          if (linkedIntegration?.accessToken) {
+            ghConfig.access_token = decrypt(linkedIntegration.accessToken);
+          }
+          if (!ghConfig.owner && !ghConfig.org && linkedIntegration?.metadata) {
+            const meta = linkedIntegration.metadata as any;
+            if (meta.username) ghConfig.owner = meta.username;
+          }
+        } catch (e) {
+          console.error('[LINEAGE] Failed to resolve _integration_id for GitHub:', e);
+        }
+      }
+
       if (ghConfig?.access_token && ghConfig?.owner) {
         githubAttachment = {
           repo: ghConfig.repo ? `${ghConfig.owner}/${ghConfig.repo}` : ghConfig.owner,
@@ -161,6 +190,26 @@ export async function POST(
       }
 
       const extractConfig: Record<string, any> = { ...(decryptedConfig || {}) };
+
+      // Resolve OAuth _integration_id for nodes that lack a direct integrationId FK
+      // (e.g. GitHub OAuth stores the link in node config, not as a PipelineNode FK)
+      if (!extractConfig.access_token && extractConfig._integration_id && !node.integrationId) {
+        try {
+          const linkedInt = await prisma.integration.findUnique({
+            where: { id: extractConfig._integration_id },
+            select: { accessToken: true, metadata: true },
+          });
+          if (linkedInt?.accessToken) {
+            extractConfig.access_token = decrypt(linkedInt.accessToken);
+          }
+          if (!extractConfig.owner && !extractConfig.org && linkedInt?.metadata) {
+            const meta = linkedInt.metadata as any;
+            if (meta.username) extractConfig.owner = meta.username;
+          }
+        } catch (e) {
+          console.error(`[LINEAGE] Failed to resolve _integration_id for ${node.name}:`, e);
+        }
+      }
 
       // Attach GitHub config for transform/orchestration nodes —
       // only inject from VERSION_CONTROL node if the tool doesn't have its own github_token
@@ -239,6 +288,36 @@ export async function POST(
           };
         }
       }
+    }
+
+    // Ensure GitHub appears in tool_configs so the pipeline overview shows it.
+    // GitHub is a control-plane tool (no lineage data) — it just needs to be
+    // present in tool_nodes with managed_tools metadata for CP edge creation.
+    if (githubNode && !toolConfigs.some(tc => tc.layer === 'VERSION_CONTROL')) {
+      const ghNodeConfig = (githubNode as any).config || {};
+      // A tool is "managed" by GitHub if it has GitHub credentials injected,
+      // OR if it has a github_repo field set (user specified code location).
+      const managedToolTypes = toolConfigs
+        .filter(tc => {
+          if (tc.layer === 'VERSION_CONTROL') return false;
+          const cfg = tc.config || {};
+          return cfg.github_repo || cfg.code_repo
+            || (githubAttachment && (
+              cfg.github?.token === githubAttachment.token
+              || cfg.github_token === githubAttachment.token
+            ));
+        })
+        .map(tc => tc.tool_type.toLowerCase());
+      toolConfigs.push({
+        tool_type: 'github',
+        config: {
+          owner: ghNodeConfig.owner || ghNodeConfig.org || '',
+          repo: ghNodeConfig.repo || '',
+          managed_tools: managedToolTypes,
+        },
+        integration_id: ghNodeConfig._integration_id || (githubNode as any).integrationId || undefined,
+        layer: 'VERSION_CONTROL',
+      });
     }
 
     if (toolConfigs.length === 0) {

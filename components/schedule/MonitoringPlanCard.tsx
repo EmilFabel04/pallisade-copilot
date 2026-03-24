@@ -66,14 +66,19 @@ export function MonitoringPlanCard({
   const [showEditModal, setShowEditModal] = useState(false);
   const hasRun = plan.passCount > 0 || plan.warnCount > 0 || plan.failCount > 0 || plan.errorCount > 0;
 
+  const totalMonitors = plan.totalMonitors;
+
+  // Derive health from actual monitor statuses, not potentially stale stored score
+  const liveHealthScore = hasRun && totalMonitors > 0
+    ? Math.round(((plan.passCount + plan.warnCount * 0.5) / totalMonitors) * 100)
+    : plan.healthScore;
+
   const healthStatus: HealthStatus | null =
-    hasRun && plan.healthScore != null ? healthStatusFromScore(plan.healthScore) : null;
+    hasRun && liveHealthScore != null ? healthStatusFromScore(liveHealthScore) : null;
 
   const healthColor = healthStatus
     ? HEALTH_STATUS_COLORS[healthStatus]
     : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
-
-  const totalMonitors = plan.totalMonitors;
 
   return (
     <div
@@ -196,33 +201,27 @@ export function MonitoringPlanCard({
 
       {/* Metrics row */}
       <div className="flex items-center gap-4 mt-2 text-[13px]">
-        <div className="flex items-center gap-1">
-          <span className="text-[var(--muted)]">Monitors</span>
-          <span className="text-[var(--text)] font-medium tabular-nums">
-            {totalMonitors}
-          </span>
+        <div className="flex items-center gap-1 text-[12px]">
+          <span className="text-[var(--text)] font-medium tabular-nums">{totalMonitors}</span>
+          <span className="text-[var(--muted)]">monitor{totalMonitors !== 1 ? 's' : ''}</span>
+          {policyMonitorCount > 0 && (
+            <span className="text-[var(--muted)]">
+              {' · '}
+              {overrideMonitorCount > 0 && (
+                <span className="text-amber-400">{overrideMonitorCount} overridden</span>
+              )}
+              {overrideMonitorCount > 0 && (policyMonitorCount - overrideMonitorCount) > 0 && ', '}
+              {(policyMonitorCount - overrideMonitorCount) > 0 && (
+                <span className="text-violet-400">{policyMonitorCount - overrideMonitorCount} policy-covered</span>
+              )}
+            </span>
+          )}
         </div>
-        {hasRun && plan.healthScore != null && (
+        {hasRun && liveHealthScore != null && (
           <div className="flex items-center gap-1">
             <span className="text-[var(--muted)]">Health</span>
             <span className="text-[var(--text)] font-medium tabular-nums">
-              {Math.round(plan.healthScore)}
-            </span>
-          </div>
-        )}
-        {policyMonitorCount > 0 && (
-          <div className="flex items-center gap-1">
-            <span
-              className={cn(
-                'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                overrideMonitorCount > 0
-                  ? 'bg-amber-500/15 text-amber-400'
-                  : 'bg-violet-500/15 text-violet-400'
-              )}
-            >
-              {overrideMonitorCount > 0
-                ? `${overrideMonitorCount} override${overrideMonitorCount !== 1 ? 's' : ''}`
-                : `${policyMonitorCount} policy-covered`}
+              {Math.round(liveHealthScore)}
             </span>
           </div>
         )}

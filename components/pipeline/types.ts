@@ -240,6 +240,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'host', label: 'Airflow Host', type: 'text', required: false, placeholder: 'https://your-airflow.com', showWhen: { field: 'source_mode', value: 'api' } },
         { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'Airflow username', showWhen: { field: 'source_mode', value: 'api' } },
         { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'Airflow password', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'code_repo', label: 'Code Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repo where your DAG code lives (optional)', showWhen: { field: 'source_mode', value: 'api' } },
         // GitHub mode fields
         { name: 'github_repo', label: 'Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repository containing your Airflow DAGs', showWhen: { field: 'source_mode', value: 'github' } },
         { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
@@ -257,6 +258,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       configFields: [
         { name: 'host', label: 'Dagster Host', type: 'text', required: true, placeholder: 'https://your-dagster.com' },
         { name: 'api_token', label: 'API Token', type: 'password', required: false, placeholder: 'Dagster Cloud token' },
+        { name: 'code_repo', label: 'Code Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repo where your pipeline code lives (optional)' },
       ],
     },
     {
@@ -270,6 +272,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'api_url', label: 'Prefect API URL', type: 'text', required: true, placeholder: 'https://api.prefect.cloud/api' },
         { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your Prefect API key' },
         { name: 'workspace_id', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Prefect Cloud workspace ID' },
+        { name: 'code_repo', label: 'Code Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repo where your flow code lives (optional)' },
       ],
     },
   ],
@@ -512,9 +515,9 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
           { value: 'key', label: 'SSH Private Key' },
           { value: 'password', label: 'Password' },
         ]},
-        { name: 'private_key', label: 'Private Key', type: 'textarea', required: false, placeholder: '-----BEGIN RSA PRIVATE KEY-----', helperText: 'Paste your SSH private key (for key-based auth)' },
-        { name: 'passphrase', label: 'Key Passphrase', type: 'password', required: false, placeholder: 'Passphrase for encrypted key', helperText: 'Leave empty if your key is not passphrase-protected' },
-        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'SSH password', helperText: 'For password-based auth' },
+        { name: 'private_key', label: 'Private Key', type: 'textarea', required: false, placeholder: '-----BEGIN RSA PRIVATE KEY-----', helperText: 'Paste your SSH private key (for key-based auth)', showWhen: { field: 'auth_method', value: 'key' } },
+        { name: 'passphrase', label: 'Key Passphrase', type: 'password', required: false, placeholder: 'Passphrase for encrypted key', helperText: 'Leave empty if your key is not passphrase-protected', showWhen: { field: 'auth_method', value: 'key' } },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'SSH password', helperText: 'For password-based auth', showWhen: { field: 'auth_method', value: 'password' } },
       ],
     },
   ],

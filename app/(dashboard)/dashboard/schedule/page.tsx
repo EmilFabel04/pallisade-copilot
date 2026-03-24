@@ -427,15 +427,34 @@ export default function SchedulePage() {
                       }
                     />
                   ))}
-                  {watches.map((watch) => (
-                    <WatchCard
-                      key={watch.id}
-                      watch={watch}
-                      onClick={() => setSelectedWatch(watch)}
-                      onToggleEnabled={(enabled) => handleToggleWatchEnabled(watch.id, enabled)}
-                      onRunAll={() => handleRunWatch(watch.id)}
-                    />
-                  ))}
+                  {watches.map((watch) => {
+                    const watchMonitors = watch.monitors || [];
+                    const watchPolicyCount = watchMonitors.filter((m) => {
+                      const ps = getMonitorPolicyStatus(
+                        m.monitorType || '', (m as any).config || {},
+                        m.targetFqn ? resolvedPolicies[m.targetFqn] : null
+                      );
+                      return ps.status !== 'none';
+                    }).length;
+                    const watchOverrideCount = watchMonitors.filter((m) => {
+                      const ps = getMonitorPolicyStatus(
+                        m.monitorType || '', (m as any).config || {},
+                        m.targetFqn ? resolvedPolicies[m.targetFqn] : null
+                      );
+                      return ps.status === 'override' || ps.status === 'violation';
+                    }).length;
+                    return (
+                      <WatchCard
+                        key={watch.id}
+                        watch={watch}
+                        policyMonitorCount={watchPolicyCount}
+                        overrideMonitorCount={watchOverrideCount}
+                        onClick={() => setSelectedWatch(watch)}
+                        onToggleEnabled={(enabled) => handleToggleWatchEnabled(watch.id, enabled)}
+                        onRunAll={() => handleRunWatch(watch.id)}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}

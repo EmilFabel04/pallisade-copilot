@@ -33,6 +33,7 @@ export async function GET(request: NextRequest) {
                 lastStatus: true,
                 lastRunAt: true,
                 schedule: true,
+                config: true,
               },
             },
           },

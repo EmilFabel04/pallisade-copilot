@@ -133,6 +133,13 @@ export default function PlanDetailPage() {
     }
   }, [monitorRuns]);
 
+  // Auto-refetch runs when the expanded monitor's cache is cleared (after a run completes)
+  useEffect(() => {
+    if (expandedMonitorId && !monitorRuns[expandedMonitorId]) {
+      fetchMonitorRuns(expandedMonitorId);
+    }
+  }, [expandedMonitorId, monitorRuns, fetchMonitorRuns]);
+
   const handleToggleMonitor = useCallback((monitorId: string) => {
     if (expandedMonitorId === monitorId) {
       setExpandedMonitorId(null);
@@ -183,12 +190,23 @@ export default function PlanDetailPage() {
         // Check which monitors have run since we started
         const currentMons = (data.plan?.monitorGroups || []).flatMap((g: any) => g.monitors || []);
         const stillRunning = new Set<string>();
+        const justCompleted: string[] = [];
         for (const id of monIds) {
           const mon = currentMons.find((m: any) => m.id === id);
           // Still running if no lastRunAt or lastRunAt is before we started
           if (!mon?.lastRunAt || new Date(mon.lastRunAt) < new Date(startTime)) {
             stillRunning.add(id);
+          } else if (runningMonitorIds.has(id)) {
+            justCompleted.push(id);
           }
+        }
+        // Clear cached runs for monitors that just completed so logs refresh
+        if (justCompleted.length > 0) {
+          setMonitorRuns((prev) => {
+            const next = { ...prev };
+            for (const id of justCompleted) delete next[id];
+            return next;
+          });
         }
         setRunningMonitorIds(stillRunning);
         if (stillRunning.size === 0) {

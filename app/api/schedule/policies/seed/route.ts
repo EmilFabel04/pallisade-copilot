@@ -13,7 +13,7 @@ const BUILTIN_PROFILES = [
     criticality: 'critical',
     freshnessConfig: { enabled: true, maxHours: 2, warningHours: 1 },
     schemaConfig: { enabled: true, strictness: 'strict', allowEvolution: false },
-    volumeConfig: { enabled: true, growthRateThreshold: 0.05, minRows: 1 },
+    volumeConfig: { enabled: true, growthRateThreshold: 0.05, minRows: 1, maxRows: 100000000 },
     anomalyConfig: { enabled: true, sensitivity: 0.99, lookbackDays: 30 },
     qualityConfig: { enabled: true, maxNullRate: 0.01, maxDuplicateRate: 0.005 },
     ingestionConfig: { syncLagToleranceMinutes: 15, failureTolerance: 'strict', schemaDriftStrictness: 'strict' },
@@ -27,7 +27,7 @@ const BUILTIN_PROFILES = [
     criticality: 'medium',
     freshnessConfig: { enabled: true, maxHours: 12, warningHours: 6 },
     schemaConfig: { enabled: true, strictness: 'warn', allowEvolution: true },
-    volumeConfig: { enabled: true, growthRateThreshold: 0.15, minRows: 1 },
+    volumeConfig: { enabled: true, growthRateThreshold: 0.15, minRows: 1, maxRows: 500000000 },
     anomalyConfig: { enabled: true, sensitivity: 0.95, lookbackDays: 14 },
     qualityConfig: { enabled: true, maxNullRate: 0.05, maxDuplicateRate: 0.02 },
     ingestionConfig: { syncLagToleranceMinutes: 60, failureTolerance: 'normal', schemaDriftStrictness: 'warn' },
@@ -40,30 +40,19 @@ const BUILTIN_PROFILES = [
     description: 'Lenient monitoring for low-priority assets',
     criticality: 'low',
     freshnessConfig: { enabled: true, maxHours: 48, warningHours: 24 },
-    schemaConfig: { enabled: false, strictness: 'ignore', allowEvolution: true },
-    volumeConfig: { enabled: false },
-    anomalyConfig: { enabled: false },
+    schemaConfig: { enabled: true, strictness: 'ignore', allowEvolution: true },
+    volumeConfig: { enabled: true, growthRateThreshold: 0.30, minRows: 0, maxRows: 1000000000 },
+    anomalyConfig: { enabled: true, sensitivity: 0.80, lookbackDays: 7 },
     qualityConfig: { enabled: true, maxNullRate: 0.10, maxDuplicateRate: 0.05 },
     ingestionConfig: { syncLagToleranceMinutes: 180, failureTolerance: 'relaxed', schemaDriftStrictness: 'ignore' },
     biConfig: { freshnessHours: 24, contentHealthEnabled: false, upstreamBreakStrictness: 'ignore' },
     orchestrationConfig: { runLatencyMinutes: 60, scheduleLagMinutes: 30, failureTolerance: 'relaxed' },
     transformConfig: { testFailureTolerance: 'relaxed', modelFreshnessHours: 48 },
   },
-  {
-    name: 'BI Shield',
-    description: 'Optimized for BI/reporting assets — freshness and upstream integrity focus',
-    targetDomain: 'bi',
-    freshnessConfig: { enabled: true, maxHours: 6, warningHours: 4 },
-    biConfig: { freshnessHours: 4, contentHealthEnabled: true, upstreamBreakStrictness: 'strict' },
-  },
-  {
-    name: 'Source Guard',
-    description: 'Optimized for ingestion assets — sync lag and schema drift focus',
-    targetDomain: 'ingestion',
-    freshnessConfig: { enabled: true, maxHours: 4, warningHours: 2 },
-    ingestionConfig: { syncLagToleranceMinutes: 30, failureTolerance: 'strict', schemaDriftStrictness: 'strict' },
-  },
 ];
+
+// Domain-specific profiles to remove (deprecated)
+const DEPRECATED_PROFILES = ['BI Shield', 'Source Guard'];
 
 // POST /api/schedule/policies/seed — Seed built-in profiles for the org
 export async function POST(request: NextRequest) {
@@ -99,7 +88,7 @@ export async function POST(request: NextRequest) {
             // Update config fields on existing built-ins (keeps them fresh)
             isBuiltIn: true,
             description: profile.description,
-            targetDomain: profile.targetDomain || null,
+            targetDomain: null,
             criticality: profile.criticality || null,
             freshnessConfig: profile.freshnessConfig || undefined,
             schemaConfig: profile.schemaConfig || undefined,
@@ -118,10 +107,22 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Remove deprecated profiles (BI Shield, Source Guard)
+    let removed = 0;
+    for (const name of DEPRECATED_PROFILES) {
+      try {
+        const { count } = await prisma.policyProfile.deleteMany({
+          where: { organizationId, name, isBuiltIn: true },
+        });
+        removed += count;
+      } catch { /* ignore — may have assignments */ }
+    }
+
     return NextResponse.json({
-      message: `Seeded ${created} built-in profiles (${skipped} skipped)`,
+      message: `Seeded ${created} built-in profiles (${skipped} skipped, ${removed} deprecated removed)`,
       created,
       skipped,
+      removed,
     });
   } catch (error: any) {
     console.error('[Policies] Error seeding profiles:', error);

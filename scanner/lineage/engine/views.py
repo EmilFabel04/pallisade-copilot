@@ -1095,6 +1095,7 @@ class ViewBuilder:
             tool_type = (tn.get("toolType") or tn.get("tool_type") or "unknown").lower()
 
             # Determine lane
+            tool_category = get_category(tool_type)
             if tool_type in INFRA_PLATFORMS:
                 lane = PipelineLane.INGESTION.value
             elif tool_type in INGESTION_PLATFORMS:
@@ -1107,6 +1108,8 @@ class ViewBuilder:
                 lane = PipelineLane.REPORTING.value
             elif tool_type in WAREHOUSE_PLATFORMS:
                 lane = PipelineLane.WAREHOUSE_RAW.value
+            elif tool_category == ToolCategory.VERSION_CONTROL:
+                lane = PipelineLane.TRANSFORMATION.value
             else:
                 lane = PipelineLane.WAREHOUSE_RAW.value
 

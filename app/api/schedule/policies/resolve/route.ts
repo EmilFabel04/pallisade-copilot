@@ -159,12 +159,25 @@ export async function POST(request: NextRequest) {
       const direct = directByFqn.get(node.fqn);
       if (direct) {
         const profile = profileMap[direct.profileId];
+        // Node-level status is always "assigned" — customized values within
+        // the profile are the user's SLA/SLO configuration, not an override.
+        // "Override" only applies at the monitor level when a running monitor's
+        // config diverges from the policy rules.
+        const effectiveConfig = configFromProfile(profile);
+        // Merge any per-assignment overrides into the effective config
+        if (direct.overrides && typeof direct.overrides === 'object') {
+          for (const [section, fields] of Object.entries(direct.overrides as Record<string, any>)) {
+            if (fields && typeof fields === 'object' && effectiveConfig[section as keyof typeof effectiveConfig]) {
+              Object.assign(effectiveConfig[section as keyof typeof effectiveConfig], fields);
+            }
+          }
+        }
         policies[node.fqn] = {
-          source: direct.overrides ? 'direct_override' : 'direct_profile',
+          source: 'direct_profile',
           profileId: direct.profileId,
           profileName: profile?.name || null,
-          status: direct.overrides ? 'override' : 'assigned',
-          ...configFromProfile(profile),
+          status: 'assigned',
+          ...effectiveConfig,
         };
         continue;
       }

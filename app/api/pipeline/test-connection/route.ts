@@ -12,8 +12,11 @@ const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 export async function POST(request: NextRequest) {
   try {
     const session = await auth();
-    if (!session?.user?.organizationId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    if (!session?.user) {
+      return NextResponse.json({ success: false, message: 'Please sign in to test connections' }, { status: 401 });
+    }
+    if (!(session.user as any).organizationId) {
+      return NextResponse.json({ success: false, message: 'No organization found — try signing out and back in' }, { status: 401 });
     }
 
     const body = await request.json();

@@ -1,7 +1,6 @@
 'use client';
 
 import React from 'react';
-import type { PolicyStatus } from '@/types/policy';
 
 interface PolicyModeToolbarProps {
   selectedCount: number;
@@ -22,14 +21,14 @@ export function PolicyModeToolbar({
     <div className="flex items-center gap-4 mt-4 pt-4 border-t border-slate-500/20">
       {/* Mode indicator */}
       <div className="flex items-center gap-2">
-        <div className="w-2 h-2 bg-slate-400 rounded-full animate-pulse" />
-        <span className="text-[13px] font-medium text-slate-300">Policy Mode</span>
+        <div className="w-2 h-2 bg-[var(--accent)] rounded-full animate-pulse" />
+        <span className="text-[13px] font-medium" style={{ color: 'var(--text)' }}>Policy Mode</span>
       </div>
 
       {/* Selection counter */}
       <div className="text-[12px] text-[var(--muted)]">
         {selectedCount > 0 ? (
-          <span className="text-slate-300 font-medium">{selectedCount}</span>
+          <span className="font-medium" style={{ color: 'var(--text)' }}>{selectedCount}</span>
         ) : (
           <span>0</span>
         )}
@@ -37,19 +36,15 @@ export function PolicyModeToolbar({
         {totalNodes} nodes selected
       </div>
 
-      {/* Badge legend */}
-      <div className="flex items-center gap-3 ml-auto text-[11px] text-[var(--muted)]">
-        <span className="flex items-center gap-1">
-          <svg className="w-3 h-3 text-slate-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          Assigned
+      {/* Badge legend — matches the profile name badges on nodes */}
+      <div className="flex items-center gap-3 ml-auto text-[11px]">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block px-1.5 py-0.5 rounded-sm text-[8px] font-semibold uppercase" style={{ background: 'var(--subtle-bg)', color: 'var(--muted)', border: '1px solid var(--subtle-border)' }}>Profile</span>
+          <span style={{ color: 'var(--text-secondary)' }}>= policy assigned</span>
         </span>
-        <span className="flex items-center gap-1">
-          <svg className="w-3 h-3 text-slate-300/60" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          Inherited
-        </span>
-        <span className="flex items-center gap-1">
-          <svg className="w-3 h-3 text-amber-400" viewBox="0 0 24 24" fill="currentColor"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          Override
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: 'var(--text-faint)', border: '1px dashed var(--muted)' }} />
+          <span style={{ color: 'var(--text-secondary)' }}>= no policy</span>
         </span>
       </div>
 
@@ -57,7 +52,7 @@ export function PolicyModeToolbar({
       <button
         onClick={onSaveAll}
         disabled={saving}
-        className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-slate-500/20 text-slate-300 hover:bg-slate-500/30 border border-slate-500/30 transition-all disabled:opacity-50"
+        className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-[var(--accent)] text-white hover:bg-[var(--accent-2)] transition-all disabled:opacity-50"
       >
         {saving ? 'Saving...' : 'Save All'}
       </button>

@@ -390,8 +390,10 @@ export async function GET(
       fetchEngineStats(stackId),
     ]);
 
-    // If engine graph is empty (e.g., after server restart), try restoring from DB snapshot
-    if (!engineGraph) {
+    // If engine graph is empty, only restore from snapshot if explicitly requested
+    // (via ?restore=true query param). Auto-restoring on every page load can show
+    // stale data from a different pipeline since snapshots are org-scoped.
+    if (!engineGraph && searchParams.get('restore') === 'true') {
       const restored = await tryRestoreEngineFromSnapshot(organizationId, stackId);
       if (restored) {
         // Re-fetch with plane filter now that the graph is restored

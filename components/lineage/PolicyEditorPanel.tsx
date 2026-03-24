@@ -54,32 +54,14 @@ const BUILTIN_PROFILES: PolicyProfile[] = [
     isBuiltIn: true,
     criticality: 'low',
     freshnessConfig: { enabled: true, maxHours: 48, warningHours: 24 },
-    schemaConfig: { enabled: false, strictness: 'ignore', allowEvolution: true },
-    volumeConfig: { enabled: false },
-    anomalyConfig: { enabled: false },
+    schemaConfig: { enabled: true, strictness: 'ignore', allowEvolution: true },
+    volumeConfig: { enabled: true, growthRateThreshold: 0.30, minRows: 0, maxRows: 1000000000 },
+    anomalyConfig: { enabled: true, sensitivity: 0.80, lookbackDays: 7 },
     qualityConfig: { enabled: true, maxNullRate: 0.10, maxDuplicateRate: 0.05 },
     ingestionConfig: { syncLagToleranceMinutes: 180, failureTolerance: 'relaxed', schemaDriftStrictness: 'ignore' },
     biConfig: { freshnessHours: 24, contentHealthEnabled: false, upstreamBreakStrictness: 'ignore' },
     orchestrationConfig: { runLatencyMinutes: 60, scheduleLagMinutes: 30, failureTolerance: 'relaxed' },
     transformConfig: { testFailureTolerance: 'relaxed', modelFreshnessHours: 48 },
-  },
-  {
-    id: 'builtin_bi_shield',
-    name: 'BI Shield',
-    description: 'Optimized for BI/reporting assets',
-    isBuiltIn: true,
-    targetDomain: 'bi',
-    biConfig: { freshnessHours: 4, contentHealthEnabled: true, upstreamBreakStrictness: 'strict' },
-    freshnessConfig: { enabled: true, maxHours: 6, warningHours: 4 },
-  },
-  {
-    id: 'builtin_source_guard',
-    name: 'Source Guard',
-    description: 'Optimized for ingestion assets',
-    isBuiltIn: true,
-    targetDomain: 'ingestion',
-    ingestionConfig: { syncLagToleranceMinutes: 30, failureTolerance: 'strict', schemaDriftStrictness: 'strict' },
-    freshnessConfig: { enabled: true, maxHours: 4, warningHours: 2 },
   },
 ];
 
@@ -95,6 +77,7 @@ interface PolicyEditorPanelProps {
   allEdges: UnifiedLineageEdge[];
   stackId: string;
   nodePolicies: Map<string, EffectivePolicy>;
+  saving?: boolean;
   onApply: (request: PolicyAssignRequest, scope: ApplyScope) => void;
   onClose: () => void;
   onClearSelection: () => void;
@@ -244,6 +227,7 @@ export function PolicyEditorPanel({
   allEdges,
   stackId,
   nodePolicies,
+  saving,
   onApply,
   onClose,
   onClearSelection,
@@ -252,6 +236,22 @@ export function PolicyEditorPanel({
   const [applyScope, setApplyScope] = useState<ApplyScope>('selected');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [dbProfiles, setDbProfiles] = useState<PolicyProfile[]>([]);
+  // Tracks whether the current selection has been applied — stays true until
+  // the user changes the profile, edits overrides, or selects different nodes.
+  const [applied, setApplied] = useState(false);
+  const prevSavingRef = React.useRef(false);
+
+  // Detect when saving transitions from true → false (apply completed)
+  React.useEffect(() => {
+    if (prevSavingRef.current && !saving) {
+      setApplied(true);
+    }
+    prevSavingRef.current = !!saving;
+  }, [saving]);
+
+  // Reset applied state when user changes anything
+  React.useEffect(() => { setApplied(false); }, [selectedProfileId, applyScope]);
+  React.useEffect(() => { setApplied(false); }, [selectedNodeIds]);
 
   // Local overrides — user edits on top of the selected profile.
   // Keys mirror the profile config shape. Only changed fields are tracked.
@@ -265,6 +265,7 @@ export function PolicyEditorPanel({
 
   // Helper to set a nested override value: setOverride('freshnessConfig', 'maxHours', 6)
   const setOverride = useCallback((section: string, key: string, value: any) => {
+    setApplied(false);
     setOverrides((prev) => ({
       ...prev,
       [section]: { ...(prev[section] || {}), [key]: value },
@@ -297,7 +298,10 @@ export function PolicyEditorPanel({
         const res = await fetch('/api/schedule/policies/profiles');
         if (res.ok && !cancelled) {
           const data = await res.json();
-          setDbProfiles(data.profiles || data || []);
+          const allProfiles = data.profiles || data || [];
+          // Filter out deprecated domain-specific profiles
+          const DEPRECATED = ['BI Shield', 'Source Guard'];
+          setDbProfiles(allProfiles.filter((p: PolicyProfile) => !DEPRECATED.includes(p.name)));
         }
       } catch (err) {
         console.error('[PolicyEditor] Failed to load profiles:', err);
@@ -357,18 +361,38 @@ export function PolicyEditorPanel({
   const handleApply = useCallback(() => {
     if (!selectedProfileId) return;
 
+    // Filter overrides to only include values that actually differ from the profile
+    const effectiveOverrides: Record<string, any> = {};
+    if (selectedProfile) {
+      for (const [section, fields] of Object.entries(overrides)) {
+        if (!fields || typeof fields !== 'object') continue;
+        const profileSection = (selectedProfile as any)?.[section];
+        const diffFields: Record<string, any> = {};
+        for (const [key, value] of Object.entries(fields)) {
+          const profileValue = profileSection?.[key];
+          if (String(value) !== String(profileValue)) {
+            diffFields[key] = value;
+          }
+        }
+        if (Object.keys(diffFields).length > 0) {
+          effectiveOverrides[section] = diffFields;
+        }
+      }
+    }
+    const hasEffectiveOverrides = Object.keys(effectiveOverrides).length > 0;
+
     const fqns = selectedNodes.map((n) => n.fullName || n.name);
     const request: PolicyAssignRequest & { _profileName?: string } = {
       profileId: selectedProfileId,
       assignmentType: applyScope === 'downstream' ? 'branch' : 'direct',
       nodeFqns: applyScope === 'downstream' ? undefined : fqns,
       branchRootFqn: applyScope === 'downstream' ? fqns[0] : undefined,
-      overrides: hasOverrides ? overrides : undefined,
+      overrides: hasEffectiveOverrides ? effectiveOverrides : undefined,
       _profileName: selectedProfile?.name || undefined,
     };
 
     onApply(request, applyScope);
-  }, [selectedProfileId, selectedProfile, selectedNodes, applyScope, onApply, overrides, hasOverrides]);
+  }, [selectedProfileId, selectedProfile, selectedNodes, applyScope, onApply, overrides]);
 
   if (selectedNodeIds.size === 0) {
     return (
@@ -404,7 +428,7 @@ export function PolicyEditorPanel({
           </button>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-[12px] text-slate-300 font-medium">
+          <span className="text-[12px] font-medium" style={{ color: 'var(--text)' }}>
             {selectedNodeIds.size} node{selectedNodeIds.size !== 1 ? 's' : ''} selected
           </span>
           <button
@@ -419,11 +443,11 @@ export function PolicyEditorPanel({
           <p className="text-[11px] text-[var(--muted)] mt-1">Includes {domainLabels}</p>
         )}
         {/* Current policy summary */}
-        {currentPolicy && selectedNodeIds.size === 1 && (
+        {currentPolicy && currentPolicy.status !== 'none' && selectedNodeIds.size === 1 && (
           <div className="mt-2 px-2 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <span className="text-[11px] text-[var(--muted)]">Current: </span>
-            <span className="text-[11px] text-slate-300 font-medium">
-              {currentPolicy.profileName || 'Default'} ({currentPolicy.source})
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text)' }}>
+              {currentPolicy.profileName || 'Default'}
             </span>
           </div>
         )}
@@ -748,17 +772,31 @@ export function PolicyEditorPanel({
       {/* Footer (sticky) */}
       {selectedProfileId && (
         <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0">
-          <button
-            onClick={handleApply}
-            className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-slate-500 hover:bg-slate-600 text-white transition-all"
-          >
-            Apply {selectedProfile?.name || 'Policy'}{hasOverrides ? ' (custom)' : ''} to{' '}
-            {applyScope === 'selected'
-              ? `${selectedNodeIds.size} node${selectedNodeIds.size !== 1 ? 's' : ''}`
-              : applyScope === 'downstream'
-              ? `${downstreamCount} downstream`
-              : `${typeCount} ${dominantCategory} nodes`}
-          </button>
+          {applied ? (
+            <div className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-green-600/90 text-white text-center flex items-center justify-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              {selectedProfile?.name || 'Policy'} applied
+            </div>
+          ) : (
+            <button
+              onClick={handleApply}
+              disabled={saving}
+              className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] text-white transition-all disabled:opacity-70"
+            >
+              {saving ? 'Applying...' : (
+                <>
+                  Apply {selectedProfile?.name || 'Policy'}{hasOverrides ? ' (custom)' : ''} to{' '}
+                  {applyScope === 'selected'
+                    ? `${selectedNodeIds.size} node${selectedNodeIds.size !== 1 ? 's' : ''}`
+                    : applyScope === 'downstream'
+                    ? `${downstreamCount} downstream`
+                    : `${typeCount} ${dominantCategory} nodes`}
+                </>
+              )}
+            </button>
+          )}
         </div>
       )}
     </div>

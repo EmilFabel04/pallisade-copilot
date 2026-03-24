@@ -603,8 +603,10 @@ def get_policy_status(
     """
     for a in assignments:
         if a.get("assignmentType") == "direct" and a.get("nodeFqn") == node_fqn:
-            if a.get("overrides"):
-                return "override"
+            # Node-level status is always "assigned" — customized values
+            # within the profile are the user's SLA/SLO configuration, not
+            # an override.  "Override" only applies at the monitor level when
+            # a running monitor's config diverges from the policy rules.
             return "assigned"
 
     # Check branch coverage

@@ -17,6 +17,8 @@ import {
 
 interface WatchCardProps {
   watch: WatchSummary;
+  policyMonitorCount?: number;
+  overrideMonitorCount?: number;
   onClick: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onRunAll: () => void;
@@ -54,12 +56,20 @@ function timeAgo(dateStr?: string | null): string {
   return `${days}d ago`;
 }
 
-export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCardProps) {
+export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount = 0, onClick, onToggleEnabled, onRunAll }: WatchCardProps) {
   const [showEditModal, setShowEditModal] = useState(false);
 
-  const healthStatus: HealthStatus | null = watch.healthScore != null
-    ? healthStatusFromScore(watch.healthScore)
-    : null;
+  const totalMonitors = watch.monitorCount;
+  const hasRun = watch.passCount > 0 || watch.warnCount > 0 || watch.failCount > 0;
+
+  // Derive health from actual monitor statuses, not potentially stale stored score
+  const liveHealthScore = hasRun && totalMonitors > 0
+    ? Math.round(((watch.passCount + watch.warnCount * 0.5) / totalMonitors) * 100)
+    : watch.healthScore;
+
+  const healthStatus: HealthStatus | null = hasRun && liveHealthScore != null
+    ? healthStatusFromScore(liveHealthScore)
+    : watch.healthScore != null ? healthStatusFromScore(watch.healthScore) : null;
 
   const healthColor = healthStatus
     ? HEALTH_STATUS_COLORS[healthStatus]
@@ -67,7 +77,6 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
 
   const watchTypeColor = WATCH_TYPE_COLORS[watch.watchType] || WATCH_TYPE_COLORS.custom_watch;
 
-  const totalMonitors = watch.monitorCount;
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
   const failureGroups = watch.healthDetails?.failureGroups || [];
 
@@ -99,8 +108,22 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
               </svg>
               {cronToHuman(watch.schedule || '')}
             </span>
-            <span>{totalMonitors} monitor{totalMonitors !== 1 ? 's' : ''}</span>
-            {coveragePct != null && (
+            <span>
+              {totalMonitors} monitor{totalMonitors !== 1 ? 's' : ''}
+              {policyMonitorCount > 0 && (
+                <>
+                  {' · '}
+                  {overrideMonitorCount > 0 && (
+                    <span className="text-amber-400">{overrideMonitorCount} overridden</span>
+                  )}
+                  {overrideMonitorCount > 0 && (policyMonitorCount - overrideMonitorCount) > 0 && ', '}
+                  {(policyMonitorCount - overrideMonitorCount) > 0 && (
+                    <span className="text-violet-400">{policyMonitorCount - overrideMonitorCount} policy-covered</span>
+                  )}
+                </>
+              )}
+            </span>
+            {coveragePct != null && policyMonitorCount === 0 && (
               <span className="text-[var(--text-faint)]">{coveragePct}% coverage</span>
             )}
           </div>
@@ -141,48 +164,26 @@ export function WatchCard({ watch, onClick, onToggleEnabled, onRunAll }: WatchCa
       </div>
 
       {/* Health score bar */}
-      <div className="mt-3">
-        {watch.healthScore != null ? (
-          <div className="flex items-center gap-2 mb-1.5">
-            <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  watch.healthScore >= 90 ? 'bg-emerald-500/60' :
-                  watch.healthScore >= 70 ? 'bg-amber-500/60' :
-                  watch.healthScore >= 40 ? 'bg-orange-500/60' :
-                  'bg-red-500/60'
-                )}
-                style={{ width: `${Math.min(watch.healthScore, 100)}%` }}
-              />
-            </div>
-            <span className="text-[11px] text-[var(--muted)] shrink-0 tabular-nums">
-              {Math.round(watch.healthScore)}
-            </span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 mb-1.5">
-            <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden">
-              {totalMonitors > 0 && (
-                <div className="flex h-full">
-                  {watch.passCount > 0 && (
-                    <div className="bg-emerald-500/60 h-full" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
-                  )}
-                  {watch.warnCount > 0 && (
-                    <div className="bg-amber-500/60 h-full" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
-                  )}
-                  {watch.failCount > 0 && (
-                    <div className="bg-red-500/60 h-full" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
-                  )}
-                </div>
+      {hasRun && totalMonitors > 0 && (
+        <div className="flex items-center gap-2 mt-3 mb-1.5">
+          <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden">
+            <div className="flex h-full">
+              {watch.passCount > 0 && (
+                <div className="bg-emerald-500/60 h-full" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
+              )}
+              {watch.warnCount > 0 && (
+                <div className="bg-amber-500/60 h-full" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
+              )}
+              {watch.failCount > 0 && (
+                <div className="bg-red-500/60 h-full" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
               )}
             </div>
-            <span className="text-[11px] text-[var(--muted)] shrink-0">
-              {watch.passCount}/{totalMonitors} passing
-            </span>
           </div>
-        )}
-      </div>
+          <span className="text-[11px] text-[var(--muted)] shrink-0">
+            {watch.failCount > 0 ? `${watch.failCount} failed` : `${watch.passCount}/${totalMonitors} passing`}
+          </span>
+        </div>
+      )}
 
       {/* Failure groups (compact) */}
       {failureGroups.length > 0 && (

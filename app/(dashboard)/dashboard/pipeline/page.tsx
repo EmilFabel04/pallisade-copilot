@@ -378,10 +378,27 @@ export default function PipelinePage() {
   useEffect(() => {
     const success = searchParams.get('success');
     const error = searchParams.get('error');
-    if (success === 'github') { toast.success('GitHub connected successfully'); fetchIntegrations(); window.history.replaceState({}, '', '/dashboard/pipeline'); }
+    if (success === 'github') {
+      toast.success('GitHub connected successfully');
+      fetchIntegrations();
+      // Re-open the dbt Core config modal if GitHub was connected from there
+      const pending = sessionStorage.getItem('pending_github_node');
+      if (pending) {
+        try {
+          const { nodeId } = JSON.parse(pending);
+          sessionStorage.removeItem('pending_github_node');
+          const targetNode = stack.nodes.find((n) => n.id === nodeId);
+          if (targetNode) {
+            // Small delay to let integrations refresh before opening modal
+            setTimeout(() => setNodeModal(targetNode), 300);
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      window.history.replaceState({}, '', '/dashboard/pipeline');
+    }
     else if (success === 'slack') { toast.success('Slack connected successfully'); fetchIntegrations(); window.history.replaceState({}, '', '/dashboard/pipeline'); }
     else if (error) { toast.error(`Authentication error: ${error}`); window.history.replaceState({}, '', '/dashboard/pipeline'); }
-  }, [fetchIntegrations, searchParams]);
+  }, [fetchIntegrations, searchParams, stack.nodes]);
 
   // Deep-link: open a specific tool's config modal via ?openConfig=<toolType>
   useEffect(() => {
