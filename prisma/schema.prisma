@@ -360,8 +360,10 @@ model PipelineStack {
   context PipelineContext?
 
   // Contracts
-  pipelineContract PipelineContract?
-  sourceContracts  SourceContract[]
+  pipelineContract     PipelineContract?
+  sourceContracts      SourceContract[]
+  dataContracts        PipelineDataContract[]
+  dataContractsEnabled Boolean               @default(false)
 
   // Notifications
   notificationEvents NotificationEvent[]
@@ -2114,6 +2116,55 @@ model PipelineContract {
   pipelineStackId String        @unique
 
   @@index([pipelineStackId])
+}
+
+// Group-level or exception contract for pipeline data assets
+// (distinct from DataContract which is org-scoped, per-table)
+model PipelineDataContract {
+  id String @id @default(cuid())
+
+  // Scope
+  scope    String  // 'schema' | 'dbt_model_group' | 'dashboard' | 'exception'
+  scopeRef String  // e.g., "bigquery:public", "staging", dashboard ID
+
+  // Ownership
+  ownerUser      String?
+  ownerTeam      String?
+  contactChannel String?
+
+  // SLA expectations
+  slaTier                           String? // T0, T1, T2, T3
+  expectedFreshnessMinutes          Int?
+  expectedExtractionFrequencyMinutes Int?
+  alertPolicyJson                   Json?
+  notes                             String? @db.Text
+
+  // Data-asset-specific
+  schemaExpectations Json? // SchemaExpectation[]
+  qualityRules       Json? // QualityRule[]
+
+  // Override fields
+  overridesJson Json?
+
+  // Exception contract support
+  isException      Boolean              @default(false)
+  parentContractId String?
+  parentContract   PipelineDataContract?  @relation("ExceptionParent", fields: [parentContractId], references: [id])
+  exceptions       PipelineDataContract[] @relation("ExceptionParent")
+
+  // Auto-sync tracking
+  autoSynced Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relation to pipeline
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+
+  @@unique([pipelineStackId, scope, scopeRef])
+  @@index([pipelineStackId])
+  @@index([parentContractId])
 }
 
 enum IntegrationType {
