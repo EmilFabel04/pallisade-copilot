@@ -277,10 +277,13 @@ The overall CONTRACT_CHECK status is:
 
 ## UI Surfaces
 
-### Pipeline Overview / Lineage — SLA Modal (per node)
+### Pipeline Overview / Lineage — SLA Modal (per node or multi-node)
 
 - Click any node → inspector panel shows SLA section
-- Fields adapt to node type (existing override schemas)
+- **Multi-select**: Shift+Click to select multiple nodes, then open SLA modal to apply the same SLA to all selected nodes at once
+- SLA modal header shows: single node name, or "X nodes selected" for multi-select
+- When multi-selecting, the modal shows a hint: `💡 Shift+Click nodes to select multiple` (displayed in the modal footer when a single node is selected, so users discover the shortcut)
+- Fields adapt to node type (existing override schemas). For multi-select, only fields common to all selected node types are shown.
 - Inherits from pipeline defaults, "Inherited" label with option to customize
 - When contracts enabled (data assets): banner — "This node has a data contract. SLA changes will show as override or violation against the contract."
 - Compliance badge next to each field when contracts enabled (per-field green/blue/red)
