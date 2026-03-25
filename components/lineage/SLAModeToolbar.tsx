@@ -2,7 +2,7 @@
 
 import React from 'react';
 
-interface PolicyModeToolbarProps {
+interface SLAModeToolbarProps {
   selectedCount: number;
   totalNodes: number;
   onSaveAll: () => void;
@@ -10,13 +10,13 @@ interface PolicyModeToolbarProps {
   saving?: boolean;
 }
 
-export function PolicyModeToolbar({
+export function SLAModeToolbar({
   selectedCount,
   totalNodes,
   onSaveAll,
   onExit,
   saving,
-}: PolicyModeToolbarProps) {
+}: SLAModeToolbarProps) {
   return (
     <div className="flex items-center gap-4 mt-4 pt-4 border-t border-slate-500/20">
       {/* Mode indicator */}

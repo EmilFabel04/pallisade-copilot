@@ -9,10 +9,10 @@ interface Props {
   onTestConnection: (source: ControlPlaneSource) => void;
   onViewDetails: (source: ControlPlaneSource) => void;
   onDisconnect: (source: ControlPlaneSource) => void;
-  onEditContract: (source: ControlPlaneSource) => void;
+  onEditSLA: (source: ControlPlaneSource) => void;
 }
 
-export default function SourceActionsMenu({ source, onTestConnection, onViewDetails, onDisconnect, onEditContract }: Props) {
+export default function SourceActionsMenu({ source, onTestConnection, onViewDetails, onDisconnect, onEditSLA }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -27,7 +27,7 @@ export default function SourceActionsMenu({ source, onTestConnection, onViewDeta
 
   const items = [
     { icon: Wifi, label: 'Test Connection', action: () => onTestConnection(source) },
-    { icon: FileText, label: 'Edit Contract', action: () => onEditContract(source) },
+    { icon: FileText, label: 'Edit SLA', action: () => onEditSLA(source) },
     { icon: KeyRound, label: 'Re-authenticate', action: () => window.open(`/dashboard/pipeline?openConfig=${source.toolType}`, '_self') },
     { icon: RotateCw, label: 'Rotate Key', action: () => window.open(`/dashboard/pipeline?openConfig=${source.toolType}`, '_self') },
     ...(source.layer === 'WAREHOUSE'

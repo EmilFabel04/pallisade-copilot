@@ -3,7 +3,7 @@
 import { useState, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { MONITOR_CATALOG } from '@/types/monitor-catalog';
-import { PolicyFieldBadge } from './PolicyFieldBadge';
+import { SLAFieldBadge } from './SLAFieldBadge';
 import { ColumnPicker } from './ColumnPicker';
 import {
   SLA_FIELD_MAP,
@@ -191,7 +191,7 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
                     {field.required && <span className="text-red-400 ml-0.5">*</span>}
                   </label>
                   {hasPolicyMapping && (
-                    <PolicyFieldBadge
+                    <SLAFieldBadge
                       fieldKey={field.key}
                       currentValue={currentValue}
                       policyValue={policyValue}

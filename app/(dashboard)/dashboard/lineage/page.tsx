@@ -48,8 +48,8 @@ import {
 } from '@/components/lineage/types';
 import { InspectorPanel } from '@/components/lineage/pipeline-overview/InspectorPanel';
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
-import { PolicyEditorPanel, type ApplyScope } from '@/components/lineage/PolicyEditorPanel';
-import { PolicyModeToolbar } from '@/components/lineage/PolicyModeToolbar';
+import { SLAEditorPanel, type ApplyScope } from '@/components/lineage/SLAEditorPanel';
+import { SLAModeToolbar } from '@/components/lineage/SLAModeToolbar';
 import type { EffectiveSLAPolicy, SLAAssignRequest, SLAStatus } from '@/types/sla';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
@@ -203,23 +203,23 @@ function LineagePageInner() {
   }, []);
 
   // Policy mode state (isolated from normal lineage state)
-  const [policyMode, setPolicyMode] = useState(false);
-  const [policySelectedNodeIds, setPolicySelectedNodeIds] = useState<Set<string>>(new Set());
-  const [nodePolicies, setNodePolicies] = useState<Map<string, EffectiveSLAPolicy>>(new Map());
+  const [slaMode, setSlaMode] = useState(false);
+  const [slaSelectedNodeIds, setSlaSelectedNodeIds] = useState<Set<string>>(new Set());
+  const [nodeSLAs, setNodeSLAs] = useState<Map<string, EffectiveSLAPolicy>>(new Map());
   const [policySaving, setPolicySaving] = useState(false);
 
   // Exit policy mode on Escape
   useEffect(() => {
-    if (!policyMode) return;
+    if (!slaMode) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setPolicyMode(false);
-        setPolicySelectedNodeIds(new Set());
+        setSlaMode(false);
+        setSlaSelectedNodeIds(new Set());
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [policyMode]);
+  }, [slaMode]);
 
   // Load existing policy assignments from DB on page load
   useEffect(() => {
@@ -247,7 +247,7 @@ function LineagePageInner() {
               map.set(fqn, pol as EffectiveSLAPolicy);
             }
           }
-          if (map.size > 0) setNodePolicies(map);
+          if (map.size > 0) setNodeSLAs(map);
         }
       } catch {
         // Non-critical — policies will load next time
@@ -940,10 +940,10 @@ function LineagePageInner() {
             isInferred: vn.inferred,
             isOverlay: vn.inferred,
             // Policy mode data
-            isPolicyMode: policyMode,
-            isPolicySelected: policyMode && policySelectedNodeIds.has(vn.id),
-            policyStatus: (nodePolicies.get(vn.metadata?.fqn || vn.name)?.status as any) || 'none',
-            policyProfileName: nodePolicies.get(vn.metadata?.fqn || vn.name)?.profileName || null,
+            isSLAMode: slaMode,
+            isSLASelected: slaMode && slaSelectedNodeIds.has(vn.id),
+            slaStatus: (nodeSLAs.get(vn.metadata?.fqn || vn.name)?.status as any) || 'none',
+            slaProfileName: nodeSLAs.get(vn.metadata?.fqn || vn.name)?.profileName || null,
           },
         };
       });
@@ -1027,10 +1027,10 @@ function LineagePageInner() {
         columnCount: node.columns?.length || 0,
         materialization: node.materialization,
         // Policy mode data
-        isPolicyMode: policyMode,
-        isPolicySelected: policyMode && policySelectedNodeIds.has(node.id),
-        policyStatus: (nodePolicies.get(node.fullName || node.name)?.status as any) || 'none',
-        policyProfileName: nodePolicies.get(node.fullName || node.name)?.profileName || null,
+        isSLAMode: slaMode,
+        isSLASelected: slaMode && slaSelectedNodeIds.has(node.id),
+        slaStatus: (nodeSLAs.get(node.fullName || node.name)?.status as any) || 'none',
+        slaProfileName: nodeSLAs.get(node.fullName || node.name)?.profileName || null,
       },
     }));
 
@@ -1071,7 +1071,7 @@ function LineagePageInner() {
 
     const layouted = layoutGraph(nodes, edges, { direction: 'LR' });
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView, policyMode, policySelectedNodeIds, nodePolicies]);
+  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView, slaMode, slaSelectedNodeIds, nodeSLAs]);
 
   // Build control plane flow nodes/edges
   // Uses rendered overview positions when available, falls back to Dagre
@@ -1292,14 +1292,14 @@ function LineagePageInner() {
   // so they don't interfere with our custom multi-select
   const onNodesChange = useCallback(
     (changes: any[]) => {
-      if (policyMode) {
+      if (slaMode) {
         const filtered = changes.filter((c: any) => c.type !== 'select');
         if (filtered.length > 0) onNodesChangeBase(filtered);
       } else {
         onNodesChangeBase(changes);
       }
     },
-    [policyMode, onNodesChangeBase]
+    [slaMode, onNodesChangeBase]
   );
 
   useEffect(() => {
@@ -1313,8 +1313,8 @@ function LineagePageInner() {
 
       // Policy mode: manage multi-select
       // Shift/Cmd/Ctrl+click to add/remove from selection, plain click to replace
-      if (policyMode) {
-        setPolicySelectedNodeIds((prev) => {
+      if (slaMode) {
+        setSlaSelectedNodeIds((prev) => {
           const next = new Set(prev);
           const isMultiKey = event.shiftKey || event.metaKey || event.ctrlKey;
           if (isMultiKey) {
@@ -1365,7 +1365,7 @@ function LineagePageInner() {
       }
       setSelectedEdge(null);
     },
-    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview, policyMode]
+    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview, slaMode]
   );
 
   const handleEdgeClick = useCallback(
@@ -1439,7 +1439,7 @@ function LineagePageInner() {
         </div>
       )}
       {/* Header */}
-      <div className={`px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)] ${policyMode ? 'ring-1 ring-inset ring-slate-500/20' : ''}`}>
+      <div className={`px-6 py-4 border-b border-[var(--subtle-border)] bg-[var(--surface-sunken)] ${slaMode ? 'ring-1 ring-inset ring-slate-500/20' : ''}`}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-lg font-semibold text-[var(--text)]">Pipeline Lineage</h1>
@@ -1454,11 +1454,11 @@ function LineagePageInner() {
               </span>
             )}
             {/* Define Policy button */}
-            {lineageData && lineageData.nodes.length > 0 && !policyMode && (
+            {lineageData && lineageData.nodes.length > 0 && !slaMode && (
               <button
                 onClick={() => {
-                  setPolicyMode(true);
-                  setPolicySelectedNodeIds(new Set());
+                  setSlaMode(true);
+                  setSlaSelectedNodeIds(new Set());
                   setSelectedNode(null);
                   setSelectedEdge(null);
                 }}
@@ -1527,17 +1527,17 @@ function LineagePageInner() {
         </div>
 
         {/* Stats / Policy toolbar */}
-        {policyMode ? (
-          <PolicyModeToolbar
-            selectedCount={policySelectedNodeIds.size}
+        {slaMode ? (
+          <SLAModeToolbar
+            selectedCount={slaSelectedNodeIds.size}
             totalNodes={lineageData?.nodes?.length || 0}
             saving={policySaving}
             onSaveAll={() => {
               // TODO: batch save all pending policies
             }}
             onExit={() => {
-              setPolicyMode(false);
-              setPolicySelectedNodeIds(new Set());
+              setSlaMode(false);
+              setSlaSelectedNodeIds(new Set());
             }}
           />
         ) : (
@@ -1681,8 +1681,8 @@ function LineagePageInner() {
               proOptions={{ hideAttribution: true }}
               // In policy mode: disable ReactFlow's built-in multi-select so shift+click
               // reaches our handler instead of being consumed by ReactFlow's selection system
-              multiSelectionKeyCode={policyMode ? null : 'Shift'}
-              selectionKeyCode={policyMode ? null : 'Shift'}
+              multiSelectionKeyCode={slaMode ? null : 'Shift'}
+              selectionKeyCode={slaMode ? null : 'Shift'}
             >
               <Controls className="!bg-[var(--subtle-bg)] !border-[var(--border-medium)] !rounded-lg [&>button]:!bg-[var(--subtle-bg)] [&>button]:!border-[var(--border-medium)] [&>button]:!text-[var(--text-tertiary)]" />
               <MiniMap
@@ -1822,13 +1822,13 @@ function LineagePageInner() {
         )}
 
         {/* Side panel - Policy editor */}
-        {policyMode && (
-          <PolicyEditorPanel
-            selectedNodeIds={policySelectedNodeIds}
+        {slaMode && (
+          <SLAEditorPanel
+            selectedNodeIds={slaSelectedNodeIds}
             allNodes={lineageData?.nodes || []}
             allEdges={lineageData?.edges || []}
             stackId={stackId || ''}
-            nodePolicies={nodePolicies}
+            nodeSLAs={nodeSLAs}
             saving={policySaving}
             onApply={async (request: SLAAssignRequest, scope: ApplyScope) => {
               setPolicySaving(true);
@@ -1864,11 +1864,11 @@ function LineagePageInner() {
                           map.set(fqn, pol as EffectiveSLAPolicy);
                         }
                       }
-                      setNodePolicies(map);
+                      setNodeSLAs(map);
                     }
                   } catch {
                     // Non-critical — badges still show from assign response
-                    const newPolicies = new Map(nodePolicies);
+                    const newPolicies = new Map(nodeSLAs);
                     const profileName = (request as any)._profileName || null;
                     for (const a of data.assignments || []) {
                       if (a.nodeFqn) {
@@ -1882,7 +1882,7 @@ function LineagePageInner() {
                         });
                       }
                     }
-                    setNodePolicies(newPolicies);
+                    setNodeSLAs(newPolicies);
                   }
                 } else {
                   const errText = await res.text().catch(() => '');
@@ -1904,15 +1904,15 @@ function LineagePageInner() {
               }
             }}
             onClose={() => {
-              setPolicyMode(false);
-              setPolicySelectedNodeIds(new Set());
+              setSlaMode(false);
+              setSlaSelectedNodeIds(new Set());
             }}
-            onClearSelection={() => setPolicySelectedNodeIds(new Set())}
+            onClearSelection={() => setSlaSelectedNodeIds(new Set())}
           />
         )}
 
         {/* Side panel - Node details */}
-        {!policyMode && activeTab !== 'control-plane' && selectedNode && !selectedEdge && (
+        {!slaMode && activeTab !== 'control-plane' && selectedNode && !selectedEdge && (
           (selectedNode.category === 'dag' || selectedNode.category === 'task') ? (
             <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-sunken)] p-4 overflow-y-auto">
               <div className="flex items-center justify-between mb-4">
@@ -2307,9 +2307,9 @@ function LineagePageInner() {
               onNodeNavigate={handleNavigateToNode}
               onCreateSingleMonitor={handleCreateSingleMonitor}
               onCreateMultiMonitor={handleCreateMultiMonitor}
-              policyInfo={(() => {
+              slaInfo={(() => {
                 const fqn = selectedNode.fullName || selectedNode.name;
-                const p = nodePolicies.get(fqn);
+                const p = nodeSLAs.get(fqn);
                 if (!p) return null;
                 return {
                   profileName: p.profileName || null,
@@ -2317,11 +2317,11 @@ function LineagePageInner() {
                   source: p.source || undefined,
                 };
               })()}
-              onEditPolicy={(nodeId) => {
-                setPolicyMode(true);
+              onEditSLA={(nodeId) => {
+                setSlaMode(true);
                 // Find the engine view node ID (without lineage- prefix)
                 const viewNodeId = nodeId.replace('lineage-', '');
-                setPolicySelectedNodeIds(new Set([viewNodeId]));
+                setSlaSelectedNodeIds(new Set([viewNodeId]));
                 setSelectedNode(null);
               }}
             />

@@ -25,10 +25,10 @@ interface Props {
   onClick: (source: ControlPlaneSource) => void;
   onTestConnection: (source: ControlPlaneSource) => void;
   onDisconnect: (source: ControlPlaneSource) => void;
-  onEditContract: (source: ControlPlaneSource) => void;
+  onEditSLA: (source: ControlPlaneSource) => void;
 }
 
-export default function SourceCard({ source, onClick, onTestConnection, onDisconnect, onEditContract }: Props) {
+export default function SourceCard({ source, onClick, onTestConnection, onDisconnect, onEditSLA }: Props) {
   const tool = getToolById(source.toolType);
   const displayName = tool?.name || source.name;
   const statusCfg = STATUS_CONFIG[source.status];
@@ -126,7 +126,7 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
           onTestConnection={onTestConnection}
           onViewDetails={onClick}
           onDisconnect={onDisconnect}
-          onEditContract={onEditContract}
+          onEditSLA={onEditSLA}
         />
       </div>
     </div>

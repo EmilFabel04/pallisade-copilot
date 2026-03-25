@@ -20,7 +20,7 @@ import {
 import SourceSummaryBar from '@/components/sources/SourceSummaryBar';
 import SourceCard from '@/components/sources/SourceCard';
 import SourceDetailDrawer from '@/components/sources/SourceDetailDrawer';
-import EditContractModal from '@/components/sources/EditContractModal';
+import EditSLAModal from '@/components/sources/EditSLAModal';
 
 const ALL_LAYERS: PipelineLayer[] = ['INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
 const ALL_STATUSES: SourceStatus[] = ['healthy', 'degraded', 'disconnected', 'expiring_soon', 'pending'];
@@ -38,7 +38,7 @@ export default function SourcesPage() {
   const { sources, summary, pipelineContract, loading, error, refresh } = useSourcesData();
   const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
   const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
-  const [contractSource, setContractSource] = useState<ControlPlaneSource | null>(null);
+  const [slaSource, setSlaSource] = useState<ControlPlaneSource | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [showLayerFilter, setShowLayerFilter] = useState(false);
   const [showExtractionFilter, setShowExtractionFilter] = useState(false);
@@ -108,12 +108,12 @@ export default function SourcesPage() {
     } catch {}
   }, [refresh, selectedSource]);
 
-  const handleEditContract = useCallback((source: ControlPlaneSource) => {
-    setContractSource(source);
+  const handleEditSLA = useCallback((source: ControlPlaneSource) => {
+    setSlaSource(source);
   }, []);
 
-  const handleContractSaved = useCallback(() => {
-    setContractSource(null);
+  const handleSLASaved = useCallback(() => {
+    setSlaSource(null);
     refresh(true);
   }, [refresh]);
 
@@ -356,7 +356,7 @@ export default function SourcesPage() {
               onClick={setSelectedSource}
               onTestConnection={handleTestConnection}
               onDisconnect={handleDisconnect}
-              onEditContract={handleEditContract}
+              onEditSLA={handleEditSLA}
             />
             {testingId === source.id && (
               <div className="absolute inset-0 rounded-lg bg-[var(--surface)]/60 flex items-center justify-center">
@@ -380,17 +380,17 @@ export default function SourcesPage() {
         <SourceDetailDrawer
           source={selectedSource}
           onClose={() => setSelectedSource(null)}
-          onEditContract={handleEditContract}
+          onEditSLA={handleEditSLA}
         />
       )}
 
-      {/* Edit contract modal */}
-      {contractSource && (
-        <EditContractModal
-          source={contractSource}
+      {/* Edit SLA modal */}
+      {slaSource && (
+        <EditSLAModal
+          source={slaSource}
           pipelineContract={pipelineContract}
-          onClose={() => setContractSource(null)}
-          onSaved={handleContractSaved}
+          onClose={() => setSlaSource(null)}
+          onSaved={handleSLASaved}
         />
       )}
     </div>

@@ -29,7 +29,7 @@ import {
 import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { CATEGORY_VISUALS, CATEGORY_LAYER_MAP, type UnifiedNodeCategory, type MonitorStatusSummary } from './types';
 import { ToolIcon } from '@/components/icons/ToolIcon';
-import { PolicyBadge } from './PolicyBadge';
+import { SLABadge } from './SLABadge';
 
 // Map platform names to layer colors for multi-platform badges / split indicators
 const PLATFORM_COLORS: Record<string, string> = {
@@ -116,10 +116,10 @@ interface DataAssetNodeData {
   // Inferred node (bridge node from investigator)
   isInferred?: boolean;
   // Policy mode
-  isPolicyMode?: boolean;
-  isPolicySelected?: boolean;
-  policyStatus?: 'assigned' | 'inherited' | 'override' | 'none';
-  policyProfileName?: string | null;
+  isSLAMode?: boolean;
+  isSLASelected?: boolean;
+  slaStatus?: 'assigned' | 'inherited' | 'override' | 'none';
+  slaProfileName?: string | null;
 }
 
 // Get layer icon component
@@ -539,26 +539,26 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   const isInferred = data.isInferred || false;
 
   // Policy mode visual state
-  const isPolicyMode = data.isPolicyMode || false;
-  const isPolicySelected = data.isPolicySelected || false;
-  const policyStatus = data.policyStatus || 'none';
+  const isSLAMode = data.isSLAMode || false;
+  const isSLASelected = data.isSLASelected || false;
+  const slaStatus = data.slaStatus || 'none';
 
   // Compute opacity: in policy mode, unselected nodes are dimmed
   let nodeOpacity = data.isOverlay ? 0.5 : isInferred ? 0.75 : 1;
-  if (isPolicyMode && !isPolicySelected) {
+  if (isSLAMode && !isSLASelected) {
     nodeOpacity = 0.5;
   }
 
   return (
     <div
       className={`relative rounded-lg border min-w-[160px] max-w-[220px] shadow-md transition-all hover:shadow-lg hover:scale-[1.02] overflow-hidden ${
-        isPolicySelected ? 'ring-[3px] ring-slate-500' : ''
+        isSLASelected ? 'ring-[3px] ring-slate-500' : ''
       }`}
       style={{
         borderColor: isInferred ? '#F59E0B60' : borderColor,
         backgroundColor: isInferred ? 'rgba(245,158,11,0.06)' : primaryBg,
         opacity: nodeOpacity,
-        borderStyle: (data.isOverlay || isInferred || (isPolicyMode && policyStatus === 'none')) ? 'dashed' : 'solid',
+        borderStyle: (data.isOverlay || isInferred || (isSLAMode && slaStatus === 'none')) ? 'dashed' : 'solid',
       }}
     >
       {/* Split color strip for multi-platform nodes (e.g., dbt + BigQuery) */}
@@ -604,7 +604,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
             )}
           </div>
           {/* Policy badge (inline, right side) */}
-          <PolicyBadge status={policyStatus} profileName={data.policyProfileName} />
+          <SLABadge status={slaStatus} profileName={data.slaProfileName} />
         </div>
 
         {/* Status indicators row */}

@@ -3,19 +3,19 @@
 import React from 'react';
 import type { SLAStatus } from '@/types/sla';
 
-interface PolicyBadgeProps {
+interface SLABadgeProps {
   status: SLAStatus;
   profileName?: string | null;
   source?: string;
 }
 
-export function PolicyBadge({ status, profileName }: PolicyBadgeProps) {
+export function SLABadge({ status, profileName }: SLABadgeProps) {
   // Nodes are either assigned a policy profile or not — no badge if unassigned
   if (status === 'none') return null;
 
   // Always show the profile name (e.g. "Relaxed", "Critical SLA", "Standard")
   // "Override" only applies at the monitor level, not the node level.
-  const label = profileName || 'Policy';
+  const label = profileName || 'SLA';
 
   return (
     <div

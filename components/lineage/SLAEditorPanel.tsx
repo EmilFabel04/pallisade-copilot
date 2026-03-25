@@ -71,12 +71,12 @@ const BUILTIN_PROFILES: SLAProfile[] = [
 
 export type ApplyScope = 'selected' | 'downstream' | 'all_of_type';
 
-interface PolicyEditorPanelProps {
+interface SLAEditorPanelProps {
   selectedNodeIds: Set<string>;
   allNodes: UnifiedLineageNode[];
   allEdges: UnifiedLineageEdge[];
   stackId: string;
-  nodePolicies: Map<string, EffectiveSLAPolicy>;
+  nodeSLAs: Map<string, EffectiveSLAPolicy>;
   saving?: boolean;
   onApply: (request: SLAAssignRequest, scope: ApplyScope) => void;
   onClose: () => void;
@@ -221,17 +221,17 @@ function NumberInput({
 // Main Component
 // ---------------------------------------------------------------------------
 
-export function PolicyEditorPanel({
+export function SLAEditorPanel({
   selectedNodeIds,
   allNodes,
   allEdges,
   stackId,
-  nodePolicies,
+  nodeSLAs,
   saving,
   onApply,
   onClose,
   onClearSelection,
-}: PolicyEditorPanelProps) {
+}: SLAEditorPanelProps) {
   const [selectedProfileId, setSelectedProfileId] = useState<string>('');
   const [applyScope, setApplyScope] = useState<ApplyScope>('selected');
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -344,7 +344,7 @@ export function PolicyEditorPanel({
 
   // Current effective policy for first selected node
   const firstFqn = selectedNodes[0]?.fullName || selectedNodes[0]?.name || '';
-  const currentPolicy = nodePolicies.get(firstFqn);
+  const currentPolicy = nodeSLAs.get(firstFqn);
 
   // Domain distribution label
   const domainLabels = useMemo(() => {

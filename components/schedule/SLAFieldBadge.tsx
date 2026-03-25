@@ -1,6 +1,6 @@
 'use client';
 
-interface PolicyFieldBadgeProps {
+interface SLAFieldBadgeProps {
   fieldKey: string;
   currentValue: any;
   policyValue: any;
@@ -10,7 +10,7 @@ interface PolicyFieldBadgeProps {
   onReset?: () => void;
 }
 
-export function PolicyFieldBadge({
+export function SLAFieldBadge({
   fieldKey: _fieldKey,
   currentValue: _currentValue,
   policyValue,
@@ -18,7 +18,7 @@ export function PolicyFieldBadge({
   isOverridden,
   isLessStrict,
   onReset,
-}: PolicyFieldBadgeProps) {
+}: SLAFieldBadgeProps) {
   if (policyValue === null || policyValue === undefined) return null;
 
   // State 1: Following policy (not overridden)

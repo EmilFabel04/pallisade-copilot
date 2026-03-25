@@ -33,7 +33,7 @@ interface Props {
   onSaved: () => void;
 }
 
-export default function EditContractModal({ source, pipelineContract, onClose, onSaved }: Props) {
+export default function EditSLAModal({ source, pipelineContract, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,7 +144,7 @@ export default function EditContractModal({ source, pipelineContract, onClose, o
           {/* Header */}
           <div className="flex items-center justify-between px-8 py-5 border-b border-[var(--subtle-border)]">
             <h2 className="text-base font-semibold text-[var(--text)]">
-              Edit Contract &mdash; {source.name}
+              Edit SLA &mdash; {source.name}
             </h2>
             <button onClick={onClose} className="p-1.5 rounded-md hover:bg-[var(--hover-bg)] text-[var(--text-tertiary)] transition-colors">
               <X className="w-4 h-4" />

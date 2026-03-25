@@ -12,7 +12,7 @@ import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG, SLA_CONFIG
 import { CAPABILITY_CONFIG } from './capabilities';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 
-type DrawerTab = 'health' | 'extraction' | 'contract';
+type DrawerTab = 'health' | 'extraction' | 'sla';
 
 function formatDate(iso: string | null): string {
   if (!iso) return 'N/A';
@@ -59,10 +59,10 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 interface Props {
   source: ControlPlaneSource;
   onClose: () => void;
-  onEditContract: (source: ControlPlaneSource) => void;
+  onEditSLA: (source: ControlPlaneSource) => void;
 }
 
-export default function SourceDetailDrawer({ source, onClose, onEditContract }: Props) {
+export default function SourceDetailDrawer({ source, onClose, onEditSLA }: Props) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<DrawerTab>('health');
   const tool = getToolById(source.toolType);
@@ -106,7 +106,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
   const tabs: { id: DrawerTab; label: string }[] = [
     { id: 'health', label: 'Health' },
     { id: 'extraction', label: 'Extraction' },
-    { id: 'contract', label: 'Contract' },
+    { id: 'sla', label: 'SLA' },
   ];
 
   return createPortal(
@@ -313,7 +313,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
                     <div className="text-xs text-[var(--text-faint)]">
                       No expectations configured.{' '}
                       <button
-                        onClick={() => onEditContract(source)}
+                        onClick={() => onEditSLA(source)}
                         className="text-[var(--accent-2)] hover:underline"
                       >
                         Set expectations
@@ -326,7 +326,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
           )}
 
           {/* ── Contract Tab ── */}
-          {activeTab === 'contract' && (
+          {activeTab === 'sla' && (
             <>
               <Section title="Ownership" icon={Users}>
                 <div className="space-y-2">
@@ -371,12 +371,12 @@ export default function SourceDetailDrawer({ source, onClose, onEditContract }: 
 
               <div className="pt-3">
                 <button
-                  onClick={() => onEditContract(source)}
+                  onClick={() => onEditSLA(source)}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--subtle-border)]
                              hover:bg-[var(--hover-bg)] text-sm text-[var(--text-secondary)] transition-colors"
                 >
                   <Edit3 className="w-3.5 h-3.5" />
-                  Edit Contract
+                  Edit SLA
                 </button>
               </div>
             </>
