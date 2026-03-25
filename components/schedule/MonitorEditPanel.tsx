@@ -6,10 +6,10 @@ import { MONITOR_CATALOG } from '@/types/monitor-catalog';
 import { PolicyFieldBadge } from './PolicyFieldBadge';
 import { ColumnPicker } from './ColumnPicker';
 import {
-  POLICY_FIELD_MAP,
-  getPolicyValueForField,
+  SLA_FIELD_MAP,
+  getSLAValueForField,
   isLessStrictClient,
-} from '@/lib/policy-utils';
+} from '@/lib/sla-utils';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,7 +41,7 @@ interface MonitorEditPanelProps {
   onSave: (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => Promise<void>;
 }
 
-// POLICY_FIELD_MAP, getPolicyValueForField, isLessStrictClient imported from @/lib/policy-utils
+// SLA_FIELD_MAP, getSLAValueForField, isLessStrictClient imported from @/lib/sla-utils
 
 // ---------------------------------------------------------------------------
 // Component
@@ -61,12 +61,12 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
   const catalogKey = TYPE_ALIASES[monitor.monitorType] || monitor.monitorType;
   const def = MONITOR_CATALOG.find((m) => m.key === catalogKey);
   const profileName = resolvedPolicy?.profileName;
-  const fieldMap = POLICY_FIELD_MAP[monitor.monitorType] || {};
+  const fieldMap = SLA_FIELD_MAP[monitor.monitorType] || {};
 
   // Get policy value for a config field key (delegates to shared util)
   const getPolicyValue = useCallback(
     (fieldKey: string): any => {
-      return getPolicyValueForField(monitor.monitorType, fieldKey, resolvedPolicy);
+      return getSLAValueForField(monitor.monitorType, fieldKey, resolvedPolicy);
     },
     [monitor.monitorType, resolvedPolicy],
   );

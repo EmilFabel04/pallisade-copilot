@@ -16,7 +16,7 @@ import {
 import { MonitorEditPanel } from '@/components/schedule/MonitorEditPanel';
 import { WatchEditModal } from '@/components/schedule/WatchEditModal';
 import { Settings } from 'lucide-react';
-import { getMonitorPolicyStatus } from '@/lib/policy-utils';
+import { getMonitorSLAStatus } from '@/lib/sla-utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -457,7 +457,7 @@ export default function PlanDetailPage() {
                   : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
                 const isExpanded = expandedMonitorId === mon.id;
                 const monPolicy = mon.targetFqn ? resolvedPolicies[mon.targetFqn] : null;
-                const policyStatus = getMonitorPolicyStatus(
+                const policyStatus = getMonitorSLAStatus(
                   mon.monitorType || '', mon.config || {}, monPolicy
                 );
                 const monType = (mon.monitorType || '').toUpperCase();

@@ -1,15 +1,15 @@
 /**
- * Shared policy utilities for comparing monitor config against resolved policies.
+ * Shared SLA utilities for comparing monitor config against resolved SLA policies.
  *
  * Used by MonitorEditPanel, plan detail page, schedule dashboard, and cards
- * to determine policy compliance status without relying on the stored
+ * to determine SLA compliance status without relying on the stored
  * policyOverrides DB field.
  */
 
 // Maps: monitorType → { configField → [policySection, policySectionField] }
-type PolicyFieldMap = Record<string, Record<string, [string, string]>>;
+type SLAFieldMap = Record<string, Record<string, [string, string]>>;
 
-export const POLICY_FIELD_MAP: PolicyFieldMap = {
+export const SLA_FIELD_MAP: SLAFieldMap = {
   FRESHNESS: {
     max_hours: ['freshness', 'maxHours'],
     warning_hours: ['freshness', 'warningHours'],
@@ -80,14 +80,14 @@ export function sensitivityToZscore(sensitivity: number): number {
   return 4.0 + (0.80 - sensitivity) / (0.80 - 0.50) * 1.0;
 }
 
-/** Get the policy value for a config field, converting sensitivity→zscore if needed */
-export function getPolicyValueForField(
+/** Get the SLA value for a config field, converting sensitivity→zscore if needed */
+export function getSLAValueForField(
   monitorType: string,
   configField: string,
   resolvedPolicy: Record<string, any> | null,
 ): any {
   if (!resolvedPolicy) return undefined;
-  const map = POLICY_FIELD_MAP[monitorType];
+  const map = SLA_FIELD_MAP[monitorType];
   if (!map) return undefined;
   const mapping = map[configField];
   if (!mapping) return undefined;
@@ -137,23 +137,23 @@ export function isLessStrictClient(fieldKey: string, currentValue: any, policyVa
   return false;
 }
 
-export type MonitorPolicyStatus = 'policy' | 'override' | 'violation' | 'none';
+export type MonitorSLAStatus = 'policy' | 'override' | 'violation' | 'none';
 
 /**
- * Compute the policy compliance status for a monitor by comparing its
- * config values against the resolved policy. Works without the stored
+ * Compute the SLA compliance status for a monitor by comparing its
+ * config values against the resolved SLA policy. Works without the stored
  * policyOverrides DB field.
  */
-export function getMonitorPolicyStatus(
+export function getMonitorSLAStatus(
   monitorType: string,
   config: Record<string, any> | null,
   resolvedPolicy: Record<string, any> | null,
-): { status: MonitorPolicyStatus; overriddenFields: string[]; violationFields: string[] } {
+): { status: MonitorSLAStatus; overriddenFields: string[]; violationFields: string[] } {
   if (!resolvedPolicy || !config || Object.keys(config).length === 0 || resolvedPolicy.status === 'none') {
     return { status: 'none', overriddenFields: [], violationFields: [] };
   }
 
-  const map = POLICY_FIELD_MAP[monitorType];
+  const map = SLA_FIELD_MAP[monitorType];
   if (!map || Object.keys(map).length === 0) {
     return { status: 'none', overriddenFields: [], violationFields: [] };
   }
@@ -162,13 +162,13 @@ export function getMonitorPolicyStatus(
   const violationFields: string[] = [];
 
   for (const configField of Object.keys(map)) {
-    const policyVal = getPolicyValueForField(monitorType, configField, resolvedPolicy);
+    const policyVal = getSLAValueForField(monitorType, configField, resolvedPolicy);
     if (policyVal === undefined || policyVal === null) continue;
 
     const configVal = config[configField];
     if (configVal === undefined || configVal === null) continue;
 
-    // Compare: if config value differs from policy value, it's an override
+    // Compare: if config value differs from SLA value, it's an override
     if (String(configVal) !== String(policyVal)) {
       overriddenFields.push(configField);
       if (isLessStrictClient(configField, configVal, policyVal)) {

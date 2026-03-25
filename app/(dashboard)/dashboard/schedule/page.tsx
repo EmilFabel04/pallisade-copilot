@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils';
 import type { ScheduledTask, TaskRun } from '@/types/schedule';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
-import { getMonitorPolicyStatus } from '@/lib/policy-utils';
+import { getMonitorSLAStatus } from '@/lib/sla-utils';
 
 type FilterStatus = 'all' | 'passing' | 'failing' | 'disabled';
 
@@ -119,17 +119,35 @@ export default function SchedulePage() {
 
   useEffect(() => {
     if (!selectedPipeline?.id) return;
-    cachedFetch(`/api/pipeline/nodes?stackId=${selectedPipeline.id}`)
+    // Fetch pipeline nodes (warehouses, transforms, etc.)
+    const nodesPromise = cachedFetch(`/api/pipeline/nodes?stackId=${selectedPipeline.id}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
-        if (!data) return;
-        setIntegrations(
-          (data.nodes || [])
-            .filter((n: any) => ['CONNECTED', 'HEALTHY', 'WARNING'].includes(n.status))
-            .map((n: any) => ({ id: n.integrationId || n.id, name: n.name, type: n.toolType || n.type }))
-        );
+        if (!data) return [];
+        return (data.nodes || [])
+          .filter((n: any) => ['CONNECTED', 'HEALTHY', 'WARNING'].includes(n.status))
+          .map((n: any) => ({ id: n.integrationId || n.id, name: n.name, type: n.toolType || n.type }));
       })
-      .catch(() => {});
+      .catch(() => [] as Array<{ id: string; name: string; type: string }>);
+    // Fetch alert/notification integrations (Slack, PagerDuty, etc.)
+    const alertsPromise = cachedFetch(`/api/integrations?stackId=${selectedPipeline.id}`)
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (!data?.integrations) return [];
+        return (data.integrations as any[])
+          .filter((i: any) => i.status === 'ACTIVE')
+          .map((i: any) => ({ id: i.id, name: i.name || i.type, type: i.type }));
+      })
+      .catch(() => [] as Array<{ id: string; name: string; type: string }>);
+    Promise.all([nodesPromise, alertsPromise]).then(([nodes, alerts]) => {
+      const seen = new Set<string>();
+      const merged = [...(nodes || []), ...(alerts || [])].filter((i) => {
+        if (seen.has(i.id)) return false;
+        seen.add(i.id);
+        return true;
+      });
+      setIntegrations(merged);
+    });
   }, [selectedPipeline?.id]);
 
   // Fetch runs for selected task (uses fetch, not cachedFetch, so runs are always fresh)
@@ -408,7 +426,7 @@ export default function SchedulePage() {
                       policyMonitorCount={
                         (plan.monitorGroups || []).flatMap((g) => g.monitors || [])
                           .filter((m) => {
-                            const ps = getMonitorPolicyStatus(
+                            const ps = getMonitorSLAStatus(
                               (m as any).monitorType || '', (m as any).config || {},
                               m.targetFqn ? resolvedPolicies[m.targetFqn] : null
                             );
@@ -418,7 +436,7 @@ export default function SchedulePage() {
                       overrideMonitorCount={
                         (plan.monitorGroups || []).flatMap((g) => g.monitors || [])
                           .filter((m) => {
-                            const ps = getMonitorPolicyStatus(
+                            const ps = getMonitorSLAStatus(
                               (m as any).monitorType || '', (m as any).config || {},
                               m.targetFqn ? resolvedPolicies[m.targetFqn] : null
                             );
@@ -430,14 +448,14 @@ export default function SchedulePage() {
                   {watches.map((watch) => {
                     const watchMonitors = watch.monitors || [];
                     const watchPolicyCount = watchMonitors.filter((m) => {
-                      const ps = getMonitorPolicyStatus(
+                      const ps = getMonitorSLAStatus(
                         m.monitorType || '', (m as any).config || {},
                         m.targetFqn ? resolvedPolicies[m.targetFqn] : null
                       );
                       return ps.status !== 'none';
                     }).length;
                     const watchOverrideCount = watchMonitors.filter((m) => {
-                      const ps = getMonitorPolicyStatus(
+                      const ps = getMonitorSLAStatus(
                         m.monitorType || '', (m as any).config || {},
                         m.targetFqn ? resolvedPolicies[m.targetFqn] : null
                       );

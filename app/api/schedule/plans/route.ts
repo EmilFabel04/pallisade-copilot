@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { createWatchInTransaction } from '@/lib/watch-helpers';
-import { POLICY_FIELD_MAP, getPolicyValueForField } from '@/lib/policy-utils';
+import { SLA_FIELD_MAP, getSLAValueForField } from '@/lib/sla-utils';
 
 // GET /api/schedule/plans - List all monitoring plans
 export async function GET(request: NextRequest) {
@@ -228,11 +228,11 @@ export async function POST(request: NextRequest) {
         for (const rec of group.recommendations || []) {
           const policy = resolvedPolicies[rec.target_fqn];
           if (!policy) continue;
-          const fieldMap = POLICY_FIELD_MAP[rec.monitor_key];
+          const fieldMap = SLA_FIELD_MAP[rec.monitor_key];
           if (!fieldMap) continue;
           const hints = rec.config_hints || {};
           for (const fieldKey of Object.keys(fieldMap)) {
-            const policyVal = getPolicyValueForField(rec.monitor_key, fieldKey, policy);
+            const policyVal = getSLAValueForField(rec.monitor_key, fieldKey, policy);
             if (policyVal != null) {
               hints[fieldKey] = policyVal;
             }
