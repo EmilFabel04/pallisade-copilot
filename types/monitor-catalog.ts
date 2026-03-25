@@ -665,6 +665,22 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
       { key: 'lookback_hours', label: 'Lookback hours', type: 'number', placeholder: '24', default_value: 24, advanced: true },
     ],
   },
+
+  // ==========================================================================
+  // CONTRACT CHECK — Validates data asset against its data contract
+  // ==========================================================================
+  {
+    key: 'CONTRACT_CHECK',
+    label: 'Contract Check',
+    description: 'Validates a data asset against its data contract, checking per-field compliance',
+    category: 'warehouse',
+    required_integrations: [],
+    target_selector_type: 'none',
+    executor_type: 'tool_api',
+    supports_baselines: false,
+    auto_configurable: false,
+    config_schema: [],
+  },
 ];
 
 // ---------------------------------------------------------------------------

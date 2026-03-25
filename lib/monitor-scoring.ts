@@ -38,12 +38,14 @@ export const APPLICABLE_MONITORS: Record<AssetCategory, string[]> = {
     'DATE_CONSISTENCY',
     'DATA_TYPE_VALIDATION',
     'OUTLIER_DETECTION',
+    'CONTRACT_CHECK',
   ],
   bi: [
     'BI_FRESHNESS_PROXY',
     'BI_CONTENT_HEALTH',
     'BI_UPSTREAM_BREAK_RISK',
     'BI_REFRESH_FAILURE',
+    'CONTRACT_CHECK',
   ],
   ingestion: [
     'SYNC_LAG',
@@ -59,6 +61,7 @@ export const APPLICABLE_MONITORS: Record<AssetCategory, string[]> = {
     'DBT_TEST_FAILURES',
     'DBT_MODEL_FRESHNESS',
     'DBT_SOURCE_FRESHNESS',
+    'CONTRACT_CHECK',
   ],
   infra: [
     'SERVER_HEALTH',
@@ -262,7 +265,15 @@ export function computeMonitorScoring(
 /**
  * Get the list of applicable monitor types for a category.
  * Convenience re-export for callers that need just the list.
+ *
+ * CONTRACT_CHECK is only included when `options.hasContract` is true.
  */
-export function getApplicableMonitorTypes(category: AssetCategory): string[] {
-  return APPLICABLE_MONITORS[category] || [];
+export function getApplicableMonitorTypes(
+  category: AssetCategory,
+  options?: { hasContract?: boolean },
+): string[] {
+  const types = APPLICABLE_MONITORS[category] || [];
+  if (options?.hasContract) return types;
+  // Exclude CONTRACT_CHECK when no contract
+  return types.filter(t => t !== 'CONTRACT_CHECK');
 }

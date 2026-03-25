@@ -136,13 +136,13 @@ describe('healthStatusFromScore', () => {
 // ---------------------------------------------------------------------------
 
 describe('computeMonitorCoverage', () => {
-  it('warehouse 11/11 → coveragePct 100, coverageStatus good', () => {
+  it('warehouse 12/12 → coveragePct 100, coverageStatus good', () => {
     const result = computeMonitorCoverage(
       [
         'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK',
         'UNIQUENESS_CHECK', 'REFERENTIAL', 'RANGE_VALIDATION',
         'ACCEPTED_VALUES', 'DATE_CONSISTENCY', 'DATA_TYPE_VALIDATION',
-        'OUTLIER_DETECTION',
+        'OUTLIER_DETECTION', 'CONTRACT_CHECK',
       ],
       'warehouse',
     );
@@ -151,12 +151,12 @@ describe('computeMonitorCoverage', () => {
     expect(result.missingTypes).toEqual([]);
   });
 
-  it('warehouse 9/11 → coveragePct ~81.8, coverageStatus good (≥80%)', () => {
+  it('warehouse 10/12 → coveragePct ~83.3, coverageStatus good (≥80%)', () => {
     const result = computeMonitorCoverage(
       [
         'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK',
         'UNIQUENESS_CHECK', 'REFERENTIAL', 'RANGE_VALIDATION',
-        'ACCEPTED_VALUES', 'OUTLIER_DETECTION',
+        'ACCEPTED_VALUES', 'OUTLIER_DETECTION', 'CONTRACT_CHECK',
       ],
       'warehouse',
     );
@@ -188,21 +188,21 @@ describe('computeMonitorCoverage', () => {
     expect(result.configured).toBeGreaterThanOrEqual(5);
   });
 
-  it('BI 4/4 → coverageStatus good', () => {
+  it('BI 5/5 → coverageStatus good', () => {
     const result = computeMonitorCoverage(
-      ['BI_FRESHNESS_PROXY', 'BI_CONTENT_HEALTH', 'BI_UPSTREAM_BREAK_RISK', 'BI_REFRESH_FAILURE'],
+      ['BI_FRESHNESS_PROXY', 'BI_CONTENT_HEALTH', 'BI_UPSTREAM_BREAK_RISK', 'BI_REFRESH_FAILURE', 'CONTRACT_CHECK'],
       'bi',
     );
     expect(result.coveragePct).toBe(100);
     expect(result.coverageStatus).toBe('good');
   });
 
-  it('BI 2/4 → coverageStatus partial (50% < 100%)', () => {
+  it('BI 2/5 → coverageStatus partial (40% < 100%)', () => {
     const result = computeMonitorCoverage(
       ['BI_FRESHNESS_PROXY', 'BI_CONTENT_HEALTH'],
       'bi',
     );
-    expect(result.coveragePct).toBe(50);
+    expect(result.coveragePct).toBe(40);
     expect(result.coverageStatus).toBe('partial');
   });
 
@@ -230,7 +230,7 @@ describe('computeMonitorCoverage', () => {
       'warehouse',
     );
     expect(result.configured).toBe(1); // only FRESHNESS counts
-    expect(result.coveragePct).toBeCloseTo(9.1, 0); // 1/11
+    expect(result.coveragePct).toBeCloseTo(8.3, 0); // 1/12
   });
 
   it('case insensitive type matching', () => {
@@ -302,7 +302,7 @@ describe('computeMonitorScoring', () => {
   });
 
   it('warehouse 80%+ configured → coverageStatus good', () => {
-    // 9 types with legacy aliases expanding → should hit >= 80%
+    // 10/12 types → 83.3% >= 80%
     const result = computeMonitorScoring(
       [
         { monitorType: 'FRESHNESS', lastStatus: 'PASS' },
@@ -314,6 +314,7 @@ describe('computeMonitorScoring', () => {
         { monitorType: 'RANGE_VALIDATION', lastStatus: 'PASS' },
         { monitorType: 'ACCEPTED_VALUES', lastStatus: 'PASS' },
         { monitorType: 'OUTLIER_DETECTION', lastStatus: 'WARN' },
+        { monitorType: 'CONTRACT_CHECK', lastStatus: 'PASS' },
       ],
       'warehouse',
     );
@@ -344,10 +345,10 @@ describe('computeMonitorScoring', () => {
     );
     expect(result.healthScore).toBe(75);
     expect(result.healthStatus).toBe('degraded');
-    expect(result.coveragePct).toBe(50);
+    expect(result.coveragePct).toBe(40); // 2/5
     expect(result.coverageStatus).toBe('partial');
     expect(result.configured).toBe(2);
-    expect(result.available).toBe(4);
+    expect(result.available).toBe(5); // now includes CONTRACT_CHECK
   });
 
   it('data asset detail and tool overview use the same scoring', () => {
@@ -395,5 +396,40 @@ describe('getApplicableMonitorTypes', () => {
 
   it('returns empty array for unknown category', () => {
     expect(getApplicableMonitorTypes('unknown' as AssetCategory)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CONTRACT_CHECK in APPLICABLE_MONITORS
+// ---------------------------------------------------------------------------
+
+describe('CONTRACT_CHECK in APPLICABLE_MONITORS', () => {
+  it('getApplicableMonitorTypes includes CONTRACT_CHECK when hasContract is true', () => {
+    const types = getApplicableMonitorTypes('warehouse', { hasContract: true });
+    expect(types).toContain('CONTRACT_CHECK');
+  });
+
+  it('getApplicableMonitorTypes excludes CONTRACT_CHECK when hasContract is false', () => {
+    const types = getApplicableMonitorTypes('warehouse', { hasContract: false });
+    expect(types).not.toContain('CONTRACT_CHECK');
+  });
+
+  it('getApplicableMonitorTypes excludes CONTRACT_CHECK by default', () => {
+    const types = getApplicableMonitorTypes('warehouse');
+    expect(types).not.toContain('CONTRACT_CHECK');
+  });
+
+  it('CONTRACT_CHECK is available for all data asset categories', () => {
+    for (const cat of ['warehouse', 'bi', 'dbt_transform'] as const) {
+      const types = getApplicableMonitorTypes(cat, { hasContract: true });
+      expect(types).toContain('CONTRACT_CHECK');
+    }
+  });
+
+  it('CONTRACT_CHECK is NOT available for tool-only categories', () => {
+    for (const cat of ['ingestion', 'orchestration', 'infra'] as const) {
+      const types = getApplicableMonitorTypes(cat, { hasContract: true });
+      expect(types).not.toContain('CONTRACT_CHECK');
+    }
   });
 });
