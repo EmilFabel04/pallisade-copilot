@@ -57,7 +57,10 @@ const InfrastructureOverridesSchema = z.object({
 }).strict();
 ```
 
-Add `'infrastructure'` to `OverrideKey` type. Map `LINUX_SERVER: 'infrastructure'` in `INTEGRATION_TYPE_TO_OVERRIDE_KEY`.
+Add `'infrastructure'` to `OverrideKey` type. Also update all `Record<OverrideKey, ...>` maps:
+- `INTEGRATION_TYPE_TO_OVERRIDE_KEY`: add `LINUX_SERVER: 'infrastructure'`
+- `OVERRIDE_SCHEMAS`: add `infrastructure: InfrastructureOverridesSchema`
+- `OVERRIDE_LABELS`: add `infrastructure: 'Infrastructure'`
 
 ### Hierarchical child contract structure
 
@@ -99,35 +102,55 @@ The child list is populated from the existing `childItems` array returned by the
 
 ### Catalog entries
 
-CONTRACT_COMPLIANCE is defined as **one entry per domain category** in the catalog, matching the existing pattern where each monitor has a single fixed `category`. This avoids a special-case "cross-domain" category.
+CONTRACT_COMPLIANCE uses **domain-suffixed keys** to avoid duplicate key collisions in the catalog. Each domain gets its own entry with a unique key.
 
 ```typescript
-// One entry per domain — same pattern as other monitors
+// Domain-suffixed keys — avoids getMonitorDefinition() collision
 {
-  key: 'CONTRACT_COMPLIANCE',
+  key: 'CONTRACT_COMPLIANCE_INGESTION',
   label: 'Contract Compliance',
-  description: 'Checks tool operability against its data contract requirements',
-  category: 'ingestion',  // one entry for each: ingestion, orchestration, transformation, warehouse, infrastructure, reporting
-  required_integrations: ['fivetran', 'airbyte'],  // matches the domain's tools
+  description: 'Checks ingestion tool operability against its data contract',
+  category: 'ingestion',
+  required_integrations: ['fivetran', 'airbyte'],
   target_selector_type: 'none',  // contract fully defines targets — no picker needed
   executor_type: 'tool_api',
   supports_baselines: false,
   auto_configurable: false,
   config_schema: []    // contract IS the config — no user fields
-}
-// Repeat for orchestration (airflow, dagster), transformation (dbt_cloud, dbt_core),
-// warehouse (bigquery, snowflake, ...), infrastructure (linux_server),
-// reporting (looker, tableau, powerbi, metabase)
+},
+{
+  key: 'CONTRACT_COMPLIANCE_ORCHESTRATION',
+  label: 'Contract Compliance',
+  description: 'Checks orchestration tool operability against its data contract',
+  category: 'orchestration',
+  required_integrations: ['airflow', 'dagster'],
+  // ... same shape
+},
+// Also: CONTRACT_COMPLIANCE_TRANSFORMATION (dbt_cloud, dbt_core)
+//        CONTRACT_COMPLIANCE_WAREHOUSE (bigquery, snowflake, postgres, redshift, databricks, ...)
+//        CONTRACT_COMPLIANCE_INFRASTRUCTURE (linux_server)
+//        CONTRACT_COMPLIANCE_REPORTING (looker, tableau, powerbi, metabase)
 ```
 
-Since all entries share the same `key: 'CONTRACT_COMPLIANCE'`, the catalog lookup helpers need a minor adjustment: `getMonitorDefinition(key)` currently returns the first match. For CONTRACT_COMPLIANCE, filtering should use `getAvailableMonitors(connectedToolTypes)` which already filters by `required_integrations` — this naturally returns only the domain-appropriate entry.
+Domain-suffixed keys mean `getMonitorDefinition('CONTRACT_COMPLIANCE_ORCHESTRATION')` works correctly with no ambiguity. A helper constant maps domains to their contract compliance key:
+
+```typescript
+const CONTRACT_COMPLIANCE_KEYS: Record<string, string> = {
+  ingestion: 'CONTRACT_COMPLIANCE_INGESTION',
+  orchestration: 'CONTRACT_COMPLIANCE_ORCHESTRATION',
+  transformation: 'CONTRACT_COMPLIANCE_TRANSFORMATION',
+  warehouse: 'CONTRACT_COMPLIANCE_WAREHOUSE',
+  infrastructure: 'CONTRACT_COMPLIANCE_INFRASTRUCTURE',
+  reporting: 'CONTRACT_COMPLIANCE_REPORTING',
+};
+```
 
 The `target_selector_type: 'none'` is intentional — the contract's `ToolContractConfig.children` map fully defines which child items are checked. No picker UI is needed because the contract config UI (in pipeline settings) already handles child selection.
 
 Updates to catalog helper structures:
-- Add `'CONTRACT_COMPLIANCE'` to `TOOL_MONITOR_TYPES` array
-- Add `CONTRACT_COMPLIANCE` to `TOOL_NODE_TYPE_MAP` with all tool types
-- Add `'CONTRACT_COMPLIANCE'` to each set in `DOMAIN_MONITOR_MAP`
+- Add all `CONTRACT_COMPLIANCE_*` keys to `TOOL_MONITOR_TYPES` array
+- Add each key to `TOOL_NODE_TYPE_MAP` with the domain's tool types
+- Add each key to `DOMAIN_MONITOR_MAP` — note that `DOMAIN_MONITOR_MAP` uses **platform domain strings** as keys (`ingestion`, `orchestration`, `transform`, `warehouse`, `bi`, `infrastructure`), not `MonitorCategory` values. So `CONTRACT_COMPLIANCE_REPORTING` goes under the `bi` key, and `CONTRACT_COMPLIANCE_TRANSFORMATION` goes under the `transform` key.
 
 ### Sub-checks per domain
 
@@ -162,6 +185,8 @@ interface ContractComplianceResult {
 ```
 
 Overall status = worst across all children's sub-checks. SKIPPED sub-checks (field not set in contract) are excluded from status calculation.
+
+**WARN vs FAIL threshold**: For numeric fields, WARN when actual exceeds contract value by <20%, FAIL when >=20%. For boolean fields (e.g., `oncallRequired`, `encryptionRequired`), any violation is FAIL (no WARN). For enum fields (e.g., `schemaChangePolicy`), mismatch is FAIL.
 
 ### Lifecycle
 
@@ -211,7 +236,13 @@ Edge cases:
 
 ### 3c. Coverage includes CONTRACT_COMPLIANCE conditionally
 
-`CONTRACT_COMPLIANCE` is added to `APPLICABLE_MONITORS` for every category, but only counts toward available monitors when the tool has a contract defined.
+The domain-appropriate `CONTRACT_COMPLIANCE_*` key is added to `APPLICABLE_MONITORS` for every `AssetCategory`, but only counts toward available monitors when the tool has a contract defined.
+
+**Important naming distinction**: `APPLICABLE_MONITORS` in `monitor-scoring.ts` is keyed by `AssetCategory` (`warehouse`, `bi`, `ingestion`, `orchestration`, `dbt_transform`, `infra`), which differs from `MonitorCategory` (`warehouse`, `reporting`, `ingestion`, `orchestration`, `transformation`, `infrastructure`). The mapping:
+- `AssetCategory: 'dbt_transform'` → gets `CONTRACT_COMPLIANCE_TRANSFORMATION`
+- `AssetCategory: 'infra'` → gets `CONTRACT_COMPLIANCE_INFRASTRUCTURE`
+- `AssetCategory: 'bi'` → gets `CONTRACT_COMPLIANCE_REPORTING`
+- Others match directly
 
 Updated signature:
 
