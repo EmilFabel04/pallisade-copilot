@@ -254,61 +254,150 @@ function MonitorCard({
   checked,
   onToggle,
   showTarget,
+  isToolNode,
+  config,
+  onConfigChange,
 }: {
   mon: MonitorOption;
   checked: boolean;
   onToggle: () => void;
   showTarget?: boolean;
+  isToolNode?: boolean;
+  config?: Record<string, any>;
+  onConfigChange?: (key: string, value: any) => void;
 }) {
   const def = getMonitorDefinition(mon.key);
   const label = def?.label || mon.key;
   const description = def?.description || mon.reason;
 
+  // Required config fields for tool monitors
+  const requiredFields = isToolNode && def
+    ? def.config_schema.filter((f) => f.required)
+    : [];
+  const showConfig = checked && requiredFields.length > 0;
+
+  // Check if all required fields are filled
+  const isConfigComplete = requiredFields.length === 0 || requiredFields.every(
+    (f) => config?.[f.key] || config?.[f.key] === 0,
+  );
+
   return (
-    <button
-      onClick={onToggle}
-      className={cn(
-        'flex items-start gap-3 p-3 rounded-lg border text-left transition-all w-full',
-        checked
-          ? (MONITOR_COLORS[mon.key] || 'bg-[var(--accent)]/15 text-[var(--accent)] border-[var(--accent)]/30')
-          : 'bg-transparent text-[var(--text)] border-[var(--border)] hover:border-[var(--muted)]/50',
-      )}
-    >
-      {/* Checkbox */}
-      <div
-        className={cn(
-          'w-4 h-4 mt-0.5 rounded-sm border flex items-center justify-center shrink-0 transition-colors',
-          checked
-            ? 'bg-current border-current'
-            : 'border-[var(--muted)]/40',
-        )}
+    <div className={cn(
+      'rounded-lg border transition-all overflow-hidden',
+      checked
+        ? (MONITOR_COLORS[mon.key] || 'bg-[var(--accent)]/15 text-[var(--accent)] border-[var(--accent)]/30')
+        : 'border-[var(--border)] text-[var(--text)] hover:border-[var(--muted)]/50',
+    )}>
+      <button
+        onClick={onToggle}
+        className="flex items-start gap-3 p-3 text-left transition-all w-full"
       >
-        {checked && (
-          <svg className="w-2.5 h-2.5" fill="none" stroke="var(--bg)" strokeWidth={4} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-        )}
-      </div>
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] font-medium">{label}</span>
+        {/* Checkbox */}
+        <div
+          className={cn(
+            'w-4 h-4 mt-0.5 rounded-sm border flex items-center justify-center shrink-0 transition-colors',
+            checked
+              ? 'bg-current border-current'
+              : 'border-[var(--muted)]/40',
+          )}
+        >
+          {checked && (
+            <svg className="w-2.5 h-2.5" fill="none" stroke="var(--bg)" strokeWidth={4} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          )}
         </div>
-        {description && (
-          <p className={cn(
-            'text-[11px] mt-0.5 leading-relaxed',
-            checked ? 'opacity-80' : 'text-[var(--muted)]',
-          )}>
-            {description}
-          </p>
-        )}
-        {showTarget && mon.targetFqn && (
-          <p className="text-[10px] font-mono mt-1 opacity-60 truncate">
-            {mon.targetFqn}
-          </p>
-        )}
-      </div>
-    </button>
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-medium">{label}</span>
+            {checked && isToolNode && requiredFields.length > 0 && (
+              <span className={cn(
+                'px-1.5 py-0.5 rounded text-[9px] font-medium',
+                isConfigComplete
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-amber-500/15 text-amber-400',
+              )}>
+                {isConfigComplete ? 'Configured' : 'Requires config'}
+              </span>
+            )}
+          </div>
+          {description && (
+            <p className={cn(
+              'text-[11px] mt-0.5 leading-relaxed',
+              checked ? 'opacity-80' : 'text-[var(--muted)]',
+            )}>
+              {description}
+            </p>
+          )}
+          {showTarget && mon.targetFqn && (
+            <p className="text-[10px] font-mono mt-1 opacity-60 truncate">
+              {mon.targetFqn}
+            </p>
+          )}
+        </div>
+      </button>
+
+      {/* Inline config form for tool monitors */}
+      {showConfig && (
+        <div
+          className="px-3 pb-3 pt-1 border-t border-[var(--border)] bg-[var(--surface)]/50 space-y-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {requiredFields.map((field) => (
+            <div key={field.key}>
+              <label className="block text-[10px] text-[var(--muted)] uppercase tracking-wide mb-1">
+                {field.label}
+              </label>
+              {field.type === 'select' ? (
+                <select
+                  value={config?.[field.key] ?? field.default_value ?? ''}
+                  onChange={(e) => onConfigChange?.(field.key, e.target.value)}
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
+                >
+                  <option value="">{field.placeholder || 'Select...'}</option>
+                  {field.options?.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              ) : field.type === 'multi-text' || field.type === 'textarea' ? (
+                <textarea
+                  value={config?.[field.key] ?? ''}
+                  onChange={(e) => onConfigChange?.(field.key, e.target.value)}
+                  placeholder={field.placeholder}
+                  rows={3}
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)] resize-none"
+                />
+              ) : field.type === 'checkbox' ? (
+                <label className="flex items-center gap-2 text-[12px] text-[var(--text)]">
+                  <input
+                    type="checkbox"
+                    checked={!!config?.[field.key]}
+                    onChange={(e) => onConfigChange?.(field.key, e.target.checked)}
+                    className="rounded border-[var(--border)]"
+                  />
+                  {field.placeholder || field.label}
+                </label>
+              ) : (
+                <input
+                  type={field.type === 'number' ? 'number' : 'text'}
+                  value={config?.[field.key] ?? ''}
+                  onChange={(e) => onConfigChange?.(
+                    field.key,
+                    field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value,
+                  )}
+                  placeholder={field.placeholder}
+                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)]"
+                />
+              )}
+              {field.help_text && (
+                <p className="text-[10px] text-[var(--muted)] mt-0.5">{field.help_text}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -711,7 +800,31 @@ export function MultiMonitorModal({
   // ---- Toggle individual monitor ----
   const toggleMonitor = useCallback((nodeId: string, monitorKey: string) => {
     const key = `${nodeId}::${monitorKey}`;
-    setMonitorChecks((prev) => ({ ...prev, [key]: !prev[key] }));
+
+    setMonitorChecks((prev) => {
+      const willBeChecked = !prev[key];
+
+      // Seed default values for tool monitors when checking
+      if (willBeChecked && TOOL_ONLY_MONITOR_KEYS.has(monitorKey)) {
+        const def = getMonitorDefinition(monitorKey);
+        if (def) {
+          const defaults: Record<string, any> = {};
+          for (const field of def.config_schema) {
+            if (field.default_value !== undefined) {
+              defaults[field.key] = field.default_value;
+            }
+          }
+          if (Object.keys(defaults).length > 0) {
+            setMonitorConfigs((p) => ({
+              ...p,
+              [key]: { ...(p[key] || {}), ...defaults },
+            }));
+          }
+        }
+      }
+
+      return { ...prev, [key]: willBeChecked };
+    });
     setActivePreset(null);
   }, []);
 
@@ -1288,6 +1401,14 @@ export function MultiMonitorModal({
                                               checked={checked}
                                               onToggle={() => toggleMonitor(mon.targetNodeId, mon.key)}
                                               showTarget={!!meta.subNodeIds}
+                                              isToolNode={!!meta.subNodeIds?.length}
+                                              config={monitorConfigs[checkKey]}
+                                              onConfigChange={(fieldKey, value) =>
+                                                setMonitorConfigs((prev) => ({
+                                                  ...prev,
+                                                  [checkKey]: { ...(prev[checkKey] || {}), [fieldKey]: value },
+                                                }))
+                                              }
                                             />
                                             {checked && isOutlier && mon.targetFqn && (
                                               <div className="ml-7 mt-1 mb-2">
