@@ -366,6 +366,7 @@ export function MultiMonitorModal({
       setRawPreview(null);
       setPreviewFailed(false);
       setMonitorChecks({});
+      setMonitorConfigs({});
       setActivePreset(null);
       setConfigTab('presets');
       setAiPrompt('');
