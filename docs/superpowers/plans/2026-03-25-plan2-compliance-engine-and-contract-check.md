@@ -598,7 +598,7 @@ Expected: FAIL.
 const SYNCABLE_FIELDS = [
   'ownerUser', 'ownerTeam', 'contactChannel', 'slaTier',
   'expectedFreshnessMinutes', 'expectedExtractionFrequencyMinutes',
-  'notes',
+  'alertPolicyJson', 'notes',
 ] as const;
 
 /**

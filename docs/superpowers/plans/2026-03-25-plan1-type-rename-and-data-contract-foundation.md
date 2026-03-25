@@ -20,10 +20,16 @@
 | `lib/policy-utils.ts` | Rename to `lib/sla-utils.ts` | Rename all `policy` → `sla` in function/variable names |
 | `components/lineage/PolicyEditorPanel.tsx` | Rename to `SLAEditorPanel.tsx` | Rename component and all internal references |
 | `components/lineage/PolicyBadge.tsx` | Rename to `SLABadge.tsx` | Rename component and all internal references |
+| `components/lineage/PolicyModeToolbar.tsx` | Rename to `SLAModeToolbar.tsx` | Rename component and all internal references |
+| `components/lineage/DataAssetDetailPanel.tsx` | Modify | Rename `PolicyInfo` → `SLAInfo`, `policyInfo` → `slaInfo`, `onEditPolicy` → `onEditSLA`, UI labels "Policy" → "SLA" |
+| `components/schedule/PolicyFieldBadge.tsx` | Rename to `SLAFieldBadge.tsx` | Rename component and all internal references |
 | `components/contracts/types.ts` | Modify | Rename `PipelineContractData` → `PipelineSLAData`, `SourceContractWithOverrides` → `NodeSLAWithOverrides`, `EffectiveContract` → `EffectiveSLA`; add `DataContract` types |
+| `components/contracts/overrides/WarehouseOverrides.tsx` | Modify | Update `WarehouseContractOverrides` → `WarehouseOverrides` type import |
+| `components/contracts/overrides/TransformationOverrides.tsx` | Modify | Update `TransformationContractOverrides` → `TransformationOverrides` type import |
+| `components/contracts/overrides/OrchestrationOverrides.tsx` | Modify | Update `OrchestrationContractOverrides` → `OrchestrationOverrides` type import |
 | `lib/contracts/resolver.ts` | Modify | Update imports and type names to SLA types |
 | `components/sources/EditContractModal.tsx` | Rename to `EditSLAModal.tsx` | Rename component |
-| `components/sources/types.ts` | Modify | Update references to renamed types |
+| `components/sources/types.ts` | Modify | Rename `SourceContractData` → `SourceSLAData`, update references to renamed types |
 | `components/sources/useSourcesData.ts` | Modify | Update `pipelineContract` → `pipelineSLA` |
 | `components/sources/SourceDetailDrawer.tsx` | Modify | Update tab label and imports |
 | `components/sources/SourceCard.tsx` | Modify | Update imports |
@@ -295,7 +301,68 @@ import { SLABadge } from './SLABadge';
 
 Update JSX: `<PolicyBadge` → `<SLABadge`.
 
-- [ ] **Step 5: Rename EditContractModal → EditSLAModal**
+- [ ] **Step 5: Rename PolicyModeToolbar → SLAModeToolbar**
+
+```bash
+git mv components/lineage/PolicyModeToolbar.tsx components/lineage/SLAModeToolbar.tsx
+```
+
+In `SLAModeToolbar.tsx`, rename:
+- `PolicyModeToolbar` → `SLAModeToolbar`
+- `PolicyModeToolbarProps` → `SLAModeToolbarProps`
+
+Update import in `app/(dashboard)/dashboard/lineage/page.tsx`.
+
+- [ ] **Step 6: Update `components/lineage/DataAssetDetailPanel.tsx`**
+
+Rename all policy references:
+- `PolicyInfo` interface → `SLAInfo`
+- `policyInfo` prop → `slaInfo`
+- `onEditPolicy` prop → `onEditSLA`
+- UI label "Monitoring Policy" → "Monitoring SLA"
+- UI label "Edit Policy" → "Edit SLA"
+- UI label "Add Policy" → "Add SLA"
+
+Update all callers of `DataAssetDetailPanel` that pass these props.
+
+- [ ] **Step 7: Rename PolicyFieldBadge → SLAFieldBadge**
+
+```bash
+git mv components/schedule/PolicyFieldBadge.tsx components/schedule/SLAFieldBadge.tsx
+```
+
+In `SLAFieldBadge.tsx`, rename:
+- `PolicyFieldBadge` → `SLAFieldBadge`
+- `PolicyFieldBadgeProps` → `SLAFieldBadgeProps`
+
+Update import in `components/schedule/MonitorEditPanel.tsx`.
+
+- [ ] **Step 8: Update `SourceDetailDrawer.tsx`**
+
+In `components/sources/SourceDetailDrawer.tsx`:
+- Tab key `'contract'` → `'sla'`
+- Tab label "Contract" → "SLA"
+- `onEditContract` → `onEditSLA`
+- All `source.contract` references → `source.sla`
+
+- [ ] **Step 9: Update `SourceCard.tsx`**
+
+In `components/sources/SourceCard.tsx`:
+- `onEditContract` prop → `onEditSLA`
+- `source.contract?.slaTier` → `source.sla?.slaTier`
+
+- [ ] **Step 10: Rename all `policy*` variables in lineage page**
+
+In `app/(dashboard)/dashboard/lineage/page.tsx`, rename all internal variable names:
+- `policyMode` → `slaMode`
+- `policySelectedNodeIds` → `slaSelectedNodeIds`
+- `isPolicyMode` → `isSLAMode`
+- `isPolicySelected` → `isSLASelected`
+- `policyStatus` → `slaStatus`
+- `policyProfileName` → `slaProfileName`
+- `nodePolicies` → `nodeSLAs`
+
+- [ ] **Step 11: Rename EditContractModal → EditSLAModal**
 
 ```bash
 git mv components/sources/EditContractModal.tsx components/sources/EditSLAModal.tsx
@@ -303,7 +370,7 @@ git mv components/sources/EditContractModal.tsx components/sources/EditSLAModal.
 
 In `EditSLAModal.tsx`, rename the component and update the modal title from "Edit Contract" to "Edit SLA".
 
-- [ ] **Step 6: Update import in `app/(dashboard)/dashboard/sources/page.tsx`**
+- [ ] **Step 12: Update import in `app/(dashboard)/dashboard/sources/page.tsx`**
 
 Change:
 ```typescript
@@ -314,17 +381,17 @@ to:
 import EditSLAModal from '@/components/sources/EditSLAModal';
 ```
 
-Update JSX and rename state: `contractSource` → `slaSource`, `handleEditContract` → `handleEditSLA`, `handleContractSaved` → `handleSLASaved`.
+Update JSX and rename all state variables: `contractSource` → `slaSource`, `setContractSource` → `setSlaSource`, `handleEditContract` → `handleEditSLA`, `handleContractSaved` → `handleSLASaved`.
 
-- [ ] **Step 7: Verify TypeScript compiles**
+- [ ] **Step 13: Verify TypeScript compiles**
 
 Run: `npx tsc --noEmit`
 Expected: No errors.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
-git add -A components/lineage/SLAEditorPanel.tsx components/lineage/SLABadge.tsx components/sources/EditSLAModal.tsx app/(dashboard)/dashboard/lineage/page.tsx components/lineage/UnifiedNodes.tsx app/(dashboard)/dashboard/sources/page.tsx
+git add -A
 git commit -m "refactor: rename Policy/Contract component files to SLA naming"
 ```
 
@@ -395,11 +462,29 @@ import type { SlaTier, PipelineSLAData } from '@/components/contracts/types';
 
 Rename `contractForm` → `slaForm`, `contractSaving` → `slaSaving`, `contractDirty` → `slaDirty`.
 
-- [ ] **Step 4: Update all other importing files**
+- [ ] **Step 4: Update override component files**
+
+In `components/contracts/overrides/WarehouseOverrides.tsx`:
+- `WarehouseContractOverrides` → `WarehouseOverrides` (type import and all 4 usages)
+
+In `components/contracts/overrides/TransformationOverrides.tsx`:
+- `TransformationContractOverrides` → `TransformationOverrides` (type import and all 4 usages)
+
+In `components/contracts/overrides/OrchestrationOverrides.tsx`:
+- `OrchestrationContractOverrides` → `OrchestrationOverrides` (type import and all 4 usages)
+
+- [ ] **Step 5: Rename `SourceContractData` in `components/sources/types.ts`**
+
+Rename `SourceContractData` → `SourceSLAData` (line 5) and update all references in:
+- `components/sources/types.ts` (definition)
+- `components/sources/useSourcesData.ts` (usage)
+- `components/sources/EditSLAModal.tsx` (usage)
+
+Also rename `pipelineContract` field in `useSourcesData` return type → `pipelineSLA`.
+
+- [ ] **Step 6: Update all other importing files**
 
 Update imports in:
-- `components/sources/types.ts`
-- `components/sources/EditSLAModal.tsx`
 - `app/api/pipeline/[stackId]/contract/route.ts`
 - `app/api/integrations/[id]/contract/route.ts`
 - `app/api/integrations/route.ts`
@@ -899,6 +984,11 @@ In `app/(dashboard)/dashboard/pipeline/settings/page.tsx`, add a new section in 
     </button>
   </div>
 </div>
+```
+
+Add the import (if not already present):
+```typescript
+import { toast } from 'sonner';
 ```
 
 Add the state and handler:
