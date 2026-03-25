@@ -1582,6 +1582,35 @@ export function MultiMonitorModal({
                     </span>
                   </div>
                 )}
+                {/* Tool monitor config summary */}
+                {configTab === 'presets' && (() => {
+                  const toolMons = selectedNodesWithMonitors.flatMap(({ meta, monitors }) => {
+                    if (!meta.subNodeIds?.length) return [];
+                    return monitors
+                      .filter((m) => TOOL_ONLY_MONITOR_KEYS.has(m.key) && monitorChecks[`${m.targetNodeId}::${m.key}`])
+                      .map((m) => {
+                        const def = getMonitorDefinition(m.key);
+                        return { mon: m, label: def?.label || m.key, nodeName: meta.name };
+                      });
+                  });
+                  if (toolMons.length === 0) return null;
+                  return (
+                    <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+                      <p className="text-[11px] text-[var(--muted)] mb-2">Tool Monitors</p>
+                      <div className="space-y-1.5">
+                        {toolMons.map(({ mon, label, nodeName }) => (
+                          <div key={`${mon.targetNodeId}::${mon.key}`} className="flex items-center gap-2">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-400">
+                              Configured
+                            </span>
+                            <span className="text-[12px] text-[var(--text)]">{label}</span>
+                            <span className="text-[10px] text-[var(--muted)]">on {nodeName}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {configTab === 'ai-prompt' && (
                   <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
                     <p className="text-[11px] text-[var(--muted)] mb-1">Prompt</p>
