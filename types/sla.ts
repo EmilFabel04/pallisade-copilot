@@ -1,8 +1,8 @@
 /**
- * Pipeline Monitoring Policy Types
+ * Pipeline Monitoring SLA Types
  *
- * Monitoring Policy is a SEPARATE concept from DataContract:
- * - Monitoring Policy = lightweight operational expectations (freshness, strictness,
+ * Monitoring SLA is a SEPARATE concept from DataContract:
+ * - Monitoring SLA = lightweight operational expectations (freshness, strictness,
  *   sensitivity). Cross-domain. Used to drive monitor defaults and auto-config.
  * - DataContract = governance/compliance artifact. Warehouse-table-specific. Has
  *   lifecycle (DRAFT/ACTIVE/VIOLATED/DEPRECATED), ownership, violation history.
@@ -68,10 +68,10 @@ export interface TransformConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Policy Profile
+// SLA Profile
 // ---------------------------------------------------------------------------
 
-export interface PolicyProfile {
+export interface SLAProfile {
   id: string;
   name: string;
   description?: string | null;
@@ -94,15 +94,15 @@ export interface PolicyProfile {
 }
 
 // ---------------------------------------------------------------------------
-// Policy Assignment
+// SLA Assignment
 // ---------------------------------------------------------------------------
 
-export type PolicyAssignmentType = 'direct' | 'branch' | 'domain_default' | 'criticality_default';
+export type SLAAssignmentType = 'direct' | 'branch' | 'domain_default' | 'criticality_default';
 
-export interface PolicyAssignment {
+export interface SLAAssignment {
   id: string;
   profileId: string;
-  assignmentType: PolicyAssignmentType;
+  assignmentType: SLAAssignmentType;
   nodeFqn?: string | null;
   nodeDomain?: string | null;
   nodeCriticality?: string | null;
@@ -114,20 +114,20 @@ export interface PolicyAssignment {
 }
 
 // ---------------------------------------------------------------------------
-// Policy Status (for UI badges)
+// SLA Status (for UI badges)
 // ---------------------------------------------------------------------------
 
-export type PolicyStatus = 'assigned' | 'inherited' | 'override' | 'none';
+export type SLAStatus = 'assigned' | 'inherited' | 'override' | 'none';
 
 // ---------------------------------------------------------------------------
-// Effective Policy (resolved from the chain)
+// Effective SLA Policy (resolved from the chain)
 // ---------------------------------------------------------------------------
 
-export interface EffectivePolicy {
+export interface EffectiveSLAPolicy {
   source: string;  // data_contract | direct_override | direct_profile | branch | criticality_default | domain_default | builtin
   profileId?: string | null;
   profileName?: string | null;
-  status: PolicyStatus;
+  status: SLAStatus;
 
   freshness: FreshnessConfig;
   schema: SchemaConfig;
@@ -144,9 +144,9 @@ export interface EffectivePolicy {
 // API request/response types
 // ---------------------------------------------------------------------------
 
-export interface PolicyAssignRequest {
+export interface SLAAssignRequest {
   profileId: string;
-  assignmentType: PolicyAssignmentType;
+  assignmentType: SLAAssignmentType;
   nodeFqns?: string[];
   branchRootFqn?: string;
   nodeDomain?: string;
@@ -154,26 +154,26 @@ export interface PolicyAssignRequest {
   overrides?: Record<string, any>;
 }
 
-export interface PolicyResolveRequest {
+export interface SLAResolveRequest {
   nodes: Array<{ fqn: string; domain: string; criticality: string }>;
   stackId?: string;
 }
 
-export interface PolicyResolveResponse {
-  policies: Record<string, EffectivePolicy>;
+export interface SLAResolveResponse {
+  policies: Record<string, EffectiveSLAPolicy>;
 }
 
 // ---------------------------------------------------------------------------
-// Domain → applicable policy controls mapping
+// Domain → applicable SLA controls mapping
 // ---------------------------------------------------------------------------
 
-export type PolicyDomain = 'warehouse' | 'ingestion' | 'bi' | 'orchestration' | 'transform';
+export type SLADomain = 'warehouse' | 'ingestion' | 'bi' | 'orchestration' | 'transform';
 
 /**
- * Maps node domains to which policy config sections are relevant.
- * Used by PolicyEditorPanel to show only applicable controls.
+ * Maps node domains to which SLA config sections are relevant.
+ * Used by SLAEditorPanel to show only applicable controls.
  */
-export const DOMAIN_POLICY_SECTIONS: Record<PolicyDomain, string[]> = {
+export const DOMAIN_SLA_SECTIONS: Record<SLADomain, string[]> = {
   warehouse: ['freshness', 'schema', 'volume', 'anomaly', 'quality'],
   ingestion: ['freshness', 'ingestion'],
   bi: ['bi', 'freshness'],
@@ -182,10 +182,10 @@ export const DOMAIN_POLICY_SECTIONS: Record<PolicyDomain, string[]> = {
 };
 
 /**
- * Maps UnifiedNodeCategory to PolicyDomain.
+ * Maps UnifiedNodeCategory to SLADomain.
  */
-export function categoryToPolicyDomain(category: string): PolicyDomain | null {
-  const mapping: Record<string, PolicyDomain> = {
+export function categoryToSLADomain(category: string): SLADomain | null {
+  const mapping: Record<string, SLADomain> = {
     // Warehouse / data assets
     table: 'warehouse',
     view: 'warehouse',

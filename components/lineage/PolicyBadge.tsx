@@ -1,10 +1,10 @@
 'use client';
 
 import React from 'react';
-import type { PolicyStatus } from '@/types/policy';
+import type { SLAStatus } from '@/types/sla';
 
 interface PolicyBadgeProps {
-  status: PolicyStatus;
+  status: SLAStatus;
   profileName?: string | null;
   source?: string;
 }

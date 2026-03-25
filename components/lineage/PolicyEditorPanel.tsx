@@ -3,18 +3,18 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import type { UnifiedLineageNode, UnifiedLineageEdge } from './types';
 import type {
-  PolicyProfile,
-  EffectivePolicy,
-  PolicyAssignRequest,
-  PolicyDomain,
-} from '@/types/policy';
-import { categoryToPolicyDomain, DOMAIN_POLICY_SECTIONS } from '@/types/policy';
+  SLAProfile,
+  EffectiveSLAPolicy,
+  SLAAssignRequest,
+  SLADomain,
+} from '@/types/sla';
+import { categoryToSLADomain, DOMAIN_SLA_SECTIONS } from '@/types/sla';
 
 // ---------------------------------------------------------------------------
 // Built-in profiles (client-side defaults matching the seeded DB profiles)
 // ---------------------------------------------------------------------------
 
-const BUILTIN_PROFILES: PolicyProfile[] = [
+const BUILTIN_PROFILES: SLAProfile[] = [
   {
     id: 'builtin_critical_sla',
     name: 'Critical SLA',
@@ -76,9 +76,9 @@ interface PolicyEditorPanelProps {
   allNodes: UnifiedLineageNode[];
   allEdges: UnifiedLineageEdge[];
   stackId: string;
-  nodePolicies: Map<string, EffectivePolicy>;
+  nodePolicies: Map<string, EffectiveSLAPolicy>;
   saving?: boolean;
-  onApply: (request: PolicyAssignRequest, scope: ApplyScope) => void;
+  onApply: (request: SLAAssignRequest, scope: ApplyScope) => void;
   onClose: () => void;
   onClearSelection: () => void;
 }
@@ -91,19 +91,19 @@ function getSelectedNodes(ids: Set<string>, allNodes: UnifiedLineageNode[]): Uni
   return allNodes.filter((n) => ids.has(n.id) || ids.has(n.id.replace('lineage-', '')));
 }
 
-function getDomainsFromNodes(nodes: UnifiedLineageNode[]): Set<PolicyDomain> {
-  const domains = new Set<PolicyDomain>();
+function getDomainsFromNodes(nodes: UnifiedLineageNode[]): Set<SLADomain> {
+  const domains = new Set<SLADomain>();
   for (const n of nodes) {
-    const d = categoryToPolicyDomain(n.category);
+    const d = categoryToSLADomain(n.category);
     if (d) domains.add(d);
   }
   return domains;
 }
 
-function getApplicableSections(domains: Set<PolicyDomain>): string[] {
+function getApplicableSections(domains: Set<SLADomain>): string[] {
   const sections = new Set<string>();
   for (const d of domains) {
-    const s = DOMAIN_POLICY_SECTIONS[d];
+    const s = DOMAIN_SLA_SECTIONS[d];
     if (s) s.forEach((sec) => sections.add(sec));
   }
   return Array.from(sections);
@@ -235,7 +235,7 @@ export function PolicyEditorPanel({
   const [selectedProfileId, setSelectedProfileId] = useState<string>('');
   const [applyScope, setApplyScope] = useState<ApplyScope>('selected');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [dbProfiles, setDbProfiles] = useState<PolicyProfile[]>([]);
+  const [dbProfiles, setDbProfiles] = useState<SLAProfile[]>([]);
   // Tracks whether the current selection has been applied — stays true until
   // the user changes the profile, edits overrides, or selects different nodes.
   const [applied, setApplied] = useState(false);
@@ -301,7 +301,7 @@ export function PolicyEditorPanel({
           const allProfiles = data.profiles || data || [];
           // Filter out deprecated domain-specific profiles
           const DEPRECATED = ['BI Shield', 'Source Guard'];
-          setDbProfiles(allProfiles.filter((p: PolicyProfile) => !DEPRECATED.includes(p.name)));
+          setDbProfiles(allProfiles.filter((p: SLAProfile) => !DEPRECATED.includes(p.name)));
         }
       } catch (err) {
         console.error('[PolicyEditor] Failed to load profiles:', err);
@@ -350,7 +350,7 @@ export function PolicyEditorPanel({
   const domainLabels = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const n of selectedNodes) {
-      const d = categoryToPolicyDomain(n.category) || n.category;
+      const d = categoryToSLADomain(n.category) || n.category;
       counts[d] = (counts[d] || 0) + 1;
     }
     return Object.entries(counts)
@@ -382,7 +382,7 @@ export function PolicyEditorPanel({
     const hasEffectiveOverrides = Object.keys(effectiveOverrides).length > 0;
 
     const fqns = selectedNodes.map((n) => n.fullName || n.name);
-    const request: PolicyAssignRequest & { _profileName?: string } = {
+    const request: SLAAssignRequest & { _profileName?: string } = {
       profileId: selectedProfileId,
       assignmentType: applyScope === 'downstream' ? 'branch' : 'direct',
       nodeFqns: applyScope === 'downstream' ? undefined : fqns,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
-import type { PolicyAssignmentType } from '@/types/policy';
+import type { SLAAssignmentType } from '@/types/sla';
 
 // POST /api/schedule/policies/assign — Assign a policy to nodes
 export async function POST(request: NextRequest) {
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
       overrides,
     } = body as {
       profileId: string;
-      assignmentType: PolicyAssignmentType;
+      assignmentType: SLAAssignmentType;
       nodeFqns?: string[];
       branchRootFqn?: string;
       nodeDomain?: string;

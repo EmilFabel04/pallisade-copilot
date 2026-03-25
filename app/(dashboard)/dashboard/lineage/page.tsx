@@ -50,7 +50,7 @@ import { InspectorPanel } from '@/components/lineage/pipeline-overview/Inspector
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
 import { PolicyEditorPanel, type ApplyScope } from '@/components/lineage/PolicyEditorPanel';
 import { PolicyModeToolbar } from '@/components/lineage/PolicyModeToolbar';
-import type { EffectivePolicy, PolicyAssignRequest, PolicyStatus } from '@/types/policy';
+import type { EffectiveSLAPolicy, SLAAssignRequest, SLAStatus } from '@/types/sla';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import type { NodeMeta } from '@/components/schedule/NodeSelectionSurface';
@@ -205,7 +205,7 @@ function LineagePageInner() {
   // Policy mode state (isolated from normal lineage state)
   const [policyMode, setPolicyMode] = useState(false);
   const [policySelectedNodeIds, setPolicySelectedNodeIds] = useState<Set<string>>(new Set());
-  const [nodePolicies, setNodePolicies] = useState<Map<string, EffectivePolicy>>(new Map());
+  const [nodePolicies, setNodePolicies] = useState<Map<string, EffectiveSLAPolicy>>(new Map());
   const [policySaving, setPolicySaving] = useState(false);
 
   // Exit policy mode on Escape
@@ -241,10 +241,10 @@ function LineagePageInner() {
         if (res.ok && !cancelled) {
           const data = await res.json();
           const policies = data.policies || {};
-          const map = new Map<string, EffectivePolicy>();
+          const map = new Map<string, EffectiveSLAPolicy>();
           for (const [fqn, pol] of Object.entries(policies)) {
             if ((pol as any).status !== 'none') {
-              map.set(fqn, pol as EffectivePolicy);
+              map.set(fqn, pol as EffectiveSLAPolicy);
             }
           }
           if (map.size > 0) setNodePolicies(map);
@@ -1830,7 +1830,7 @@ function LineagePageInner() {
             stackId={stackId || ''}
             nodePolicies={nodePolicies}
             saving={policySaving}
-            onApply={async (request: PolicyAssignRequest, scope: ApplyScope) => {
+            onApply={async (request: SLAAssignRequest, scope: ApplyScope) => {
               setPolicySaving(true);
               try {
                 const res = await fetch('/api/schedule/policies/assign', {
@@ -1858,10 +1858,10 @@ function LineagePageInner() {
                     if (resolveRes.ok) {
                       const resolveData = await resolveRes.json();
                       const policies = resolveData.policies || {};
-                      const map = new Map<string, EffectivePolicy>();
+                      const map = new Map<string, EffectiveSLAPolicy>();
                       for (const [fqn, pol] of Object.entries(policies)) {
                         if ((pol as any).status !== 'none') {
-                          map.set(fqn, pol as EffectivePolicy);
+                          map.set(fqn, pol as EffectiveSLAPolicy);
                         }
                       }
                       setNodePolicies(map);
