@@ -1067,6 +1067,7 @@ export function MultiMonitorModal({
     configTab,
     preview,
     monitorChecks,
+    monitorConfigs,
     manualMonitors,
     planName,
     resolvedGraphNodeIds,
