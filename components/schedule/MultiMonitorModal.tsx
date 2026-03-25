@@ -782,19 +782,25 @@ export function MultiMonitorModal({
     [fetchFullPreview],
   );
 
+  const incompleteToolConfig = useMemo(
+    () => hasIncompleteToolConfig(monitorChecks, monitorConfigs, selectedNodesWithMonitors),
+    [monitorChecks, monitorConfigs, selectedNodesWithMonitors],
+  );
+
   const canGoNext = useMemo(() => {
     switch (step) {
       case 1:
         return selectedNodeIds.length > 0;
       case 2:
         if (configTab === 'ai-prompt') return aiPrompt.trim().length > 0;
-        return totalMonitorCount > 0;
+        if (totalMonitorCount === 0) return false;
+        return !incompleteToolConfig;
       case 3:
         return planName.trim().length > 0;
       default:
         return false;
     }
-  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, planName]);
+  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, planName, incompleteToolConfig]);
 
   // ---- Create plan or task ----
   const handleCreate = useCallback(async () => {
@@ -1475,22 +1481,29 @@ export function MultiMonitorModal({
           </button>
 
           {step < 3 ? (
-            <button
-              onClick={() => goToStep((step + 1) as Step)}
-              disabled={!canGoNext}
-              className={cn(
-                'px-5 py-2 rounded-lg text-[13px] font-medium transition-colors',
-                canGoNext
-                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90'
-                  : 'bg-[var(--muted)]/20 text-[var(--muted)] cursor-not-allowed',
+            <div className="flex items-center">
+              {step === 2 && incompleteToolConfig && (
+                <span className="text-[11px] text-amber-400 mr-3">
+                  Configure all selected tool monitors before proceeding
+                </span>
               )}
-            >
-              {step === 2
-                ? configTab === 'ai-prompt'
-                  ? 'Next'
-                  : `Next \u00b7 ${totalMonitorCount} monitors`
-                : 'Next'}
-            </button>
+              <button
+                onClick={() => goToStep((step + 1) as Step)}
+                disabled={!canGoNext}
+                className={cn(
+                  'px-5 py-2 rounded-lg text-[13px] font-medium transition-colors',
+                  canGoNext
+                    ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90'
+                    : 'bg-[var(--muted)]/20 text-[var(--muted)] cursor-not-allowed',
+                )}
+              >
+                {step === 2
+                  ? configTab === 'ai-prompt'
+                    ? 'Next'
+                    : `Next \u00b7 ${totalMonitorCount} monitors`
+                  : 'Next'}
+              </button>
+            </div>
           ) : (
             <button
               onClick={handleCreate}
