@@ -264,6 +264,7 @@ export async function GET(
         updatedAt: pipeline.updatedAt,
         nodeCount: pipeline._count.nodes,
         scanCount: pipeline._count.scans,
+        dataContractsEnabled: pipeline.dataContractsEnabled,
       },
       accessList: accessCheck.isOrgAdmin ? accessListWithUsers : undefined,
       userRole: accessCheck.role,

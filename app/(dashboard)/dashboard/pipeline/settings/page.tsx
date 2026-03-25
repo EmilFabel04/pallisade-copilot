@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
 import type { SlaTier, PipelineSLAData } from '@/components/contracts/types';
 
@@ -19,6 +20,7 @@ interface PipelineDetails {
   updatedAt: string;
   nodeCount: number;
   scanCount: number;
+  dataContractsEnabled: boolean;
 }
 
 interface AccessEntry {
@@ -66,6 +68,9 @@ export default function PipelineSettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   
+  // Data contracts toggle
+  const [dataContractsEnabled, setDataContractsEnabled] = useState(false);
+
   // Pipeline SLA state
   const [slaForm, setSlaForm] = useState<PipelineSLAData>({
     ownerUser: null, ownerTeam: null, contactChannel: null,
@@ -108,6 +113,7 @@ export default function PipelineSettingsPage() {
         setName(data.pipeline.name);
         setDescription(data.pipeline.description || '');
         setTokenLimit(data.pipeline.tokenLimitMonthly);
+        setDataContractsEnabled(Boolean(data.pipeline.dataContractsEnabled));
 
         // Fetch access list if admin
         if (data.isOrgAdmin) {
@@ -267,6 +273,27 @@ export default function PipelineSettingsPage() {
       ));
     } catch (err) {
       setError('Failed to update access');
+    }
+  };
+
+  const handleToggleDataContracts = async (enabled: boolean) => {
+    if (enabled) {
+      if (!confirm('Enabling data contracts makes them the primary source of truth. SLA changes will no longer auto-update contracts. Continue?')) {
+        return;
+      }
+    }
+    try {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataContractsEnabled: enabled }),
+      });
+      if (res.ok) {
+        setDataContractsEnabled(enabled);
+        toast.success(enabled ? 'Data contracts enabled' : 'Data contracts disabled');
+      }
+    } catch {
+      toast.error('Failed to update setting');
     }
   };
 
@@ -553,6 +580,32 @@ export default function PipelineSettingsPage() {
               className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50 resize-none"
               placeholder="Additional notes..."
             />
+          </div>
+
+          {/* Data Contracts Toggle */}
+          <div className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)]">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-medium text-[var(--foreground)]">Data Contracts</h4>
+                <p className="text-xs text-[var(--muted)] mt-1">
+                  When enabled, data contracts become the primary source of truth for data asset compliance.
+                  SLA changes will show as overrides or violations against the contract.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={dataContractsEnabled}
+                onClick={() => handleToggleDataContracts(!dataContractsEnabled)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  dataContractsEnabled ? 'bg-emerald-500' : 'bg-zinc-600'
+                }`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  dataContractsEnabled ? 'translate-x-6' : 'translate-x-1'
+                }`} />
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 pt-4 border-t border-[var(--subtle-border)]">
