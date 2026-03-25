@@ -202,6 +202,36 @@ const TOOL_ONLY_MONITOR_KEYS = new Set([
   'CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS',
 ]);
 
+/**
+ * Returns true if any checked tool monitor has missing required config fields.
+ * Only applies to tool nodes (subNodeIds.length > 0) with TOOL_ONLY_MONITOR_KEYS monitors.
+ */
+function hasIncompleteToolConfig(
+  checks: Record<string, boolean>,
+  configs: Record<string, Record<string, any>>,
+  nodesWithMonitors: Array<{ meta: { subNodeIds?: string[] }; monitors: Array<{ targetNodeId: string; key: string }> }>,
+): boolean {
+  for (const { meta, monitors } of nodesWithMonitors) {
+    if (!meta.subNodeIds?.length) continue;
+    for (const mon of monitors) {
+      const checkKey = `${mon.targetNodeId}::${mon.key}`;
+      if (!checks[checkKey]) continue;
+      if (!TOOL_ONLY_MONITOR_KEYS.has(mon.key)) continue;
+
+      const def = getMonitorDefinition(mon.key);
+      if (!def) continue;
+
+      const config = configs[checkKey] || {};
+      const hasMissing = def.config_schema
+        .filter((f) => f.required)
+        .some((f) => !config[f.key] && config[f.key] !== 0);
+
+      if (hasMissing) return true;
+    }
+  }
+  return false;
+}
+
 const CONFIG_TABS: { key: ConfigTab; label: string; icon: string }[] = [
   {
     key: 'presets',
