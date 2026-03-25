@@ -840,6 +840,35 @@ export function MultiMonitorModal({
       }
       setMonitorChecks(newChecks);
       setActivePreset(null);
+
+      // Seed default config values for tool monitors being checked
+      if (!allChecked) {
+        const newConfigs: Record<string, Record<string, any>> = {};
+        for (const mon of monitors) {
+          const key = `${mon.targetNodeId}::${mon.key}`;
+          if (!TOOL_ONLY_MONITOR_KEYS.has(mon.key)) continue;
+          const def = getMonitorDefinition(mon.key);
+          if (!def) continue;
+          const defaults: Record<string, any> = {};
+          for (const field of def.config_schema) {
+            if (field.default_value !== undefined) {
+              defaults[field.key] = field.default_value;
+            }
+          }
+          if (Object.keys(defaults).length > 0) {
+            newConfigs[key] = defaults;
+          }
+        }
+        if (Object.keys(newConfigs).length > 0) {
+          setMonitorConfigs((prev) => {
+            const merged = { ...prev };
+            for (const [k, v] of Object.entries(newConfigs)) {
+              merged[k] = { ...(prev[k] || {}), ...v };
+            }
+            return merged;
+          });
+        }
+      }
     },
     [monitorChecks],
   );
