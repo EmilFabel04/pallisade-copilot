@@ -73,6 +73,22 @@ interface QualityRule {
   rule: 'not_null' | 'unique' | 'accepted_values' | 'range' | 'custom';
   params: Record<string, unknown>;
 }
+
+interface ContractComplianceResult {
+  contractId: string;
+  nodeId: string;
+  overallStatus: 'PASS' | 'WARN' | 'FAIL';
+  fields: ContractFieldCompliance[];
+  checkedAt: string;
+}
+
+interface ContractFieldCompliance {
+  fieldName: string;
+  contractValue: unknown;
+  slaValue: unknown | null;
+  actualValue: unknown | null;       // from latest monitor result, null if no monitor
+  status: 'compliant' | 'override' | 'violation' | 'unknown';  // unknown = no monitor data
+}
 ```
 
 ### Tools vs Data Assets
