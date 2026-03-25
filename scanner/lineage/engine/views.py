@@ -1266,7 +1266,19 @@ class ViewBuilder:
                 # Sub-nodes (cap at 20)
                 if len(sub_nodes) < 20:
                     rm = gn.raw_metadata or {}
-                    platform_id = rm.get("connector_id") or rm.get("sync_id") or rm.get("dag_id") or ""
+                    # Only expose platformId for top-level entities:
+                    # - Connectors: have connector_id/sync_id
+                    # - DAGs: original_type is dag/workflow/etc, or job without dag_id
+                    #   (tasks within DAGs also have dag_id but are NOT top-level)
+                    gn_ot = getattr(gn, "original_type", "") or ""
+                    is_dag = gn_ot in ("dag", "workflow", "pipeline", "flow") or (gn_ct == "job" and not rm.get("dag_id"))
+                    is_connector = bool(rm.get("connector_id") or rm.get("sync_id"))
+                    if is_connector:
+                        platform_id = rm.get("connector_id") or rm.get("sync_id") or ""
+                    elif is_dag:
+                        platform_id = rm.get("dag_id") or gn.name or ""
+                    else:
+                        platform_id = ""
                     sub_nodes.append({
                         "id": gn.id,
                         "name": gn.name,
