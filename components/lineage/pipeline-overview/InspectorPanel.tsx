@@ -287,14 +287,19 @@ function NodeInspector({
             let childItems: Array<{ id: string; name: string; platformId: string }> = [];
             if (details?.groups) {
               const seen = new Set<string>();
-              for (const items of Object.values(details.groups)) {
+              for (const [groupKey, items] of Object.entries(details.groups)) {
                 for (const item of items) {
                   if (item.id && !seen.has(item.id)) {
                     seen.add(item.id);
                     subNodeIds.push(item.id);
-                    // Extract platform-specific ID (connector_id, dag_id)
-                    const pid = item.metadata?.connector_id || item.metadata?.dag_id || '';
-                    if (pid) {
+                    // Extract platform-specific ID only for top-level entities:
+                    // - Connectors (have connector_id)
+                    // - DAGs (in "dags" group, not tasks which have a "container" field)
+                    const isTask = groupKey === 'tasks' || !!item.container;
+                    const pid = isTask
+                      ? ''
+                      : (item.metadata?.connector_id || item.metadata?.dag_id || '');
+                    if (pid && !childItems.some((c) => c.platformId === pid)) {
                       childItems.push({ id: item.id, name: item.name || item.id, platformId: pid });
                     }
                   }
