@@ -1268,10 +1268,10 @@ class ViewBuilder:
                     rm = gn.raw_metadata or {}
                     # Only expose platformId for top-level entities:
                     # - Connectors: have connector_id/sync_id
-                    # - DAGs: original_type is dag/workflow/etc, or job without dag_id
+                    # - DAGs: node_type is dag/workflow/pipeline/flow
                     #   (tasks within DAGs also have dag_id but are NOT top-level)
-                    gn_ot = getattr(gn, "original_type", "") or ""
-                    is_dag = gn_ot in ("dag", "workflow", "pipeline", "flow") or (gn_ct == "job" and not rm.get("dag_id"))
+                    gn_nt = (gn.node_type.value if hasattr(gn.node_type, "value") else str(gn.node_type or "")).lower()
+                    is_dag = gn_nt in ("dag", "workflow", "pipeline", "flow")
                     is_connector = bool(rm.get("connector_id") or rm.get("sync_id"))
                     if is_connector:
                         platform_id = rm.get("connector_id") or rm.get("sync_id") or ""
