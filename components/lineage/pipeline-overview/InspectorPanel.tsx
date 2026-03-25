@@ -284,6 +284,7 @@ function NodeInspector({
             // Prefer IDs from fetched tool details (details.groups) since
             // node.metadata.subNodes may be empty or truncated.
             let subNodeIds: string[] = [];
+            let childItems: Array<{ id: string; name: string; platformId: string }> = [];
             if (details?.groups) {
               const seen = new Set<string>();
               for (const items of Object.values(details.groups)) {
@@ -291,13 +292,21 @@ function NodeInspector({
                   if (item.id && !seen.has(item.id)) {
                     seen.add(item.id);
                     subNodeIds.push(item.id);
+                    // Extract platform-specific ID (connector_id, dag_id)
+                    const pid = item.metadata?.connector_id || item.metadata?.dag_id || '';
+                    if (pid) {
+                      childItems.push({ id: item.id, name: item.name || item.id, platformId: pid });
+                    }
                   }
                 }
               }
             }
             if (subNodeIds.length === 0) {
-              const subNodes: Array<{ id: string }> = node.metadata?.subNodes || [];
+              const subNodes: Array<{ id: string; name?: string; platformId?: string }> = node.metadata?.subNodes || [];
               subNodeIds = subNodes.map((s) => s.id).filter(Boolean);
+              childItems = subNodes
+                .filter((s) => s.platformId)
+                .map((s) => ({ id: s.id, name: s.name || s.id, platformId: s.platformId! }));
             }
             onCreateSingleMonitor({
               nodeId: node.id,
@@ -306,6 +315,7 @@ function NodeInspector({
               platform: node.platform || undefined,
               domain,
               subNodeIds: subNodeIds.length > 0 ? subNodeIds : undefined,
+              childItems: childItems.length > 0 ? childItems : undefined,
             });
           }}
           className={cn(

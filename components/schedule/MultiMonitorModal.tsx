@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta } from './NodeSelectionSurface';
+import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta, type ChildItem } from './NodeSelectionSurface';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
 import { ColumnPicker } from './ColumnPicker';
@@ -224,7 +224,11 @@ function hasIncompleteToolConfig(
       const config = configs[checkKey] || {};
       const hasMissing = def.config_schema
         .filter((f) => f.required)
-        .some((f) => !config[f.key] && config[f.key] !== 0);
+        .some((f) => {
+          const val = config[f.key];
+          if (Array.isArray(val)) return val.length === 0;
+          return !val && val !== 0;
+        });
 
       if (hasMissing) return true;
     }
@@ -245,6 +249,9 @@ const CONFIG_TABS: { key: ConfigTab; label: string; icon: string }[] = [
   },
 ];
 
+/** Config field keys that correspond to child item platform IDs (connectors, DAGs). */
+const CHILD_ID_FIELDS = new Set(['connector_id', 'dag_id']);
+
 // ---------------------------------------------------------------------------
 // Monitor Card sub-component
 // ---------------------------------------------------------------------------
@@ -257,6 +264,7 @@ function MonitorCard({
   isToolNode,
   config,
   onConfigChange,
+  childItems,
 }: {
   mon: MonitorOption;
   checked: boolean;
@@ -265,6 +273,7 @@ function MonitorCard({
   isToolNode?: boolean;
   config?: Record<string, any>;
   onConfigChange?: (key: string, value: any) => void;
+  childItems?: ChildItem[];
 }) {
   const def = getMonitorDefinition(mon.key);
   const label = def?.label || mon.key;
@@ -276,9 +285,13 @@ function MonitorCard({
     : [];
   const showConfig = checked && requiredFields.length > 0;
 
-  // Check if all required fields are filled
+  // Check if all required fields are filled (arrays must have at least one item)
   const isConfigComplete = requiredFields.length === 0 || requiredFields.every(
-    (f) => config?.[f.key] || config?.[f.key] === 0,
+    (f) => {
+      const val = config?.[f.key];
+      if (Array.isArray(val)) return val.length > 0;
+      return val || val === 0;
+    },
   );
 
   return (
@@ -344,57 +357,95 @@ function MonitorCard({
           className="px-3 pb-3 pt-1 border-t border-[var(--border)] bg-[var(--surface)]/50 space-y-2"
           onClick={(e) => e.stopPropagation()}
         >
-          {requiredFields.map((field) => (
-            <div key={field.key}>
-              <label className="block text-[10px] text-[var(--muted)] uppercase tracking-wide mb-1">
-                {field.label}
-              </label>
-              {field.type === 'select' ? (
-                <select
-                  value={config?.[field.key] ?? field.default_value ?? ''}
-                  onChange={(e) => onConfigChange?.(field.key, e.target.value)}
-                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
-                >
-                  <option value="">{field.placeholder || 'Select...'}</option>
-                  {field.options?.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-              ) : field.type === 'multi-text' || field.type === 'textarea' ? (
-                <textarea
-                  value={config?.[field.key] ?? ''}
-                  onChange={(e) => onConfigChange?.(field.key, e.target.value)}
-                  placeholder={field.placeholder}
-                  rows={3}
-                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)] resize-none"
-                />
-              ) : field.type === 'checkbox' ? (
-                <label className="flex items-center gap-2 text-[12px] text-[var(--text)]">
-                  <input
-                    type="checkbox"
-                    checked={!!config?.[field.key]}
-                    onChange={(e) => onConfigChange?.(field.key, e.target.checked)}
-                    className="rounded border-[var(--border)]"
-                  />
-                  {field.placeholder || field.label}
+          {requiredFields.map((field) => {
+            const hasChildPicker = CHILD_ID_FIELDS.has(field.key) && childItems && childItems.length > 0;
+            const selectedIds: string[] = hasChildPicker ? (Array.isArray(config?.[field.key]) ? config[field.key] : []) : [];
+
+            return (
+              <div key={field.key}>
+                <label className="block text-[10px] text-[var(--muted)] uppercase tracking-wide mb-1">
+                  {hasChildPicker
+                    ? `Select ${field.key === 'connector_id' ? 'Connectors' : field.key === 'dag_id' ? 'DAGs' : field.label}`
+                    : field.label}
                 </label>
-              ) : (
-                <input
-                  type={field.type === 'number' ? 'number' : 'text'}
-                  value={config?.[field.key] ?? ''}
-                  onChange={(e) => onConfigChange?.(
-                    field.key,
-                    field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value,
-                  )}
-                  placeholder={field.placeholder}
-                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)]"
-                />
-              )}
-              {field.help_text && (
-                <p className="text-[10px] text-[var(--muted)] mt-0.5">{field.help_text}</p>
-              )}
-            </div>
-          ))}
+                {hasChildPicker ? (
+                  <div className="space-y-1">
+                    {childItems!.map((child) => {
+                      const isSelected = selectedIds.includes(child.platformId);
+                      return (
+                        <label
+                          key={child.id}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors text-[12px]',
+                            isSelected
+                              ? 'bg-[var(--accent)]/10 text-[var(--text)]'
+                              : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--subtle-bg)]',
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {
+                              const next = isSelected
+                                ? selectedIds.filter((id) => id !== child.platformId)
+                                : [...selectedIds, child.platformId];
+                              onConfigChange?.(field.key, next);
+                            }}
+                            className="rounded border-[var(--border)] accent-[var(--accent)]"
+                          />
+                          <span className="font-medium">{child.name}</span>
+                          <span className="text-[10px] font-mono opacity-60">{child.platformId}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : field.type === 'select' ? (
+                  <select
+                    value={config?.[field.key] ?? field.default_value ?? ''}
+                    onChange={(e) => onConfigChange?.(field.key, e.target.value)}
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
+                  >
+                    <option value="">{field.placeholder || 'Select...'}</option>
+                    {field.options?.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                ) : field.type === 'multi-text' || field.type === 'textarea' ? (
+                  <textarea
+                    value={config?.[field.key] ?? ''}
+                    onChange={(e) => onConfigChange?.(field.key, e.target.value)}
+                    placeholder={field.placeholder}
+                    rows={3}
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)] resize-none"
+                  />
+                ) : field.type === 'checkbox' ? (
+                  <label className="flex items-center gap-2 text-[12px] text-[var(--text)]">
+                    <input
+                      type="checkbox"
+                      checked={!!config?.[field.key]}
+                      onChange={(e) => onConfigChange?.(field.key, e.target.checked)}
+                      className="rounded border-[var(--border)]"
+                    />
+                    {field.placeholder || field.label}
+                  </label>
+                ) : (
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    value={config?.[field.key] ?? ''}
+                    onChange={(e) => onConfigChange?.(
+                      field.key,
+                      field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value,
+                    )}
+                    placeholder={field.placeholder}
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)]"
+                  />
+                )}
+                {field.help_text && (
+                  <p className="text-[10px] text-[var(--muted)] mt-0.5">{field.help_text}</p>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1005,7 +1056,9 @@ export function MultiMonitorModal({
         // Presets / Manual mode → create plan via POST /api/schedule/plans
         if (!preview) return;
 
-        // Reconstruct groups with only checked monitors
+        // Reconstruct groups with only checked monitors.
+        // For tool monitors with multi-ID config (connector_id/dag_id arrays),
+        // expand into one recommendation per selected ID.
         const filteredGroups = preview.groups
           .map((g) => ({
             ...g,
@@ -1014,13 +1067,28 @@ export function MultiMonitorModal({
                 const key = `${rec.target_node_id}::${rec.monitor_key}`;
                 return monitorChecks[key] ?? false;
               })
-              .map((rec) => {
+              .flatMap((rec) => {
                 const key = `${rec.target_node_id}::${rec.monitor_key}`;
                 const extraConfig = monitorConfigs[key];
-                if (extraConfig) {
-                  return { ...rec, config_hints: { ...(rec.config_hints || {}), ...extraConfig } };
+                if (!extraConfig) return [rec];
+
+                // Find array-valued child ID fields to expand
+                const arrayField = Object.entries(extraConfig).find(
+                  ([k, v]) => CHILD_ID_FIELDS.has(k) && Array.isArray(v) && v.length > 0,
+                );
+                if (arrayField) {
+                  const [fieldKey, ids] = arrayField;
+                  return (ids as string[]).map((id) => ({
+                    ...rec,
+                    config_hints: {
+                      ...(rec.config_hints || {}),
+                      ...extraConfig,
+                      [fieldKey]: id, // single ID per monitor
+                    },
+                  }));
                 }
-                return rec;
+
+                return [{ ...rec, config_hints: { ...(rec.config_hints || {}), ...extraConfig } }];
               }),
           }))
           .filter((g) => g.recommendations.length > 0);
@@ -1439,6 +1507,7 @@ export function MultiMonitorModal({
                                                   [checkKey]: { ...(prev[checkKey] || {}), [fieldKey]: value },
                                                 }))
                                               }
+                                              childItems={meta.childItems}
                                             />
                                             {checked && isOutlier && mon.targetFqn && (
                                               <div className="ml-7 mt-1 mb-2">
@@ -1617,23 +1686,44 @@ export function MultiMonitorModal({
                     if (!meta.subNodeIds?.length) return [];
                     return monitors
                       .filter((m) => TOOL_ONLY_MONITOR_KEYS.has(m.key) && monitorChecks[`${m.targetNodeId}::${m.key}`])
-                      .map((m) => {
+                      .flatMap((m) => {
                         const def = getMonitorDefinition(m.key);
-                        return { mon: m, label: def?.label || m.key, nodeName: meta.name };
+                        const mLabel = def?.label || m.key;
+                        const checkKey = `${m.targetNodeId}::${m.key}`;
+                        const cfg = monitorConfigs[checkKey] || {};
+                        // Expand multi-ID fields into separate entries
+                        const arrayField = Object.entries(cfg).find(
+                          ([k, v]) => CHILD_ID_FIELDS.has(k) && Array.isArray(v) && v.length > 0,
+                        );
+                        if (arrayField) {
+                          return (arrayField[1] as string[]).map((id) => ({
+                            key: `${checkKey}::${id}`,
+                            label: mLabel,
+                            targetId: id,
+                            nodeName: meta.name,
+                          }));
+                        }
+                        return [{ key: checkKey, label: mLabel, targetId: '', nodeName: meta.name }];
                       });
                   });
                   if (toolMons.length === 0) return null;
                   return (
                     <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
-                      <p className="text-[11px] text-[var(--muted)] mb-2">Tool Monitors</p>
+                      <p className="text-[11px] text-[var(--muted)] mb-2">
+                        Tool Monitors ({toolMons.length})
+                      </p>
                       <div className="space-y-1.5">
-                        {toolMons.map(({ mon, label, nodeName }) => (
-                          <div key={`${mon.targetNodeId}::${mon.key}`} className="flex items-center gap-2">
+                        {toolMons.map((tm) => (
+                          <div key={tm.key} className="flex items-center gap-2">
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-400">
                               Configured
                             </span>
-                            <span className="text-[12px] text-[var(--text)]">{label}</span>
-                            <span className="text-[10px] text-[var(--muted)]">on {nodeName}</span>
+                            <span className="text-[12px] text-[var(--text)]">{tm.label}</span>
+                            {tm.targetId ? (
+                              <span className="text-[10px] font-mono text-[var(--muted)]">{tm.targetId}</span>
+                            ) : (
+                              <span className="text-[10px] text-[var(--muted)]">on {tm.nodeName}</span>
+                            )}
                           </div>
                         ))}
                       </div>

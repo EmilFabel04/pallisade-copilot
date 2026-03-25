@@ -764,4 +764,6 @@ export interface AssetPrefill {
   nodeType?: string;
   /** For tool nodes: child asset graph node IDs */
   subNodeIds?: string[];
+  /** Platform-specific child items (connectors, DAGs) with their IDs */
+  childItems?: Array<{ id: string; name: string; platformId: string }>;
 }

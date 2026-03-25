@@ -191,6 +191,7 @@ function LineagePageInner() {
       platform: prefill.platform || '',
       domain: prefill.domain || 'warehouse',
       subNodeIds: prefill.subNodeIds,
+      childItems: prefill.childItems,
     }]);
     setMultiMonitorModalOpen(true);
   }, []);

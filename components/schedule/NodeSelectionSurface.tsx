@@ -32,6 +32,12 @@ import {
 
 export type SelectionViewMode = 'lineage' | 'pipeline-overview';
 
+export interface ChildItem {
+  id: string;
+  name: string;
+  platformId: string;
+}
+
 export interface NodeMeta {
   id: string;
   name: string;
@@ -40,6 +46,8 @@ export interface NodeMeta {
   domain: string;
   /** For tool/service nodes from pipeline overview: actual graph node IDs of children */
   subNodeIds?: string[];
+  /** Platform-specific child items (connectors, DAGs) with their IDs */
+  childItems?: ChildItem[];
 }
 
 export interface NodeSelectionSurfaceProps {
@@ -142,8 +150,17 @@ export function NodeSelectionSurface({
         if (onNodesLoaded && data.nodes) {
           const metas: NodeMeta[] = data.nodes.map((n) => {
             // Extract sub-node IDs for tool/service nodes (pipeline overview)
+            const rawSubs: Array<{ id: string; name?: string; platformId?: string }> =
+              n.metadata?.subNodes || [];
             const subs: string[] | undefined =
-              n.metadata?.subNodes?.map((s: { id: string }) => s.id);
+              rawSubs.map((s) => s.id).filter(Boolean);
+            // Build childItems with platform-specific IDs (connector_id, dag_id)
+            const childItems: ChildItem[] | undefined =
+              rawSubs.length > 0
+                ? rawSubs
+                    .filter((s) => s.platformId)
+                    .map((s) => ({ id: s.id, name: s.name || s.id, platformId: s.platformId! }))
+                : undefined;
             return {
               id: n.id,
               name: n.name,
@@ -151,6 +168,7 @@ export function NodeSelectionSurface({
               platform: n.platform || 'unknown',
               domain: n.platformDomain || 'other',
               subNodeIds: subs?.length ? subs : undefined,
+              childItems: childItems?.length ? childItems : undefined,
             };
           });
           onNodesLoaded(metas);

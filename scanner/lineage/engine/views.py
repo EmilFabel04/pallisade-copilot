@@ -1265,12 +1265,15 @@ class ViewBuilder:
                         last_run_ts = gn.observed_at.isoformat()
                 # Sub-nodes (cap at 20)
                 if len(sub_nodes) < 20:
+                    rm = gn.raw_metadata or {}
+                    platform_id = rm.get("connector_id") or rm.get("sync_id") or rm.get("dag_id") or ""
                     sub_nodes.append({
                         "id": gn.id,
                         "name": gn.name,
                         "type": gn_ct or "unknown",
                         "fqn": gn.fqn or gn.name,
                         "isJob": is_job,
+                        "platformId": platform_id,
                     })
 
             # Collect distinct schemas from graph nodes
