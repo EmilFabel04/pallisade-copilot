@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 
-// POST /api/pipeline/[stackId]/contract/apply — apply pipeline defaults to all tools
+// POST /api/pipeline/[stackId]/sla/apply — apply pipeline SLA defaults to all tools
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ stackId: string }> }

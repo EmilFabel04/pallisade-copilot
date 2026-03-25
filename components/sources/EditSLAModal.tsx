@@ -3,18 +3,18 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Save, Loader2, ArrowDown } from 'lucide-react';
-import { ControlPlaneSource, SourceContractData, SlaTier } from './types';
+import { ControlPlaneSource, SourceSLAData, SlaTier } from './types';
 import {
-  EffectiveContract,
-  PipelineContractData,
-  SourceContractWithOverrides,
+  EffectiveSLA,
+  PipelineSLAData,
+  NodeSLAWithOverrides,
   InheritanceState,
   INHERITANCE_CONFIG,
   getOverrideKey,
   OVERRIDE_LABELS,
   validateOverrides,
 } from '@/components/contracts/types';
-import { resolveEffectiveContract } from '@/lib/contracts/resolver';
+import { resolveEffectiveSLA } from '@/lib/contracts/resolver';
 import WarehouseOverrides from '@/components/contracts/overrides/WarehouseOverrides';
 import TransformationOverrides from '@/components/contracts/overrides/TransformationOverrides';
 import OrchestrationOverrides from '@/components/contracts/overrides/OrchestrationOverrides';
@@ -28,7 +28,7 @@ const SLA_OPTIONS: { value: SlaTier; label: string }[] = [
 
 interface Props {
   source: ControlPlaneSource;
-  pipelineContract?: PipelineContractData | null;
+  pipelineContract?: PipelineSLAData | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -68,8 +68,8 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // Build effective contract preview
-  const sourceForResolver: SourceContractWithOverrides = {
+  // Build effective SLA preview
+  const sourceForResolver: NodeSLAWithOverrides = {
     ownerUser: ownerUser || null,
     ownerTeam: ownerTeam || null,
     contactChannel: contactChannel || null,
@@ -81,7 +81,7 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
     pipelineStackId: source.stackId,
     overridesJson: Object.keys(overrides).length > 0 ? overrides : null,
   };
-  const effective = resolveEffectiveContract(pipelineContract || null, sourceForResolver, source.integrationType);
+  const effective = resolveEffectiveSLA(pipelineContract || null, sourceForResolver, source.integrationType);
 
   const handleSave = async () => {
     setSaving(true);
@@ -106,7 +106,7 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
         overridesJson: Object.keys(cleanOverrides).length > 0 ? cleanOverrides : null,
       };
 
-      const res = await fetch(`/api/integrations/${source.id}/contract`, {
+      const res = await fetch(`/api/integrations/${source.id}/sla`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -126,7 +126,7 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
   const inputClass =
     'w-full px-4 py-3 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)] text-[var(--text)] text-sm placeholder:text-[var(--text-faint)] focus:outline-none focus:border-[var(--border-medium)] transition-colors';
 
-  const pipelinePlaceholder = (field: keyof PipelineContractData) => {
+  const pipelinePlaceholder = (field: keyof PipelineSLAData) => {
     if (!inheritFromPipeline || !pipelineContract) return undefined;
     const val = pipelineContract[field];
     return val ? `Pipeline default: ${val}` : undefined;

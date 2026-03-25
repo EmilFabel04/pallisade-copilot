@@ -3,7 +3,7 @@ import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { validateOverrides } from '@/components/contracts/types';
 
-// GET /api/integrations/[id]/contract — fetch source contract
+// GET /api/integrations/[id]/sla — fetch source SLA
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -26,7 +26,7 @@ export async function GET(
   }
 }
 
-// PATCH /api/integrations/[id]/contract — create or update source contract
+// PATCH /api/integrations/[id]/sla — create or update source SLA
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

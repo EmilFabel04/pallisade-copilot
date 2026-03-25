@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { usePipeline } from '@/contexts/PipelineContext';
-import type { SlaTier, PipelineContractData } from '@/components/contracts/types';
+import type { SlaTier, PipelineSLAData } from '@/components/contracts/types';
 
 interface PipelineDetails {
   id: string;
@@ -66,14 +66,14 @@ export default function PipelineSettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   
-  // Pipeline contract state
-  const [contractForm, setContractForm] = useState<PipelineContractData>({
+  // Pipeline SLA state
+  const [slaForm, setSlaForm] = useState<PipelineSLAData>({
     ownerUser: null, ownerTeam: null, contactChannel: null,
     slaTier: null, expectedFreshnessMinutes: null,
     expectedExtractionFrequencyMinutes: null, alertPolicyJson: null, notes: null,
   });
-  const [contractSaving, setContractSaving] = useState(false);
-  const [contractDirty, setContractDirty] = useState(false);
+  const [slaSaving, setSlaSaving] = useState(false);
+  const [slaDirty, setSlaDirty] = useState(false);
   const [applyingDefaults, setApplyingDefaults] = useState(false);
   const [coverage, setCoverage] = useState<{ totalIntegrations: number; inherited: number; overridden: number; noContract: number } | null>(null);
 
@@ -274,11 +274,11 @@ export default function PipelineSettingsPage() {
   const fetchContract = useCallback(async () => {
     if (!selectedPipelineId) return;
     try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/contract`);
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/sla`);
       if (res.ok) {
         const data = await res.json();
         if (data.contract) {
-          setContractForm({
+          setSlaForm({
             ownerUser: data.contract.ownerUser || null,
             ownerTeam: data.contract.ownerTeam || null,
             contactChannel: data.contract.contactChannel || null,
@@ -298,31 +298,31 @@ export default function PipelineSettingsPage() {
 
   useEffect(() => { fetchContract(); }, [fetchContract]);
 
-  const updateContract = (key: keyof PipelineContractData, value: any) => {
-    setContractForm(f => ({ ...f, [key]: value || null }));
-    setContractDirty(true);
+  const updateSLA = (key: keyof PipelineSLAData, value: any) => {
+    setSlaForm(f => ({ ...f, [key]: value || null }));
+    setSlaDirty(true);
   };
 
   const handleSaveContract = async () => {
     if (!selectedPipelineId) return;
-    setContractSaving(true);
+    setSlaSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/contract`, {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/sla`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(contractForm),
+        body: JSON.stringify(slaForm),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to save contract');
       }
-      setContractDirty(false);
+      setSlaDirty(false);
       await fetchContract();
     } catch (err: any) {
       setError(err.message);
     } finally {
-      setContractSaving(false);
+      setSlaSaving(false);
     }
   };
 
@@ -331,7 +331,7 @@ export default function PipelineSettingsPage() {
     setApplyingDefaults(true);
     setError(null);
     try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/contract/apply`, {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/sla/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -474,8 +474,8 @@ export default function PipelineSettingsPage() {
               <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Owner (User)</label>
               <input
                 type="text"
-                value={contractForm.ownerUser || ''}
-                onChange={(e) => updateContract('ownerUser', e.target.value)}
+                value={slaForm.ownerUser || ''}
+                onChange={(e) => updateSLA('ownerUser', e.target.value)}
                 className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
                 placeholder="e.g. jane.doe"
               />
@@ -484,8 +484,8 @@ export default function PipelineSettingsPage() {
               <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Owner (Team)</label>
               <input
                 type="text"
-                value={contractForm.ownerTeam || ''}
-                onChange={(e) => updateContract('ownerTeam', e.target.value)}
+                value={slaForm.ownerTeam || ''}
+                onChange={(e) => updateSLA('ownerTeam', e.target.value)}
                 className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
                 placeholder="e.g. Data Platform"
               />
@@ -497,8 +497,8 @@ export default function PipelineSettingsPage() {
               <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Contact Channel</label>
               <input
                 type="text"
-                value={contractForm.contactChannel || ''}
-                onChange={(e) => updateContract('contactChannel', e.target.value)}
+                value={slaForm.contactChannel || ''}
+                onChange={(e) => updateSLA('contactChannel', e.target.value)}
                 className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
                 placeholder="e.g. #data-alerts"
               />
@@ -506,8 +506,8 @@ export default function PipelineSettingsPage() {
             <div>
               <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">SLA Tier</label>
               <select
-                value={contractForm.slaTier || ''}
-                onChange={(e) => updateContract('slaTier', e.target.value)}
+                value={slaForm.slaTier || ''}
+                onChange={(e) => updateSLA('slaTier', e.target.value)}
                 className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:outline-none focus:border-[var(--accent)]/50"
               >
                 <option value="">None</option>
@@ -525,8 +525,8 @@ export default function PipelineSettingsPage() {
               <input
                 type="number"
                 min={0}
-                value={contractForm.expectedFreshnessMinutes ?? ''}
-                onChange={(e) => updateContract('expectedFreshnessMinutes', e.target.value ? Number(e.target.value) : null)}
+                value={slaForm.expectedFreshnessMinutes ?? ''}
+                onChange={(e) => updateSLA('expectedFreshnessMinutes', e.target.value ? Number(e.target.value) : null)}
                 className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
                 placeholder="e.g. 60"
               />
@@ -536,8 +536,8 @@ export default function PipelineSettingsPage() {
               <input
                 type="number"
                 min={0}
-                value={contractForm.expectedExtractionFrequencyMinutes ?? ''}
-                onChange={(e) => updateContract('expectedExtractionFrequencyMinutes', e.target.value ? Number(e.target.value) : null)}
+                value={slaForm.expectedExtractionFrequencyMinutes ?? ''}
+                onChange={(e) => updateSLA('expectedExtractionFrequencyMinutes', e.target.value ? Number(e.target.value) : null)}
                 className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
                 placeholder="e.g. 360"
               />
@@ -547,8 +547,8 @@ export default function PipelineSettingsPage() {
           <div>
             <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Notes</label>
             <textarea
-              value={contractForm.notes || ''}
-              onChange={(e) => updateContract('notes', e.target.value)}
+              value={slaForm.notes || ''}
+              onChange={(e) => updateSLA('notes', e.target.value)}
               rows={2}
               className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50 resize-none"
               placeholder="Additional notes..."
@@ -558,10 +558,10 @@ export default function PipelineSettingsPage() {
           <div className="flex items-center gap-3 pt-4 border-t border-[var(--subtle-border)]">
             <button
               onClick={handleSaveContract}
-              disabled={contractSaving || !contractDirty}
+              disabled={slaSaving || !slaDirty}
               className="px-6 py-2.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
             >
-              {contractSaving ? 'Saving...' : 'Save Contract'}
+              {slaSaving ? 'Saving...' : 'Save Contract'}
             </button>
             <button
               onClick={handleApplyDefaults}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 
-// GET /api/pipeline/[stackId]/contract — fetch pipeline contract + coverage stats
+// GET /api/pipeline/[stackId]/sla — fetch pipeline SLA + coverage stats
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ stackId: string }> }
@@ -43,7 +43,7 @@ export async function GET(
   }
 }
 
-// PATCH /api/pipeline/[stackId]/contract — create or update pipeline contract
+// PATCH /api/pipeline/[stackId]/sla — create or update pipeline SLA
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ stackId: string }> }
