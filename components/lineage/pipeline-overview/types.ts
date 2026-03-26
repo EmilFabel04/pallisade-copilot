@@ -96,9 +96,16 @@ export interface OpsSummary {
 
 // ── Inspector panel state ────────────────────────────────────────────────
 
+export interface MultiNodeTarget {
+  type: 'multi';
+  nodeIds: string[];
+  nodes: ViewNode[];
+}
+
 export type InspectorTarget =
   | { kind: 'node'; node: ViewNode }
   | { kind: 'edge'; edge: ViewEdge }
+  | { kind: 'multi'; nodeIds: string[]; nodes: ViewNode[] }
   | null;
 
 export type InspectorTab = string;  // Dynamic: 'overview' + domain-specific tab keys

@@ -202,6 +202,9 @@ function LineagePageInner() {
     setMultiMonitorModalOpen(true);
   }, []);
 
+  // Normal-mode multi-select (Shift+Click outside of SLA editor mode)
+  const [multiSelectedNodeIds, setMultiSelectedNodeIds] = useState<Set<string>>(new Set());
+
   // Policy mode state (isolated from normal lineage state)
   const [slaMode, setSlaMode] = useState(false);
   const [slaSelectedNodeIds, setSlaSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -1334,6 +1337,30 @@ function LineagePageInner() {
         return;
       }
 
+      // Normal mode: Shift+Click for multi-select (only on control-plane tab where
+      // ViewNodes and the InspectorPanel are available)
+      if (event.shiftKey && activeTab === 'control-plane') {
+        const viewNode = laneOverview?.nodes.find(n => n.id === node.id)
+          || renderedOverview?.nodes.find(n => n.id === node.id);
+        if (viewNode) {
+          setMultiSelectedNodeIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(node.id)) {
+              next.delete(node.id);
+            } else {
+              next.add(node.id);
+            }
+            return next;
+          });
+          setSelectedNode(null);
+          setSelectedEdge(null);
+          return;
+        }
+      }
+
+      // Plain click: clear multi-select and proceed with single-node inspection
+      setMultiSelectedNodeIds(new Set());
+
       if (activeTab === 'control-plane') {
         // Use InspectorPanel for control-plane nodes
         const viewNode = laneOverview?.nodes.find(n => n.id === node.id)
@@ -1416,6 +1443,16 @@ function LineagePageInner() {
       </div>
     );
   }
+
+  // Compute the effective inspector target: multi-select takes priority when ≥2 nodes selected
+  const allViewNodes = [...(laneOverview?.nodes || []), ...(renderedOverview?.nodes || [])];
+  const multiNodes = Array.from(multiSelectedNodeIds)
+    .map(id => allViewNodes.find(n => n.id === id))
+    .filter((n): n is ViewNode => n !== undefined);
+  const effectiveInspectorTarget: InspectorTarget =
+    multiNodes.length >= 2
+      ? { kind: 'multi', nodeIds: Array.from(multiSelectedNodeIds), nodes: multiNodes }
+      : pipelineInspectorTarget;
 
   return (
     <div className="h-[calc(100vh-56px)] flex flex-col -m-6">
@@ -1809,13 +1846,16 @@ function LineagePageInner() {
         )}
 
         {/* Side panel - Pipeline Overview inspector */}
-        {activeTab === 'control-plane' && pipelineInspectorTarget && (
+        {activeTab === 'control-plane' && effectiveInspectorTarget && (
           <InspectorPanel
-            target={pipelineInspectorTarget}
+            target={effectiveInspectorTarget}
             laneOverview={laneOverview}
             stackId={stackId}
             allMonitors={lineageData?.allMonitors}
-            onClose={() => setPipelineInspectorTarget(null)}
+            onClose={() => {
+              setPipelineInspectorTarget(null);
+              setMultiSelectedNodeIds(new Set());
+            }}
             onCreateSingleMonitor={handleCreateSingleMonitor}
             onCreateMultiMonitor={(nodeIds: string[]) => handleCreateMultiMonitor(nodeIds)}
           />

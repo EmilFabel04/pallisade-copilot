@@ -645,7 +645,7 @@ export function InspectorPanel({
       {/* Close button */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-[15px] font-medium text-[var(--text)]">
-          {target.kind === 'node' ? 'Tool Details' : 'Flow Details'}
+          {target.kind === 'node' ? 'Tool Details' : target.kind === 'multi' ? `${target.nodes.length} Selected` : 'Flow Details'}
         </h3>
         <button
           onClick={onClose}
@@ -660,6 +660,35 @@ export function InspectorPanel({
       {/* Content */}
       {target.kind === 'node' ? (
         <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} onCreateSingleMonitor={onCreateSingleMonitor} onCreateMultiMonitor={onCreateMultiMonitor} />
+      ) : target.kind === 'multi' ? (
+        <div className="space-y-4">
+          <p className="text-[12px] text-[var(--muted)]">
+            {target.nodes.length} nodes selected
+          </p>
+          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+            <SLASection
+              fields={[]}
+              overallCompliance="none"
+              hasContract={false}
+              isMultiSelect={true}
+              selectedCount={target.nodes.length}
+            />
+          </div>
+          <button
+            className="w-full py-2 px-4 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
+            onClick={() => onCreateMultiMonitor?.(target.nodeIds)}
+          >
+            Apply SLA to All Selected
+          </button>
+          <div className="space-y-1">
+            {target.nodes.map(n => (
+              <div key={n.id} className="px-2 py-1.5 rounded bg-[var(--overlay-bg)] flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] shrink-0" />
+                <span className="text-[12px] text-[var(--text)] truncate">{n.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : (
         <EdgeInspector edge={target.edge} laneOverview={laneOverview} />
       )}
