@@ -25,7 +25,7 @@ interface Props {
   onClick: (source: ControlPlaneSource) => void;
   onTestConnection: (source: ControlPlaneSource) => void;
   onDisconnect: (source: ControlPlaneSource) => void;
-  onEditSLA: (source: ControlPlaneSource) => void;
+  onEditSLA?: (source: ControlPlaneSource) => void;
 }
 
 export default function SourceCard({ source, onClick, onTestConnection, onDisconnect, onEditSLA }: Props) {
@@ -126,7 +126,6 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
           onTestConnection={onTestConnection}
           onViewDetails={onClick}
           onDisconnect={onDisconnect}
-          onEditSLA={onEditSLA}
         />
       </div>
     </div>

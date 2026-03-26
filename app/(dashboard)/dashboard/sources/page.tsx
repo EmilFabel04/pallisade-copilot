@@ -22,7 +22,7 @@ import {
 import SourceSummaryBar from '@/components/sources/SourceSummaryBar';
 import SourceCard from '@/components/sources/SourceCard';
 import SourceDetailDrawer from '@/components/sources/SourceDetailDrawer';
-import EditSLAModal from '@/components/sources/EditSLAModal';
+// SLA editing removed — SLAs are defined in lineage, viewed read-only here
 
 const ALL_LAYERS: PipelineLayer[] = ['INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
 const ALL_STATUSES: SourceStatus[] = ['healthy', 'degraded', 'disconnected', 'expiring_soon', 'pending'];
@@ -41,7 +41,6 @@ export default function SourcesPage() {
   const [activeTab, setActiveTab] = useState<'sources' | 'data-contracts'>('sources');
   const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
   const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
-  const [slaSource, setSlaSource] = useState<ControlPlaneSource | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [showLayerFilter, setShowLayerFilter] = useState(false);
   const [showExtractionFilter, setShowExtractionFilter] = useState(false);
@@ -111,14 +110,6 @@ export default function SourcesPage() {
     } catch {}
   }, [refresh, selectedSource]);
 
-  const handleEditSLA = useCallback((source: ControlPlaneSource) => {
-    setSlaSource(source);
-  }, []);
-
-  const handleSLASaved = useCallback(() => {
-    setSlaSource(null);
-    refresh(true);
-  }, [refresh]);
 
   const activeFilterCount =
     filters.layers.size + filters.statuses.size + filters.extractionStatuses.size + filters.slaTiers.size +
@@ -383,7 +374,6 @@ export default function SourcesPage() {
               onClick={setSelectedSource}
               onTestConnection={handleTestConnection}
               onDisconnect={handleDisconnect}
-              onEditSLA={handleEditSLA}
             />
             {testingId === source.id && (
               <div className="absolute inset-0 rounded-lg bg-[var(--surface)]/60 flex items-center justify-center">
@@ -407,19 +397,9 @@ export default function SourcesPage() {
         <SourceDetailDrawer
           source={selectedSource}
           onClose={() => setSelectedSource(null)}
-          onEditSLA={handleEditSLA}
         />
       )}
 
-      {/* Edit SLA modal */}
-      {slaSource && (
-        <EditSLAModal
-          source={slaSource}
-          pipelineContract={pipelineSLA}
-          onClose={() => setSlaSource(null)}
-          onSaved={handleSLASaved}
-        />
-      )}
       </>
       )}
     </div>

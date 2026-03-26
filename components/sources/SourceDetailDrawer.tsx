@@ -59,7 +59,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 interface Props {
   source: ControlPlaneSource;
   onClose: () => void;
-  onEditSLA: (source: ControlPlaneSource) => void;
+  onEditSLA?: (source: ControlPlaneSource) => void;
 }
 
 export default function SourceDetailDrawer({ source, onClose, onEditSLA }: Props) {
@@ -311,13 +311,7 @@ export default function SourceDetailDrawer({ source, onClose, onEditSLA }: Props
                   </Row>
                   {!source.contract?.expectedFreshnessMinutes && !source.contract?.expectedExtractionFrequencyMinutes && (
                     <div className="text-xs text-[var(--text-faint)]">
-                      No expectations configured.{' '}
-                      <button
-                        onClick={() => onEditSLA(source)}
-                        className="text-[var(--accent-2)] hover:underline"
-                      >
-                        Set expectations
-                      </button>
+                      No expectations configured. Define SLAs in lineage view.
                     </div>
                   )}
                 </div>
@@ -369,15 +363,8 @@ export default function SourceDetailDrawer({ source, onClose, onEditSLA }: Props
                 </Section>
               )}
 
-              <div className="pt-3">
-                <button
-                  onClick={() => onEditSLA(source)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--subtle-border)]
-                             hover:bg-[var(--hover-bg)] text-sm text-[var(--text-secondary)] transition-colors"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  Edit SLA
-                </button>
+              <div className="pt-3 text-xs text-[var(--text-faint)]">
+                SLAs are defined in the lineage view.
               </div>
             </>
           )}
