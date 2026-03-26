@@ -219,8 +219,8 @@ export function categoryToSLADomain(category: string): SLADomain | null {
  * Criticality → default built-in profile mapping.
  */
 export const CRITICALITY_PROFILE_MAP: Record<string, string> = {
-  critical: 'Critical SLA',
-  high: 'Critical SLA',
-  medium: 'Standard',
-  low: 'Relaxed',
+  critical: 'T0 — Critical',
+  high: 'T1 — High',
+  medium: 'T2 — Standard',
+  low: 'T3 — Low',
 };
