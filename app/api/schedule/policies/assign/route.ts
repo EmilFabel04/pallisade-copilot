@@ -174,10 +174,74 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Unknown assignmentType: ${assignmentType}` }, { status: 400 });
     }
 
+    // ── Auto-sync: create/update data contracts when contracts are disabled ──
+    // When dataContractsEnabled=false, SLA changes auto-update contracts
+    try {
+      if (assignmentType === 'direct' && nodeFqns && nodeFqns.length > 0) {
+        // Find the pipeline stack for these nodes
+        const node = await prisma.pipelineNode.findFirst({
+          where: { name: { in: nodeFqns } },
+          select: { stackId: true, layer: true },
+        });
+        if (node?.stackId) {
+          const pipeline = await prisma.pipelineStack.findUnique({
+            where: { id: node.stackId },
+            select: { dataContractsEnabled: true },
+          });
+          // Only auto-sync when contracts are NOT enabled (SLA is source of truth)
+          if (pipeline && !pipeline.dataContractsEnabled) {
+            // Map SLA profile fields → data contract fields
+            const contractData: Record<string, unknown> = {};
+            if (profile.freshnessConfig) {
+              const fc = profile.freshnessConfig as Record<string, unknown>;
+              if (fc.maxHours != null) contractData.expectedFreshnessMinutes = Math.round(Number(fc.maxHours) * 60);
+            }
+            if (profile.criticality) {
+              const tierMap: Record<string, string> = { critical: 'T0', high: 'T1', medium: 'T2', low: 'T3' };
+              contractData.slaTier = tierMap[profile.criticality as string] || null;
+            }
+
+            // Determine scope from node domain (warehouse→schema, transform→dbt_model_group, bi→dashboard)
+            const domainToScope: Record<string, string> = {
+              WAREHOUSE: 'schema',
+              TRANSFORMATION: 'dbt_model_group',
+              REPORTING: 'dashboard',
+            };
+            const scope = domainToScope[node.layer || ''] || 'schema';
+            const scopeRef = `auto:${node.layer?.toLowerCase() || 'unknown'}`;
+
+            await prisma.pipelineDataContract.upsert({
+              where: {
+                pipelineStackId_scope_scopeRef: {
+                  pipelineStackId: node.stackId,
+                  scope,
+                  scopeRef,
+                },
+              },
+              create: {
+                pipelineStackId: node.stackId,
+                scope,
+                scopeRef,
+                autoSynced: true,
+                ...contractData,
+              },
+              update: {
+                autoSynced: true,
+                ...contractData,
+              },
+            });
+          }
+        }
+      }
+    } catch (syncErr) {
+      // Non-critical — log but don't fail the assignment
+      console.warn('[SLA] Auto-sync to data contract failed:', syncErr);
+    }
+
     return NextResponse.json({
       created: created.length,
       assignments: created,
-      message: `Policy assigned to ${created.length} target(s)`,
+      message: `SLA assigned to ${created.length} target(s)`,
     });
   } catch (error: any) {
     console.error('[Policies] Error assigning policy:', error?.message, error?.code, error?.meta);
