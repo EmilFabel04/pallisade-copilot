@@ -3,6 +3,8 @@
 import { useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { Search, Filter, SortAsc, SortDesc, Plus, Database, X } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { DataContractsTab } from '@/components/sources/DataContractsTab';
 import { PipelineLayer, LAYER_COLORS, LAYER_LABELS } from '@/components/pipeline/types';
 import { useSourcesData, filterAndSort } from '@/components/sources/useSourcesData';
 import {
@@ -35,7 +37,8 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 ];
 
 export default function SourcesPage() {
-  const { sources, summary, pipelineContract, loading, error, refresh } = useSourcesData();
+  const { sources, summary, pipelineSLA, loading, error, refresh } = useSourcesData();
+  const [activeTab, setActiveTab] = useState<'sources' | 'data-contracts'>('sources');
   const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
   const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
   const [slaSource, setSlaSource] = useState<ControlPlaneSource | null>(null);
@@ -187,6 +190,30 @@ export default function SourcesPage() {
 
       <SourceSummaryBar summary={summary} />
 
+      {/* Tab navigation */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setActiveTab('sources')}
+          className={cn('px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
+            activeTab === 'sources' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-[var(--foreground)]'
+          )}
+        >
+          Sources
+        </button>
+        <button
+          onClick={() => setActiveTab('data-contracts')}
+          className={cn('px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
+            activeTab === 'data-contracts' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-[var(--foreground)]'
+          )}
+        >
+          Data Contracts
+        </button>
+      </div>
+
+      {activeTab === 'data-contracts' ? (
+        <DataContractsTab dataContractsEnabled={false} />
+      ) : (
+      <>
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Search */}
@@ -388,10 +415,12 @@ export default function SourcesPage() {
       {slaSource && (
         <EditSLAModal
           source={slaSource}
-          pipelineContract={pipelineContract}
+          pipelineContract={pipelineSLA}
           onClose={() => setSlaSource(null)}
           onSaved={handleSLASaved}
         />
+      )}
+      </>
       )}
     </div>
   );
