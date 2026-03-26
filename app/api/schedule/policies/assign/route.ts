@@ -178,14 +178,17 @@ export async function POST(request: NextRequest) {
 
     // ── Auto-sync: create/update data contracts when contracts are disabled ──
     // When dataContractsEnabled=false, SLA changes auto-update contracts
+    console.log('[SLA-Sync] stackId:', stackId, 'assignmentType:', assignmentType, 'nodeFqns:', nodeFqns?.length, 'profile:', profile.name);
     try {
       if (stackId && assignmentType === 'direct' && nodeFqns && nodeFqns.length > 0) {
         const pipeline = await prisma.pipelineStack.findUnique({
           where: { id: stackId },
           select: { dataContractsEnabled: true },
         });
-        // Only auto-sync when contracts are NOT enabled (SLA is source of truth)
-        if (pipeline && !pipeline.dataContractsEnabled) {
+        console.log('[SLA-Sync] pipeline found:', !!pipeline, 'dataContractsEnabled:', pipeline?.dataContractsEnabled);
+        // Always sync: create contracts if they don't exist, update only when contracts are disabled
+        if (pipeline) {
+          const contractsEnabled = pipeline.dataContractsEnabled;
           // Map SLA profile fields → data contract fields
           const contractData: Record<string, unknown> = {};
           if (profile.freshnessConfig) {
@@ -208,26 +211,49 @@ export async function POST(request: NextRequest) {
           const scopeRef = fqnParts.length >= 2 ? `${fqnParts[0]}.${fqnParts[1]}` : fqnParts[0] || 'default';
           const scope = 'schema'; // Most lineage nodes are warehouse/data assets
 
-          await prisma.pipelineDataContract.upsert({
-            where: {
-              pipelineStackId_scope_scopeRef: {
+          // When contracts enabled: only create if doesn't exist (don't overwrite user edits)
+          // When contracts disabled: always upsert (SLA is source of truth)
+          if (contractsEnabled) {
+            const existing = await prisma.pipelineDataContract.findUnique({
+              where: { pipelineStackId_scope_scopeRef: { pipelineStackId: stackId, scope, scopeRef } },
+            });
+            if (!existing) {
+              await prisma.pipelineDataContract.create({
+                data: {
+                  pipelineStackId: stackId,
+                  scope,
+                  scopeRef,
+                  autoSynced: false, // User-owned when contracts are enabled
+                  ...contractData,
+                },
+              });
+              console.log('[SLA-Sync] Created new data contract (contracts enabled):', scopeRef);
+            } else {
+              console.log('[SLA-Sync] Skipped update — contract exists and contracts are enabled:', scopeRef);
+            }
+          } else {
+            await prisma.pipelineDataContract.upsert({
+              where: {
+                pipelineStackId_scope_scopeRef: {
+                  pipelineStackId: stackId,
+                  scope,
+                  scopeRef,
+                },
+              },
+              create: {
                 pipelineStackId: stackId,
                 scope,
                 scopeRef,
+                autoSynced: true,
+                ...contractData,
               },
-            },
-            create: {
-              pipelineStackId: stackId,
-              scope,
-              scopeRef,
-              autoSynced: true,
-              ...contractData,
-            },
-            update: {
-              autoSynced: true,
-              ...contractData,
-            },
-          });
+              update: {
+                autoSynced: true,
+                ...contractData,
+              },
+            });
+            console.log('[SLA-Sync] Upserted data contract (contracts disabled):', scopeRef);
+          }
 
           // Also update the SourceContract (per-integration SLA) if an integration exists
           // This keeps the sources page SLA in sync
