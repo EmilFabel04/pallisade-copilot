@@ -16,6 +16,7 @@ import {
 } from './types';
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
+import { SLASection } from './SLASection';
 import type { AssetPrefill } from '@/types/monitor-catalog';
 import { computeMonitorScoring, resolveAssetCategory, type MonitorScoringResult } from '@/lib/monitor-scoring';
 
@@ -263,6 +264,15 @@ function NodeInspector({
           </div>
         </div>
       )}
+
+      {/* SLA Section */}
+      <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+        <SLASection
+          fields={[]}
+          overallCompliance="none"
+          hasContract={false}
+        />
+      </div>
 
       {/* Detail content */}
       {loading && <LoadingState />}
