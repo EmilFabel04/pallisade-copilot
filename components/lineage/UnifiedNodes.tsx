@@ -30,6 +30,7 @@ import { LAYER_COLORS, type PipelineLayer } from '@/components/pipeline/types';
 import { CATEGORY_VISUALS, CATEGORY_LAYER_MAP, type UnifiedNodeCategory, type MonitorStatusSummary } from './types';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import { SLABadge } from './SLABadge';
+import { ComplianceBadge, type ComplianceBadgeStatus } from './ComplianceBadge';
 
 // Map platform names to layer colors for multi-platform badges / split indicators
 const PLATFORM_COLORS: Record<string, string> = {
@@ -120,6 +121,8 @@ interface DataAssetNodeData {
   isSLASelected?: boolean;
   slaStatus?: 'assigned' | 'inherited' | 'override' | 'none';
   slaProfileName?: string | null;
+  // Compliance status against contract/tier baseline
+  complianceStatus?: ComplianceBadgeStatus;
 }
 
 // Get layer icon component
@@ -604,7 +607,12 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
             )}
           </div>
           {/* Policy badge (inline, right side) */}
-          <SLABadge status={slaStatus} profileName={data.slaProfileName} />
+          <div className="flex items-center gap-1">
+            <SLABadge status={slaStatus} profileName={data.slaProfileName} />
+            {data.complianceStatus && (
+              <ComplianceBadge status={data.complianceStatus} />
+            )}
+          </div>
         </div>
 
         {/* Status indicators row */}
