@@ -46,5 +46,5 @@ export function getTierBaseline(tier: SlaTier): TierBaseline {
 export function getTierBaselineValue(tier: SlaTier, field: string): unknown {
   const baseline = TIER_BASELINES[tier];
   if (!baseline) return undefined;
-  return (baseline as Record<string, unknown>)[field];
+  return (baseline as unknown as Record<string, unknown>)[field];
 }

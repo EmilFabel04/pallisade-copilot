@@ -48,7 +48,7 @@ export function evaluateNodeCompliance(
     });
   }
 
-  let overallStatus: NodeComplianceResult['overallStatus'] = 'compliant';
+  let overallStatus: string = 'compliant';
   for (const f of fields) {
     if (f.status === 'violation') { overallStatus = 'violation'; break; }
     if (f.status === 'override' && overallStatus !== 'violation') overallStatus = 'override';
@@ -57,5 +57,5 @@ export function evaluateNodeCompliance(
 
   if (fields.length === 0) overallStatus = 'unknown';
 
-  return { overallStatus, fields };
+  return { overallStatus: overallStatus as NodeComplianceResult['overallStatus'], fields };
 }
