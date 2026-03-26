@@ -1876,7 +1876,7 @@ function LineagePageInner() {
                 const res = await fetch('/api/schedule/policies/assign', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(request),
+                  body: JSON.stringify({ ...request, stackId }),
                 });
                 if (res.ok) {
                   const data = await res.json();

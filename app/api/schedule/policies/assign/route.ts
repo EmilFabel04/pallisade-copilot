@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
       nodeDomain,
       nodeCriticality,
       overrides,
+      stackId,
     } = body as {
       profileId: string;
       assignmentType: SLAAssignmentType;
@@ -33,6 +34,7 @@ export async function POST(request: NextRequest) {
       nodeDomain?: string;
       nodeCriticality?: string;
       overrides?: Record<string, any>;
+      stackId?: string;
     };
 
     // Validate profile exists — try by ID first, then by name (for backward compat)
@@ -177,57 +179,79 @@ export async function POST(request: NextRequest) {
     // ── Auto-sync: create/update data contracts when contracts are disabled ──
     // When dataContractsEnabled=false, SLA changes auto-update contracts
     try {
-      if (assignmentType === 'direct' && nodeFqns && nodeFqns.length > 0) {
-        // Find the pipeline stack for these nodes
-        const node = await prisma.pipelineNode.findFirst({
-          where: { name: { in: nodeFqns } },
-          select: { stackId: true, layer: true },
+      if (stackId && assignmentType === 'direct' && nodeFqns && nodeFqns.length > 0) {
+        const pipeline = await prisma.pipelineStack.findUnique({
+          where: { id: stackId },
+          select: { dataContractsEnabled: true },
         });
-        if (node?.stackId) {
-          const pipeline = await prisma.pipelineStack.findUnique({
-            where: { id: node.stackId },
-            select: { dataContractsEnabled: true },
-          });
-          // Only auto-sync when contracts are NOT enabled (SLA is source of truth)
-          if (pipeline && !pipeline.dataContractsEnabled) {
-            // Map SLA profile fields → data contract fields
-            const contractData: Record<string, unknown> = {};
-            if (profile.freshnessConfig) {
-              const fc = profile.freshnessConfig as Record<string, unknown>;
-              if (fc.maxHours != null) contractData.expectedFreshnessMinutes = Math.round(Number(fc.maxHours) * 60);
-            }
-            if (profile.criticality) {
-              const tierMap: Record<string, string> = { critical: 'T0', high: 'T1', medium: 'T2', low: 'T3' };
-              contractData.slaTier = tierMap[profile.criticality as string] || null;
-            }
+        // Only auto-sync when contracts are NOT enabled (SLA is source of truth)
+        if (pipeline && !pipeline.dataContractsEnabled) {
+          // Map SLA profile fields → data contract fields
+          const contractData: Record<string, unknown> = {};
+          if (profile.freshnessConfig) {
+            const fc = profile.freshnessConfig as Record<string, unknown>;
+            if (fc.maxHours != null) contractData.expectedFreshnessMinutes = Math.round(Number(fc.maxHours) * 60);
+          }
+          if (profile.ingestionConfig) {
+            const ic = profile.ingestionConfig as Record<string, unknown>;
+            if (ic.syncLagToleranceMinutes != null) contractData.expectedExtractionFrequencyMinutes = Number(ic.syncLagToleranceMinutes);
+          }
+          if (profile.criticality) {
+            const tierMap: Record<string, string> = { critical: 'T0', high: 'T1', medium: 'T2', low: 'T3' };
+            contractData.slaTier = tierMap[profile.criticality as string] || null;
+          }
 
-            // Determine scope from node domain (warehouse→schema, transform→dbt_model_group, bi→dashboard)
-            const domainToScope: Record<string, string> = {
-              WAREHOUSE: 'schema',
-              TRANSFORMATION: 'dbt_model_group',
-              REPORTING: 'dashboard',
-            };
-            const scope = domainToScope[node.layer || ''] || 'schema';
-            const scopeRef = `auto:${node.layer?.toLowerCase() || 'unknown'}`;
+          // Create one contract per unique domain scope from the assigned FQNs
+          // Parse domain from first FQN segment (e.g., "bigquery.public.customers" → warehouse)
+          // For now, create a single auto-synced contract per assignment
+          const fqnParts = nodeFqns[0]?.split('.') || [];
+          const scopeRef = fqnParts.length >= 2 ? `${fqnParts[0]}.${fqnParts[1]}` : fqnParts[0] || 'default';
+          const scope = 'schema'; // Most lineage nodes are warehouse/data assets
 
-            await prisma.pipelineDataContract.upsert({
-              where: {
-                pipelineStackId_scope_scopeRef: {
-                  pipelineStackId: node.stackId,
-                  scope,
-                  scopeRef,
-                },
-              },
-              create: {
-                pipelineStackId: node.stackId,
+          await prisma.pipelineDataContract.upsert({
+            where: {
+              pipelineStackId_scope_scopeRef: {
+                pipelineStackId: stackId,
                 scope,
                 scopeRef,
-                autoSynced: true,
-                ...contractData,
+              },
+            },
+            create: {
+              pipelineStackId: stackId,
+              scope,
+              scopeRef,
+              autoSynced: true,
+              ...contractData,
+            },
+            update: {
+              autoSynced: true,
+              ...contractData,
+            },
+          });
+
+          // Also update the SourceContract (per-integration SLA) if an integration exists
+          // This keeps the sources page SLA in sync
+          const integrations = await prisma.integration.findMany({
+            where: {
+              pipelineNodes: { some: { stackId } },
+            },
+            select: { id: true },
+          });
+          for (const integration of integrations) {
+            await prisma.sourceContract.upsert({
+              where: { integrationId: integration.id },
+              create: {
+                integrationId: integration.id,
+                pipelineStackId: stackId,
+                inheritFromPipeline: true,
+                slaTier: contractData.slaTier as string || undefined,
+                expectedFreshnessMinutes: contractData.expectedFreshnessMinutes as number || undefined,
+                expectedExtractionFrequencyMinutes: contractData.expectedExtractionFrequencyMinutes as number || undefined,
               },
               update: {
-                autoSynced: true,
-                ...contractData,
+                slaTier: contractData.slaTier as string || undefined,
+                expectedFreshnessMinutes: contractData.expectedFreshnessMinutes as number || undefined,
+                expectedExtractionFrequencyMinutes: contractData.expectedExtractionFrequencyMinutes as number || undefined,
               },
             });
           }
