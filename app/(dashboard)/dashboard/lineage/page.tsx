@@ -1490,7 +1490,7 @@ function LineagePageInner() {
                 Last extracted: {formatDate(lineageData.lastExtracted)}
               </span>
             )}
-            {/* Define Policy button */}
+            {/* Define SLA button */}
             {lineageData && lineageData.nodes.length > 0 && !slaMode && (
               <button
                 onClick={() => {
@@ -1504,7 +1504,7 @@ function LineagePageInner() {
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
-                Define Policy
+                Define SLA
               </button>
             )}
             <button
@@ -1881,7 +1881,7 @@ function LineagePageInner() {
                 if (res.ok) {
                   const data = await res.json();
                   const count = data.assignments?.length || 0;
-                  toast.success(`Policy applied to ${count} node${count !== 1 ? 's' : ''}`);
+                  toast.success(`SLA applied to ${count} node${count !== 1 ? 's' : ''}`);
 
                   // Re-fetch resolved policies from DB so local state has full config
                   try {
@@ -1926,7 +1926,7 @@ function LineagePageInner() {
                   }
                 } else {
                   const errText = await res.text().catch(() => '');
-                  let errMsg = `Failed to apply policy (${res.status})`;
+                  let errMsg = `Failed to apply SLA (${res.status})`;
                   try {
                     const errData = JSON.parse(errText);
                     errMsg = errData.error || errMsg;
@@ -1938,7 +1938,7 @@ function LineagePageInner() {
                 }
               } catch (err) {
                 console.error('[Policy] Error assigning:', err);
-                toast.error('Failed to apply policy');
+                toast.error('Failed to apply SLA');
               } finally {
                 setPolicySaving(false);
               }

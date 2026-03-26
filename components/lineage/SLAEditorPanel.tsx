@@ -401,7 +401,7 @@ export function SLAEditorPanel({
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
         <p className="text-[13px] text-[var(--muted)]">
-          Click a node to define its policy.
+          Click a node to define its SLA.
         </p>
         <p className="text-[11px] text-[var(--muted)] mt-1">
           Shift+click to select multiple nodes.
@@ -419,7 +419,7 @@ export function SLAEditorPanel({
             <svg className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
-            Policy Editor
+            SLA Editor
           </h3>
           <button onClick={onClose} className="p-1 hover:bg-[var(--subtle-bg)] rounded">
             <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -442,7 +442,7 @@ export function SLAEditorPanel({
         {domains.size > 1 && (
           <p className="text-[11px] text-[var(--muted)] mt-1">Includes {domainLabels}</p>
         )}
-        {/* Current policy summary */}
+        {/* Current SLA summary */}
         {currentPolicy && currentPolicy.status !== 'none' && selectedNodeIds.size === 1 && (
           <div className="mt-2 px-2 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
             <span className="text-[11px] text-[var(--muted)]">Current: </span>
@@ -777,7 +777,7 @@ export function SLAEditorPanel({
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
-              {selectedProfile?.name || 'Policy'} applied
+              {selectedProfile?.name || 'SLA'} applied
             </div>
           ) : (
             <button
@@ -787,7 +787,7 @@ export function SLAEditorPanel({
             >
               {saving ? 'Applying...' : (
                 <>
-                  Apply {selectedProfile?.name || 'Policy'}{hasOverrides ? ' (custom)' : ''} to{' '}
+                  Apply {selectedProfile?.name || 'SLA'}{hasOverrides ? ' (custom)' : ''} to{' '}
                   {applyScope === 'selected'
                     ? `${selectedNodeIds.size} node${selectedNodeIds.size !== 1 ? 's' : ''}`
                     : applyScope === 'downstream'
