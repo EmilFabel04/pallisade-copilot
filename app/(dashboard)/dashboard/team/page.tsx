@@ -22,6 +22,7 @@ import {
   Workflow,
   Activity,
   KeyRound,
+  RefreshCw,
 } from 'lucide-react';
 import AuthenticationSettings from '@/components/settings/AuthenticationSettings';
 
@@ -56,6 +57,7 @@ interface PendingInvite {
   inviterName: string | null;
   createdAt: string;
   expiresAt: string;
+  emailSentAt: string | null;
 }
 
 interface Pipeline {
@@ -327,6 +329,24 @@ export default function TeamPage() {
       await fetchTeamData();
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  // Handle resend invite
+  const handleResendInvite = async (inviteId: string) => {
+    try {
+      const res = await fetch('/api/team/invite', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inviteId }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to resend invite');
+      }
+      fetchTeamData(); // Refresh to show updated emailSentAt
+    } catch (err: any) {
+      console.error('Resend invite failed:', err);
     }
   };
 
@@ -719,6 +739,20 @@ export default function TeamPage() {
                           <RoleIcon className="w-3 h-3" />
                           {roleConfig.label}
                         </span>
+                      )}
+                      {invite.emailSentAt && (
+                        <span className="text-[10px] text-[var(--text-faint)]">
+                          Emailed {formatDate(invite.emailSentAt)}
+                        </span>
+                      )}
+                      {isAdmin && (
+                        <button
+                          onClick={() => handleResendInvite(invite.id)}
+                          className="p-2 rounded-lg text-[var(--text-faint)] hover:text-violet-400 hover:bg-violet-500/10 transition-colors"
+                          title="Resend invite email"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
                       )}
                       {isAdmin && (
                         <button
