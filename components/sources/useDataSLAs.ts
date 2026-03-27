@@ -98,7 +98,7 @@ export function useDataSLAs() {
       const res = await fetch(`/api/pipeline/${selectedPipelineId}/data-slas`);
       if (!res.ok) throw new Error('Failed to fetch data SLAs');
       const data = await res.json();
-      const fetched: DataSLASummary[] = data.contracts || [];
+      const fetched: DataSLASummary[] = data.dataSLAs || data.contracts || [];
       const enabled: boolean = data.dataSLAsEnabled ?? false;
       setContracts(fetched);
       setDataSLAsEnabled(enabled);
