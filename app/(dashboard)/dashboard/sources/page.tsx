@@ -3,8 +3,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { Search, Filter, SortAsc, SortDesc, Plus, Database, X } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { DataSLAsTab } from '@/components/sources/DataSLAsTab';
 import { PipelineLayer, LAYER_COLORS, LAYER_LABELS } from '@/components/pipeline/types';
 import { useSourcesData, filterAndSort } from '@/components/sources/useSourcesData';
 import {
@@ -38,13 +36,6 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 
 export default function SourcesPage() {
   const { sources, summary, pipelineSLA, loading, error, refresh } = useSourcesData();
-  const [activeTab, setActiveTab] = useState<'sources' | 'data-slas'>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('tab') === 'data-slas') return 'data-slas';
-    }
-    return 'sources';
-  });
   const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
   const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -187,30 +178,6 @@ export default function SourcesPage() {
 
       <SourceSummaryBar summary={summary} />
 
-      {/* Tab navigation */}
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setActiveTab('sources')}
-          className={cn('px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
-            activeTab === 'sources' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-[var(--foreground)]'
-          )}
-        >
-          Sources
-        </button>
-        <button
-          onClick={() => setActiveTab('data-slas')}
-          className={cn('px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
-            activeTab === 'data-slas' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-[var(--foreground)]'
-          )}
-        >
-          Data SLAs
-        </button>
-      </div>
-
-      {activeTab === 'data-slas' ? (
-        <DataSLAsTab />
-      ) : (
-      <>
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Search */}
@@ -406,8 +373,6 @@ export default function SourcesPage() {
         />
       )}
 
-      </>
-      )}
     </div>
   );
 }
