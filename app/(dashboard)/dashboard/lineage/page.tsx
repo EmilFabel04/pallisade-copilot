@@ -51,10 +51,43 @@ import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage
 import { SLAEditorPanel, type ApplyScope } from '@/components/lineage/SLAEditorPanel';
 import { SLAModeToolbar } from '@/components/lineage/SLAModeToolbar';
 import type { EffectiveSLAPolicy, SLAAssignRequest, SLAStatus } from '@/types/sla';
+import { categoryToSLADomain, DOMAIN_SLA_SECTIONS } from '@/types/sla';
+import { evaluateNodeCompliance } from '@/lib/compliance/evaluate';
+import type { ComplianceBadgeStatus } from '@/components/lineage/ComplianceBadge';
 import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import type { NodeMeta } from '@/components/schedule/NodeSelectionSurface';
 import type { AssetPrefill } from '@/types/monitor-catalog';
+
+// Compute compliance status for a node given its resolved SLA policy
+function computeNodeCompliance(
+  sla: EffectiveSLAPolicy | undefined,
+  category: string,
+): ComplianceBadgeStatus {
+  if (!sla || sla.status === 'none') return 'none';
+
+  const domain = categoryToSLADomain(category);
+  if (!domain) return 'none';
+
+  const sections = DOMAIN_SLA_SECTIONS[domain] || [];
+  const slaValues: Record<string, unknown> = {};
+  for (const section of sections) {
+    const config = (sla as any)[section] as Record<string, unknown> | undefined;
+    if (!config) continue;
+    if ('enabled' in config && config.enabled === false) continue;
+    for (const [k, v] of Object.entries(config)) {
+      if (k === 'enabled' || v == null) continue;
+      slaValues[`${section}.${k}`] = v;
+    }
+  }
+
+  if (Object.keys(slaValues).length === 0) return 'none';
+
+  const compliance = evaluateNodeCompliance(slaValues, null, null);
+  if (compliance.fields.length === 0) return 'none';
+  if (compliance.overallStatus === 'unknown') return 'missing_sla';
+  return compliance.overallStatus as ComplianceBadgeStatus;
+}
 
 // Map a ViewNode's canonical type + metadata to a UnifiedNodeCategory for rendering
 function _viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
@@ -172,6 +205,10 @@ function LineagePageInner() {
   // laneOverview is now populated by fetchControlPlane (lane view is the primary Pipeline Overview)
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
+  // Data contract settings (affect SLA editor behavior)
+  const [dataContractsEnabled, setDataContractsEnabled] = useState(false);
+  const [contractAllowOverrides, setContractAllowOverrides] = useState(false);
+
   // Pipeline Overview inspector state
   const [pipelineInspectorTarget, setPipelineInspectorTarget] = useState<InspectorTarget>(null);
 
@@ -201,6 +238,20 @@ function LineagePageInner() {
     setMultiMonitorPreMeta(undefined); // No pre-built metadata for multi-select
     setMultiMonitorModalOpen(true);
   }, []);
+
+  // Fetch data contract settings for this pipeline
+  useEffect(() => {
+    if (!stackId) return;
+    fetch(`/api/pipeline/${stackId}/data-slas`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setDataContractsEnabled(data.dataContractsEnabled ?? false);
+          setContractAllowOverrides(data.contractAllowOverrides ?? false);
+        }
+      })
+      .catch(() => {});
+  }, [stackId]);
 
   // Normal-mode multi-select (Shift+Click outside of SLA editor mode)
   const [multiSelectedNodeIds, setMultiSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -239,7 +290,7 @@ function LineagePageInner() {
         const res = await fetch('/api/schedule/policies/resolve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ nodes: nodesPayload }),
+          body: JSON.stringify({ nodes: nodesPayload, stackId }),
         });
         if (res.ok && !cancelled) {
           const data = await res.json();
@@ -259,6 +310,36 @@ function LineagePageInner() {
 
     return () => { cancelled = true; };
   }, [lineageData?.nodes]);
+
+  // Re-fetch SLA policies (used after pipeline SLA edits)
+  const refreshSLAs = async () => {
+    if (!lineageData?.nodes?.length) return;
+    try {
+      const nodesPayload = lineageData.nodes.map((n) => ({
+        fqn: n.fullName || n.name,
+        domain: n.layer?.toLowerCase() || 'warehouse',
+        criticality: n.criticality?.toLowerCase() || 'medium',
+      }));
+      const res = await fetch('/api/schedule/policies/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes: nodesPayload, stackId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const policies = data.policies || {};
+        const map = new Map<string, EffectiveSLAPolicy>();
+        for (const [fqn, pol] of Object.entries(policies)) {
+          if ((pol as any).status !== 'none') {
+            map.set(fqn, pol as EffectiveSLAPolicy);
+          }
+        }
+        setNodeSLAs(map);
+      }
+    } catch {
+      // Non-critical
+    }
+  };
 
   // LLM extraction state
   const [llmExtracting, setLlmExtracting] = useState(false);
@@ -947,6 +1028,10 @@ function LineagePageInner() {
             isSLASelected: slaMode && slaSelectedNodeIds.has(vn.id),
             slaStatus: (nodeSLAs.get(vn.metadata?.fqn || vn.name)?.status as any) || 'none',
             slaProfileName: nodeSLAs.get(vn.metadata?.fqn || vn.name)?.profileName || null,
+            complianceStatus: computeNodeCompliance(
+              nodeSLAs.get(vn.metadata?.fqn || vn.name),
+              vn.platformDomain || vn.originalType || '',
+            ),
           },
         };
       });
@@ -1034,6 +1119,10 @@ function LineagePageInner() {
         isSLASelected: slaMode && slaSelectedNodeIds.has(node.id),
         slaStatus: (nodeSLAs.get(node.fullName || node.name)?.status as any) || 'none',
         slaProfileName: nodeSLAs.get(node.fullName || node.name)?.profileName || null,
+        complianceStatus: computeNodeCompliance(
+          nodeSLAs.get(node.fullName || node.name),
+          node.category || '',
+        ),
       },
     }));
 
@@ -1490,8 +1579,8 @@ function LineagePageInner() {
                 Last extracted: {formatDate(lineageData.lastExtracted)}
               </span>
             )}
-            {/* Define SLA button */}
-            {lineageData && lineageData.nodes.length > 0 && !slaMode && (
+            {/* Data SLA button */}
+            {lineageData && lineageData.nodes.length > 0 && !slaMode && activeTab === 'data' && (
               <button
                 onClick={() => {
                   setSlaMode(true);
@@ -1504,7 +1593,7 @@ function LineagePageInner() {
                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
-                Define SLA
+                Data SLA
               </button>
             )}
             <button
@@ -1852,12 +1941,14 @@ function LineagePageInner() {
             laneOverview={laneOverview}
             stackId={stackId}
             allMonitors={lineageData?.allMonitors}
+            nodeSLAs={nodeSLAs}
             onClose={() => {
               setPipelineInspectorTarget(null);
               setMultiSelectedNodeIds(new Set());
             }}
             onCreateSingleMonitor={handleCreateSingleMonitor}
             onCreateMultiMonitor={(nodeIds: string[]) => handleCreateMultiMonitor(nodeIds)}
+            onSLAUpdated={refreshSLAs}
           />
         )}
 
@@ -1870,6 +1961,27 @@ function LineagePageInner() {
             stackId={stackId || ''}
             nodeSLAs={nodeSLAs}
             saving={policySaving}
+            dataContractsEnabled={dataContractsEnabled}
+            contractAllowOverrides={contractAllowOverrides}
+            onRemoveSLA={async (nodeFqns: string[]) => {
+              try {
+                const res = await fetch('/api/schedule/policies/assign?' + new URLSearchParams({ stackId: stackId || '' }), {
+                  method: 'DELETE',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ nodeFqns }),
+                });
+                if (res.ok) {
+                  toast.success('Data SLA removed');
+                  const newPolicies = new Map(nodeSLAs);
+                  for (const fqn of nodeFqns) newPolicies.delete(fqn);
+                  setNodeSLAs(newPolicies);
+                } else {
+                  toast.error('Failed to remove SLA');
+                }
+              } catch {
+                toast.error('Failed to remove SLA');
+              }
+            }}
             onApply={async (request: SLAAssignRequest, scope: ApplyScope) => {
               setPolicySaving(true);
               try {
@@ -1893,7 +2005,7 @@ function LineagePageInner() {
                     const resolveRes = await fetch('/api/schedule/policies/resolve', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ nodes: nodesPayload }),
+                      body: JSON.stringify({ nodes: nodesPayload, stackId }),
                     });
                     if (resolveRes.ok) {
                       const resolveData = await resolveRes.json();
