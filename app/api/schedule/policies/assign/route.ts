@@ -345,6 +345,32 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// PATCH /api/schedule/policies/assign — Update assignment status
+export async function PATCH(request: NextRequest) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const body = await request.json();
+    const { id, status } = body;
+    if (!id || !['active', 'inactive', 'archived'].includes(status)) {
+      return NextResponse.json({ error: 'Invalid id or status' }, { status: 400 });
+    }
+    const assignment = await prisma.policyAssignment.update({
+      where: { id },
+      data: {
+        status,
+        archivedAt: status === 'archived' ? new Date() : null,
+      },
+    });
+    return NextResponse.json({ assignment });
+  } catch (error) {
+    console.error('Error updating assignment status:', error);
+    return NextResponse.json({ error: 'Failed to update' }, { status: 500 });
+  }
+}
+
 // DELETE /api/schedule/policies/assign — Delete an assignment by ID
 export async function DELETE(request: NextRequest) {
   try {

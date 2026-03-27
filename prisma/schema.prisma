@@ -918,6 +918,10 @@ model PolicyAssignment {
   // Per-asset overrides (sparse — only set fields override the profile)
   overrides Json?
 
+  // Status management
+  status     String   @default("active") // 'active' | 'inactive' | 'archived'
+  archivedAt DateTime?
+
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -2173,6 +2177,10 @@ model PipelineDataContract {
 
   // Auto-sync tracking
   autoSynced Boolean @default(false)
+
+  // Status management
+  status     String   @default("active") // 'active' | 'inactive' | 'archived'
+  archivedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

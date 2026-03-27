@@ -47,6 +47,8 @@ export async function GET(request: NextRequest) {
       nodeDomain: a.nodeDomain || null,
       overrides: a.overrides || null,
       slaTier: a.profile?.criticality || null,
+      status: a.status || 'active',
+      archivedAt: a.archivedAt?.toISOString() || null,
       updatedAt: a.updatedAt?.toISOString() || null,
     }));
 

@@ -42,6 +42,13 @@ export async function PATCH(
       return NextResponse.json({ error: `Validation failed: ${issues}` }, { status: 400 });
     }
 
+    // Auto-set archivedAt when archiving
+    if (parsed.data.status === 'archived') {
+      parsed.data.archivedAt = new Date();
+    } else if (parsed.data.status && parsed.data.status !== 'archived') {
+      parsed.data.archivedAt = null;
+    }
+
     const contract = await prisma.pipelineDataContract.update({
       where: { id: slaId, pipelineStackId: stackId },
       data: buildUpdateData(parsed.data),

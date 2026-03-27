@@ -112,6 +112,10 @@ export const DataSLAInputSchema = z.object({
   overridesJson: z.record(z.string(), z.unknown()).nullable().optional(),
   isException: z.boolean().default(false),
   parentContractId: z.string().nullable().optional(),
+
+  // Status management
+  status: z.enum(['active', 'inactive', 'archived']).optional(),
+  archivedAt: z.union([z.date(), z.null()]).optional(),
 });
 export type DataSLAInput = z.infer<typeof DataSLAInputSchema>;
 
