@@ -29,7 +29,7 @@ interface SLAViewDrawerProps {
   fields: SLAField[];
   nodes?: string[];
   notes?: string | null;
-  updatedAt?: string;
+  updatedAt?: string | null;
   onClose: () => void;
   onEdit?: () => void;
 }

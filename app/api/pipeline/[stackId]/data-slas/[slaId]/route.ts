@@ -45,7 +45,7 @@ export async function PATCH(
     // Auto-set archivedAt when archiving
     if (parsed.data.status === 'archived') {
       parsed.data.archivedAt = new Date();
-    } else if (parsed.data.status && parsed.data.status !== 'archived') {
+    } else if (parsed.data.status) {
       parsed.data.archivedAt = null;
     }
 
