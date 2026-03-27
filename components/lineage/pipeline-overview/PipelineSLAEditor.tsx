@@ -3,80 +3,7 @@
 import React, { useState, useMemo } from 'react';
 import type { SLADomain } from '@/types/sla';
 import { DOMAIN_SLA_SECTIONS } from '@/types/sla';
-
-// ─── Tool-specific field definitions ────────────────────────────────
-
-interface FieldDef {
-  key: string;
-  label: string;
-  type: 'number' | 'select';
-  placeholder?: string;
-  options?: { value: string; label: string }[];
-  unit?: string;
-}
-
-const TOOL_FIELDS: Record<string, FieldDef[]> = {
-  ingestion: [
-    { key: 'ingestion.syncLagToleranceMinutes', label: 'Sync Lag Tolerance', type: 'number', placeholder: '30', unit: 'min' },
-    { key: 'ingestion.failureTolerance', label: 'Failure Tolerance', type: 'select', options: [
-      { value: 'none', label: 'None — alert immediately' },
-      { value: 'low', label: 'Low — 1 consecutive failure' },
-      { value: 'medium', label: 'Medium — 2-3 consecutive' },
-      { value: 'high', label: 'High — 4+ consecutive' },
-    ]},
-    { key: 'ingestion.schemaDriftStrictness', label: 'Schema Drift Strictness', type: 'select', options: [
-      { value: 'strict', label: 'Strict — block on any drift' },
-      { value: 'warn', label: 'Warn — alert but continue' },
-      { value: 'relaxed', label: 'Relaxed — allow drift' },
-    ]},
-    { key: 'freshness.maxHours', label: 'Max Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-  ],
-  orchestration: [
-    { key: 'orchestration.runLatencyMinutes', label: 'Run Latency Threshold', type: 'number', placeholder: '60', unit: 'min' },
-    { key: 'orchestration.scheduleLagMinutes', label: 'Schedule Lag Tolerance', type: 'number', placeholder: '15', unit: 'min' },
-    { key: 'orchestration.failureTolerance', label: 'Failure Tolerance', type: 'select', options: [
-      { value: 'none', label: 'None — alert immediately' },
-      { value: 'low', label: 'Low — 1 consecutive failure' },
-      { value: 'medium', label: 'Medium — 2-3 consecutive' },
-      { value: 'high', label: 'High — 4+ consecutive' },
-    ]},
-  ],
-  transform: [
-    { key: 'transform.testFailureTolerance', label: 'Test Failure Tolerance', type: 'select', options: [
-      { value: 'none', label: 'None — block on any failure' },
-      { value: 'warn', label: 'Warn — alert but continue' },
-      { value: 'relaxed', label: 'Relaxed — allow failures' },
-    ]},
-    { key: 'transform.modelFreshnessHours', label: 'Model Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'freshness.maxHours', label: 'Source Freshness', type: 'number', placeholder: '48', unit: 'hrs' },
-  ],
-  bi: [
-    { key: 'bi.freshnessHours', label: 'Dashboard Freshness', type: 'number', placeholder: '12', unit: 'hrs' },
-    { key: 'bi.upstreamBreakStrictness', label: 'Upstream Break Strictness', type: 'select', options: [
-      { value: 'strict', label: 'Strict — flag immediately' },
-      { value: 'warn', label: 'Warn — degrade gracefully' },
-      { value: 'relaxed', label: 'Relaxed — ignore upstream' },
-    ]},
-    { key: 'bi.refreshFailureAlerting', label: 'Refresh Failure Alerting', type: 'select', options: [
-      { value: 'immediate', label: 'Immediate' },
-      { value: 'batched', label: 'Batched (daily digest)' },
-      { value: 'off', label: 'Off' },
-    ]},
-  ],
-  warehouse: [
-    { key: 'freshness.maxHours', label: 'Max Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'freshness.warningHours', label: 'Warning Threshold', type: 'number', placeholder: '12', unit: 'hrs' },
-  ],
-};
-
-// Domain-friendly label for the header
-const DOMAIN_LABELS: Record<string, string> = {
-  ingestion: 'Ingestion',
-  orchestration: 'Orchestration',
-  transform: 'Transformation',
-  bi: 'BI / Reporting',
-  warehouse: 'Warehouse',
-};
+import { PIPELINE_SLA_FIELDS, DOMAIN_LABELS, type PipelineSLAFieldDef } from '@/lib/pipeline-sla-fields';
 
 interface PipelineSLAEditorProps {
   domain: SLADomain;
@@ -100,7 +27,7 @@ export function PipelineSLAEditor({
   onSaved,
   onCancel,
 }: PipelineSLAEditorProps) {
-  const fields = TOOL_FIELDS[domain] || TOOL_FIELDS.warehouse;
+  const fields = PIPELINE_SLA_FIELDS[domain] || PIPELINE_SLA_FIELDS.warehouse;
 
   // Initialize values from current SLA or empty
   const [values, setValues] = useState<Record<string, string>>(() => {
