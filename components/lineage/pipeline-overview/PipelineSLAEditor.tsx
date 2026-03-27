@@ -143,7 +143,7 @@ export function PipelineSLAEditor({
         body: JSON.stringify({
           stackId,
           profileId: '__custom',
-          assignmentType: 'explicit',
+          assignmentType: 'direct',
           nodeFqns: [nodeFqn],
           nodeDomain: domain,
           overrides,
