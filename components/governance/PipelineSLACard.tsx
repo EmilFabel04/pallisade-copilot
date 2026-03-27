@@ -12,6 +12,8 @@ export interface PipelineSLAItem {
   overrides: Record<string, any> | null;
   slaTier: string | null;
   updatedAt: string | null;
+  status?: string; // 'active' | 'inactive' | 'archived'
+  archivedAt?: string | null;
   // Enriched client-side
   nodeName?: string;
   platform?: string;

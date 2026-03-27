@@ -7,6 +7,7 @@ import { GovernanceFilters } from './GovernanceFilters';
 import { PipelineSLACard, type PipelineSLAItem } from './PipelineSLACard';
 import { NodeSelectionSurface, type NodeMeta } from '@/components/schedule/NodeSelectionSurface';
 import { toast } from 'sonner';
+import { SLAViewDrawer } from './SLAViewDrawer';
 
 /* ------------------------------------------------------------------ */
 /*  Domain-specific SLA fields                                         */
@@ -311,6 +312,8 @@ export function PipelineSLAsTab() {
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
   const [domainFilter, setDomainFilter] = useState<Set<string>>(new Set());
+  const [viewItem, setViewItem] = useState<PipelineSLAItem | null>(null);
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
 
   const refreshItems = useCallback(() => {
     if (!selectedPipelineId) return;
@@ -351,16 +354,58 @@ export function PipelineSLAsTab() {
       result = result.filter(i => i.nodeDomain && domainFilter.has(i.nodeDomain));
     }
 
-    return result;
-  }, [items, search, tierFilter, domainFilter]);
+    if (statusFilter.size > 0) {
+      result = result.filter(i => statusFilter.has(i.status || 'active'));
+    }
 
-  const hasActiveFilters = search.length > 0 || tierFilter.size > 0 || domainFilter.size > 0;
+    return result;
+  }, [items, search, tierFilter, domainFilter, statusFilter]);
+
+  const hasActiveFilters = search.length > 0 || tierFilter.size > 0 || domainFilter.size > 0 || statusFilter.size > 0;
 
   const toggleFilter = (set: Set<string>, setter: (s: Set<string>) => void, value: string) => {
     const next = new Set(set);
     if (next.has(value)) next.delete(value);
     else next.add(value);
     setter(next);
+  };
+
+  const handleDeleteAssignment = async (item: PipelineSLAItem) => {
+    if (!confirm(`Delete pipeline SLA for "${item.nodeName || item.nodeFqn}"?`)) return;
+    try {
+      const res = await fetch(`/api/schedule/policies/assign?id=${item.assignmentId}`, { method: 'DELETE' });
+      if (res.ok) { toast.success('Pipeline SLA deleted'); refreshItems(); }
+      else { toast.error('Failed to delete'); }
+    } catch { toast.error('Failed to delete'); }
+  };
+
+  const handleStatusChange = async (item: PipelineSLAItem, newStatus: string) => {
+    try {
+      const res = await fetch('/api/schedule/policies/assign', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.assignmentId, status: newStatus }),
+      });
+      if (res.ok) {
+        toast.success(`SLA ${newStatus === 'archived' ? 'archived' : newStatus === 'active' ? 'activated' : 'deactivated'}`);
+        refreshItems();
+      } else { toast.error('Failed to update status'); }
+    } catch { toast.error('Failed to update status'); }
+  };
+
+  const buildViewFields = (item: PipelineSLAItem) => {
+    const fields: { label: string; value: string | number | null }[] = [];
+    if (!item.overrides) return fields;
+    for (const [section, config] of Object.entries(item.overrides)) {
+      if (typeof config !== 'object' || !config) continue;
+      for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
+        if (key === 'enabled' || value == null) continue;
+        const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase())
+          .replace(/Minutes$/, ' (min)').replace(/Hours$/, ' (hrs)');
+        fields.push({ label: `${section}: ${label}`, value: String(value) });
+      }
+    }
+    return fields;
   };
 
   if (loading) {
@@ -401,11 +446,22 @@ export function PipelineSLAsTab() {
             selected: domainFilter,
             onToggle: v => toggleFilter(domainFilter, setDomainFilter, v),
           },
+          {
+            label: 'Status',
+            options: [
+              { value: 'active', label: 'Active' },
+              { value: 'inactive', label: 'Inactive' },
+              { value: 'archived', label: 'Archived' },
+            ],
+            selected: statusFilter,
+            onToggle: v => toggleFilter(statusFilter, setStatusFilter, v),
+          },
         ]}
         onClearAll={() => {
           setSearch('');
           setTierFilter(new Set());
           setDomainFilter(new Set());
+          setStatusFilter(new Set());
         }}
         hasActiveFilters={hasActiveFilters}
         totalCount={items.length}
@@ -434,12 +490,27 @@ export function PipelineSLAsTab() {
             <PipelineSLACard
               key={`${item.assignmentId}-${item.nodeFqn}`}
               item={item}
-              onClick={() => {
-                // Edit drawer will be added in a future iteration
-              }}
+              onView={() => setViewItem(item)}
+              onClick={() => {}}
+              onDelete={() => handleDeleteAssignment(item)}
+              onArchive={() => handleStatusChange(item, (item.status || 'active') === 'archived' ? 'active' : 'archived')}
+              onToggleActive={() => handleStatusChange(item, (item.status || 'active') === 'active' ? 'inactive' : 'active')}
             />
           ))}
         </div>
+      )}
+
+      {viewItem && (
+        <SLAViewDrawer
+          title={viewItem.nodeName || viewItem.nodeFqn.split('.').pop() || viewItem.nodeFqn}
+          subtitle={viewItem.nodeFqn}
+          slaTier={viewItem.slaTier}
+          status={viewItem.status || 'active'}
+          fields={buildViewFields(viewItem)}
+          notes={null}
+          updatedAt={viewItem.updatedAt}
+          onClose={() => setViewItem(null)}
+        />
       )}
 
       {showCreate && selectedPipelineId && (
