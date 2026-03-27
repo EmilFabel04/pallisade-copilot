@@ -4,10 +4,9 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { cachedFetch } from '@/lib/fetch-cache';
-import { Settings as SettingsIcon, Plug, Bell, Key, CreditCard, MessageSquare, ClipboardList, Link, AlertTriangle, User, SlidersHorizontal, Shield } from 'lucide-react';
+import { Settings as SettingsIcon, Plug, Bell, Key, CreditCard, MessageSquare, ClipboardList, Link, AlertTriangle, User, SlidersHorizontal } from 'lucide-react';
 import NotificationRoutingSettings from '@/components/settings/NotificationRoutingSettings';
 import ConnectedAccounts from '@/components/settings/ConnectedAccounts';
-import AuthenticationSettings from '@/components/settings/AuthenticationSettings';
 
 interface OAuthIntegration {
   id: string;
@@ -106,7 +105,6 @@ export default function SettingsPage() {
     { id: 'notifications', name: 'Notifications', icon: <Bell size={16} /> },
     { id: 'api', name: 'API Keys', icon: <Key size={16} /> },
     { id: 'billing', name: 'Billing', icon: <CreditCard size={16} /> },
-    { id: 'authentication', name: 'Authentication', icon: <Shield size={16} /> },
   ];
 
   return (
@@ -146,8 +144,19 @@ export default function SettingsPage() {
           <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
             <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4 flex items-center gap-2"><User size={16} className="text-[var(--muted)]" /> Profile</h2>
             <div className="flex items-start gap-6">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-2xl font-semibold">
-                {session?.user?.name?.[0]?.toUpperCase() || 'U'}
+              <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-2)] flex items-center justify-center text-white text-2xl font-semibold overflow-hidden">
+                {session?.user?.name?.[0]?.toUpperCase() || session?.user?.email?.[0]?.toUpperCase() || 'U'}
+                {session?.user?.image && (
+                  <img
+                    src={session.user.image}
+                    alt=""
+                    className="absolute inset-0 w-full h-full rounded-2xl object-cover"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                )}
               </div>
               <div className="flex-1 space-y-4">
                 <div>
@@ -410,11 +419,6 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Authentication Tab */}
-      {activeTab === 'authentication' && (
-        <AuthenticationSettings />
       )}
 
       {/* Saved Notification */}

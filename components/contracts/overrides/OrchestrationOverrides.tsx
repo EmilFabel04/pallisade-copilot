@@ -1,15 +1,15 @@
 'use client';
 
-import type { OrchestrationContractOverrides } from '../types';
+import type { OrchestrationOverrides as OrchestrationOverridesType } from '../types';
 
 interface Props {
-  value: Partial<OrchestrationContractOverrides>;
-  onChange: (overrides: Partial<OrchestrationContractOverrides>) => void;
+  value: Partial<OrchestrationOverridesType>;
+  onChange: (overrides: Partial<OrchestrationOverridesType>) => void;
   inputClass: string;
 }
 
 export default function OrchestrationOverrides({ value, onChange, inputClass }: Props) {
-  const update = (key: keyof OrchestrationContractOverrides, val: any) => {
+  const update = (key: keyof OrchestrationOverridesType, val: any) => {
     onChange({ ...value, [key]: val });
   };
 

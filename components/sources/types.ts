@@ -1,11 +1,8 @@
 import { PipelineLayer } from '@/components/pipeline/types';
-import type { EffectiveContract, InheritanceState } from '@/components/contracts/types';
+import type { EffectiveSLA, InheritanceState } from '@/components/contracts/types';
 
-// Source contract (ownership + expectations)
-export interface SourceContractData {
-  ownerUser: string | null;
-  ownerTeam: string | null;
-  contactChannel: string | null;
+// Source SLA (expectations)
+export interface SourceSLAData {
   slaTier: SlaTier | null;
   expectedFreshnessMinutes: number | null;
   expectedExtractionFrequencyMinutes: number | null;
@@ -73,9 +70,9 @@ export interface ControlPlaneSource {
   criticalCount: number;
   highCount: number;
 
-  // Contract
-  contract: SourceContractData | null;
-  effectiveContract: EffectiveContract | null;
+  // SLA
+  contract: SourceSLAData | null;
+  effectiveContract: EffectiveSLA | null;
   inheritanceState: InheritanceState | null;
 
   // Metadata

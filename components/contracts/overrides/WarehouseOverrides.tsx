@@ -1,15 +1,15 @@
 'use client';
 
-import type { WarehouseContractOverrides } from '../types';
+import type { WarehouseOverrides as WarehouseOverridesType } from '../types';
 
 interface Props {
-  value: Partial<WarehouseContractOverrides>;
-  onChange: (overrides: Partial<WarehouseContractOverrides>) => void;
+  value: Partial<WarehouseOverridesType>;
+  onChange: (overrides: Partial<WarehouseOverridesType>) => void;
   inputClass: string;
 }
 
 export default function WarehouseOverrides({ value, onChange, inputClass }: Props) {
-  const update = (key: keyof WarehouseContractOverrides, val: any) => {
+  const update = (key: keyof WarehouseOverridesType, val: any) => {
     onChange({ ...value, [key]: val });
   };
 

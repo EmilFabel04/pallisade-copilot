@@ -205,9 +205,9 @@ function LineagePageInner() {
   // laneOverview is now populated by fetchControlPlane (lane view is the primary Pipeline Overview)
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
-  // Data contract settings (affect SLA editor behavior)
-  const [dataContractsEnabled, setDataContractsEnabled] = useState(false);
-  const [contractAllowOverrides, setContractAllowOverrides] = useState(false);
+  // Data SLA settings (affect SLA editor behavior)
+  const [dataSLAsEnabled, setDataSLAsEnabled] = useState(false);
+  const [slaAllowOverrides, setSlaAllowOverrides] = useState(false);
 
   // Pipeline Overview inspector state
   const [pipelineInspectorTarget, setPipelineInspectorTarget] = useState<InspectorTarget>(null);
@@ -239,15 +239,15 @@ function LineagePageInner() {
     setMultiMonitorModalOpen(true);
   }, []);
 
-  // Fetch data contract settings for this pipeline
+  // Fetch data SLA settings for this pipeline
   useEffect(() => {
     if (!stackId) return;
     fetch(`/api/pipeline/${stackId}/data-slas`)
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
-          setDataContractsEnabled(data.dataContractsEnabled ?? false);
-          setContractAllowOverrides(data.contractAllowOverrides ?? false);
+          setDataSLAsEnabled(data.dataSLAsEnabled ?? false);
+          setSlaAllowOverrides(data.slaAllowOverrides ?? false);
         }
       })
       .catch(() => {});
@@ -1961,8 +1961,8 @@ function LineagePageInner() {
             stackId={stackId || ''}
             nodeSLAs={nodeSLAs}
             saving={policySaving}
-            dataContractsEnabled={dataContractsEnabled}
-            contractAllowOverrides={contractAllowOverrides}
+            dataSLAsEnabled={dataSLAsEnabled}
+            slaAllowOverrides={slaAllowOverrides}
             onRemoveSLA={async (nodeFqns: string[]) => {
               try {
                 const res = await fetch('/api/schedule/policies/assign?' + new URLSearchParams({ stackId: stackId || '' }), {

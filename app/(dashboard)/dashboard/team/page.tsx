@@ -21,7 +21,9 @@ import {
   Clock,
   Workflow,
   Activity,
+  KeyRound,
 } from 'lucide-react';
+import AuthenticationSettings from '@/components/settings/AuthenticationSettings';
 
 // --- Types ---
 
@@ -146,7 +148,7 @@ export default function TeamPage() {
   const [isAdmin, setIsAdmin] = useState(false);
 
   // UI State
-  const [activeTab, setActiveTab] = useState<'members' | 'invites'>('members');
+  const [activeTab, setActiveTab] = useState<'members' | 'invites' | 'authentication'>('members');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMember, setSelectedMember] = useState<TeamMember | null>(null);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -526,6 +528,18 @@ export default function TeamPage() {
           >
             Invites ({pendingInvites.length})
           </button>
+          <button
+            onClick={() => setActiveTab('authentication')}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-md transition-all',
+              activeTab === 'authentication'
+                ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
+            )}
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            Authentication
+          </button>
         </div>
 
         <div className="relative">
@@ -721,6 +735,17 @@ export default function TeamPage() {
               })}
             </div>
           )}
+        </motion.div>
+      )}
+
+      {/* Authentication Tab */}
+      {activeTab === 'authentication' && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <AuthenticationSettings />
         </motion.div>
       )}
 

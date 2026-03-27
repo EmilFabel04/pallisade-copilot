@@ -363,7 +363,9 @@ model PipelineStack {
   pipelineContract     PipelineContract?
   sourceContracts      SourceContract[]
   dataContracts        PipelineDataContract[]
-  dataContractsEnabled Boolean               @default(false)
+  dataContractsEnabled         Boolean @default(false)
+  contractAllowOverrides       Boolean @default(false) // Allow node-level SLA overrides when contracts exist
+  contractViolationAlerting    Boolean @default(true)  // Send alerts on contract violations
 
   // Notifications
   notificationEvents NotificationEvent[]
@@ -2123,21 +2125,38 @@ model PipelineContract {
 model PipelineDataContract {
   id String @id @default(cuid())
 
-  // Scope
+  // Scope — scopeRef is the unique identifier, scope is legacy type
   scope    String  // 'schema' | 'dbt_model_group' | 'dashboard' | 'exception'
   scopeRef String  // e.g., "bigquery:public", "staging", dashboard ID
+  name     String? // Optional human-friendly name for this contract
+
+  // Covered nodes
+  nodeFqns Json?   // string[] — FQNs of lineage nodes covered by this contract
 
   // Ownership
   ownerUser      String?
   ownerTeam      String?
   contactChannel String?
 
-  // SLA expectations
-  slaTier                           String? // T0, T1, T2, T3
+  // SLA tier
+  slaTier String? // T0, T1, T2, T3
+  notes   String? @db.Text
+
+  // Domain-specific SLA config sections (same structure as PolicyProfile)
+  freshnessConfig     Json? // { enabled, maxHours, warningHours }
+  schemaConfig        Json? // { enabled, strictness, allowEvolution }
+  volumeConfig        Json? // { enabled, minRows, maxRows, growthRateThreshold }
+  anomalyConfig       Json? // { enabled, sensitivity, lookbackDays }
+  qualityConfig       Json? // { enabled, maxNullRate, maxDuplicateRate }
+  ingestionConfig     Json? // { syncLagToleranceMinutes, failureTolerance, schemaDriftStrictness }
+  biConfig            Json? // { freshnessHours, contentHealthEnabled, upstreamBreakStrictness }
+  orchestrationConfig Json? // { runLatencyMinutes, scheduleLagMinutes, failureTolerance }
+  transformConfig     Json? // { testFailureTolerance, modelFreshnessHours }
+
+  // Legacy fields (kept for backwards compat with existing records)
   expectedFreshnessMinutes          Int?
   expectedExtractionFrequencyMinutes Int?
   alertPolicyJson                   Json?
-  notes                             String? @db.Text
 
   // Data-asset-specific
   schemaExpectations Json? // SchemaExpectation[]

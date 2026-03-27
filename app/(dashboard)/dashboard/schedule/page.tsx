@@ -110,6 +110,7 @@ export default function SchedulePage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         nodes: [...allFqns].map((fqn) => ({ fqn, domain: 'warehouse', criticality: 'medium' })),
+        stackId: selectedPipeline?.id,
       }),
     })
       .then((res) => res.ok ? res.json() : null)

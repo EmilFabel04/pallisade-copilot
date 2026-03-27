@@ -39,7 +39,7 @@ export function AutoDiscoveryPrompt({ discovered, onCreateAll, onCreateSelected,
         </button>
       </div>
       <p className="text-xs text-[var(--muted)] mt-1 mb-3">
-        Create data contracts for these {config.label}?
+        Create data SLAs for these {config.label}?
       </p>
       <div className="flex flex-wrap gap-1.5 mb-3">
         {discovered.items.slice(0, 8).map(item => (

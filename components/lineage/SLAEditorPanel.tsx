@@ -94,7 +94,10 @@ interface SLAEditorPanelProps {
   stackId: string;
   nodeSLAs: Map<string, EffectiveSLAPolicy>;
   saving?: boolean;
+  dataSLAsEnabled?: boolean;
+  slaAllowOverrides?: boolean;
   onApply: (request: SLAAssignRequest, scope: ApplyScope) => void;
+  onRemoveSLA?: (nodeFqns: string[]) => void;
   onClose: () => void;
   onClearSelection: () => void;
 }
@@ -244,7 +247,10 @@ export function SLAEditorPanel({
   stackId,
   nodeSLAs,
   saving,
+  dataSLAsEnabled,
+  slaAllowOverrides,
   onApply,
+  onRemoveSLA,
   onClose,
   onClearSelection,
 }: SLAEditorPanelProps) {
@@ -417,7 +423,7 @@ export function SLAEditorPanel({
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
         </svg>
         <p className="text-[13px] text-[var(--muted)]">
-          Click a node to define its SLA.
+          Click a node to define its Data SLA.
         </p>
         <p className="text-[11px] text-[var(--muted)] mt-1">
           Shift+click to select multiple nodes.
@@ -435,7 +441,7 @@ export function SLAEditorPanel({
             <svg className="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="currentColor">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
-            SLA Editor
+            Data SLA Editor
           </h3>
           <button onClick={onClose} className="p-1 hover:bg-[var(--subtle-bg)] rounded">
             <svg className="w-4 h-4 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -469,9 +475,28 @@ export function SLAEditorPanel({
         )}
       </div>
 
+      {/* Data SLA read-only banner */}
+      {dataSLAsEnabled && !slaAllowOverrides && (
+        <div className="mx-4 mt-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+          <p className="text-[11px] text-amber-400 font-medium">Data SLAs are enabled</p>
+          <p className="text-[10px] text-[var(--muted)] mt-1">
+            Data SLA expectations are managed through data SLAs. Edit or view SLAs in the Governance &rarr; Data SLAs tab.
+          </p>
+        </div>
+      )}
+
+      {dataSLAsEnabled && slaAllowOverrides && (
+        <div className="mx-4 mt-3 p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20">
+          <p className="text-[10px] text-blue-400">
+            Overrides are allowed. Changes here will be tracked against the data SLA as overrides.
+          </p>
+        </div>
+      )}
+
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Profile selector */}
+        {/* Profile selector — hidden when data SLAs enabled without overrides */}
+        {(!dataSLAsEnabled || slaAllowOverrides) && (
         <div>
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Apply Profile</label>
           <select
@@ -490,6 +515,7 @@ export function SLAEditorPanel({
             <p className="text-[11px] text-[var(--muted)] mt-1.5">{selectedProfile.description}</p>
           )}
         </div>
+        )}
 
         {/* Selected node names */}
         {selectedNodes.length <= 5 && (
@@ -786,35 +812,51 @@ export function SLAEditorPanel({
       </div>
 
       {/* Footer (sticky) */}
-      {selectedProfileId && (
-        <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0">
-          {applied ? (
-            <div className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-green-600/90 text-white text-center flex items-center justify-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              {selectedProfile?.name || 'SLA'} applied
-            </div>
-          ) : (
-            <button
-              onClick={handleApply}
-              disabled={saving}
-              className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] text-white transition-all disabled:opacity-70"
-            >
-              {saving ? 'Applying...' : (
-                <>
-                  Apply {selectedProfile?.name || 'SLA'}{hasOverrides ? ' (custom)' : ''} to{' '}
-                  {applyScope === 'selected'
-                    ? `${selectedNodeIds.size} node${selectedNodeIds.size !== 1 ? 's' : ''}`
-                    : applyScope === 'downstream'
-                    ? `${downstreamCount} downstream`
-                    : `${typeCount} ${dominantCategory} nodes`}
-                </>
-              )}
-            </button>
-          )}
-        </div>
-      )}
+      <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0 space-y-2">
+        {/* Apply button — only when editing is allowed */}
+        {selectedProfileId && (!dataSLAsEnabled || slaAllowOverrides) && (
+          <>
+            {applied ? (
+              <div className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-green-600/90 text-white text-center flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                {selectedProfile?.name || 'Data SLA'} applied
+              </div>
+            ) : (
+              <button
+                onClick={handleApply}
+                disabled={saving}
+                className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] text-white transition-all disabled:opacity-70"
+              >
+                {saving ? 'Applying...' : (
+                  <>
+                    Apply {selectedProfile?.name || 'Data SLA'}{hasOverrides ? ' (custom)' : ''} to{' '}
+                    {applyScope === 'selected'
+                      ? `${selectedNodeIds.size} node${selectedNodeIds.size !== 1 ? 's' : ''}`
+                      : applyScope === 'downstream'
+                      ? `${downstreamCount} downstream`
+                      : `${typeCount} ${dominantCategory} nodes`}
+                  </>
+                )}
+              </button>
+            )}
+          </>
+        )}
+
+        {/* Remove Data SLA button — only when data SLAs are disabled and nodes have SLAs */}
+        {!dataSLAsEnabled && currentPolicy && currentPolicy.status !== 'none' && onRemoveSLA && (
+          <button
+            onClick={() => {
+              const fqns = selectedNodes.map(n => n.fullName || n.name);
+              onRemoveSLA(fqns);
+            }}
+            className="w-full px-4 py-2 text-[12px] font-medium rounded-lg text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-colors"
+          >
+            Remove Data SLA from {selectedNodeIds.size} node{selectedNodeIds.size !== 1 ? 's' : ''}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

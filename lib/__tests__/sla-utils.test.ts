@@ -158,9 +158,10 @@ describe('isLessStrictClient', () => {
 });
 
 describe('getMonitorSLAStatus', () => {
+  // FRESHNESS requires timestamp_column in REQUIRED_CONFIG_FIELDS
   it('returns policy when config matches SLA', () => {
     const sla = { freshness: { maxHours: 24 } };
-    const config = { max_hours: 24 };
+    const config = { max_hours: 24, timestamp_column: 'updated_at' };
     const result = getMonitorSLAStatus('FRESHNESS', config, sla);
     expect(result.status).toBe('policy');
     expect(result.overriddenFields).toHaveLength(0);
@@ -169,7 +170,7 @@ describe('getMonitorSLAStatus', () => {
 
   it('returns override when config is stricter', () => {
     const sla = { freshness: { maxHours: 24 } };
-    const config = { max_hours: 12 };
+    const config = { max_hours: 12, timestamp_column: 'updated_at' };
     const result = getMonitorSLAStatus('FRESHNESS', config, sla);
     expect(result.status).toBe('override');
     expect(result.overriddenFields).toContain('max_hours');
@@ -178,26 +179,50 @@ describe('getMonitorSLAStatus', () => {
 
   it('returns violation when config is less strict', () => {
     const sla = { freshness: { maxHours: 24 } };
-    const config = { max_hours: 48 };
+    const config = { max_hours: 48, timestamp_column: 'updated_at' };
     const result = getMonitorSLAStatus('FRESHNESS', config, sla);
     expect(result.status).toBe('violation');
     expect(result.violationFields).toContain('max_hours');
   });
 
-  it('returns none for null SLA', () => {
-    const result = getMonitorSLAStatus('FRESHNESS', { max_hours: 24 }, null);
+  it('returns needs_config when required fields are missing', () => {
+    const sla = { freshness: { maxHours: 24 } };
+    const config = { max_hours: 24 };
+    const result = getMonitorSLAStatus('FRESHNESS', config, sla);
+    expect(result.status).toBe('needs_config');
+  });
+
+  it('returns none for null SLA with complete config', () => {
+    const result = getMonitorSLAStatus('FRESHNESS', { max_hours: 24, timestamp_column: 'updated_at' }, null);
     expect(result.status).toBe('none');
   });
 
-  it('returns none for null config', () => {
+  it('returns needs_config for null SLA with missing required fields', () => {
+    const result = getMonitorSLAStatus('FRESHNESS', { max_hours: 24 }, null);
+    expect(result.status).toBe('needs_config');
+  });
+
+  it('returns needs_config for null config when monitor has required fields', () => {
     const sla = { freshness: { maxHours: 24 } };
     const result = getMonitorSLAStatus('FRESHNESS', null, sla);
+    expect(result.status).toBe('needs_config');
+  });
+
+  it('returns needs_config for empty config when monitor has required fields', () => {
+    const sla = { freshness: { maxHours: 24 } };
+    const result = getMonitorSLAStatus('FRESHNESS', {}, sla);
+    expect(result.status).toBe('needs_config');
+  });
+
+  it('returns none for null config when monitor has no required fields', () => {
+    const sla = { schema: { strictness: 'strict' } };
+    const result = getMonitorSLAStatus('SCHEMA_CHANGE', null, sla);
     expect(result.status).toBe('none');
   });
 
-  it('returns none for empty config', () => {
-    const sla = { freshness: { maxHours: 24 } };
-    const result = getMonitorSLAStatus('FRESHNESS', {}, sla);
+  it('returns none for empty config when monitor has no required fields', () => {
+    const sla = { schema: { strictness: 'strict' } };
+    const result = getMonitorSLAStatus('SCHEMA_CHANGE', {}, sla);
     expect(result.status).toBe('none');
   });
 
@@ -209,14 +234,14 @@ describe('getMonitorSLAStatus', () => {
 
   it('returns none when resolvedPolicy has status none', () => {
     const sla = { freshness: { maxHours: 24 }, status: 'none' };
-    const result = getMonitorSLAStatus('FRESHNESS', { max_hours: 24 }, sla);
+    const result = getMonitorSLAStatus('FRESHNESS', { max_hours: 24, timestamp_column: 'updated_at' }, sla);
     expect(result.status).toBe('none');
   });
 
   it('violation status takes precedence over override', () => {
     const sla = { freshness: { maxHours: 24, warningHours: 12 } };
     // max_hours=48 is a violation, warning_hours=6 is an override (stricter)
-    const config = { max_hours: 48, warning_hours: 6 };
+    const config = { max_hours: 48, warning_hours: 6, timestamp_column: 'updated_at' };
     const result = getMonitorSLAStatus('FRESHNESS', config, sla);
     expect(result.status).toBe('violation');
     expect(result.violationFields).toContain('max_hours');
@@ -245,10 +270,26 @@ describe('getMonitorSLAStatus', () => {
   });
 
   it('skips fields not present in config', () => {
-    // SLA has maxHours defined but config does not include max_hours
+    // SLA has maxHours defined but config does not include max_hours — only timestamp_column
     const sla = { freshness: { maxHours: 24 } };
-    const config = { some_other_field: 10 };
+    const config = { timestamp_column: 'updated_at' };
     const result = getMonitorSLAStatus('FRESHNESS', config, sla);
+    expect(result.status).toBe('policy');
+  });
+
+  it('setting timestamp_column does not trigger override', () => {
+    // Core scenario: monitor created with policy values, user adds required operational config
+    const sla = { freshness: { maxHours: 24, warningHours: 12 } };
+    const config = { max_hours: 24, warning_hours: 12, timestamp_column: 'updated_at' };
+    const result = getMonitorSLAStatus('FRESHNESS', config, sla);
+    expect(result.status).toBe('policy');
+    expect(result.overriddenFields).toHaveLength(0);
+  });
+
+  it('OUTLIER_DETECTION: setting column does not trigger override', () => {
+    const sla = { anomaly: { sensitivity: 0.95, lookbackDays: 14 } };
+    const config = { column: 'revenue', anomaly_threshold: 3, lookback_days: 14 };
+    const result = getMonitorSLAStatus('OUTLIER_DETECTION', config, sla);
     expect(result.status).toBe('policy');
   });
 });

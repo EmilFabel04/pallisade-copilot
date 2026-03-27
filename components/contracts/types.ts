@@ -4,10 +4,7 @@ import { z } from 'zod';
 export type SlaTier = 'T0' | 'T1' | 'T2' | 'T3';
 
 // ─── Pipeline Contract ───────────────────────────────────────
-export interface PipelineContractData {
-  ownerUser: string | null;
-  ownerTeam: string | null;
-  contactChannel: string | null;
+export interface PipelineSLAData {
   slaTier: SlaTier | null;
   expectedFreshnessMinutes: number | null;
   expectedExtractionFrequencyMinutes: number | null;
@@ -30,10 +27,7 @@ export const INHERITANCE_CONFIG: Record<InheritanceState, { label: string; color
 };
 
 // ─── Source Contract (extended) ──────────────────────────────
-export interface SourceContractWithOverrides {
-  ownerUser: string | null;
-  ownerTeam: string | null;
-  contactChannel: string | null;
+export interface NodeSLAWithOverrides {
   slaTier: SlaTier | null;
   expectedFreshnessMinutes: number | null;
   expectedExtractionFrequencyMinutes: number | null;
@@ -44,15 +38,12 @@ export interface SourceContractWithOverrides {
 }
 
 // ─── Effective Contract (resolved) ──────────────────────────
-export interface EffectiveContract {
-  ownerUser: string | null;
-  ownerTeam: string | null;
-  contactChannel: string | null;
+export interface EffectiveSLA {
   slaTier: SlaTier | null;
   expectedFreshnessMinutes: number | null;
   expectedExtractionFrequencyMinutes: number | null;
   toolOverrides: Record<string, any>;
-  inheritanceState: InheritanceState;
+  inheritanceState: InheritanceState | null;
 }
 
 // ─── Override Key (layer-based) ──────────────────────────────
@@ -113,7 +104,7 @@ export const WarehouseOverridesSchema = z.object({
   defaultDataset: z.string().optional(),
   readOnlyEnforced: z.boolean().optional(),
 }).strict();
-export type WarehouseContractOverrides = z.infer<typeof WarehouseOverridesSchema>;
+export type WarehouseOverrides = z.infer<typeof WarehouseOverridesSchema>;
 
 // Ingestion (Fivetran, Airbyte, Stitch)
 export const IngestionOverridesSchema = z.object({
@@ -121,7 +112,7 @@ export const IngestionOverridesSchema = z.object({
   connectorPriority: z.enum(['low', 'medium', 'high']).optional(),
   schemaChangePolicy: z.enum(['ignore', 'warn', 'fail']).optional(),
 }).strict();
-export type IngestionContractOverrides = z.infer<typeof IngestionOverridesSchema>;
+export type IngestionOverrides = z.infer<typeof IngestionOverridesSchema>;
 
 // Orchestration (Airflow, Dagster, Prefect, n8n)
 export const OrchestrationOverridesSchema = z.object({
@@ -129,7 +120,7 @@ export const OrchestrationOverridesSchema = z.object({
   retryBackoffMinutes: z.number().min(0).optional(),
   oncallRequired: z.boolean().optional(),
 }).strict();
-export type OrchestrationContractOverrides = z.infer<typeof OrchestrationOverridesSchema>;
+export type OrchestrationOverrides = z.infer<typeof OrchestrationOverridesSchema>;
 
 // Transformation (dbt Cloud, dbt Core)
 export const TransformationOverridesSchema = z.object({
@@ -137,28 +128,28 @@ export const TransformationOverridesSchema = z.object({
   requiredTests: z.array(z.enum(['not_null', 'unique', 'relationships', 'accepted_values', 'freshness'])).optional(),
   freshnessTestsRequired: z.boolean().optional(),
 }).strict();
-export type TransformationContractOverrides = z.infer<typeof TransformationOverridesSchema>;
+export type TransformationOverrides = z.infer<typeof TransformationOverridesSchema>;
 
 // Reporting (Tableau, Looker, PowerBI, Metabase)
 export const ReportingOverridesSchema = z.object({
   refreshSlaMinutes: z.number().min(0).optional(),
   ownerAckRequired: z.boolean().optional(),
 }).strict();
-export type ReportingContractOverrides = z.infer<typeof ReportingOverridesSchema>;
+export type ReportingOverrides = z.infer<typeof ReportingOverridesSchema>;
 
 // Storage (S3, GCS, ADLS)
 export const StorageOverridesSchema = z.object({
   retentionDays: z.number().int().min(0).optional(),
   encryptionRequired: z.boolean().optional(),
 }).strict();
-export type StorageContractOverrides = z.infer<typeof StorageOverridesSchema>;
+export type StorageOverrides = z.infer<typeof StorageOverridesSchema>;
 
 // Observability (Elementary, Monte Carlo, Bigeye, Soda)
 export const ObservabilityOverridesSchema = z.object({
   incidentSeverityMapping: z.record(z.string(), z.string()).optional(),
   monitorMinimumSet: z.array(z.enum(['freshness', 'volume', 'schema', 'anomaly'])).optional(),
 }).strict();
-export type ObservabilityContractOverrides = z.infer<typeof ObservabilityOverridesSchema>;
+export type ObservabilityOverrides = z.infer<typeof ObservabilityOverridesSchema>;
 
 // Schema registry keyed by override key
 export const OVERRIDE_SCHEMAS: Record<OverrideKey, z.ZodObject<any>> = {

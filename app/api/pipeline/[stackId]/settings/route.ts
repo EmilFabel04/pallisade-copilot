@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 
+// Map from frontend field names to Prisma field names
+const BOOLEAN_FIELD_MAP: Record<string, string> = {
+  dataSLAsEnabled: 'dataContractsEnabled',         // new frontend name → Prisma column
+  dataContractsEnabled: 'dataContractsEnabled',    // legacy compat
+  slaAllowOverrides: 'contractAllowOverrides',     // new frontend name → Prisma column
+  contractAllowOverrides: 'contractAllowOverrides', // legacy compat
+  contractViolationAlerting: 'contractViolationAlerting',
+};
+
 // PATCH /api/pipeline/[stackId]/settings — update pipeline settings
 export async function PATCH(
   request: NextRequest,
@@ -17,8 +26,10 @@ export async function PATCH(
     const body = await request.json();
     const data: Record<string, any> = {};
 
-    if ('dataContractsEnabled' in body) {
-      data.dataContractsEnabled = Boolean(body.dataContractsEnabled);
+    for (const [frontendField, prismaField] of Object.entries(BOOLEAN_FIELD_MAP)) {
+      if (frontendField in body) {
+        data[prismaField] = Boolean(body[frontendField]);
+      }
     }
 
     if (Object.keys(data).length === 0) {
@@ -28,7 +39,12 @@ export async function PATCH(
     const pipeline = await prisma.pipelineStack.update({
       where: { id: stackId },
       data,
-      select: { id: true, dataContractsEnabled: true },
+      select: {
+        id: true,
+        dataContractsEnabled: true,
+        contractAllowOverrides: true,
+        contractViolationAlerting: true,
+      },
     });
 
     return NextResponse.json({ pipeline });

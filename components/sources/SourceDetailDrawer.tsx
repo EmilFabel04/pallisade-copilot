@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import {
   X, Activity, KeyRound, Shield, Zap, ExternalLink, AlertTriangle, CheckCircle,
-  Clock, Download, FileText, User, Users, Hash, MessageSquare, StickyNote, Edit3,
+  Clock, Download, FileText, User, Hash, MessageSquare, StickyNote, Edit3,
 } from 'lucide-react';
 import { LAYER_COLORS, LAYER_LABELS, getToolById } from '@/components/pipeline/types';
 import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG, SLA_CONFIG } from './types';
@@ -322,20 +322,6 @@ export default function SourceDetailDrawer({ source, onClose, onEditSLA }: Props
           {/* ── Contract Tab ── */}
           {activeTab === 'sla' && (
             <>
-              <Section title="Ownership" icon={Users}>
-                <div className="space-y-2">
-                  <Row label="Owner (User)">
-                    {source.contract?.ownerUser || <span className="text-[var(--text-faint)]">Not set</span>}
-                  </Row>
-                  <Row label="Owner (Team)">
-                    {source.contract?.ownerTeam || <span className="text-[var(--text-faint)]">Not set</span>}
-                  </Row>
-                  <Row label="Contact Channel">
-                    {source.contract?.contactChannel || <span className="text-[var(--text-faint)]">Not set</span>}
-                  </Row>
-                </div>
-              </Section>
-
               <Section title="SLA" icon={Shield}>
                 <div className="space-y-2">
                   <Row label="SLA Tier">

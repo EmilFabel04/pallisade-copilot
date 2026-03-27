@@ -1,11 +1,11 @@
 /**
  * Pipeline Monitoring SLA Types
  *
- * Monitoring SLA is a SEPARATE concept from DataContract:
+ * Monitoring SLA is a SEPARATE concept from DataSLA:
  * - Monitoring SLA = lightweight operational expectations (freshness, strictness,
  *   sensitivity). Cross-domain. Used to drive monitor defaults and auto-config.
- * - DataContract = governance/compliance artifact. Warehouse-table-specific. Has
- *   lifecycle (DRAFT/ACTIVE/VIOLATED/DEPRECATED), ownership, violation history.
+ * - DataSLA = governance/compliance artifact. Warehouse-table-specific. Has
+ *   lifecycle (DRAFT/ACTIVE/VIOLATED/DEPRECATED), violation history.
  */
 
 // ---------------------------------------------------------------------------

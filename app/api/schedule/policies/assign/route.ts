@@ -176,8 +176,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Unknown assignmentType: ${assignmentType}` }, { status: 400 });
     }
 
-    // ── Auto-sync: create/update data contracts when contracts are disabled ──
-    // When dataContractsEnabled=false, SLA changes auto-update contracts
+    // ── Auto-sync: create/update data SLAs when data SLAs are disabled ──
+    // When dataSLAsEnabled=false, SLA changes auto-update data SLA records
     console.log('[SLA-Sync] stackId:', stackId, 'assignmentType:', assignmentType, 'nodeFqns:', nodeFqns?.length, 'profile:', profile.name);
     try {
       if (stackId && assignmentType === 'direct' && nodeFqns && nodeFqns.length > 0) {
@@ -189,8 +189,36 @@ export async function POST(request: NextRequest) {
         // Always sync: create contracts if they don't exist, update only when contracts are disabled
         if (pipeline) {
           const contractsEnabled = pipeline.dataContractsEnabled;
-          // Map SLA profile fields → data contract fields
+          // Map SLA profile → data contract fields (full config sections + legacy fields)
           const contractData: Record<string, unknown> = {};
+          // SLA tier from criticality
+          if (profile.criticality) {
+            const tierMap: Record<string, string> = { critical: 'T0', high: 'T1', medium: 'T2', low: 'T3' };
+            contractData.slaTier = tierMap[profile.criticality as string] || null;
+          }
+          // Full domain-specific config sections (same shape as PolicyProfile)
+          const configKeys = [
+            'freshnessConfig', 'schemaConfig', 'volumeConfig', 'anomalyConfig',
+            'qualityConfig', 'ingestionConfig', 'biConfig', 'orchestrationConfig',
+            'transformConfig',
+          ] as const;
+          for (const key of configKeys) {
+            if (profile[key]) contractData[key] = profile[key];
+          }
+          // Also apply per-assignment overrides into configs
+          if (overrides && typeof overrides === 'object') {
+            for (const [section, fields] of Object.entries(overrides as Record<string, any>)) {
+              if (fields && typeof fields === 'object') {
+                const configKey = `${section}` as string;
+                if (contractData[configKey] && typeof contractData[configKey] === 'object') {
+                  contractData[configKey] = { ...(contractData[configKey] as Record<string, unknown>), ...fields };
+                } else {
+                  contractData[configKey] = fields;
+                }
+              }
+            }
+          }
+          // Legacy fields for backwards compat
           if (profile.freshnessConfig) {
             const fc = profile.freshnessConfig as Record<string, unknown>;
             if (fc.maxHours != null) contractData.expectedFreshnessMinutes = Math.round(Number(fc.maxHours) * 60);
@@ -199,77 +227,89 @@ export async function POST(request: NextRequest) {
             const ic = profile.ingestionConfig as Record<string, unknown>;
             if (ic.syncLagToleranceMinutes != null) contractData.expectedExtractionFrequencyMinutes = Number(ic.syncLagToleranceMinutes);
           }
-          if (profile.criticality) {
-            const tierMap: Record<string, string> = { critical: 'T0', high: 'T1', medium: 'T2', low: 'T3' };
-            contractData.slaTier = tierMap[profile.criticality as string] || null;
-          }
 
-          // Create one contract per unique domain scope from the assigned FQNs
-          // Parse domain from first FQN segment (e.g., "bigquery.public.customers" → warehouse)
-          // For now, create a single auto-synced contract per assignment
-          const fqnParts = nodeFqns[0]?.split('.') || [];
-          const scopeRef = fqnParts.length >= 2 ? `${fqnParts[0]}.${fqnParts[1]}` : fqnParts[0] || 'default';
-          const scope = 'schema'; // Most lineage nodes are warehouse/data assets
+          // Build a stable scopeRef from sorted FQNs for the unique constraint
+          const sortedFqns = [...nodeFqns].sort();
+          const scopeRef = sortedFqns.join(',').slice(0, 200) || 'default';
+          const scope = 'schema';
+          const contractName = `${profile.name} — ${nodeFqns.length} node${nodeFqns.length !== 1 ? 's' : ''}`;
 
           // When contracts enabled: only create if doesn't exist (don't overwrite user edits)
           // When contracts disabled: always upsert (SLA is source of truth)
+          // First check if a contract already covers any of these nodes
+          const existingContracts = await prisma.pipelineDataContract.findMany({
+            where: { pipelineStackId: stackId },
+          });
+          const existingForNodes = existingContracts.find(c => {
+            const cFqns = (c.nodeFqns as string[] | null) || [];
+            return cFqns.length > 0 && nodeFqns.some(fqn => cFqns.includes(fqn));
+          });
+          // Also check by legacy scopeRef
+          const existingByScopeRef = existingContracts.find(c => c.scopeRef === scopeRef);
+          const existing = existingForNodes || existingByScopeRef;
+
           if (contractsEnabled) {
-            const existing = await prisma.pipelineDataContract.findUnique({
-              where: { pipelineStackId_scope_scopeRef: { pipelineStackId: stackId, scope, scopeRef } },
-            });
             if (!existing) {
               await prisma.pipelineDataContract.create({
                 data: {
                   pipelineStackId: stackId,
                   scope,
                   scopeRef,
-                  autoSynced: false, // User-owned when contracts are enabled
+                  name: contractName,
+                  nodeFqns: sortedFqns,
+                  autoSynced: false,
                   ...contractData,
                 },
               });
-              console.log('[SLA-Sync] Created new data contract (contracts enabled):', scopeRef);
-            } else {
-              console.log('[SLA-Sync] Skipped update — contract exists and contracts are enabled:', scopeRef);
             }
           } else {
-            await prisma.pipelineDataContract.upsert({
-              where: {
-                pipelineStackId_scope_scopeRef: {
+            if (existing) {
+              await prisma.pipelineDataContract.update({
+                where: { id: existing.id },
+                data: {
+                  autoSynced: true,
+                  nodeFqns: sortedFqns,
+                  name: existing.name || contractName,
+                  ...contractData,
+                },
+              });
+            } else {
+              await prisma.pipelineDataContract.create({
+                data: {
                   pipelineStackId: stackId,
                   scope,
                   scopeRef,
+                  name: contractName,
+                  nodeFqns: sortedFqns,
+                  autoSynced: true,
+                  ...contractData,
                 },
-              },
-              create: {
-                pipelineStackId: stackId,
-                scope,
-                scopeRef,
-                autoSynced: true,
-                ...contractData,
-              },
-              update: {
-                autoSynced: true,
-                ...contractData,
-              },
-            });
-            console.log('[SLA-Sync] Upserted data contract (contracts disabled):', scopeRef);
+              });
+            }
           }
 
-          // Also update the SourceContract (per-integration SLA) if an integration exists
-          // This keeps the sources page SLA in sync
-          const integrations = await prisma.integration.findMany({
+          // Update the SourceContract for the integration that owns the assigned nodes.
+          // Tool nodes (ingestion/orchestration) get the direct SLA tier.
+          // Data asset tools (warehouse/transformation) will aggregate from child assignments
+          // when the sources page fetches data — we only update matching integrations here.
+          const assignedNodes = await prisma.pipelineNode.findMany({
             where: {
-              pipelineNodes: { some: { stackId } },
+              stackId,
+              OR: nodeFqns.map(fqn => {
+                const parts = fqn.split('.');
+                return { name: parts[parts.length - 1] };
+              }),
             },
-            select: { id: true },
+            select: { integrationId: true, layer: true },
           });
-          for (const integration of integrations) {
+          const integrationIds = [...new Set(assignedNodes.map(n => n.integrationId).filter(Boolean))] as string[];
+          for (const integrationId of integrationIds) {
             await prisma.sourceContract.upsert({
-              where: { integrationId: integration.id },
+              where: { integrationId },
               create: {
-                integrationId: integration.id,
+                integrationId,
                 pipelineStackId: stackId,
-                inheritFromPipeline: true,
+                inheritFromPipeline: false,
                 slaTier: contractData.slaTier as string || undefined,
                 expectedFreshnessMinutes: contractData.expectedFreshnessMinutes as number || undefined,
                 expectedExtractionFrequencyMinutes: contractData.expectedExtractionFrequencyMinutes as number || undefined,
@@ -285,7 +325,7 @@ export async function POST(request: NextRequest) {
       }
     } catch (syncErr) {
       // Non-critical — log but don't fail the assignment
-      console.warn('[SLA] Auto-sync to data contract failed:', syncErr);
+      console.warn('[SLA] Auto-sync to data SLA failed:', syncErr);
     }
 
     return NextResponse.json({
@@ -314,20 +354,34 @@ export async function DELETE(request: NextRequest) {
     const organizationId = (session.user as any).organizationId;
     const { searchParams } = new URL(request.url);
     const assignmentId = searchParams.get('id');
-    if (!assignmentId) {
-      return NextResponse.json({ error: 'Assignment id required' }, { status: 400 });
+
+    // Delete by assignment ID
+    if (assignmentId) {
+      const existing = await prisma.policyAssignment.findFirst({
+        where: { id: assignmentId, organizationId },
+      });
+      if (!existing) {
+        return NextResponse.json({ error: 'Assignment not found' }, { status: 404 });
+      }
+      await prisma.policyAssignment.delete({ where: { id: assignmentId } });
+      return NextResponse.json({ deleted: assignmentId });
     }
 
-    const existing = await prisma.policyAssignment.findFirst({
-      where: { id: assignmentId, organizationId },
-    });
-    if (!existing) {
-      return NextResponse.json({ error: 'Assignment not found' }, { status: 404 });
+    // Delete by node FQNs (from request body)
+    const body = await request.json().catch(() => null);
+    const nodeFqns: string[] = body?.nodeFqns;
+    if (nodeFqns?.length) {
+      const deleted = await prisma.policyAssignment.deleteMany({
+        where: {
+          organizationId,
+          assignmentType: 'direct',
+          nodeFqn: { in: nodeFqns },
+        },
+      });
+      return NextResponse.json({ deleted: deleted.count });
     }
 
-    await prisma.policyAssignment.delete({ where: { id: assignmentId } });
-
-    return NextResponse.json({ deleted: assignmentId });
+    return NextResponse.json({ error: 'Assignment id or nodeFqns required' }, { status: 400 });
   } catch (error: any) {
     console.error('[Policies] Error deleting assignment:', error);
     return NextResponse.json({ error: error.message || 'Failed to delete assignment' }, { status: 500 });

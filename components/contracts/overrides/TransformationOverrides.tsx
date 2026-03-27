@@ -1,17 +1,17 @@
 'use client';
 
-import type { TransformationContractOverrides } from '../types';
+import type { TransformationOverrides as TransformationOverridesType } from '../types';
 
 interface Props {
-  value: Partial<TransformationContractOverrides>;
-  onChange: (overrides: Partial<TransformationContractOverrides>) => void;
+  value: Partial<TransformationOverridesType>;
+  onChange: (overrides: Partial<TransformationOverridesType>) => void;
   inputClass: string;
 }
 
 const TEST_OPTIONS = ['not_null', 'unique', 'relationships', 'accepted_values', 'freshness'] as const;
 
 export default function TransformationOverrides({ value, onChange, inputClass }: Props) {
-  const update = (key: keyof TransformationContractOverrides, val: any) => {
+  const update = (key: keyof TransformationOverridesType, val: any) => {
     onChange({ ...value, [key]: val });
   };
 

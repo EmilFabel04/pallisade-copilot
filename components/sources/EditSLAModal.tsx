@@ -38,9 +38,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
   const [error, setError] = useState<string | null>(null);
 
   // Core fields
-  const [ownerUser, setOwnerUser] = useState(source.contract?.ownerUser || '');
-  const [ownerTeam, setOwnerTeam] = useState(source.contract?.ownerTeam || '');
-  const [contactChannel, setContactChannel] = useState(source.contract?.contactChannel || '');
   const [slaTier, setSlaTier] = useState<string>(source.contract?.slaTier || '');
   const [expectedFreshnessMinutes, setExpectedFreshnessMinutes] = useState<string>(
     source.contract?.expectedFreshnessMinutes?.toString() || ''
@@ -70,9 +67,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
 
   // Build effective SLA preview
   const sourceForResolver: NodeSLAWithOverrides = {
-    ownerUser: ownerUser || null,
-    ownerTeam: ownerTeam || null,
-    contactChannel: contactChannel || null,
     slaTier: (slaTier || null) as SlaTier | null,
     expectedFreshnessMinutes: expectedFreshnessMinutes ? Number(expectedFreshnessMinutes) : null,
     expectedExtractionFrequencyMinutes: expectedExtractionFrequencyMinutes ? Number(expectedExtractionFrequencyMinutes) : null,
@@ -94,9 +88,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
       }
 
       const body: Record<string, any> = {
-        ownerUser: ownerUser || null,
-        ownerTeam: ownerTeam || null,
-        contactChannel: contactChannel || null,
         slaTier: slaTier || null,
         expectedFreshnessMinutes: expectedFreshnessMinutes ? Number(expectedFreshnessMinutes) : null,
         expectedExtractionFrequencyMinutes: expectedExtractionFrequencyMinutes ? Number(expectedExtractionFrequencyMinutes) : null,
@@ -186,37 +177,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
               </div>
             )}
 
-            {/* Ownership */}
-            <Section title="Ownership">
-              <Field label="Owner (User)">
-                <input
-                  type="text"
-                  value={ownerUser}
-                  onChange={(e) => setOwnerUser(e.target.value)}
-                  placeholder={pipelinePlaceholder('ownerUser') || 'e.g. jane.doe'}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Owner (Team)">
-                <input
-                  type="text"
-                  value={ownerTeam}
-                  onChange={(e) => setOwnerTeam(e.target.value)}
-                  placeholder={pipelinePlaceholder('ownerTeam') || 'e.g. Data Platform'}
-                  className={inputClass}
-                />
-              </Field>
-              <Field label="Contact Channel">
-                <input
-                  type="text"
-                  value={contactChannel}
-                  onChange={(e) => setContactChannel(e.target.value)}
-                  placeholder={pipelinePlaceholder('contactChannel') || 'e.g. #data-alerts'}
-                  className={inputClass}
-                />
-              </Field>
-            </Section>
-
             {/* SLA & Expectations */}
             <Section title="SLA & Expectations">
               <Field label="SLA Tier">
@@ -295,15 +255,15 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-faint)]">
                   Effective Contract Preview
                 </h3>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-                  INHERITANCE_CONFIG[effective.inheritanceState].bg
-                } ${INHERITANCE_CONFIG[effective.inheritanceState].color}`}>
-                  {INHERITANCE_CONFIG[effective.inheritanceState].label}
-                </span>
+                {effective.inheritanceState && (
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${
+                    INHERITANCE_CONFIG[effective.inheritanceState].bg
+                  } ${INHERITANCE_CONFIG[effective.inheritanceState].color}`}>
+                    {INHERITANCE_CONFIG[effective.inheritanceState].label}
+                  </span>
+                )}
               </div>
               <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
-                <PreviewField label="Owner" value={effective.ownerUser || effective.ownerTeam} />
-                <PreviewField label="Contact" value={effective.contactChannel} />
                 <PreviewField label="SLA Tier" value={effective.slaTier} />
                 <PreviewField label="Freshness" value={effective.expectedFreshnessMinutes ? `${effective.expectedFreshnessMinutes}m` : null} />
                 <PreviewField label="Extraction Freq" value={effective.expectedExtractionFrequencyMinutes ? `${effective.expectedExtractionFrequencyMinutes}m` : null} />

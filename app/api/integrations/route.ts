@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { encrypt, decrypt } from '@/lib/crypto';
-import { resolveEffectiveContract } from '@/lib/contracts/resolver';
-import { PipelineContractData, SourceContractWithOverrides } from '@/components/contracts/types';
+import { resolveEffectiveSLA } from '@/lib/contracts/resolver';
+import { PipelineSLAData, NodeSLAWithOverrides } from '@/components/contracts/types';
 import { notifyEvents } from '@/lib/notifications';
 
 // GET /api/integrations - List all integrations for the user's organization
@@ -100,9 +100,6 @@ export async function GET(request: NextRequest) {
             lastLogsExtractedAt: true,
             sourceContract: {
               select: {
-                ownerUser: true,
-                ownerTeam: true,
-                contactChannel: true,
                 slaTier: true,
                 expectedFreshnessMinutes: true,
                 expectedExtractionFrequencyMinutes: true,
@@ -194,8 +191,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // Filter out non-data-source nodes (infrastructure, version control are not data sources)
+    const EXCLUDED_LAYERS = new Set(['INFRASTRUCTURE', 'VERSION_CONTROL']);
+    const dataNodes = pipelineNodes.filter(node => !EXCLUDED_LAYERS.has(node.layer));
+
     // Map pipeline nodes to integration-like format with enriched health/extraction
-    const pipelineAsIntegrations = pipelineNodes.map(node => {
+    const pipelineAsIntegrations = dataNodes.map(node => {
       const intId = node.integrationId;
       const monitorData = intId ? monitorMap.get(intId) : null;
       const scanData = scanMap.get(node.stackId);
@@ -275,7 +276,7 @@ export async function GET(request: NextRequest) {
     const allIntegrations = [...pipelineAsIntegrations, ...dedupedLegacy];
 
     // Fetch pipeline contract if stackId provided, for effective contract resolution
-    let pipelineContractData: PipelineContractData | null = null;
+    let pipelineContractData: PipelineSLAData | null = null;
     if (stackId) {
       try {
         const pc = await prisma.pipelineContract.findUnique({
@@ -283,9 +284,6 @@ export async function GET(request: NextRequest) {
         });
         if (pc) {
           pipelineContractData = {
-            ownerUser: pc.ownerUser,
-            ownerTeam: pc.ownerTeam,
-            contactChannel: pc.contactChannel,
             slaTier: pc.slaTier as any,
             expectedFreshnessMinutes: pc.expectedFreshnessMinutes,
             expectedExtractionFrequencyMinutes: pc.expectedExtractionFrequencyMinutes,
@@ -298,14 +296,104 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // For data asset tools (WAREHOUSE, TRANSFORMATION), aggregate SLA from child
+    // PolicyAssignment records instead of using the tool-level SourceContract.
+    // This gives a representative SLA for the tool's data assets.
+    const DATA_ASSET_LAYERS = new Set(['WAREHOUSE', 'TRANSFORMATION']);
+    let childSLAMap = new Map<string, { slaTier: string; freshnessMinutes: number | null; extractionMinutes: number | null }>();
+
+    if (stackId) {
+      try {
+        // Get all direct policy assignments for nodes in this stack
+        const assignments = await prisma.policyAssignment.findMany({
+          where: {
+            assignmentType: 'direct',
+            profile: { organizationId: user.organizationId },
+          },
+          select: {
+            nodeFqn: true,
+            profile: {
+              select: {
+                criticality: true,
+                freshnessConfig: true,
+                ingestionConfig: true,
+              },
+            },
+          },
+        });
+
+        // Map FQN → SLA tier (from criticality)
+        const tierOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+        const tierToLabel: Record<string, string> = { critical: 'T0', high: 'T1', medium: 'T2', low: 'T3' };
+
+        // Group assignments by integration via PipelineNode linkage
+        const fqnToAssignment = new Map(assignments.filter(a => a.nodeFqn).map(a => [a.nodeFqn!, a]));
+
+        // Get pipeline nodes to map FQN → integrationId
+        for (const node of dataNodes) {
+          if (!DATA_ASSET_LAYERS.has(node.layer) || !node.integrationId) continue;
+
+          // Check if any assignment matches this node's name pattern
+          for (const [fqn, assignment] of fqnToAssignment) {
+            const fqnParts = fqn.split('.');
+            const nodeName = fqnParts[fqnParts.length - 1];
+            if (nodeName !== node.name && !fqn.includes(node.name)) continue;
+
+            const criticality = (assignment.profile.criticality || 'medium').toLowerCase();
+            const tier = tierToLabel[criticality] || 'T2';
+            const existing = childSLAMap.get(node.integrationId);
+
+            // Keep the most critical tier (lowest T number)
+            if (!existing || tierOrder[criticality] < tierOrder[existing.slaTier.toLowerCase().replace('t', '')] || 0) {
+              const fc = assignment.profile.freshnessConfig as Record<string, unknown> | null;
+              const ic = assignment.profile.ingestionConfig as Record<string, unknown> | null;
+              childSLAMap.set(node.integrationId, {
+                slaTier: tier,
+                freshnessMinutes: fc?.maxHours != null ? Math.round(Number(fc.maxHours) * 60) : null,
+                extractionMinutes: ic?.syncLagToleranceMinutes != null ? Number(ic.syncLagToleranceMinutes) : null,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error aggregating child SLAs:', err);
+      }
+    }
+
     // Compute effective contract for each integration
     const integrationsWithEffective = allIntegrations.map(integration => {
       try {
-        const sc = integration.sourceContract as SourceContractWithOverrides | null;
+        let sc = integration.sourceContract as NodeSLAWithOverrides | null;
         const intType = integration.type || '';
-        const effective = resolveEffectiveContract(pipelineContractData, sc, intType);
+
+        // Discard stale SourceContracts that were created by old auto-sync
+        // (inheritFromPipeline=true means it was blindly copied from pipeline,
+        //  not derived from actual child asset SLA assignments)
+        if (sc?.inheritFromPipeline) {
+          sc = null;
+        }
+
+        // For data asset tools, use aggregated child SLA if available
+        const layer = (integration as any).layer;
+        if (DATA_ASSET_LAYERS.has(layer)) {
+          const aggregated = childSLAMap.get(integration.id);
+          if (aggregated) {
+            sc = {
+              notes: sc?.notes ?? null,
+              slaTier: aggregated.slaTier,
+              expectedFreshnessMinutes: aggregated.freshnessMinutes ?? null,
+              expectedExtractionFrequencyMinutes: aggregated.extractionMinutes ?? null,
+              inheritFromPipeline: false,
+              pipelineStackId: null,
+              overridesJson: null,
+            } as NodeSLAWithOverrides;
+          }
+        }
+
+        const effective = resolveEffectiveSLA(pipelineContractData, sc, intType);
         return {
           ...integration,
+          sourceContract: sc,
           effectiveContract: effective,
           inheritanceState: effective.inheritanceState,
         };

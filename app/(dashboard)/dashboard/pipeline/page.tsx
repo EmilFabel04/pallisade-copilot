@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, ChevronDown, CircleAlert, CircleDashed, GitBranch, Loader2, Pencil, Search, Sparkles, Trash2, Unplug, X, Zap } from 'lucide-react';
+import { Check, ChevronDown, CircleAlert, Info, Loader2, Pencil, Search, Trash2, Unplug, X } from 'lucide-react';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
@@ -18,7 +18,6 @@ import {
   PipelineLayer,
   PipelineNode,
   PipelineStack,
-  ToolDefinition,
   TOOLS,
   getToolById,
   isMultiRoleTool,
@@ -49,33 +48,21 @@ const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRA
 const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
 const ENVIRONMENTS = ['Dev', 'Staging', 'Prod'] as const;
 
-const STACK_TEMPLATES = [
-  {
-    id: 'gcp-analytics-stack',
-    name: 'GCP Analytics Stack',
-    description: 'BigQuery + dbt Cloud + Airflow + Looker',
-    recommendedConnectorIds: ['bigquery', 'dbt_cloud', 'airflow', 'looker'],
-  },
-  {
-    id: 'snowflake-stack',
-    name: 'Snowflake Stack',
-    description: 'Snowflake + dbt Cloud + Tableau',
-    recommendedConnectorIds: ['snowflake', 'dbt_cloud', 'tableau'],
-  },
-  {
-    id: 'oss-stack',
-    name: 'OSS Stack',
-    description: 'Airbyte + dbt Core + Apache Airflow + Microsoft Power BI',
-    recommendedConnectorIds: ['airbyte', 'dbt_core', 'airflow', 'powerbi'],
-  },
+const CONNECTION_STATUS_CATEGORIES: Array<{ key: string; label: string; connectorIds: string[] }> = [
+  { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'] },
+  { key: 'transform', label: 'Transform', connectorIds: ['dbt_cloud', 'dbt_core'] },
+  { key: 'orchestration', label: 'Orchestration', connectorIds: ['airflow', 'dagster', 'prefect'] },
+  { key: 'version_control', label: 'Version Control', connectorIds: ['github', 'gitlab', 'bitbucket'] },
+  { key: 'bi', label: 'BI', connectorIds: ['looker', 'tableau', 'powerbi', 'metabase'] },
+  { key: 'ingestion', label: 'Ingestion', connectorIds: ['fivetran', 'airbyte', 'stitch'] },
+  { key: 'storage', label: 'Storage', connectorIds: ['amazon_s3', 'gcs', 'adls'] },
+  { key: 'alerts', label: 'Alerts', connectorIds: ['slack', 'teams', 'pagerduty', 'opsgenie', 'jira', 'linear', 'asana', 'github_issues', 'monte_carlo', 'bigeye', 'soda', 'elementary'] },
 ];
 
-const CHECKLIST_STEPS: Array<{ key: string; label: string; connectorIds: string[]; required: boolean }> = [
-  { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'], required: true },
-  { key: 'transform', label: 'Transform', connectorIds: ['dbt_cloud', 'dbt_core'], required: true },
-  { key: 'orchestration', label: 'Orchestration', connectorIds: ['airflow', 'dagster', 'prefect'], required: false },
-  { key: 'bi', label: 'BI', connectorIds: ['looker', 'tableau', 'powerbi', 'metabase'], required: false },
-  { key: 'alerts', label: 'Alerts', connectorIds: ['slack', 'teams', 'pagerduty', 'opsgenie', 'jira', 'linear', 'asana', 'github_issues', 'monte_carlo', 'bigeye', 'soda', 'elementary'], required: false },
+const VCS_PROVIDERS = [
+  { id: 'github', name: 'GitHub' },
+  { id: 'gitlab', name: 'GitLab' },
+  { id: 'bitbucket', name: 'Bitbucket' },
 ];
 
 const GROUP_COLORS: Record<ConnectorGroup, string> = {
@@ -171,14 +158,12 @@ export default function PipelinePage() {
   const [integrationRecords, setIntegrationRecords] = useState<IntegrationRecord[]>([]);
   const [search, setSearch] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [environment, setEnvironment] = useState<(typeof ENVIRONMENTS)[number]>('Prod');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set(CORE_GROUP_ORDER));
   const [nodeModal, setNodeModal] = useState<PipelineNode | null>(null);
   const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
-  const [dismissedRecommendations, setDismissedRecommendations] = useState<Set<string>>(new Set());
 
   // ─── Derived data ─────────────────────────────────────────
   const connectorCatalog = useMemo<ConnectorCard[]>(() => {
@@ -215,8 +200,6 @@ export default function PipelinePage() {
     return m;
   }, [connectorCatalog, connectedFromStack, integrationRecords]);
 
-  const selectedTemplate = useMemo(() => STACK_TEMPLATES.find((t) => t.id === selectedTemplateId) || null, [selectedTemplateId]);
-
   const filteredConnectors = useMemo(() => {
     const q = search.trim().toLowerCase();
     return connectorCatalog.filter((c) => {
@@ -226,10 +209,7 @@ export default function PipelinePage() {
     });
   }, [connectorCatalog, search, selectedGroup]);
 
-  const checklistProgress = useMemo(() => {
-    const completed = CHECKLIST_STEPS.filter((s) => s.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED')).length;
-    return { completed, total: CHECKLIST_STEPS.length, percent: Math.round((completed / CHECKLIST_STEPS.length) * 100) };
-  }, [connectorStatusById]);
+  const hasVcsConnected = useMemo(() => VCS_PROVIDERS.some((p) => connectorStatusById.get(p.id) === 'CONNECTED'), [connectorStatusById]);
 
 
   // ─── Actions ──────────────────────────────────────────────
@@ -476,26 +456,6 @@ export default function PipelinePage() {
     });
   }, [integrationRecords]);
 
-  const nextSuggestedStep = useMemo(() => CHECKLIST_STEPS.find((s) => !s.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED')) || null, [connectorStatusById]);
-
-  // Recommendations: check connected tools that recommend pairing with another tool
-  const recommendations = useMemo(() => {
-    const allTools: ToolDefinition[] = Object.values(TOOLS).flat();
-    const results: Array<{ tool: ToolDefinition; missingId: string; missingName: string }> = [];
-    const seen = new Set<string>();
-    for (const tool of allTools) {
-      if (!tool.recommendedWith || !connectedFromStack.has(tool.id)) continue;
-      for (const recId of tool.recommendedWith) {
-        if (connectedFromStack.has(recId) || seen.has(recId) || dismissedRecommendations.has(recId)) continue;
-        seen.add(recId);
-        const recTool = getToolById(recId);
-        if (recTool) {
-          results.push({ tool, missingId: recId, missingName: recTool.name });
-        }
-      }
-    }
-    return results;
-  }, [connectedFromStack, dismissedRecommendations]);
 
   // ─── Handlers ─────────────────────────────────────────────
   const handleConnect = useCallback((connector: ConnectorCard) => {
@@ -559,74 +519,66 @@ export default function PipelinePage() {
           </div>
         </div>
 
-        {/* Setup Progress */}
-        <div className="rounded-xl border border-[var(--border-medium)] bg-[var(--overlay-faint)] p-4">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-[var(--accent-2)]" />
-              <h2 className="text-sm font-medium">Setup progress</h2>
-            </div>
-            <div className="text-xs text-[var(--muted)]">{checklistProgress.completed}/{checklistProgress.total} complete ({checklistProgress.percent}%)</div>
-          </div>
-
-          {/* Progress bar */}
-          <div className="h-1.5 rounded-full bg-[var(--hover-bg)] mb-3 overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all duration-700 ease-out"
-              style={{ width: `${checklistProgress.percent}%`, background: checklistProgress.percent === 100 ? '#10B981' : 'var(--accent-2)' }}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-            {CHECKLIST_STEPS.map((step) => {
-              const connected = step.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED');
-              return (
-                <div
-                  key={step.key}
-                  className={`px-3 py-2 rounded-lg border text-xs transition-all ${
-                    connected
-                      ? 'border-emerald-500/30 bg-emerald-500/10'
-                      : 'border-[var(--border-medium)] bg-[var(--overlay-faint)]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {connected ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <CircleDashed className="w-3.5 h-3.5 text-[var(--muted)]" />}
-                    <span>{step.label}</span>
-                  </div>
-                  <div className="mt-1 text-[10px] text-[var(--muted)]">{step.required ? 'Required' : 'Optional'}</div>
-                </div>
-              );
-            })}
-          </div>
-          {nextSuggestedStep && (
-            <p className="text-xs text-[var(--muted)] mt-3">
-              Next step: connect <span className="text-[var(--accent-2)] font-medium">{nextSuggestedStep.label}</span>
-            </p>
-          )}
+        {/* Connected Status */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {CONNECTION_STATUS_CATEGORIES.map((cat) => {
+            const connected = cat.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED');
+            return (
+              <div
+                key={cat.key}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all ${
+                  connected
+                    ? 'border-emerald-500/30 bg-emerald-500/10'
+                    : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] text-[var(--muted)]'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-[var(--muted)]'}`} />
+                <span>{cat.label}</span>
+              </div>
+            );
+          })}
         </div>
 
-        {/* Stack Templates */}
-        <div className="rounded-xl border border-[var(--border-medium)] bg-[var(--overlay-faint)] p-4">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <h3 className="text-sm font-medium">Stack templates</h3>
-            <span className="text-xs text-[var(--muted)]">One-click starter bundles</span>
+        {/* VCS Integration Callout */}
+        <div className={`rounded-xl border p-4 ${hasVcsConnected ? 'border-emerald-500/25 bg-emerald-500/[0.04]' : 'border-blue-500/25 bg-blue-500/[0.06]'}`}>
+          <div className="flex items-start gap-3">
+            <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${hasVcsConnected ? 'text-emerald-400' : 'text-blue-400'}`} />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-medium">
+                {hasVcsConnected ? 'Version control connected' : 'Connect version control for richer tool context'}
+              </h3>
+              <p className="text-xs text-[var(--muted)] mt-1 leading-relaxed">
+                {hasVcsConnected
+                  ? 'Your VCS is linked — open source tools like dbt, Airflow, and Dagster can access their code repos. Configure repo paths here as a universal source instead of reconfiguring in each tool.'
+                  : 'Link your VCS to give open source tools like dbt, Airflow, and Dagster access to their code repos. This acts as a universal source — configure repo paths here instead of reconfiguring version control in each tool separately.'}
+              </p>
+            </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {STACK_TEMPLATES.map((template) => {
-              const active = selectedTemplateId === template.id;
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+            {VCS_PROVIDERS.map((provider) => {
+              const connector = connectorCatalog.find((c) => c.id === provider.id);
+              const isConnected = connectorStatusById.get(provider.id) === 'CONNECTED';
               return (
                 <button
-                  key={template.id}
-                  onClick={() => setSelectedTemplateId(active ? null : template.id)}
-                  className={`text-left rounded-lg border p-3 transition-all ${
-                    active
-                      ? 'border-[var(--accent)] bg-[var(--accent)]/10 shadow-accent'
+                  key={provider.id}
+                  onClick={() => connector && handleConnect(connector)}
+                  className={`flex items-center gap-3 rounded-lg border p-3 text-left transition-all ${
+                    isConnected
+                      ? 'border-emerald-500/30 bg-emerald-500/[0.06] hover:bg-emerald-500/[0.1]'
                       : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--overlay-bg)] hover:border-[var(--overlay-strong)]'
                   }`}
                 >
-                  <div className="text-sm font-medium">{template.name}</div>
-                  <div className="text-xs text-[var(--muted)] mt-1">{template.description}</div>
-                  {active && <div className="text-[10px] text-[var(--accent-2)] mt-2 font-medium">Selected — recommended tools highlighted below</div>}
+                  <ToolIcon toolType={provider.id} className="w-8 h-8" />
+                  <div>
+                    <div className="text-sm font-medium">{provider.name}</div>
+                    {isConnected ? (
+                      <div className="text-[10px] text-emerald-400 flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Connected
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-blue-400">Connect →</div>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -687,7 +639,6 @@ export default function PipelinePage() {
               {!collapsedGroups.has(group) && <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {connectors.map((connector) => {
                   const status = connectorStatusById.get(connector.id) || 'NOT_CONNECTED';
-                  const recommended = selectedTemplate?.recommendedConnectorIds.includes(connector.id);
                   const isExpanded = expandedConnector === connector.id;
                   const isDisconnecting = disconnecting === connector.id;
 
@@ -699,8 +650,6 @@ export default function PipelinePage() {
                           ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07]'
                           : status === 'NEEDS_ATTENTION'
                           ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07]'
-                          : recommended
-                          ? 'border-[var(--accent)]/40 bg-[var(--accent)]/[0.04] hover:bg-[var(--accent)]/[0.08] hover:border-[var(--accent)]/60'
                           : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)]'
                       }`}
                       onClick={() => setExpandedConnector(isExpanded ? null : connector.id)}
@@ -728,11 +677,6 @@ export default function PipelinePage() {
                             <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25">
                               <CircleAlert className="w-3 h-3" />
                               Error
-                            </span>
-                          ) : recommended ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-[var(--accent)]/15 text-[var(--accent-2)] border border-[var(--accent)]/30">
-                              <Zap className="w-3 h-3" />
-                              Recommended
                             </span>
                           ) : null}
                         </div>
@@ -780,7 +724,6 @@ export default function PipelinePage() {
                             onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}
                             className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] text-[var(--text)] hover:bg-[var(--hover-bg)] hover:border-[var(--overlay-strong)] transition-all"
                           >
-                            <Zap className="w-3 h-3" />
                             Connect
                           </button>
                         )}
@@ -832,37 +775,6 @@ export default function PipelinePage() {
           );
         })}
 
-        {/* Complementary Integration Recommendations */}
-        {recommendations.length > 0 && recommendations.map(({ tool, missingId, missingName }) => (
-          <div
-            key={missingId}
-            className="flex items-center gap-3 rounded-xl border border-purple-500/25 bg-purple-500/[0.06] p-4"
-          >
-            <GitBranch className="w-5 h-5 text-purple-400 flex-shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm">
-                <span className="font-medium">{tool.name}</span> works best with <span className="font-medium">{missingName}</span>.{' '}
-                <span className="text-[var(--muted)]">{tool.recommendedReason}</span>
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                const connector = connectorCatalog.find((c) => c.id === missingId);
-                if (connector) handleConnect(connector);
-              }}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-purple-500/15 border border-purple-500/30 text-purple-300 hover:bg-purple-500/25 transition-all flex-shrink-0"
-            >
-              <Zap className="w-3 h-3" />
-              Connect {missingName}
-            </button>
-            <button
-              onClick={() => setDismissedRecommendations((prev) => new Set([...prev, missingId]))}
-              className="p-1 rounded-md hover:bg-[var(--hover-bg)] text-[var(--muted)] transition-all flex-shrink-0"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
       </section>
 
 

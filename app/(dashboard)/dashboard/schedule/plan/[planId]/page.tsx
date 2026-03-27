@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { usePipeline } from '@/contexts/PipelineContext';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { RunHistoryTable } from '@/components/schedule/RunHistoryTable';
@@ -52,6 +53,7 @@ function cronToHuman(cron: string): string {
 export default function PlanDetailPage() {
   const { planId } = useParams<{ planId: string }>();
   const router = useRouter();
+  const { selectedPipelineId } = usePipeline();
 
   const [plan, setPlan] = useState<any>(null);
   const [aggregate, setAggregate] = useState<any>(null);
@@ -94,6 +96,7 @@ export default function PlanDetailPage() {
                 nodes: fqns.map((fqn) => ({
                   fqn, domain: 'warehouse', criticality: 'medium',
                 })),
+                stackId: selectedPipelineId,
               }),
             });
             if (policyRes.ok) {
@@ -460,9 +463,7 @@ export default function PlanDetailPage() {
                 const policyStatus = getMonitorSLAStatus(
                   mon.monitorType || '', mon.config || {}, monPolicy
                 );
-                const monType = (mon.monitorType || '').toUpperCase();
-                const needsConfig = (monType === 'ANOMALY' || monType === 'OUTLIER_DETECTION')
-                  && !(mon.config as Record<string, any>)?.column;
+                const needsConfig = policyStatus.status === 'needs_config';
                 return (
                   <div
                     key={mon.id}

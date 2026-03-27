@@ -137,7 +137,22 @@ export function isLessStrictClient(fieldKey: string, currentValue: any, policyVa
   return false;
 }
 
-export type MonitorSLAStatus = 'policy' | 'override' | 'violation' | 'none';
+export type MonitorSLAStatus = 'policy' | 'override' | 'violation' | 'needs_config' | 'none';
+
+// Required config fields per monitor type — if any are empty, status is 'needs_config'
+const REQUIRED_CONFIG_FIELDS: Record<string, string[]> = {
+  FRESHNESS: ['timestamp_column'],
+  VOLUME: [],
+  SCHEMA_CHANGE: [],
+  SYNC_LAG: [],
+  FAILED_SYNCS: [],
+  ANOMALY: ['timestamp_column', 'metric_column'],
+  OUTLIER_DETECTION: ['column'],
+  NULL_CHECK: ['columns'],
+  UNIQUENESS_CHECK: ['columns'],
+  RANGE_VALIDATION: ['column', 'min_value', 'max_value'],
+  ACCEPTED_VALUES: ['column', 'accepted_values'],
+};
 
 /**
  * Compute the SLA compliance status for a monitor by comparing its
@@ -150,7 +165,24 @@ export function getMonitorSLAStatus(
   resolvedPolicy: Record<string, any> | null,
 ): { status: MonitorSLAStatus; overriddenFields: string[]; violationFields: string[] } {
   if (!resolvedPolicy || !config || Object.keys(config).length === 0 || resolvedPolicy.status === 'none') {
+    // Even without a policy, check for required config
+    const reqFields = REQUIRED_CONFIG_FIELDS[monitorType] || [];
+    for (const f of reqFields) {
+      const val = config?.[f];
+      if (val === undefined || val === null || val === '' || (Array.isArray(val) && val.length === 0)) {
+        return { status: 'needs_config', overriddenFields: [], violationFields: [] };
+      }
+    }
     return { status: 'none', overriddenFields: [], violationFields: [] };
+  }
+
+  // Check required config fields first
+  const requiredFields = REQUIRED_CONFIG_FIELDS[monitorType] || [];
+  for (const f of requiredFields) {
+    const val = config[f];
+    if (val === undefined || val === null || val === '' || (Array.isArray(val) && val.length === 0)) {
+      return { status: 'needs_config', overriddenFields: [], violationFields: [] };
+    }
   }
 
   const map = SLA_FIELD_MAP[monitorType];

@@ -1313,16 +1313,16 @@ export function DataAssetDetailPanel({
           )}
         </div>
 
-        {/* ─── Monitoring SLA ────────────────────────────── */}
+        {/* ─── Data SLA ────────────────────────────── */}
         <div className="border-t border-[var(--subtle-border)] pt-3">
-          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Monitoring SLA</label>
+          <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data SLA</label>
           {slaInfo && slaInfo.status !== 'none' ? (
             <div className="mt-2 p-2.5 rounded-lg border border-slate-500/30 bg-slate-500/10">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-slate-400" />
                   <span className="text-[13px] font-medium text-slate-300">
-                    {slaInfo.profileName || 'SLA Assigned'}
+                    {slaInfo.profileName || 'Data SLA Assigned'}
                   </span>
                 </div>
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-300 capitalize">
@@ -1332,7 +1332,21 @@ export function DataAssetDetailPanel({
               {slaInfo.source && (
                 <p className="text-[11px] text-[var(--muted)] mt-1">{slaInfo.source}</p>
               )}
-              {onEditSLA && (
+              {slaInfo.source === 'data_contract' ? (
+                <a
+                  href="/dashboard/sources"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.location.href = '/dashboard/governance?tab=data-slas';
+                  }}
+                  className="mt-2 text-[11px] text-blue-400 hover:text-blue-300 hover:underline flex items-center gap-1"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  View Data SLA
+                </a>
+              ) : onEditSLA ? (
                 <button
                   onClick={() => onEditSLA(node.id)}
                   className="mt-2 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
@@ -1340,20 +1354,20 @@ export function DataAssetDetailPanel({
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
-                  Edit SLA
+                  Edit Data SLA
                 </button>
-              )}
+              ) : null}
             </div>
           ) : (
             <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
-              <p className="text-[12px] text-[var(--muted)]">No SLA assigned</p>
+              <p className="text-[12px] text-[var(--muted)]">No Data SLA assigned</p>
               {onEditSLA && (
                 <button
                   onClick={() => onEditSLA(node.id)}
                   className="mt-1.5 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3" />
-                  Add SLA
+                  Add Data SLA
                 </button>
               )}
             </div>

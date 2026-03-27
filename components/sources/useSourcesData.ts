@@ -10,7 +10,7 @@ import {
   ExtractionStatus,
   HealthSummary,
   SourceFilters,
-  SourceContractData,
+  SourceSLAData,
   STATUS_PRIORITY,
   deriveExtractionStatus,
 } from './types';
@@ -131,13 +131,10 @@ function mapLayer(raw: string | undefined): PipelineLayer {
   return valid.includes(upper as PipelineLayer) ? (upper as PipelineLayer) : 'WAREHOUSE';
 }
 
-// Normalize contract data from API
-function normalizeContract(raw: any): SourceContractData | null {
+// Normalize SLA data from API
+function normalizeContract(raw: any): SourceSLAData | null {
   if (!raw) return null;
   return {
-    ownerUser: raw.ownerUser || null,
-    ownerTeam: raw.ownerTeam || null,
-    contactChannel: raw.contactChannel || null,
     slaTier: raw.slaTier || null,
     expectedFreshnessMinutes: raw.expectedFreshnessMinutes ?? null,
     expectedExtractionFrequencyMinutes: raw.expectedExtractionFrequencyMinutes ?? null,
@@ -224,7 +221,7 @@ function computeSummary(sources: ControlPlaneSource[]): HealthSummary {
 export function filterAndSort(sources: ControlPlaneSource[], filters: SourceFilters): ControlPlaneSource[] {
   let result = sources;
 
-  // Search (also search owner)
+  // Search
   if (filters.search) {
     const q = filters.search.toLowerCase();
     result = result.filter(
@@ -232,9 +229,7 @@ export function filterAndSort(sources: ControlPlaneSource[], filters: SourceFilt
         s.name.toLowerCase().includes(q) ||
         s.toolType.includes(q) ||
         s.integrationType.toLowerCase().includes(q) ||
-        s.scopeSummary.toLowerCase().includes(q) ||
-        (s.contract?.ownerUser?.toLowerCase().includes(q)) ||
-        (s.contract?.ownerTeam?.toLowerCase().includes(q))
+        s.scopeSummary.toLowerCase().includes(q)
     );
   }
 
@@ -295,7 +290,7 @@ export function filterAndSort(sources: ControlPlaneSource[], filters: SourceFilt
 export function useSourcesData() {
   const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
   const [sources, setSources] = useState<ControlPlaneSource[]>([]);
-  const [pipelineContract, setPipelineContract] = useState<any>(null);
+  const [pipelineSLA, setPipelineSLA] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const lastPipelineIdRef = useRef<string | null>(null);
@@ -328,7 +323,7 @@ export function useSourcesData() {
       const normalized = rawIntegrations.map((r: any) => normalize(r, allToolTypes));
 
       setSources(normalized);
-      setPipelineContract(data.pipelineContract || null);
+      setPipelineSLA(data.pipelineContract || null);
       saveCache(selectedPipelineId, normalized);
     } catch (err: any) {
       setError(err.message || 'Unknown error');
@@ -346,5 +341,5 @@ export function useSourcesData() {
 
   const summary = computeSummary(sources);
 
-  return { sources, summary, pipelineContract, loading: loading || pipelineLoading, error, refresh };
+  return { sources, summary, pipelineSLA, loading: loading || pipelineLoading, error, refresh };
 }

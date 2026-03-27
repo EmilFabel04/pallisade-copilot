@@ -1,6 +1,6 @@
 'use client';
 
-import { Clock, User } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { LAYER_COLORS, LAYER_LABELS, getToolById } from '@/components/pipeline/types';
 import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG, SLA_CONFIG } from './types';
 import { INHERITANCE_CONFIG } from '@/components/contracts/types';
@@ -81,20 +81,12 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
         </div>
       )}
 
-      {/* Contract inheritance badge */}
-      {source.inheritanceState && (
+      {/* Contract inheritance badge — only show when source has its own SLA */}
+      {source.inheritanceState && source.contract?.slaTier && (
         <div className={`hidden md:flex shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium ${
           INHERITANCE_CONFIG[source.inheritanceState].bg
         } ${INHERITANCE_CONFIG[source.inheritanceState].color}`}>
           {INHERITANCE_CONFIG[source.inheritanceState].label}
-        </div>
-      )}
-
-      {/* Owner */}
-      {source.contract?.ownerUser && (
-        <div className="hidden lg:flex items-center gap-1 text-xs text-[var(--text-faint)] shrink-0 max-w-[100px] truncate">
-          <User className="w-3 h-3 shrink-0" />
-          <span className="truncate">{source.contract.ownerUser}</span>
         </div>
       )}
 

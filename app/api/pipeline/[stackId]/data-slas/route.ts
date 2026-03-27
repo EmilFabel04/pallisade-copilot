@@ -53,8 +53,8 @@ export async function GET(
 
     return NextResponse.json({
       dataSLAs: contracts,
-      dataContractsEnabled: pipeline?.dataContractsEnabled ?? false,
-      contractAllowOverrides: pipeline?.contractAllowOverrides ?? false,
+      dataSLAsEnabled: pipeline?.dataContractsEnabled ?? false,
+      slaAllowOverrides: pipeline?.contractAllowOverrides ?? false,
       contractViolationAlerting: pipeline?.contractViolationAlerting ?? true,
     });
   } catch (error) {

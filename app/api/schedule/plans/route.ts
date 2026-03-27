@@ -159,6 +159,7 @@ export async function POST(request: NextRequest) {
       alertChannels = [],
       alertOnStatus = ['FAIL', 'WARN', 'ERROR'],
       groups, // Array of group specs from the preview
+      stackId, // Pipeline stack ID for contract-aware resolution
     } = body;
 
     console.log('[Plans] POST body:', JSON.stringify({
@@ -219,6 +220,45 @@ export async function POST(request: NextRequest) {
         }
       } catch (err) {
         console.warn('[Plans] Policy resolve failed (non-fatal), proceeding without policy merge:', err);
+      }
+    }
+
+    // When data SLAs are enabled, data SLA values override policy values
+    if (stackId && targetFqns.size > 0) {
+      try {
+        const pipeline = await prisma.pipelineStack.findUnique({
+          where: { id: stackId },
+          select: { dataContractsEnabled: true },
+        });
+        if (pipeline?.dataContractsEnabled) {
+          const contracts = await prisma.pipelineDataContract.findMany({
+            where: { pipelineStackId: stackId },
+          });
+          for (const contract of contracts) {
+            const fqns = (contract.nodeFqns as string[] | null) || [];
+            for (const fqn of fqns) {
+              if (targetFqns.has(fqn)) {
+                resolvedPolicies[fqn] = {
+                  source: 'data_contract',
+                  profileId: null,
+                  profileName: (contract as any).slaTier ? `Contract ${(contract as any).slaTier}` : 'Data SLA',
+                  status: 'assigned',
+                  freshness: (contract as any).freshnessConfig || {},
+                  schema: (contract as any).schemaConfig || {},
+                  volume: (contract as any).volumeConfig || {},
+                  anomaly: (contract as any).anomalyConfig || {},
+                  quality: (contract as any).qualityConfig || {},
+                  ingestion: (contract as any).ingestionConfig || {},
+                  bi: (contract as any).biConfig || {},
+                  orchestration: (contract as any).orchestrationConfig || {},
+                  transform: (contract as any).transformConfig || {},
+                };
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Plans] Contract override failed (non-fatal):', err);
       }
     }
 

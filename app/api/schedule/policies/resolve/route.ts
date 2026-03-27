@@ -38,6 +38,32 @@ export async function POST(request: NextRequest) {
       }),
     ]);
 
+    // Load data SLAs for this pipeline (if enabled, they take priority)
+    let contractsEnabled = false;
+    const contractsByFqn = new Map<string, any>();
+    if (stackId) {
+      try {
+        const pipeline = await prisma.pipelineStack.findUnique({
+          where: { id: stackId },
+          select: { dataContractsEnabled: true },
+        });
+        contractsEnabled = pipeline?.dataContractsEnabled ?? false;
+
+        if (contractsEnabled) {
+          const contracts = await prisma.pipelineDataContract.findMany({
+            where: { pipelineStackId: stackId },
+          });
+          // Build a map: FQN → contract (only explicit nodeFqns)
+          for (const contract of contracts) {
+            const fqns = (contract.nodeFqns as string[] | null) || [];
+            for (const fqn of fqns) {
+              contractsByFqn.set(fqn, contract);
+            }
+          }
+        }
+      } catch {}
+    }
+
     // Build profile lookup
     const profileMap: Record<string, any> = {};
     for (const p of profiles) {
@@ -71,6 +97,29 @@ export async function POST(request: NextRequest) {
 
       if (res.ok) {
         const data = await res.json();
+        // Apply contract overrides on top of FastAPI results
+        if (contractsEnabled && contractsByFqn.size > 0 && data.policies) {
+          for (const node of nodes) {
+            const contract = contractsByFqn.get(node.fqn);
+            if (contract) {
+              data.policies[node.fqn] = {
+                source: 'data_contract',
+                profileId: null,
+                profileName: contract.slaTier ? `Contract ${contract.slaTier}` : 'Data SLA',
+                status: 'assigned',
+                freshness: contract.freshnessConfig || {},
+                schema: contract.schemaConfig || {},
+                volume: contract.volumeConfig || {},
+                anomaly: contract.anomalyConfig || {},
+                quality: contract.qualityConfig || {},
+                ingestion: contract.ingestionConfig || {},
+                bi: contract.biConfig || {},
+                orchestration: contract.orchestrationConfig || {},
+                transform: contract.transformConfig || {},
+              };
+            }
+          }
+        }
         return NextResponse.json(data);
       }
     } catch {
@@ -155,6 +204,31 @@ export async function POST(request: NextRequest) {
     });
 
     for (const node of nodes) {
+      // When data SLAs are enabled and a data SLA covers this node, use SLA values
+      if (contractsEnabled) {
+        const contract = contractsByFqn.get(node.fqn);
+        if (contract) {
+          policies[node.fqn] = {
+            source: 'data_contract',
+            profileId: null,
+            profileName: contract.slaTier ? `Contract ${contract.slaTier}` : 'Data SLA',
+            status: 'assigned',
+            ...configFromProfile({
+              freshnessConfig: contract.freshnessConfig,
+              schemaConfig: contract.schemaConfig,
+              volumeConfig: contract.volumeConfig,
+              anomalyConfig: contract.anomalyConfig,
+              qualityConfig: contract.qualityConfig,
+              ingestionConfig: contract.ingestionConfig,
+              biConfig: contract.biConfig,
+              orchestrationConfig: contract.orchestrationConfig,
+              transformConfig: contract.transformConfig,
+            }),
+          };
+          continue;
+        }
+      }
+
       // Resolution chain: direct → criticality_default → domain_default → builtin
       const direct = directByFqn.get(node.fqn);
       if (direct) {

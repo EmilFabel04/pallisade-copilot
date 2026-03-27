@@ -1038,6 +1038,7 @@ export function MultiMonitorModal({
             alertChannels,
             alertOnStatus,
             groups,
+            stackId,
           }),
         });
         if (res.ok) {
@@ -1138,6 +1139,7 @@ export function MultiMonitorModal({
             alertChannels,
             alertOnStatus,
             groups: filteredGroups,
+            stackId,
           }),
         });
 
@@ -1669,6 +1671,7 @@ export function MultiMonitorModal({
                     onChannelsChange={setAlertChannels}
                     alertOnStatus={alertOnStatus}
                     onAlertOnStatusChange={setAlertOnStatus}
+                    integrations={integrations.length > 0 ? integrations : undefined}
                   />
                 </div>
 

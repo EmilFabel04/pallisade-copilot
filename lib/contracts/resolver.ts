@@ -1,99 +1,45 @@
 import {
-  PipelineContractData,
-  SourceContractWithOverrides,
-  EffectiveContract,
-  InheritanceState,
-  SlaTier,
+  NodeSLAWithOverrides,
+  EffectiveSLA,
+  PipelineSLAData,
   validateOverrides,
 } from '@/components/contracts/types';
 
 /**
- * Core contract fields that can be inherited from pipeline → source.
- */
-const INHERITABLE_FIELDS = [
-  'ownerUser',
-  'ownerTeam',
-  'contactChannel',
-  'slaTier',
-  'expectedFreshnessMinutes',
-  'expectedExtractionFrequencyMinutes',
-] as const;
-
-/**
- * Resolve the effective contract for an integration by merging pipeline defaults
- * with source-level overrides according to inheritance rules.
+ * Resolve the effective SLA for a source integration.
  *
- * Precedence:
- *   1. If no source contract → pipeline defaults (INHERITED)
- *   2. If inheritFromPipeline=false → source-only (FULL_OVERRIDE)
- *   3. If inheritFromPipeline=true → source fields override pipeline where non-null (PARTIAL_OVERRIDE or INHERITED)
+ * Pipeline contracts and data contracts are separate concepts:
+ * - Pipeline contract = governance agreement on the pipeline as a whole
+ * - Source SLA = derived from SLA assignments on child data assets
+ *
+ * Sources only have SLA data when explicitly set via SourceContract
+ * (created by auto-sync from SLA assignments in lineage).
+ * There is NO inheritance from pipeline contract to source SLA.
  */
-export function resolveEffectiveContract(
-  pipelineContract: PipelineContractData | null,
-  sourceContract: SourceContractWithOverrides | null,
+export function resolveEffectiveSLA(
+  _pipelineSLA: PipelineSLAData | null,
+  nodeSLA: NodeSLAWithOverrides | null,
   integrationType: string
-): EffectiveContract {
-  // No source contract at all → pure pipeline defaults
-  if (!sourceContract) {
+): EffectiveSLA {
+  // No source SLA → empty (no pipeline inheritance)
+  if (!nodeSLA) {
     return {
-      ownerUser: pipelineContract?.ownerUser ?? null,
-      ownerTeam: pipelineContract?.ownerTeam ?? null,
-      contactChannel: pipelineContract?.contactChannel ?? null,
-      slaTier: pipelineContract?.slaTier ?? null,
-      expectedFreshnessMinutes: pipelineContract?.expectedFreshnessMinutes ?? null,
-      expectedExtractionFrequencyMinutes: pipelineContract?.expectedExtractionFrequencyMinutes ?? null,
+      slaTier: null,
+      expectedFreshnessMinutes: null,
+      expectedExtractionFrequencyMinutes: null,
       toolOverrides: {},
-      inheritanceState: 'INHERITED',
+      inheritanceState: null,
     };
   }
 
-  // Source exists but not inheriting → standalone
-  if (!sourceContract.inheritFromPipeline) {
-    const overrides = resolveToolOverrides(sourceContract.overridesJson, integrationType);
-    return {
-      ownerUser: sourceContract.ownerUser,
-      ownerTeam: sourceContract.ownerTeam,
-      contactChannel: sourceContract.contactChannel,
-      slaTier: sourceContract.slaTier,
-      expectedFreshnessMinutes: sourceContract.expectedFreshnessMinutes,
-      expectedExtractionFrequencyMinutes: sourceContract.expectedExtractionFrequencyMinutes,
-      toolOverrides: overrides,
-      inheritanceState: 'FULL_OVERRIDE',
-    };
-  }
-
-  // Inheriting: merge source over pipeline
-  const merged: Record<string, any> = {};
-  let hasSourceOverride = false;
-
-  for (const field of INHERITABLE_FIELDS) {
-    const sourceVal = sourceContract[field];
-    const pipelineVal = pipelineContract?.[field] ?? null;
-
-    if (sourceVal !== null && sourceVal !== undefined) {
-      merged[field] = sourceVal;
-      hasSourceOverride = true;
-    } else {
-      merged[field] = pipelineVal;
-    }
-  }
-
-  const overrides = resolveToolOverrides(sourceContract.overridesJson, integrationType);
-  if (Object.keys(overrides).length > 0) {
-    hasSourceOverride = true;
-  }
-
-  const inheritanceState: InheritanceState = hasSourceOverride ? 'PARTIAL_OVERRIDE' : 'INHERITED';
-
+  // Source has its own SLA data (set via auto-sync from lineage assignments)
+  const overrides = resolveToolOverrides(nodeSLA.overridesJson, integrationType);
   return {
-    ownerUser: merged.ownerUser as string | null,
-    ownerTeam: merged.ownerTeam as string | null,
-    contactChannel: merged.contactChannel as string | null,
-    slaTier: merged.slaTier as SlaTier | null,
-    expectedFreshnessMinutes: merged.expectedFreshnessMinutes as number | null,
-    expectedExtractionFrequencyMinutes: merged.expectedExtractionFrequencyMinutes as number | null,
+    slaTier: nodeSLA.slaTier ?? null,
+    expectedFreshnessMinutes: nodeSLA.expectedFreshnessMinutes ?? null,
+    expectedExtractionFrequencyMinutes: nodeSLA.expectedExtractionFrequencyMinutes ?? null,
     toolOverrides: overrides,
-    inheritanceState,
+    inheritanceState: null,
   };
 }
 

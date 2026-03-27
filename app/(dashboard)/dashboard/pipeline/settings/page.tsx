@@ -20,7 +20,7 @@ interface PipelineDetails {
   updatedAt: string;
   nodeCount: number;
   scanCount: number;
-  dataContractsEnabled: boolean;
+  dataSLAsEnabled: boolean;
 }
 
 interface AccessEntry {
@@ -68,12 +68,11 @@ export default function PipelineSettingsPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   
-  // Data contracts toggle
-  const [dataContractsEnabled, setDataContractsEnabled] = useState(false);
+  // Data SLAs toggle
+  const [dataSLAsEnabled, setDataSLAsEnabled] = useState(false);
 
   // Pipeline SLA state
   const [slaForm, setSlaForm] = useState<PipelineSLAData>({
-    ownerUser: null, ownerTeam: null, contactChannel: null,
     slaTier: null, expectedFreshnessMinutes: null,
     expectedExtractionFrequencyMinutes: null, alertPolicyJson: null, notes: null,
   });
@@ -113,7 +112,7 @@ export default function PipelineSettingsPage() {
         setName(data.pipeline.name);
         setDescription(data.pipeline.description || '');
         setTokenLimit(data.pipeline.tokenLimitMonthly);
-        setDataContractsEnabled(Boolean(data.pipeline.dataContractsEnabled));
+        setDataSLAsEnabled(Boolean(data.pipeline.dataSLAsEnabled));
 
         // Fetch access list if admin
         if (data.isOrgAdmin) {
@@ -276,9 +275,9 @@ export default function PipelineSettingsPage() {
     }
   };
 
-  const handleToggleDataContracts = async (enabled: boolean) => {
+  const handleToggleDataSLAs = async (enabled: boolean) => {
     if (enabled) {
-      if (!confirm('Enabling data contracts makes them the primary source of truth. SLA changes will no longer auto-update contracts. Continue?')) {
+      if (!confirm('Enabling data SLAs makes them the primary source of truth. SLA changes will no longer auto-update records. Continue?')) {
         return;
       }
     }
@@ -286,11 +285,11 @@ export default function PipelineSettingsPage() {
       const res = await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataContractsEnabled: enabled }),
+        body: JSON.stringify({ dataSLAsEnabled: enabled }),
       });
       if (res.ok) {
-        setDataContractsEnabled(enabled);
-        toast.success(enabled ? 'Data contracts enabled' : 'Data contracts disabled');
+        setDataSLAsEnabled(enabled);
+        toast.success(enabled ? 'Data SLAs enabled' : 'Data SLAs disabled');
       }
     } catch {
       toast.error('Failed to update setting');
@@ -306,9 +305,6 @@ export default function PipelineSettingsPage() {
         const data = await res.json();
         if (data.contract) {
           setSlaForm({
-            ownerUser: data.contract.ownerUser || null,
-            ownerTeam: data.contract.ownerTeam || null,
-            contactChannel: data.contract.contactChannel || null,
             slaTier: data.contract.slaTier || null,
             expectedFreshnessMinutes: data.contract.expectedFreshnessMinutes ?? null,
             expectedExtractionFrequencyMinutes: data.contract.expectedExtractionFrequencyMinutes ?? null,
@@ -498,39 +494,6 @@ export default function PipelineSettingsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Owner (User)</label>
-              <input
-                type="text"
-                value={slaForm.ownerUser || ''}
-                onChange={(e) => updateSLA('ownerUser', e.target.value)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
-                placeholder="e.g. jane.doe"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Owner (Team)</label>
-              <input
-                type="text"
-                value={slaForm.ownerTeam || ''}
-                onChange={(e) => updateSLA('ownerTeam', e.target.value)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
-                placeholder="e.g. Data Platform"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Contact Channel</label>
-              <input
-                type="text"
-                value={slaForm.contactChannel || ''}
-                onChange={(e) => updateSLA('contactChannel', e.target.value)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
-                placeholder="e.g. #data-alerts"
-              />
-            </div>
-            <div>
               <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">SLA Tier</label>
               <select
                 value={slaForm.slaTier || ''}
@@ -582,27 +545,27 @@ export default function PipelineSettingsPage() {
             />
           </div>
 
-          {/* Data Contracts Toggle */}
+          {/* Data SLAs Toggle */}
           <div className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)]">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-medium text-[var(--foreground)]">Data Contracts</h4>
+                <h4 className="text-sm font-medium text-[var(--foreground)]">Data SLAs</h4>
                 <p className="text-xs text-[var(--muted)] mt-1">
-                  When enabled, data contracts become the primary source of truth for data asset compliance.
-                  SLA changes will show as overrides or violations against the contract.
+                  When enabled, data SLAs become the primary source of truth for data asset compliance.
+                  SLA changes will show as overrides or violations against the data SLA.
                 </p>
               </div>
               <button
                 type="button"
                 role="switch"
-                aria-checked={dataContractsEnabled}
-                onClick={() => handleToggleDataContracts(!dataContractsEnabled)}
+                aria-checked={dataSLAsEnabled}
+                onClick={() => handleToggleDataSLAs(!dataSLAsEnabled)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  dataContractsEnabled ? 'bg-emerald-500' : 'bg-zinc-600'
+                  dataSLAsEnabled ? 'bg-emerald-500' : 'bg-zinc-600'
                 }`}
               >
                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  dataContractsEnabled ? 'translate-x-6' : 'translate-x-1'
+                  dataSLAsEnabled ? 'translate-x-6' : 'translate-x-1'
                 }`} />
               </button>
             </div>
