@@ -1627,7 +1627,7 @@ function LineagePageInner() {
               </button>
             )}
             {/* Pipeline SLA button */}
-            {controlPlaneData && !pipelineSlaMode && activeTab === 'control-plane' && (
+            {(controlPlaneData || laneOverview) && !pipelineSlaMode && activeTab === 'control-plane' && (
               <button
                 onClick={() => {
                   setPipelineSlaMode(true);
@@ -1702,7 +1702,7 @@ function LineagePageInner() {
         {pipelineSlaMode && activeTab === 'control-plane' ? (
           <PipelineSLAModeToolbar
             selectedCount={pipelineSlaSelectedNodeIds.size}
-            totalNodes={controlPlaneData?.nodes?.length || 0}
+            totalNodes={laneOverview?.nodes?.length || controlPlaneData?.nodes?.length || 0}
             onSaveAll={() => {}}
             onExit={() => {
               setPipelineSlaMode(false);
