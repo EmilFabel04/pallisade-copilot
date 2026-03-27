@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { useDataSLAs, type DataSLASummary } from './useDataSLAs';
 import { DataSLACard } from './DataSLACard';
+import { SLAViewDrawer } from '@/components/governance/SLAViewDrawer';
 import { DOMAIN_SLA_SECTIONS, categoryToSLADomain, type SLADomain } from '@/types/sla';
 import { NodeSelectionSurface, type NodeMeta } from '@/components/schedule/NodeSelectionSurface';
 
@@ -104,9 +105,11 @@ export function DataSLAsTab() {
   const [selectedContract, setSelectedContract] = useState<DataSLASummary | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
+  const [viewContract, setViewContract] = useState<DataSLASummary | null>(null);
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
   const [scopeFilter, setScopeFilter] = useState<Set<string>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
 
   const toggleFilter = (set: Set<string>, setter: (s: Set<string>) => void, value: string) => {
     const next = new Set(set);
@@ -134,11 +137,61 @@ export function DataSLAsTab() {
       result = result.filter(c => scopeFilter.has(c.scope));
     }
 
+    if (statusFilter.size > 0) {
+      result = result.filter(c => statusFilter.has(c.status || 'active'));
+    }
+
     return result;
-  }, [contracts, search, tierFilter, scopeFilter]);
+  }, [contracts, search, tierFilter, scopeFilter, statusFilter]);
 
   const groupContracts = filteredSLAs.filter(c => !c.isException);
   const exceptionContracts = filteredSLAs.filter(c => c.isException);
+
+  const handleDeleteSLA = async (contract: DataSLASummary) => {
+    if (!confirm(`Delete "${contract.name || contract.scopeRef}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/data-slas/${contract.id}`, { method: 'DELETE' });
+      if (res.ok) { toast.success('Data SLA deleted'); refresh(true); }
+      else { toast.error('Failed to delete'); }
+    } catch { toast.error('Failed to delete'); }
+  };
+
+  const handleStatusChange = async (contract: DataSLASummary, newStatus: string) => {
+    try {
+      const res = await fetch(`/api/pipeline/${selectedPipelineId}/data-slas/${contract.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (res.ok) {
+        toast.success(`SLA ${newStatus === 'archived' ? 'archived' : newStatus === 'active' ? 'activated' : 'deactivated'}`);
+        refresh(true);
+      } else { toast.error('Failed to update status'); }
+    } catch { toast.error('Failed to update status'); }
+  };
+
+  const buildViewFields = (c: DataSLASummary) => {
+    const fields: { label: string; value: string | number | null }[] = [];
+    if (c.freshnessConfig && (c.freshnessConfig as any).maxHours != null)
+      fields.push({ label: 'Max Freshness', value: `${(c.freshnessConfig as any).maxHours}h` });
+    if (c.freshnessConfig && (c.freshnessConfig as any).warningHours != null)
+      fields.push({ label: 'Warning Threshold', value: `${(c.freshnessConfig as any).warningHours}h` });
+    if (c.schemaConfig && (c.schemaConfig as any).strictness)
+      fields.push({ label: 'Schema Strictness', value: (c.schemaConfig as any).strictness });
+    if (c.volumeConfig && (c.volumeConfig as any).growthRateThreshold != null)
+      fields.push({ label: 'Volume Growth Threshold', value: `${Math.round((c.volumeConfig as any).growthRateThreshold * 100)}%` });
+    if (c.qualityConfig && (c.qualityConfig as any).maxNullRate != null)
+      fields.push({ label: 'Max Null Rate', value: `${Math.round((c.qualityConfig as any).maxNullRate * 100)}%` });
+    if (c.ingestionConfig && (c.ingestionConfig as any).syncLagToleranceMinutes != null)
+      fields.push({ label: 'Sync Lag Tolerance', value: `${(c.ingestionConfig as any).syncLagToleranceMinutes} min` });
+    if (c.biConfig && (c.biConfig as any).freshnessHours != null)
+      fields.push({ label: 'BI Freshness', value: `${(c.biConfig as any).freshnessHours}h` });
+    if (c.orchestrationConfig && (c.orchestrationConfig as any).runLatencyMinutes != null)
+      fields.push({ label: 'Run Latency', value: `${(c.orchestrationConfig as any).runLatencyMinutes} min` });
+    if (c.transformConfig && (c.transformConfig as any).modelFreshnessHours != null)
+      fields.push({ label: 'Model Freshness', value: `${(c.transformConfig as any).modelFreshnessHours}h` });
+    return fields;
+  };
 
   if (loading) {
     return (
@@ -182,13 +235,24 @@ export function DataSLAsTab() {
             selected: scopeFilter,
             onToggle: v => toggleFilter(scopeFilter, setScopeFilter, v),
           },
+          {
+            label: 'Status',
+            options: [
+              { value: 'active', label: 'Active' },
+              { value: 'inactive', label: 'Inactive' },
+              { value: 'archived', label: 'Archived' },
+            ],
+            selected: statusFilter,
+            onToggle: v => toggleFilter(statusFilter, setStatusFilter, v),
+          },
         ]}
         onClearAll={() => {
           setSearch('');
           setTierFilter(new Set());
           setScopeFilter(new Set());
+          setStatusFilter(new Set());
         }}
-        hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0}
+        hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0 || statusFilter.size > 0}
         totalCount={contracts.length}
         filteredCount={filteredSLAs.length}
         actionButton={
@@ -217,7 +281,16 @@ export function DataSLAsTab() {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {groupContracts.map(c => (
-              <DataSLACard key={c.id} contract={c} editable={true} onClick={setSelectedContract} />
+              <DataSLACard
+                key={c.id}
+                contract={c}
+                editable={true}
+                onView={() => setViewContract(c)}
+                onClick={setSelectedContract}
+                onDelete={() => handleDeleteSLA(c)}
+                onArchive={() => handleStatusChange(c, c.status === 'archived' ? 'active' : 'archived')}
+                onToggleActive={() => handleStatusChange(c, c.status === 'active' ? 'inactive' : 'active')}
+              />
             ))}
           </div>
         </div>
@@ -229,7 +302,16 @@ export function DataSLAsTab() {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {exceptionContracts.map(c => (
-              <DataSLACard key={c.id} contract={c} editable={true} onClick={setSelectedContract} />
+              <DataSLACard
+                key={c.id}
+                contract={c}
+                editable={true}
+                onView={() => setViewContract(c)}
+                onClick={setSelectedContract}
+                onDelete={() => handleDeleteSLA(c)}
+                onArchive={() => handleStatusChange(c, c.status === 'archived' ? 'active' : 'archived')}
+                onToggleActive={() => handleStatusChange(c, c.status === 'active' ? 'inactive' : 'active')}
+              />
             ))}
           </div>
         </div>
@@ -252,6 +334,22 @@ export function DataSLAsTab() {
           pipelineId={selectedPipelineId}
           onClose={() => setShowCreate(false)}
           onCreated={() => { setShowCreate(false); refresh(true); }}
+        />
+      )}
+
+      {/* View drawer */}
+      {viewContract && (
+        <SLAViewDrawer
+          title={viewContract.name || viewContract.scopeRef}
+          subtitle={viewContract.scopeRef}
+          slaTier={viewContract.slaTier}
+          status={viewContract.status || 'active'}
+          fields={buildViewFields(viewContract)}
+          nodes={viewContract.nodeFqns || []}
+          notes={viewContract.notes}
+          updatedAt={viewContract.updatedAt}
+          onClose={() => setViewContract(null)}
+          onEdit={() => { setViewContract(null); setSelectedContract(viewContract); }}
         />
       )}
 

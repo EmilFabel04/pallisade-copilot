@@ -28,6 +28,8 @@ export interface DataSLASummary {
   isException: boolean;
   parentContractId: string | null;
   autoSynced: boolean;
+  status: string; // 'active' | 'inactive' | 'archived'
+  archivedAt: string | null;
   exceptions: Array<{ id: string; scopeRef: string }>;
   updatedAt: string;
 }
