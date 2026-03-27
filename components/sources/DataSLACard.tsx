@@ -2,12 +2,19 @@
 
 import React from 'react';
 import type { DataSLASummary } from './useDataSLAs';
+import { SLACardMenu, type SLAStatus } from '../governance/SLACardMenu';
 
 const TIER_STYLES: Record<string, { color: string; bg: string }> = {
   T0: { color: 'text-red-400', bg: 'bg-red-500/15' },
   T1: { color: 'text-amber-400', bg: 'bg-amber-500/15' },
   T2: { color: 'text-blue-400', bg: 'bg-blue-500/15' },
   T3: { color: 'text-zinc-400', bg: 'bg-zinc-500/15' },
+};
+
+const STATUS_STYLES: Record<string, { color: string; bg: string; label: string }> = {
+  active: { color: 'text-emerald-400', bg: 'bg-emerald-500/15', label: 'Active' },
+  inactive: { color: 'text-zinc-400', bg: 'bg-zinc-500/15', label: 'Inactive' },
+  archived: { color: 'text-amber-400', bg: 'bg-amber-500/15', label: 'Archived' },
 };
 
 const SCOPE_COLORS: Record<string, string> = {
@@ -27,10 +34,15 @@ const SCOPE_LABELS: Record<string, string> = {
 interface DataSLACardProps {
   contract: DataSLASummary;
   editable: boolean;
+  onView: () => void;
   onClick: (contract: DataSLASummary) => void;
+  onDelete: () => void;
+  onArchive: () => void;
+  onToggleActive: () => void;
 }
 
-export function DataSLACard({ contract, editable, onClick }: DataSLACardProps) {
+export function DataSLACard({ contract, editable, onView, onClick, onDelete, onArchive, onToggleActive }: DataSLACardProps) {
+  const status: SLAStatus = (contract as any).status || 'active';
   const displayName = contract.name || contract.scopeRef;
   const nodeCount = contract.nodeFqns?.length || 0;
   const tierStyle = TIER_STYLES[(contract.slaTier || '').toUpperCase()] || TIER_STYLES.T2;
@@ -38,20 +50,34 @@ export function DataSLACard({ contract, editable, onClick }: DataSLACardProps) {
   const scopeLabel = SCOPE_LABELS[contract.scope] || contract.scope;
 
   return (
-    <button
-      onClick={() => onClick(contract)}
-      className="w-full text-left p-4 rounded-xl border border-[var(--subtle-border)] bg-[var(--surface-raised)] hover:border-[var(--accent)]/30 hover:shadow-md hover:shadow-black/5 transition-all group"
+    <div
+      className={`w-full text-left p-4 rounded-xl border border-[var(--subtle-border)] bg-[var(--surface-raised)] hover:border-[var(--accent)]/30 hover:shadow-md hover:shadow-black/5 transition-all group ${status !== 'active' ? 'opacity-60' : ''}`}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-[13px] font-medium text-[var(--text)] truncate">
           {displayName}
         </span>
-        {contract.slaTier && (
-          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${tierStyle.color} ${tierStyle.bg}`}>
-            {contract.slaTier}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {contract.slaTier && (
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${tierStyle.color} ${tierStyle.bg}`}>
+              {contract.slaTier}
+            </span>
+          )}
+          {status !== 'active' && (
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLES[status].color} ${STATUS_STYLES[status].bg}`}>
+              {STATUS_STYLES[status].label}
+            </span>
+          )}
+          <SLACardMenu
+            status={status}
+            onView={onView}
+            onEdit={() => onClick(contract)}
+            onDelete={onDelete}
+            onArchive={onArchive}
+            onToggleActive={onToggleActive}
+          />
+        </div>
       </div>
 
       {/* Metadata row */}
@@ -85,6 +111,6 @@ export function DataSLACard({ contract, editable, onClick }: DataSLACardProps) {
           <p className="text-[11px] text-[var(--muted)] italic">Profile assigned, no custom expectations</p>
         )}
       </div>
-    </button>
+    </div>
   );
 }
