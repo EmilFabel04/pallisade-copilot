@@ -40,7 +40,7 @@ export function DataSLACard({ contract, editable, onClick }: DataSLACardProps) {
   return (
     <button
       onClick={() => onClick(contract)}
-      className="w-full text-left p-4 rounded-xl border border-[var(--subtle-border)] bg-[var(--overlay-bg)] hover:border-[var(--accent)]/30 transition-all"
+      className="w-full text-left p-4 rounded-xl border border-[var(--subtle-border)] bg-[var(--surface-raised)] hover:border-[var(--accent)]/30 hover:shadow-md hover:shadow-black/5 transition-all group"
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
