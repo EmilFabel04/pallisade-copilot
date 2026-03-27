@@ -16,128 +16,8 @@ import {
 } from './types';
 import { ToolDetailView } from './tool-details/ToolDetailView';
 import { LoadingState } from './tool-details/SharedDetailComponents';
-import { SLASection } from './SLASection';
-import { PipelineSLAEditor } from './PipelineSLAEditor';
 import type { AssetPrefill } from '@/types/monitor-catalog';
 import { computeMonitorScoring, resolveAssetCategory, type MonitorScoringResult } from '@/lib/monitor-scoring';
-import type { EffectiveSLAPolicy } from '@/types/sla';
-import { categoryToSLADomain, DOMAIN_SLA_SECTIONS, type SLADomain } from '@/types/sla';
-import { evaluateNodeCompliance } from '@/lib/compliance/evaluate';
-import type { ComplianceBadgeStatus } from '../ComplianceBadge';
-import type { ComplianceStatus } from '@/lib/compliance/field-comparison';
-
-// ─── SLA field display helpers ─────────────────────────────────────
-
-interface SLAFieldDisplay {
-  fieldName: string;
-  label: string;
-  slaValue: unknown;
-  baselineValue: unknown | null;
-  complianceStatus: ComplianceStatus | null;
-}
-
-const SECTION_FIELD_LABELS: Record<string, Record<string, string>> = {
-  freshness: {
-    maxHours: 'Max Freshness (hrs)',
-    warningHours: 'Warning Threshold (hrs)',
-  },
-  schema: {
-    strictness: 'Schema Strictness',
-    allowEvolution: 'Allow Evolution',
-  },
-  volume: {
-    minRows: 'Min Rows',
-    maxRows: 'Max Rows',
-    growthRateThreshold: 'Growth Rate Threshold',
-  },
-  anomaly: {
-    sensitivity: 'Anomaly Sensitivity',
-    lookbackDays: 'Lookback (days)',
-  },
-  quality: {
-    maxNullRate: 'Max Null Rate',
-    maxDuplicateRate: 'Max Duplicate Rate',
-  },
-  ingestion: {
-    syncLagToleranceMinutes: 'Sync Lag Tolerance (min)',
-    failureTolerance: 'Failure Tolerance',
-    schemaDriftStrictness: 'Schema Drift Strictness',
-  },
-  bi: {
-    freshnessHours: 'Dashboard Freshness (hrs)',
-    upstreamBreakStrictness: 'Upstream Break Strictness',
-    refreshFailureAlerting: 'Refresh Failure Alerting',
-  },
-  orchestration: {
-    runLatencyMinutes: 'Run Latency (min)',
-    scheduleLagMinutes: 'Schedule Lag (min)',
-    failureTolerance: 'Failure Tolerance',
-  },
-  transform: {
-    testFailureTolerance: 'Test Failure Tolerance',
-    modelFreshnessHours: 'Model Freshness (hrs)',
-  },
-};
-
-const CONFIG_KEY_MAP: Record<string, string> = {
-  freshness: 'freshness',
-  schema: 'schema',
-  volume: 'volume',
-  anomaly: 'anomaly',
-  quality: 'quality',
-  ingestion: 'ingestion',
-  bi: 'bi',
-  orchestration: 'orchestration',
-  transform: 'transform',
-};
-
-function extractSLAFields(
-  sla: EffectiveSLAPolicy,
-  domain: SLADomain,
-  complianceFields?: Map<string, ComplianceStatus>,
-): SLAFieldDisplay[] {
-  const sections = DOMAIN_SLA_SECTIONS[domain] || [];
-  const fields: SLAFieldDisplay[] = [];
-
-  for (const section of sections) {
-    const configKey = CONFIG_KEY_MAP[section] as keyof EffectiveSLAPolicy;
-    const config = sla[configKey] as Record<string, unknown> | undefined;
-    if (!config) continue;
-    // Skip disabled sections
-    if ('enabled' in config && config.enabled === false) continue;
-
-    const labels = SECTION_FIELD_LABELS[section] || {};
-    for (const [fieldName, label] of Object.entries(labels)) {
-      const value = config[fieldName];
-      if (value == null) continue;
-      fields.push({
-        fieldName: `${section}.${fieldName}`,
-        label,
-        slaValue: value,
-        baselineValue: null,
-        complianceStatus: complianceFields?.get(`${section}.${fieldName}`) ?? null,
-      });
-    }
-  }
-
-  return fields;
-}
-
-function resolveNodeDomain(node: ViewNode): SLADomain | null {
-  // Try platform domain first, then layer, then canonical type
-  const platformDomain = node.metadata?.platformDomain as string | undefined;
-  if (platformDomain) {
-    const d = categoryToSLADomain(platformDomain);
-    if (d) return d;
-  }
-  const layer = node.layer?.toLowerCase();
-  if (layer) {
-    const d = categoryToSLADomain(layer);
-    if (d) return d;
-  }
-  return categoryToSLADomain(node.canonicalType) ?? 'warehouse';
-}
-
 // Role badges shown when functional role differs from the lane name.
 // "transformation" and "reporting" are excluded — they match their lane, so a badge is redundant.
 const ROLE_BADGE_LABELS: Record<string, string> = {
@@ -168,11 +48,9 @@ interface InspectorPanelProps {
   laneOverview: RenderedViewResponse | null;
   stackId: string | null;
   allMonitors?: MonitorInfo[];
-  nodeSLAs?: Map<string, EffectiveSLAPolicy>;
   onClose: () => void;
   onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
   onCreateMultiMonitor?: (nodeIds: string[]) => void;
-  onSLAUpdated?: () => void;
 }
 
 
@@ -183,19 +61,15 @@ function NodeInspector({
   laneOverview,
   stackId,
   allMonitors,
-  nodeSLAs,
   onCreateSingleMonitor,
   onCreateMultiMonitor,
-  onSLAUpdated,
 }: {
   node: ViewNode;
   laneOverview: RenderedViewResponse | null;
   stackId: string | null;
   allMonitors?: MonitorInfo[];
-  nodeSLAs?: Map<string, EffectiveSLAPolicy>;
   onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
   onCreateMultiMonitor?: (nodeIds: string[]) => void;
-  onSLAUpdated?: () => void;
 }) {
   const meta = getToolMeta(node);
   const health = getOverallHealth(meta.healthSummary);
@@ -245,10 +119,6 @@ function NodeInspector({
       : toolScoring.healthStatus === 'unhealthy' ? '#EF4444'
       : '#6B7280')
     : (nodeMonitors.length === 0 ? '#6B7280' : healthColor); // gray when no monitors
-
-  // Pipeline SLA inline editor state
-  const [editingPipelineSLA, setEditingPipelineSLA] = useState(false);
-  const nodeDomain = useMemo(() => resolveNodeDomain(node), [node]);
 
   // Fetch tool details on-demand
   const [details, setDetails] = useState<ToolDetailsResponse | null>(null);
@@ -305,56 +175,6 @@ function NodeInspector({
 
     return () => { cancelled = true; };
   }, [node.id, stackId]);
-
-  // ─── SLA data for this node ──────────────────────────────────────
-  const slaDisplay = useMemo(() => {
-    const fqn = (node.metadata?.fqn as string) || node.name;
-    const sla = nodeSLAs?.get(fqn);
-    if (!sla || sla.status === 'none') {
-      return { fields: [] as SLAFieldDisplay[], overallCompliance: 'none' as ComplianceBadgeStatus, hasContract: false, profileName: null as string | null };
-    }
-
-    const domain = resolveNodeDomain(node);
-    if (!domain) {
-      return { fields: [] as SLAFieldDisplay[], overallCompliance: 'none' as ComplianceBadgeStatus, hasContract: false, profileName: sla.profileName || null };
-    }
-
-    // Build flat slaValues for compliance evaluation
-    const slaValues: Record<string, unknown> = {};
-    const sections = DOMAIN_SLA_SECTIONS[domain] || [];
-    for (const section of sections) {
-      const configKey = CONFIG_KEY_MAP[section] as keyof EffectiveSLAPolicy;
-      const config = sla[configKey] as Record<string, unknown> | undefined;
-      if (!config) continue;
-      if ('enabled' in config && config.enabled === false) continue;
-      for (const [k, v] of Object.entries(config)) {
-        if (k === 'enabled' || v == null) continue;
-        slaValues[`${section}.${k}`] = v;
-      }
-    }
-
-    // Evaluate compliance (against tier baseline when no explicit contract)
-    const slaTier = sla.source === 'data_contract' ? null : (
-      (node.metadata?.criticality as string)?.toLowerCase() === 'critical' ? 'T0' :
-      (node.metadata?.criticality as string)?.toLowerCase() === 'high' ? 'T1' :
-      (node.metadata?.criticality as string)?.toLowerCase() === 'low' ? 'T3' : 'T2'
-    );
-    const compliance = evaluateNodeCompliance(slaValues, null, slaTier as any);
-
-    const complianceMap = new Map<string, ComplianceStatus>();
-    for (const f of compliance.fields) {
-      complianceMap.set(f.fieldName, f.status);
-    }
-
-    const fields = extractSLAFields(sla, domain, complianceMap);
-    const hasContract = sla.source === 'data_contract';
-    const overallCompliance: ComplianceBadgeStatus =
-      compliance.overallStatus === 'unknown' && fields.length === 0 ? 'none' :
-      compliance.overallStatus === 'unknown' ? 'missing_sla' :
-      compliance.overallStatus;
-
-    return { fields, overallCompliance, hasContract, profileName: sla.profileName || null };
-  }, [node, nodeSLAs]);
 
   return (
     <div className="space-y-4">
@@ -442,48 +262,6 @@ function NodeInspector({
           </div>
         </div>
       )}
-
-      {/* Pipeline SLA Section */}
-      <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-        {editingPipelineSLA && nodeDomain && stackId ? (
-          <PipelineSLAEditor
-            domain={nodeDomain}
-            nodeFqn={(node.metadata?.fqn as string) || node.name}
-            nodeName={node.name}
-            platform={node.platform || 'Unknown'}
-            stackId={stackId}
-            currentValues={(() => {
-              const fqn = (node.metadata?.fqn as string) || node.name;
-              const sla = nodeSLAs?.get(fqn);
-              if (!sla || sla.status === 'none') return undefined;
-              const vals: Record<string, unknown> = {};
-              const sections = DOMAIN_SLA_SECTIONS[nodeDomain] || [];
-              for (const section of sections) {
-                const config = (sla as any)[section] as Record<string, unknown> | undefined;
-                if (!config) continue;
-                for (const [k, v] of Object.entries(config)) {
-                  if (k === 'enabled' || v == null) continue;
-                  vals[`${section}.${k}`] = v;
-                }
-              }
-              return vals;
-            })()}
-            onSaved={() => {
-              setEditingPipelineSLA(false);
-              onSLAUpdated?.();
-            }}
-            onCancel={() => setEditingPipelineSLA(false)}
-          />
-        ) : (
-          <SLASection
-            fields={slaDisplay.fields}
-            overallCompliance={slaDisplay.overallCompliance}
-            hasContract={slaDisplay.hasContract}
-            profileName={slaDisplay.profileName}
-            onEditPipelineSLA={() => setEditingPipelineSLA(true)}
-          />
-        )}
-      </div>
 
       {/* Detail content */}
       {loading && <LoadingState />}
@@ -845,11 +623,9 @@ export function InspectorPanel({
   laneOverview,
   stackId,
   allMonitors,
-  nodeSLAs,
   onClose,
   onCreateSingleMonitor,
   onCreateMultiMonitor,
-  onSLAUpdated,
 }: InspectorPanelProps) {
   if (!target) return null;
 
@@ -872,27 +648,12 @@ export function InspectorPanel({
 
       {/* Content */}
       {target.kind === 'node' ? (
-        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} nodeSLAs={nodeSLAs} onCreateSingleMonitor={onCreateSingleMonitor} onCreateMultiMonitor={onCreateMultiMonitor} onSLAUpdated={onSLAUpdated} />
+        <NodeInspector node={target.node} laneOverview={laneOverview} stackId={stackId} allMonitors={allMonitors} onCreateSingleMonitor={onCreateSingleMonitor} onCreateMultiMonitor={onCreateMultiMonitor} />
       ) : target.kind === 'multi' ? (
         <div className="space-y-4">
           <p className="text-[12px] text-[var(--muted)]">
             {target.nodes.length} nodes selected
           </p>
-          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-            <SLASection
-              fields={[]}
-              overallCompliance="none"
-              hasContract={false}
-              isMultiSelect={true}
-              selectedCount={target.nodes.length}
-            />
-          </div>
-          <button
-            className="w-full py-2 px-4 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
-            onClick={() => onCreateMultiMonitor?.(target.nodeIds)}
-          >
-            Apply Pipeline SLA to All Selected
-          </button>
           <div className="space-y-1">
             {target.nodes.map(n => (
               <div key={n.id} className="px-2 py-1.5 rounded bg-[var(--overlay-bg)] flex items-center gap-2">
