@@ -1445,13 +1445,12 @@ function LineagePageInner() {
         return;
       }
 
-      // Pipeline SLA mode: toggle node selection on control-plane tab
+      // Pipeline SLA mode: single node selection on control-plane tab
       if (pipelineSlaMode && activeTab === 'control-plane') {
         setPipelineSlaSelectedNodeIds(prev => {
-          const next = new Set(prev);
-          if (next.has(node.id)) next.delete(node.id);
-          else next.add(node.id);
-          return next;
+          // Single select — clicking the same node deselects, otherwise replace
+          if (prev.has(node.id)) return new Set();
+          return new Set([node.id]);
         });
         return; // Don't open inspector
       }
