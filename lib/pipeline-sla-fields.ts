@@ -24,12 +24,6 @@ const FAILURE_TOLERANCE = [
   { value: 'high', label: 'High — 4+ consecutive' },
 ];
 
-const ALERTING_URGENCY = [
-  { value: 'immediate', label: 'Immediate — page on-call' },
-  { value: 'urgent', label: 'Urgent — Slack + email' },
-  { value: 'batched', label: 'Batched — daily digest' },
-  { value: 'off', label: 'Off — log only' },
-];
 
 /**
  * Tool-level operational SLA fields per pipeline domain.
@@ -55,7 +49,7 @@ export const PIPELINE_SLA_FIELDS: Record<string, PipelineSLAFieldDef[]> = {
       { value: 'normal', label: 'Normal — alert on failures only' },
       { value: 'relaxed', label: 'Relaxed — alert on extended outage' },
     ]},
-    { key: 'ingestion.alerting', label: 'Failure Alerting', type: 'select', options: ALERTING_URGENCY },
+
   ],
 
   orchestration: [
@@ -70,7 +64,7 @@ export const PIPELINE_SLA_FIELDS: Record<string, PipelineSLAFieldDef[]> = {
     ]},
     { key: 'orchestration.taskFailureThreshold', label: 'Task Failure Threshold', type: 'number', placeholder: '1', unit: 'tasks' },
     { key: 'orchestration.slaDeadlineMinutes', label: 'SLA Deadline (from schedule)', type: 'number', placeholder: '60', unit: 'min' },
-    { key: 'orchestration.alerting', label: 'Failure Alerting', type: 'select', options: ALERTING_URGENCY },
+
   ],
 
   transform: [
@@ -83,7 +77,7 @@ export const PIPELINE_SLA_FIELDS: Record<string, PipelineSLAFieldDef[]> = {
     { key: 'transform.modelFailureTolerance', label: 'Model Build Failure Tolerance', type: 'select', options: FAILURE_TOLERANCE },
     { key: 'transform.staleDependencyHours', label: 'Stale Dependency Threshold', type: 'number', placeholder: '24', unit: 'hrs' },
     { key: 'transform.expectedRunFrequencyHours', label: 'Expected Run Frequency', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'transform.alerting', label: 'Build Failure Alerting', type: 'select', options: ALERTING_URGENCY },
+
   ],
 
   bi: [
@@ -100,7 +94,7 @@ export const PIPELINE_SLA_FIELDS: Record<string, PipelineSLAFieldDef[]> = {
       { value: 'warn', label: 'Warn — degrade gracefully' },
       { value: 'ignore', label: 'Ignore — independent of upstream' },
     ]},
-    { key: 'bi.alerting', label: 'Refresh Failure Alerting', type: 'select', options: ALERTING_URGENCY },
+
   ],
 
   warehouse: [
@@ -114,7 +108,7 @@ export const PIPELINE_SLA_FIELDS: Record<string, PipelineSLAFieldDef[]> = {
       { value: 'daily', label: 'Daily (2-4 AM)' },
       { value: 'custom', label: 'Custom schedule' },
     ]},
-    { key: 'warehouse.alerting', label: 'Operations Alerting', type: 'select', options: ALERTING_URGENCY },
+
   ],
 };
 
