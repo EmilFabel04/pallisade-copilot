@@ -665,7 +665,9 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
         <div className="p-5 border-b border-[var(--subtle-border)] flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Shield className="w-5 h-5 text-[var(--accent)]" />
+              <div className="w-8 h-8 rounded-lg bg-[var(--accent)]/15 flex items-center justify-center">
+                <Shield className="w-4 h-4 text-[var(--accent)]" />
+              </div>
               <div>
                 <h2 className="text-sm font-semibold text-[var(--foreground)]">Create Data SLA</h2>
                 <p className="text-[11px] text-[var(--muted)] mt-0.5">
@@ -678,16 +680,30 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
             </button>
           </div>
           {/* Step indicator */}
-          <div className="flex items-center gap-2 mt-4">
-            <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${step === 'pick-node' ? 'bg-[var(--accent)]/15 text-[var(--accent)]' : 'text-[var(--muted)]'}`}>
-              1. Select Nodes
-            </span>
-            <ChevronRight className="w-3 h-3 text-[var(--muted)]" />
-            <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${step === 'configure' ? 'bg-[var(--accent)]/15 text-[var(--accent)]' : 'text-[var(--muted)]'}`}>
-              2. Configure SLA
-            </span>
+          <div className="flex items-center gap-3 mt-4">
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              step === 'pick-node'
+                ? 'bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/20'
+                : 'text-[var(--muted)] bg-[var(--overlay-bg)] border border-[var(--subtle-border)]'
+            }`}>
+              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                step === 'pick-node' ? 'bg-[var(--accent)] text-white' : 'bg-[var(--subtle-border)] text-[var(--muted)]'
+              }`}>1</span>
+              Select Nodes
+            </div>
+            <ChevronRight className="w-3.5 h-3.5 text-[var(--muted)]" />
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              step === 'configure'
+                ? 'bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/20'
+                : 'text-[var(--muted)] bg-[var(--overlay-bg)] border border-[var(--subtle-border)]'
+            }`}>
+              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                step === 'configure' ? 'bg-[var(--accent)] text-white' : 'bg-[var(--subtle-border)] text-[var(--muted)]'
+              }`}>2</span>
+              Configure SLA
+            </div>
             {selectedNodeIds.length > 0 && step === 'pick-node' && (
-              <span className="ml-auto text-[11px] text-[var(--accent)] font-medium">
+              <span className="ml-auto text-[11px] text-[var(--accent)] font-medium bg-[var(--accent)]/10 px-2 py-1 rounded-md">
                 {selectedNodeIds.length} node{selectedNodeIds.length !== 1 ? 's' : ''} selected
               </span>
             )}
@@ -707,11 +723,6 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            {/* Back button */}
-            <button onClick={() => setStep('pick-node')} className="text-[11px] text-[var(--muted)] hover:text-[var(--text)] flex items-center gap-1">
-              <ChevronRight className="w-3 h-3 rotate-180" /> Back to node selection
-            </button>
-
             {/* Selected nodes summary */}
             <div className="flex flex-wrap gap-1.5">
               {selectedMetas.slice(0, 8).map(n => (
@@ -756,19 +767,28 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
         )}
 
         {/* Footer */}
-        <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)]">Cancel</button>
-          {step === 'pick-node' ? (
-            <button onClick={handleProceed} disabled={selectedNodeIds.length === 0}
-              className="px-4 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50">
-              Continue
-            </button>
-          ) : (
-            <button onClick={handleCreate} disabled={saving || selectedMetas.length === 0}
-              className="px-4 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50">
-              {saving ? 'Creating...' : 'Create Data SLA'}
-            </button>
-          )}
+        <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0 flex items-center justify-between">
+          <button onClick={onClose} className="px-4 py-2 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--overlay-bg)] transition-colors">
+            Cancel
+          </button>
+          <div className="flex gap-2">
+            {step === 'configure' && (
+              <button onClick={() => setStep('pick-node')} className="px-4 py-2 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--overlay-bg)] transition-colors">
+                Back
+              </button>
+            )}
+            {step === 'pick-node' ? (
+              <button onClick={handleProceed} disabled={selectedNodeIds.length === 0}
+                className="px-5 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity">
+                Continue
+              </button>
+            ) : (
+              <button onClick={handleCreate} disabled={saving || selectedMetas.length === 0}
+                className="px-5 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity">
+                {saving ? 'Creating...' : 'Create Data SLA'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
