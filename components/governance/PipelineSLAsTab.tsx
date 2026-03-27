@@ -100,8 +100,8 @@ function PipelineSLACreatorModal({
   };
 
   return (
-    <div className="fixed inset-x-0 top-14 bottom-0 z-40 flex items-start justify-center bg-black/40 backdrop-blur-sm overflow-y-auto p-6">
-      <div className="w-full max-w-2xl bg-[var(--surface-raised)] rounded-xl border border-[var(--subtle-border)] shadow-xl flex flex-col max-h-[calc(100vh-6rem)]">
+    <div className="fixed inset-x-0 top-14 bottom-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-[90vw] max-w-4xl h-[80vh] bg-[var(--surface-raised)] rounded-xl border border-[var(--subtle-border)] shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--subtle-border)]">
           <div className="flex items-center gap-3">
