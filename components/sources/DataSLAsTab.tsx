@@ -198,6 +198,8 @@ export function DataSLAsTab() {
             setScopeFilter(new Set());
           }}
           hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0}
+          totalCount={contracts.length}
+          filteredCount={filteredSLAs.length}
         />
       )}
 

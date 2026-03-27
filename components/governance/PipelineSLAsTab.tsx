@@ -91,11 +91,11 @@ export function PipelineSLAsTab() {
           {
             label: 'Domain',
             options: [
-              { value: 'ingestion', label: 'Ingestion' },
-              { value: 'orchestration', label: 'Orchestration' },
-              { value: 'transform', label: 'Transform' },
-              { value: 'bi', label: 'BI' },
-              { value: 'warehouse', label: 'Warehouse' },
+              { value: 'ingestion', label: 'Ingestion', dot: '#10B981' },
+              { value: 'orchestration', label: 'Orchestration', dot: '#F97316' },
+              { value: 'transform', label: 'Transform', dot: '#F59E0B' },
+              { value: 'bi', label: 'BI', dot: '#3B82F6' },
+              { value: 'warehouse', label: 'Warehouse', dot: '#8B5CF6' },
             ],
             selected: domainFilter,
             onToggle: v => toggleFilter(domainFilter, setDomainFilter, v),
@@ -107,6 +107,8 @@ export function PipelineSLAsTab() {
           setDomainFilter(new Set());
         }}
         hasActiveFilters={hasActiveFilters}
+        totalCount={items.length}
+        filteredCount={filtered.length}
       />
 
       {filtered.length === 0 ? (
