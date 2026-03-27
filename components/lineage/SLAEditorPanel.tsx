@@ -95,7 +95,6 @@ interface SLAEditorPanelProps {
   nodeSLAs: Map<string, EffectiveSLAPolicy>;
   saving?: boolean;
   dataSLAsEnabled?: boolean;
-  slaAllowOverrides?: boolean;
   onApply: (request: SLAAssignRequest, scope: ApplyScope) => void;
   onRemoveSLA?: (nodeFqns: string[]) => void;
   onClose: () => void;
@@ -248,7 +247,6 @@ export function SLAEditorPanel({
   nodeSLAs,
   saving,
   dataSLAsEnabled,
-  slaAllowOverrides,
   onApply,
   onRemoveSLA,
   onClose,
@@ -475,28 +473,18 @@ export function SLAEditorPanel({
         )}
       </div>
 
-      {/* Data SLA read-only banner */}
-      {dataSLAsEnabled && !slaAllowOverrides && (
-        <div className="mx-4 mt-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-          <p className="text-[11px] text-amber-400 font-medium">Data SLAs are enabled</p>
-          <p className="text-[10px] text-[var(--muted)] mt-1">
-            Data SLA expectations are managed through data SLAs. Edit or view SLAs in the Governance &rarr; Data SLAs tab.
-          </p>
-        </div>
-      )}
-
-      {dataSLAsEnabled && slaAllowOverrides && (
+      {/* Data SLA info banner */}
+      {dataSLAsEnabled && (
         <div className="mx-4 mt-3 p-2.5 rounded-lg bg-blue-500/10 border border-blue-500/20">
           <p className="text-[10px] text-blue-400">
-            Overrides are allowed. Changes here will be tracked against the data SLA as overrides.
+            Data SLAs are managed in Governance. Changes here will sync automatically.
           </p>
         </div>
       )}
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Profile selector — hidden when data SLAs enabled without overrides */}
-        {(!dataSLAsEnabled || slaAllowOverrides) && (
+        {/* Profile selector */}
         <div>
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Apply Profile</label>
           <select
@@ -515,7 +503,6 @@ export function SLAEditorPanel({
             <p className="text-[11px] text-[var(--muted)] mt-1.5">{selectedProfile.description}</p>
           )}
         </div>
-        )}
 
         {/* Selected node names */}
         {selectedNodes.length <= 5 && (
@@ -813,8 +800,8 @@ export function SLAEditorPanel({
 
       {/* Footer (sticky) */}
       <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0 space-y-2">
-        {/* Apply button — only when editing is allowed */}
-        {selectedProfileId && (!dataSLAsEnabled || slaAllowOverrides) && (
+        {/* Apply button */}
+        {selectedProfileId && (
           <>
             {applied ? (
               <div className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-green-600/90 text-white text-center flex items-center justify-center gap-2">
@@ -844,8 +831,8 @@ export function SLAEditorPanel({
           </>
         )}
 
-        {/* Remove Data SLA button — only when data SLAs are disabled and nodes have SLAs */}
-        {!dataSLAsEnabled && currentPolicy && currentPolicy.status !== 'none' && onRemoveSLA && (
+        {/* Remove Data SLA button */}
+        {currentPolicy && currentPolicy.status !== 'none' && onRemoveSLA && (
           <button
             onClick={() => {
               const fqns = selectedNodes.map(n => n.fullName || n.name);

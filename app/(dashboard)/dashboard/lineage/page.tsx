@@ -2068,7 +2068,6 @@ function LineagePageInner() {
             nodeSLAs={nodeSLAs}
             saving={policySaving}
             dataSLAsEnabled={dataSLAsEnabled}
-            slaAllowOverrides={slaAllowOverrides}
             onRemoveSLA={async (nodeFqns: string[]) => {
               try {
                 const res = await fetch('/api/schedule/policies/assign?' + new URLSearchParams({ stackId: stackId || '' }), {
