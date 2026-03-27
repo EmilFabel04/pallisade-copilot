@@ -1332,21 +1332,7 @@ export function DataAssetDetailPanel({
               {slaInfo.source && (
                 <p className="text-[11px] text-[var(--muted)] mt-1">{slaInfo.source}</p>
               )}
-              {slaInfo.source === 'data_contract' ? (
-                <a
-                  href="/dashboard/sources"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    window.location.href = '/dashboard/governance?tab=data-slas';
-                  }}
-                  className="mt-2 text-[11px] text-blue-400 hover:text-blue-300 hover:underline flex items-center gap-1"
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  View Data SLA
-                </a>
-              ) : onEditSLA ? (
+              {onEditSLA && (
                 <button
                   onClick={() => onEditSLA(node.id)}
                   className="mt-2 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
@@ -1356,7 +1342,7 @@ export function DataAssetDetailPanel({
                   </svg>
                   Edit Data SLA
                 </button>
-              ) : null}
+              )}
             </div>
           ) : (
             <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
