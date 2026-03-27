@@ -32,8 +32,8 @@ function PipelineSLACreatorModal({
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [allNodes, setAllNodes] = useState<NodeMeta[]>([]);
-  const [selectedDomain, setSelectedDomain] = useState('');
   const [slaTier, setSlaTier] = useState('');
+  // values keyed by "domain:fieldKey" to support per-domain config
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -42,51 +42,59 @@ function PipelineSLACreatorModal({
     [allNodes, selectedNodeIds],
   );
 
-  // Auto-detect domain from selected nodes
-  useEffect(() => {
-    if (step !== 2) return;
-    const domains = new Set(selectedMetas.map(n => n.domain).filter(Boolean));
-    if (domains.size === 1) {
-      const detected = [...domains][0];
-      if (PIPELINE_SLA_DOMAINS.includes(detected as typeof PIPELINE_SLA_DOMAINS[number])) {
-        setSelectedDomain(detected);
-      }
+  // Group selected nodes by domain
+  const domainGroups = useMemo(() => {
+    const groups: Record<string, NodeMeta[]> = {};
+    for (const node of selectedMetas) {
+      const domain = (PIPELINE_SLA_DOMAINS as readonly string[]).includes(node.domain)
+        ? node.domain
+        : 'warehouse';
+      if (!groups[domain]) groups[domain] = [];
+      groups[domain].push(node);
     }
-  }, [step, selectedMetas]);
+    return groups;
+  }, [selectedMetas]);
 
-  const fields = selectedDomain ? PIPELINE_SLA_FIELDS[selectedDomain] || [] : [];
+  const domainKeys = Object.keys(domainGroups);
+  const isSingleDomain = domainKeys.length === 1;
 
   const handleSave = async () => {
-    if (!selectedDomain || selectedMetas.length === 0) return;
+    if (selectedMetas.length === 0) return;
     setSaving(true);
 
     try {
-      const overrides: Record<string, Record<string, unknown>> = {};
-      for (const [key, val] of Object.entries(values)) {
-        if (!val) continue;
-        const [section, field] = key.split('.');
-        if (!overrides[section]) overrides[section] = {};
-        const fieldDef = fields.find(f => f.key === key);
-        overrides[section][field] = fieldDef?.type === 'number' ? Number(val) : val;
-      }
+      // Create one assignment per domain group
+      for (const [domain, nodes] of Object.entries(domainGroups)) {
+        const domainFields = PIPELINE_SLA_FIELDS[domain] || [];
+        const overrides: Record<string, Record<string, unknown>> = {};
 
-      const res = await fetch('/api/schedule/policies/assign', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stackId: pipelineId,
-          profileId: '__custom',
-          assignmentType: 'direct',
-          nodeFqns: selectedMetas.map(n => n.fqn),
-          nodeDomain: selectedDomain,
-          slaTier: slaTier || undefined,
-          overrides,
-        }),
-      });
+        for (const f of domainFields) {
+          const valKey = isSingleDomain ? f.key : `${domain}:${f.key}`;
+          const val = values[valKey];
+          if (!val) continue;
+          const [section, field] = f.key.split('.');
+          if (!overrides[section]) overrides[section] = {};
+          overrides[section][field] = f.type === 'number' ? Number(val) : val;
+        }
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Failed to create pipeline SLA');
+        const res = await fetch('/api/schedule/policies/assign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            stackId: pipelineId,
+            profileId: '__custom',
+            assignmentType: 'direct',
+            nodeFqns: nodes.map(n => n.fqn),
+            nodeDomain: domain,
+            slaTier: slaTier || undefined,
+            overrides,
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || 'Failed to create pipeline SLA');
+        }
       }
 
       toast.success(`Pipeline SLA created for ${selectedMetas.length} node(s)`);
@@ -164,30 +172,7 @@ function PipelineSLACreatorModal({
             />
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            {/* Selected nodes summary */}
-            <div className="flex flex-wrap gap-1.5">
-              {selectedMetas.slice(0, 8).map(n => (
-                <span key={n.id} className="text-[10px] px-2 py-0.5 rounded bg-[var(--overlay-bg)] text-[var(--text)] font-mono">{n.fqn}</span>
-              ))}
-              {selectedMetas.length > 8 && <span className="text-[10px] text-[var(--muted)]">+{selectedMetas.length - 8} more</span>}
-            </div>
-
-            {/* Domain */}
-            <div>
-              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">Domain</label>
-              <select
-                value={selectedDomain}
-                onChange={e => { setSelectedDomain(e.target.value); setValues({}); }}
-                className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
-              >
-                <option value="">Select domain...</option>
-                {PIPELINE_SLA_DOMAINS.map(d => (
-                  <option key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</option>
-                ))}
-              </select>
-            </div>
-
+          <div className="flex-1 overflow-y-auto p-5 space-y-5">
             {/* SLA Tier */}
             <div>
               <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">SLA Tier</label>
@@ -201,39 +186,69 @@ function PipelineSLACreatorModal({
               </select>
             </div>
 
-            {/* Domain-specific fields */}
-            {fields.length > 0 && (
-              <div className="space-y-3">
-                {fields.map(f => (
-                  <div key={f.key}>
-                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">{f.label}</label>
-                    {f.type === 'number' ? (
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          placeholder={f.placeholder}
-                          value={values[f.key] || ''}
-                          onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
-                          className="flex-1 px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
-                        />
-                        {f.unit && <span className="text-[11px] text-[var(--muted)] whitespace-nowrap">{f.unit}</span>}
-                      </div>
-                    ) : (
-                      <select
-                        value={values[f.key] || ''}
-                        onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
-                        className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
-                      >
-                        <option value="">Select...</option>
-                        {f.options?.map(o => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
-                    )}
+            {/* Per-domain config sections */}
+            {domainKeys.map(domain => {
+              const nodes = domainGroups[domain];
+              const domainFields = PIPELINE_SLA_FIELDS[domain] || [];
+              const domainLabel = domain.charAt(0).toUpperCase() + domain.slice(1);
+
+              return (
+                <div key={domain} className="space-y-3">
+                  {/* Domain header with node pills */}
+                  <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-[11px] font-semibold text-[var(--foreground)] uppercase tracking-wide">
+                        {domainLabel}
+                      </span>
+                      <span className="text-[10px] text-[var(--muted)]">
+                        {nodes.length} node{nodes.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {nodes.slice(0, 6).map(n => (
+                        <span key={n.id} className="text-[10px] px-2 py-0.5 rounded bg-[var(--surface-raised)] text-[var(--text)] font-mono truncate max-w-[200px]">
+                          {n.name}
+                        </span>
+                      ))}
+                      {nodes.length > 6 && <span className="text-[10px] text-[var(--muted)]">+{nodes.length - 6} more</span>}
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
+
+                  {/* Domain fields */}
+                  {domainFields.map(f => {
+                    const valKey = isSingleDomain ? f.key : `${domain}:${f.key}`;
+                    return (
+                      <div key={valKey}>
+                        <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">{f.label}</label>
+                        {f.type === 'number' ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              placeholder={f.placeholder}
+                              value={values[valKey] || ''}
+                              onChange={e => setValues(v => ({ ...v, [valKey]: e.target.value }))}
+                              className="flex-1 px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
+                            />
+                            {f.unit && <span className="text-[11px] text-[var(--muted)] whitespace-nowrap">{f.unit}</span>}
+                          </div>
+                        ) : (
+                          <select
+                            value={values[valKey] || ''}
+                            onChange={e => setValues(v => ({ ...v, [valKey]: e.target.value }))}
+                            className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
+                          >
+                            <option value="">Select...</option>
+                            {f.options?.map(o => (
+                              <option key={o.value} value={o.value}>{o.label}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -254,7 +269,7 @@ function PipelineSLACreatorModal({
                 Continue
               </button>
             ) : (
-              <button onClick={handleSave} disabled={!selectedDomain || saving}
+              <button onClick={handleSave} disabled={domainKeys.length === 0 || saving}
                 className="px-5 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity">
                 {saving ? 'Creating...' : 'Create Pipeline SLA'}
               </button>
