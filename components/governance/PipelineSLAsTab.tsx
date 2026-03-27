@@ -373,15 +373,6 @@ export function PipelineSLAsTab() {
 
   return (
     <div>
-      <div className="flex items-center justify-end mb-4">
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
-        >
-          <Plus className="w-3.5 h-3.5" /> Create Pipeline SLA
-        </button>
-      </div>
-
       <GovernanceFilters
         search={search}
         onSearchChange={setSearch}
@@ -419,6 +410,14 @@ export function PipelineSLAsTab() {
         hasActiveFilters={hasActiveFilters}
         totalCount={items.length}
         filteredCount={filtered.length}
+        actionButton={
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity"
+          >
+            <Plus className="w-3.5 h-3.5" /> Create Pipeline SLA
+          </button>
+        }
       />
 
       {filtered.length === 0 ? (

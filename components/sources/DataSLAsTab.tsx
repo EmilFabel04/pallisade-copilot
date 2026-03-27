@@ -154,54 +154,50 @@ export function DataSLAsTab() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-end">
-        <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity">
-          <Plus className="w-3.5 h-3.5" /> Create Data SLA
-        </button>
-      </div>
-
-      {/* Search and filters */}
-      {contracts.length > 0 && (
-        <GovernanceFilters
-          search={search}
-          onSearchChange={setSearch}
-          searchPlaceholder="Search by name or scope..."
-          filters={[
-            {
-              label: 'Tier',
-              options: [
-                { value: 'T0', label: 'T0' },
-                { value: 'T1', label: 'T1' },
-                { value: 'T2', label: 'T2' },
-                { value: 'T3', label: 'T3' },
-              ],
-              selected: tierFilter,
-              onToggle: v => toggleFilter(tierFilter, setTierFilter, v),
-            },
-            {
-              label: 'Scope',
-              options: [
-                { value: 'schema', label: 'Schema' },
-                { value: 'dbt_model_group', label: 'dbt Model Group' },
-                { value: 'dashboard', label: 'Dashboard' },
-                { value: 'exception', label: 'Exception' },
-              ],
-              selected: scopeFilter,
-              onToggle: v => toggleFilter(scopeFilter, setScopeFilter, v),
-            },
-          ]}
-          onClearAll={() => {
-            setSearch('');
-            setTierFilter(new Set());
-            setScopeFilter(new Set());
-          }}
-          hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0}
-          totalCount={contracts.length}
-          filteredCount={filteredSLAs.length}
-        />
-      )}
+      {/* Search, filters and create button */}
+      <GovernanceFilters
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search by name or scope..."
+        filters={[
+          {
+            label: 'Tier',
+            options: [
+              { value: 'T0', label: 'T0' },
+              { value: 'T1', label: 'T1' },
+              { value: 'T2', label: 'T2' },
+              { value: 'T3', label: 'T3' },
+            ],
+            selected: tierFilter,
+            onToggle: v => toggleFilter(tierFilter, setTierFilter, v),
+          },
+          {
+            label: 'Scope',
+            options: [
+              { value: 'schema', label: 'Schema' },
+              { value: 'dbt_model_group', label: 'dbt Model Group' },
+              { value: 'dashboard', label: 'Dashboard' },
+              { value: 'exception', label: 'Exception' },
+            ],
+            selected: scopeFilter,
+            onToggle: v => toggleFilter(scopeFilter, setScopeFilter, v),
+          },
+        ]}
+        onClearAll={() => {
+          setSearch('');
+          setTierFilter(new Set());
+          setScopeFilter(new Set());
+        }}
+        hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0}
+        totalCount={contracts.length}
+        filteredCount={filteredSLAs.length}
+        actionButton={
+          <button onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity">
+            <Plus className="w-3.5 h-3.5" /> Create Data SLA
+          </button>
+        }
+      />
 
       {/* Empty state */}
       {contracts.length === 0 && (

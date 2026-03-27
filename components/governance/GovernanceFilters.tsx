@@ -19,6 +19,7 @@ interface GovernanceFiltersProps {
   hasActiveFilters: boolean;
   totalCount: number;
   filteredCount: number;
+  actionButton?: React.ReactNode;
 }
 
 export function GovernanceFilters({
@@ -30,6 +31,7 @@ export function GovernanceFilters({
   hasActiveFilters,
   totalCount,
   filteredCount,
+  actionButton,
 }: GovernanceFiltersProps) {
   const [openFilter, setOpenFilter] = useState<string | null>(null);
 
@@ -85,6 +87,9 @@ export function GovernanceFilters({
             ))}
           </FilterDropdown>
         ))}
+
+        {/* Action button (e.g. Create SLA) */}
+        {actionButton && <div className="ml-auto">{actionButton}</div>}
       </div>
 
       {/* Active filters summary */}
