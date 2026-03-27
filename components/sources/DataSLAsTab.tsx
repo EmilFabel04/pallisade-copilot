@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { GovernanceFilters } from '@/components/governance/GovernanceFilters';
-import { Loader2, FileText, Plus, X, Clock, User, Shield, ChevronRight } from 'lucide-react';
+import { Loader2, FileText, Plus, X, Clock, Shield, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { useDataSLAs, type DataSLASummary } from './useDataSLAs';
@@ -96,30 +96,12 @@ function SelectInput({ value, onChange, label, options }: {
 const STRICTNESS_OPTIONS = [{ value: 'strict', label: 'Strict' }, { value: 'warn', label: 'Warn' }, { value: 'ignore', label: 'Ignore' }];
 const TOLERANCE_OPTIONS = [{ value: 'strict', label: 'Strict' }, { value: 'normal', label: 'Normal' }, { value: 'relaxed', label: 'Relaxed' }];
 
-function SettingToggle({ label, description, checked, onChange }: {
-  label: string; description: string; checked: boolean; onChange: (v: boolean) => void;
-}) {
-  return (
-    <label className="flex items-start gap-2 cursor-pointer flex-1 min-w-0">
-      <button role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors shrink-0 mt-0.5 ${checked ? 'bg-emerald-500' : 'bg-zinc-600'}`}>
-        <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
-      </button>
-      <div className="min-w-0">
-        <span className="text-[11px] font-medium text-[var(--text)] block">{label}</span>
-        <span className="text-[10px] text-[var(--muted)] block">{description}</span>
-      </div>
-    </label>
-  );
-}
-
 // ─── Main Tab ────────────────────────────────────────────────────
 
 export function DataSLAsTab() {
   const { selectedPipelineId } = usePipeline();
-  const { contracts, dataSLAsEnabled, contractAllowOverrides, contractViolationAlerting, loading, error, refresh } = useDataSLAs();
+  const { contracts, loading, error, refresh } = useDataSLAs();
   const [selectedContract, setSelectedContract] = useState<DataSLASummary | null>(null);
-  const [toggling, setToggling] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
   const [search, setSearch] = useState('');
@@ -158,57 +140,6 @@ export function DataSLAsTab() {
   const groupContracts = filteredSLAs.filter(c => !c.isException);
   const exceptionContracts = filteredSLAs.filter(c => c.isException);
 
-  const [showEnableDisclaimer, setShowEnableDisclaimer] = useState(false);
-
-  const handleToggle = useCallback(async (enabled: boolean) => {
-    if (!selectedPipelineId) return;
-    if (enabled) {
-      setShowEnableDisclaimer(true);
-      return;
-    }
-    setToggling(true);
-    try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataSLAsEnabled: enabled }),
-      });
-      if (res.ok) {
-        toast.success(enabled ? 'Data SLAs enabled' : 'Data SLAs disabled');
-        refresh(true);
-      } else {
-        toast.error('Failed to update setting');
-      }
-    } catch {
-      toast.error('Failed to update setting');
-    } finally {
-      setToggling(false);
-    }
-  }, [selectedPipelineId, refresh]);
-
-  const confirmEnable = useCallback(async () => {
-    if (!selectedPipelineId) return;
-    setShowEnableDisclaimer(false);
-    setToggling(true);
-    try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataSLAsEnabled: true }),
-      });
-      if (res.ok) {
-        toast.success('Data SLAs enabled');
-        refresh(true);
-      } else {
-        toast.error('Failed to update setting');
-      }
-    } catch {
-      toast.error('Failed to update setting');
-    } finally {
-      setToggling(false);
-    }
-  }, [selectedPipelineId, refresh]);
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -224,61 +155,12 @@ export function DataSLAsTab() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <label className="flex items-center gap-2 cursor-pointer">
-          <button role="switch" aria-checked={dataSLAsEnabled} disabled={toggling}
-            onClick={() => handleToggle(!dataSLAsEnabled)}
-            className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors ${dataSLAsEnabled ? 'bg-emerald-500' : 'bg-zinc-600'} ${toggling ? 'opacity-50' : ''}`}>
-            <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${dataSLAsEnabled ? 'translate-x-5' : 'translate-x-1'}`} />
-          </button>
-          <span className="text-xs text-[var(--muted)]">Allow Data SLAs</span>
-        </label>
-        {dataSLAsEnabled && (
-          <button onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity">
-            <Plus className="w-3.5 h-3.5" /> Create Data SLA
-          </button>
-        )}
+      <div className="flex items-center justify-end">
+        <button onClick={() => setShowCreate(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity">
+          <Plus className="w-3.5 h-3.5" /> Create Data SLA
+        </button>
       </div>
-
-      {/* Data SLA settings (only when enabled) */}
-      {dataSLAsEnabled && (
-        <details className="group rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-          <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none text-[11px] text-[var(--muted)] hover:text-[var(--text)] transition-colors list-none">
-            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Settings
-          </summary>
-          <div className="flex items-center gap-6 px-3 py-2.5 border-t border-[var(--subtle-border)]">
-            <SettingToggle
-              label="Allow node-level overrides"
-              description="Users can override SLA fields on individual nodes in lineage"
-              checked={contractAllowOverrides}
-              onChange={async (v) => {
-                await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ contractAllowOverrides: v }),
-                });
-                refresh(true);
-              }}
-            />
-            <SettingToggle
-              label="Violation alerting"
-              description="Alert when node SLAs are set looser than the contract"
-              checked={contractViolationAlerting}
-              onChange={async (v) => {
-                await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ contractViolationAlerting: v }),
-                });
-                refresh(true);
-              }}
-            />
-          </div>
-        </details>
-      )}
 
       {/* Search and filters */}
       {contracts.length > 0 && (
@@ -324,9 +206,7 @@ export function DataSLAsTab() {
         <div className="text-center py-12">
           <FileText className="w-8 h-8 mx-auto mb-3 text-[var(--muted)]" />
           <p className="text-sm text-[var(--muted)]">
-            {dataSLAsEnabled
-              ? 'No data SLAs yet. Click "Create Data SLA" to define SLA expectations for your data assets.'
-              : 'Enable data SLAs to define SLA expectations for your data assets. SLAs set in lineage will auto-generate data SLAs.'}
+            No data SLAs yet. Click &quot;Create Data SLA&quot; to define SLA expectations for your data assets.
           </p>
         </div>
       )}
@@ -339,7 +219,7 @@ export function DataSLAsTab() {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {groupContracts.map(c => (
-              <DataSLACard key={c.id} contract={c} editable={dataSLAsEnabled} onClick={setSelectedContract} />
+              <DataSLACard key={c.id} contract={c} editable={true} onClick={setSelectedContract} />
             ))}
           </div>
         </div>
@@ -351,7 +231,7 @@ export function DataSLAsTab() {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {exceptionContracts.map(c => (
-              <DataSLACard key={c.id} contract={c} editable={dataSLAsEnabled} onClick={setSelectedContract} />
+              <DataSLACard key={c.id} contract={c} editable={true} onClick={setSelectedContract} />
             ))}
           </div>
         </div>
@@ -362,7 +242,7 @@ export function DataSLAsTab() {
         <ContractEditorDrawer
           contract={selectedContract}
           pipelineId={selectedPipelineId}
-          editable={dataSLAsEnabled}
+          editable={true}
           onClose={() => setSelectedContract(null)}
           onSaved={() => { setSelectedContract(null); refresh(true); }}
         />
@@ -377,49 +257,6 @@ export function DataSLAsTab() {
         />
       )}
 
-      {/* Enable disclaimer modal */}
-      {showEnableDisclaimer && (
-        <div className="fixed inset-x-0 top-14 bottom-0 z-40 flex items-center justify-center" onClick={() => setShowEnableDisclaimer(false)}>
-          <div className="absolute inset-0 bg-black/40" />
-          <div className="relative w-full max-w-md bg-[var(--surface-raised)] rounded-xl border border-[var(--subtle-border)] p-6" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0">
-                <Shield className="w-5 h-5 text-amber-400" />
-              </div>
-              <h2 className="text-sm font-semibold text-[var(--foreground)]">Enable Data SLAs</h2>
-            </div>
-            <div className="space-y-3 mb-6">
-              <p className="text-[13px] text-[var(--text)] leading-relaxed">
-                Data SLAs will become the <span className="font-semibold">primary source of truth</span> for SLA expectations on your data assets.
-              </p>
-              <div className="space-y-2 text-[12px] text-[var(--muted)] leading-relaxed">
-                <div className="flex gap-2">
-                  <span className="text-amber-400 shrink-0 mt-0.5">&#9679;</span>
-                  <span>Data SLA values will <span className="text-[var(--text)] font-medium">take priority</span> over SLAs set in the pipeline lineage view.</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="text-amber-400 shrink-0 mt-0.5">&#9679;</span>
-                  <span>SLA changes in lineage will <span className="text-[var(--text)] font-medium">no longer auto-update</span> existing data SLAs.</span>
-                </div>
-                <div className="flex gap-2">
-                  <span className="text-red-400 shrink-0 mt-0.5">&#9679;</span>
-                  <span>If a data SLA is <span className="text-[var(--text)] font-medium">deleted</span>, the SLA expectations it defined will be removed. They will not fall back to pipeline SLAs.</span>
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setShowEnableDisclaimer(false)}
-                className="px-4 py-2 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)] transition-colors">
-                Cancel
-              </button>
-              <button onClick={confirmEnable}
-                className="px-4 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity">
-                I understand, enable data SLAs
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -79,10 +79,12 @@ export async function POST(request: NextRequest) {
             profileId: resolvedProfileId,
             assignmentType: 'direct',
             nodeFqn: fqn,
+            nodeDomain: nodeDomain || undefined,
             overrides: overrides || undefined,
           },
           update: {
             profileId: resolvedProfileId,
+            nodeDomain: nodeDomain || undefined,
             overrides: overrides || undefined,
           },
         });

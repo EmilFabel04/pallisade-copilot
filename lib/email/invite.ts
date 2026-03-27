@@ -45,10 +45,12 @@ export function generateInviteHtml(params: InviteEmailParams): string {
   const safeOrg = escapeHtml(organizationName);
 
   const noteBlock = personalNote
-    ? `<div style="margin: 20px 0; padding: 16px; background: #f9fafb; border-left: 3px solid #8b5cf6; border-radius: 0 6px 6px 0;">
-        <p style="margin: 0; color: #6b7280; font-size: 13px; font-style: italic;">"${escapeHtml(personalNote)}"</p>
-        <p style="margin: 6px 0 0; color: #9ca3af; font-size: 12px;">— ${safeName}</p>
-      </div>`
+    ? `<tr><td style="padding: 0 40px;">
+        <div style="margin: 0 0 24px; padding: 16px 20px; background: #fef2f2; border-left: 3px solid #a51a1f; border-radius: 0 6px 6px 0;">
+          <p style="margin: 0; color: #555; font-size: 14px; line-height: 1.5; font-style: italic;">"${escapeHtml(personalNote)}"</p>
+          <p style="margin: 8px 0 0; color: #999; font-size: 12px;">— ${safeName}</p>
+        </div>
+      </td></tr>`
     : '';
 
   return `<!DOCTYPE html>
@@ -56,47 +58,80 @@ export function generateInviteHtml(params: InviteEmailParams): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Team Invite</title>
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; padding: 20px; margin: 0;">
-  <div style="max-width: 560px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-    <!-- Header -->
-    <div style="background: linear-gradient(135deg, #7c3aed, #6d28d9); padding: 32px 24px; text-align: center;">
-      <h1 style="margin: 0; font-size: 22px; color: white; font-weight: 600;">You're invited to join ${safeOrg}</h1>
-    </div>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: #f0f0f0; margin: 0; padding: 0;">
+  <!-- Outer wrapper -->
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background: #f0f0f0; padding: 40px 20px;">
+    <tr><td align="center">
+      <!-- Card -->
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width: 560px; width: 100%; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
 
-    <!-- Body -->
-    <div style="padding: 32px 24px;">
-      <p style="color: #374151; line-height: 1.6; margin: 0 0 8px; font-size: 15px;">
-        <strong>${safeName}</strong> has invited you to join <strong>${safeOrg}</strong> on Pallisade.
-      </p>
+        <!-- Header with logo -->
+        <tr><td style="background: linear-gradient(135deg, #7a0a0e 0%, #a51a1f 100%); padding: 36px 40px 32px; text-align: center;">
+          <!-- Pallisade emblem (inline SVG as img) -->
+          <div style="margin: 0 0 16px;">
+            <img src="https://pallisade.dev/pallisade_emblem.svg" alt="Pallisade" width="44" height="44" style="display: inline-block; width: 44px; height: 44px; filter: brightness(0) invert(1);" />
+          </div>
+          <h1 style="margin: 0; font-size: 21px; color: #ffffff; font-weight: 600; line-height: 1.3;">You're invited to join<br>${safeOrg}</h1>
+        </td></tr>
 
-      <p style="color: #6b7280; font-size: 14px; margin: 0 0 20px;">
-        You've been invited as
-        <span style="display: inline-block; padding: 2px 10px; background: #f3f0ff; color: #7c3aed; border-radius: 12px; font-weight: 500; font-size: 13px;">${roleLabel}</span>
-      </p>
+        <!-- Divider accent line -->
+        <tr><td style="height: 3px; background: linear-gradient(90deg, #7a0a0e, #a51a1f, #7a0a0e);"></td></tr>
 
-      ${noteBlock}
+        <!-- Body -->
+        <tr><td style="padding: 36px 40px 0;">
+          <p style="color: #1a1a1a; line-height: 1.6; margin: 0 0 6px; font-size: 15px;">
+            <strong>${safeName}</strong> has invited you to join <strong>${safeOrg}</strong> on Pallisade.
+          </p>
+          <p style="color: #666; font-size: 14px; margin: 0 0 28px; line-height: 1.5;">
+            You've been invited as
+            <span style="display: inline-block; padding: 3px 12px; background: #fef2f2; color: #a51a1f; border-radius: 12px; font-weight: 600; font-size: 12px; letter-spacing: 0.02em;">${roleLabel}</span>
+          </p>
+        </td></tr>
 
-      <!-- CTA -->
-      <div style="text-align: center; margin: 28px 0;">
-        <a href="${inviteLink}" style="display: inline-block; background: linear-gradient(135deg, #7c3aed, #6d28d9); color: white; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px;">
-          Accept Invite
-        </a>
-      </div>
+        <!-- Personal note (conditional) -->
+        ${noteBlock}
 
-      <p style="color: #9ca3af; font-size: 12px; text-align: center; margin: 0;">
-        This invite expires in 7 days. If the button doesn't work, copy this link:<br>
-        <a href="${inviteLink}" style="color: #7c3aed; word-break: break-all;">${inviteLink}</a>
-      </p>
-    </div>
+        <!-- CTA Button -->
+        <tr><td style="padding: 4px 40px 32px; text-align: center;">
+          <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+            <tr><td style="border-radius: 8px; background: linear-gradient(135deg, #7a0a0e, #a51a1f);">
+              <a href="${inviteLink}" style="display: inline-block; padding: 14px 36px; color: #ffffff; text-decoration: none; font-weight: 600; font-size: 15px; letter-spacing: 0.02em;">
+                Accept Invite
+              </a>
+            </td></tr>
+          </table>
+        </td></tr>
 
-    <!-- Footer -->
-    <div style="background: #f9fafb; padding: 16px 24px; border-top: 1px solid #e5e7eb;">
-      <p style="margin: 0; font-size: 12px; color: #9ca3af; text-align: center;">
-        Sent by <a href="https://pallisade.dev" style="color: #7c3aed; text-decoration: none;">Pallisade</a> — Data Reliability Platform
-      </p>
-    </div>
-  </div>
+        <!-- Subtle divider -->
+        <tr><td style="padding: 0 40px;">
+          <div style="height: 1px; background: #eee;"></div>
+        </td></tr>
+
+        <!-- Link fallback -->
+        <tr><td style="padding: 20px 40px 28px; text-align: center;">
+          <p style="color: #aaa; font-size: 12px; margin: 0; line-height: 1.5;">
+            This invite expires in 7 days.<br>
+            If the button doesn't work, copy this link:
+          </p>
+          <p style="margin: 8px 0 0;">
+            <a href="${inviteLink}" style="color: #a51a1f; font-size: 11px; word-break: break-all; text-decoration: none;">${inviteLink}</a>
+          </p>
+        </td></tr>
+
+        <!-- Footer -->
+        <tr><td style="background: #fafafa; padding: 20px 40px; border-top: 1px solid #f0f0f0; text-align: center;">
+          <p style="margin: 0; font-size: 12px; color: #bbb;">
+            <a href="https://pallisade.dev" style="color: #a51a1f; text-decoration: none; font-weight: 500;">Pallisade</a>
+            <span style="color: #ddd; margin: 0 6px;">|</span>
+            Data Reliability Platform
+          </p>
+        </td></tr>
+
+      </table>
+    </td></tr>
+  </table>
 </body>
 </html>`.trim();
 }
