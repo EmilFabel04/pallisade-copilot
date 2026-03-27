@@ -122,8 +122,8 @@ function PipelineSLACreatorModal({
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {step === 1 && (
+        {step === 1 && (
+          <div className="flex-1 min-h-0">
             <NodeSelectionSurface
               stackId={pipelineId}
               mode="pipeline-overview"
@@ -131,9 +131,11 @@ function PipelineSLACreatorModal({
               onSelectionChange={setSelectedNodeIds}
               onNodesLoaded={setAllNodes}
             />
-          )}
+          </div>
+        )}
 
-          {step === 2 && (
+        {step === 2 && (
+          <div className="flex-1 overflow-y-auto px-5 py-4">
             <div className="space-y-5">
               {/* SLA Tier */}
               <div>
@@ -210,8 +212,8 @@ function PipelineSLACreatorModal({
                 {selectedMetas.length} node(s) selected
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-[var(--subtle-border)]">
