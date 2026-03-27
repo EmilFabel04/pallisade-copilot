@@ -122,6 +122,7 @@ export async function GET(request: NextRequest) {
       inviterName: invite.inviterName,
       createdAt: invite.createdAt.toISOString(),
       expiresAt: invite.expiresAt.toISOString(),
+      emailSentAt: invite.emailSentAt?.toISOString() || null,
     }));
 
     // Calculate activity stats
