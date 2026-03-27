@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useMemo } from 'react';
+import { GovernanceFilters } from '@/components/governance/GovernanceFilters';
 import { Loader2, FileText, Plus, X, Clock, User, Shield, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
@@ -121,8 +122,41 @@ export function DataSLAsTab() {
   const [toggling, setToggling] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
-  const groupContracts = contracts.filter(c => !c.isException);
-  const exceptionContracts = contracts.filter(c => c.isException);
+  const [search, setSearch] = useState('');
+  const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
+  const [scopeFilter, setScopeFilter] = useState<Set<string>>(new Set());
+
+  const toggleFilter = (set: Set<string>, setter: (s: Set<string>) => void, value: string) => {
+    const next = new Set(set);
+    if (next.has(value)) next.delete(value);
+    else next.add(value);
+    setter(next);
+  };
+
+  const filteredSLAs = useMemo(() => {
+    let result = contracts;
+
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter(c =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.scopeRef || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (tierFilter.size > 0) {
+      result = result.filter(c => c.slaTier && tierFilter.has(c.slaTier));
+    }
+
+    if (scopeFilter.size > 0) {
+      result = result.filter(c => scopeFilter.has(c.scope));
+    }
+
+    return result;
+  }, [contracts, search, tierFilter, scopeFilter]);
+
+  const groupContracts = filteredSLAs.filter(c => !c.isException);
+  const exceptionContracts = filteredSLAs.filter(c => c.isException);
 
   const [showEnableDisclaimer, setShowEnableDisclaimer] = useState(false);
 
@@ -209,32 +243,80 @@ export function DataSLAsTab() {
 
       {/* Data SLA settings (only when enabled) */}
       {dataSLAsEnabled && (
-        <div className="flex items-center gap-6 px-3 py-2.5 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-          <SettingToggle
-            label="Allow node-level overrides"
-            description="Users can override SLA fields on individual nodes in lineage"
-            checked={contractAllowOverrides}
-            onChange={async (v) => {
-              await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contractAllowOverrides: v }),
-              });
-              refresh(true);
-            }}
-          />
-          <SettingToggle
-            label="Violation alerting"
-            description="Alert when node SLAs are set looser than the contract"
-            checked={contractViolationAlerting}
-            onChange={async (v) => {
-              await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contractViolationAlerting: v }),
-              });
-              refresh(true);
-            }}
-          />
-        </div>
+        <details className="group rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+          <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none text-[11px] text-[var(--muted)] hover:text-[var(--text)] transition-colors list-none">
+            <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Settings
+          </summary>
+          <div className="flex items-center gap-6 px-3 py-2.5 border-t border-[var(--subtle-border)]">
+            <SettingToggle
+              label="Allow node-level overrides"
+              description="Users can override SLA fields on individual nodes in lineage"
+              checked={contractAllowOverrides}
+              onChange={async (v) => {
+                await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
+                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contractAllowOverrides: v }),
+                });
+                refresh(true);
+              }}
+            />
+            <SettingToggle
+              label="Violation alerting"
+              description="Alert when node SLAs are set looser than the contract"
+              checked={contractViolationAlerting}
+              onChange={async (v) => {
+                await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
+                  method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ contractViolationAlerting: v }),
+                });
+                refresh(true);
+              }}
+            />
+          </div>
+        </details>
+      )}
+
+      {/* Search and filters */}
+      {contracts.length > 0 && (
+        <GovernanceFilters
+          search={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="Search by name or scope..."
+          filters={[
+            {
+              label: 'Tier',
+              options: [
+                { value: 'T0', label: 'T0' },
+                { value: 'T1', label: 'T1' },
+                { value: 'T2', label: 'T2' },
+                { value: 'T3', label: 'T3' },
+              ],
+              selected: tierFilter,
+              onToggle: v => toggleFilter(tierFilter, setTierFilter, v),
+            },
+            {
+              label: 'Scope',
+              options: [
+                { value: 'schema', label: 'Schema' },
+                { value: 'dbt_model_group', label: 'dbt Model Group' },
+                { value: 'dashboard', label: 'Dashboard' },
+                { value: 'exception', label: 'Exception' },
+              ],
+              selected: scopeFilter,
+              onToggle: v => toggleFilter(scopeFilter, setScopeFilter, v),
+            },
+          ]}
+          onClearAll={() => {
+            setSearch('');
+            setTierFilter(new Set());
+            setScopeFilter(new Set());
+          }}
+          hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0}
+        />
       )}
 
       {/* Empty state */}
