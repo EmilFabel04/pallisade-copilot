@@ -250,3 +250,95 @@ export async function DELETE(request: NextRequest) {
     );
   }
 }
+
+// PATCH - Resend invite email
+export async function PATCH(request: NextRequest) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const currentUserId = session.user.id;
+    const organizationId = (session.user as any).organizationId;
+
+    if (!organizationId) {
+      return NextResponse.json({ error: 'No organization' }, { status: 400 });
+    }
+
+    // Check if user is admin
+    const currentMember = await prisma.teamMember.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: currentUserId,
+          organizationId,
+        },
+      },
+      include: {
+        user: true,
+        organization: { select: { name: true } },
+      },
+    });
+
+    if (!currentMember || (currentMember.role !== 'OWNER' && currentMember.role !== 'ADMIN')) {
+      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
+
+    const body = await request.json();
+    const { inviteId } = body;
+
+    if (!inviteId) {
+      return NextResponse.json({ error: 'inviteId is required' }, { status: 400 });
+    }
+
+    // Verify invite belongs to org and is resendable
+    const invite = await prisma.teamInvite.findUnique({
+      where: { id: inviteId },
+    });
+
+    if (!invite || invite.organizationId !== organizationId) {
+      return NextResponse.json({ error: 'Invite not found' }, { status: 404 });
+    }
+
+    if (invite.status !== 'PENDING') {
+      return NextResponse.json({ error: 'Can only resend pending invites' }, { status: 400 });
+    }
+
+    // Reset expiry to 7 days from now
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    await prisma.teamInvite.update({
+      where: { id: inviteId },
+      data: { expiresAt, status: 'PENDING' },
+    });
+
+    // Generate invite link and send email
+    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    const inviteLink = `${baseUrl}/signup?invite=${invite.token}`;
+
+    const sent = await sendInviteEmail({
+      recipientEmail: invite.email,
+      inviterName: currentMember.user.name || currentMember.user.email,
+      organizationName: currentMember.organization?.name || 'your team',
+      role: invite.role,
+      inviteLink,
+    });
+
+    if (sent) {
+      await prisma.teamInvite.update({
+        where: { id: inviteId },
+        data: { emailSentAt: new Date() },
+      });
+    }
+
+    return NextResponse.json({ success: true, emailSent: sent });
+
+  } catch (error) {
+    console.error('Failed to resend invite:', error);
+    return NextResponse.json(
+      { error: 'Failed to resend invite' },
+      { status: 500 },
+    );
+  }
+}
