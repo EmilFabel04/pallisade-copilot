@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Plus, X, ChevronRight } from 'lucide-react';
+import { Plus, X, ChevronRight, Shield } from 'lucide-react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { GovernanceFilters } from './GovernanceFilters';
 import { PipelineSLACard, type PipelineSLAItem } from './PipelineSLACard';
@@ -100,29 +100,60 @@ function PipelineSLACreatorModal({
   };
 
   return (
-    <div className="fixed inset-x-0 top-14 bottom-0 z-40 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-[90vw] max-w-4xl h-[80vh] bg-[var(--surface-raised)] rounded-xl border border-[var(--subtle-border)] shadow-xl flex flex-col" onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-x-0 top-14 bottom-0 z-40 flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40" />
+      <div className="relative w-[90vw] max-w-5xl h-[80vh] bg-[var(--surface-raised)] rounded-xl border border-[var(--subtle-border)] flex flex-col" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--subtle-border)]">
-          <div className="flex items-center gap-3">
-            <h2 className="text-sm font-semibold text-[var(--foreground)]">Create Pipeline SLA</h2>
-            <div className="flex items-center gap-1 text-[11px]">
-              <span className={`px-2 py-0.5 rounded-full font-medium ${step === 1 ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] text-[var(--muted)]'}`}>
-                1. Select Nodes
-              </span>
-              <ChevronRight className="w-3 h-3 text-[var(--muted)]" />
-              <span className={`px-2 py-0.5 rounded-full font-medium ${step === 2 ? 'bg-[var(--accent)] text-white' : 'bg-[var(--surface)] text-[var(--muted)]'}`}>
-                2. Configure SLA
-              </span>
+        <div className="p-5 border-b border-[var(--subtle-border)] flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[var(--accent)]/15 flex items-center justify-center">
+                <Shield className="w-4 h-4 text-[var(--accent)]" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-[var(--foreground)]">Create Pipeline SLA</h2>
+                <p className="text-[11px] text-[var(--muted)] mt-0.5">
+                  {step === 1 ? 'Click nodes in the graph to select pipeline tools' : 'Configure operational SLA expectations'}
+                </p>
+              </div>
             </div>
+            <button onClick={onClose} className="p-1 hover:bg-[var(--subtle-bg)] rounded transition-colors">
+              <X className="w-4 h-4 text-[var(--muted)]" />
+            </button>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--foreground)] transition-colors">
-            <X className="w-4 h-4" />
-          </button>
+          {/* Step indicator */}
+          <div className="flex items-center gap-3 mt-4">
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              step === 1
+                ? 'bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/20'
+                : 'text-[var(--muted)] bg-[var(--overlay-bg)] border border-[var(--subtle-border)]'
+            }`}>
+              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                step === 1 ? 'bg-[var(--accent)] text-white' : 'bg-[var(--subtle-border)] text-[var(--muted)]'
+              }`}>1</span>
+              Select Nodes
+            </div>
+            <ChevronRight className="w-3.5 h-3.5 text-[var(--muted)]" />
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              step === 2
+                ? 'bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/20'
+                : 'text-[var(--muted)] bg-[var(--overlay-bg)] border border-[var(--subtle-border)]'
+            }`}>
+              <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                step === 2 ? 'bg-[var(--accent)] text-white' : 'bg-[var(--subtle-border)] text-[var(--muted)]'
+              }`}>2</span>
+              Configure SLA
+            </div>
+            {selectedNodeIds.length > 0 && step === 1 && (
+              <span className="ml-auto text-[11px] text-[var(--accent)] font-medium bg-[var(--accent)]/10 px-2 py-1 rounded-md">
+                {selectedNodeIds.length} node{selectedNodeIds.length !== 1 ? 's' : ''} selected
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Body */}
-        {step === 1 && (
+        {step === 1 ? (
           <div className="flex-1 min-h-0">
             <NodeSelectionSurface
               stackId={pipelineId}
@@ -132,120 +163,99 @@ function PipelineSLACreatorModal({
               onNodesLoaded={setAllNodes}
             />
           </div>
-        )}
+        ) : (
+          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+            {/* Selected nodes summary */}
+            <div className="flex flex-wrap gap-1.5">
+              {selectedMetas.slice(0, 8).map(n => (
+                <span key={n.id} className="text-[10px] px-2 py-0.5 rounded bg-[var(--overlay-bg)] text-[var(--text)] font-mono">{n.fqn}</span>
+              ))}
+              {selectedMetas.length > 8 && <span className="text-[10px] text-[var(--muted)]">+{selectedMetas.length - 8} more</span>}
+            </div>
 
-        {step === 2 && (
-          <div className="flex-1 overflow-y-auto px-5 py-4">
-            <div className="space-y-5">
-              {/* SLA Tier */}
-              <div>
-                <label className="block text-xs font-medium text-[var(--foreground)] mb-1.5">SLA Tier</label>
-                <div className="flex gap-2">
-                  {TIERS.map(t => (
-                    <button
-                      key={t}
-                      onClick={() => setSlaTier(slaTier === t ? '' : t)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors ${
-                        slaTier === t
-                          ? 'bg-[var(--accent)] text-white border-[var(--accent)]'
-                          : 'bg-[var(--surface)] text-[var(--foreground)] border-[var(--subtle-border)] hover:border-[var(--muted)]'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            {/* Domain */}
+            <div>
+              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">Domain</label>
+              <select
+                value={selectedDomain}
+                onChange={e => { setSelectedDomain(e.target.value); setValues({}); }}
+                className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
+              >
+                <option value="">Select domain...</option>
+                {PIPELINE_SLA_DOMAINS.map(d => (
+                  <option key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</option>
+                ))}
+              </select>
+            </div>
 
-              {/* Domain */}
-              <div>
-                <label className="block text-xs font-medium text-[var(--foreground)] mb-1.5">Domain</label>
-                <select
-                  value={selectedDomain}
-                  onChange={e => { setSelectedDomain(e.target.value); setValues({}); }}
-                  className="w-full px-3 py-2 text-xs rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] text-[var(--foreground)]"
-                >
-                  <option value="">Select domain...</option>
-                  {PIPELINE_SLA_DOMAINS.map(d => (
-                    <option key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</option>
-                  ))}
-                </select>
-              </div>
+            {/* SLA Tier */}
+            <div>
+              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">SLA Tier</label>
+              <select value={slaTier} onChange={e => setSlaTier(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]">
+                <option value="">None</option>
+                <option value="T0">T0 - Critical</option>
+                <option value="T1">T1 - High</option>
+                <option value="T2">T2 - Standard</option>
+                <option value="T3">T3 - Low</option>
+              </select>
+            </div>
 
-              {/* Domain-specific fields */}
-              {fields.length > 0 && (
-                <div className="space-y-3">
-                  <p className="text-xs font-medium text-[var(--foreground)]">SLA Expectations</p>
-                  {fields.map(f => (
-                    <div key={f.key}>
-                      <label className="block text-[11px] text-[var(--muted)] mb-1">{f.label}</label>
-                      {f.type === 'number' ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            placeholder={f.placeholder}
-                            value={values[f.key] || ''}
-                            onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
-                            className="flex-1 px-3 py-1.5 text-xs rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] text-[var(--foreground)]"
-                          />
-                          {f.unit && <span className="text-[11px] text-[var(--muted)]">{f.unit}</span>}
-                        </div>
-                      ) : (
-                        <select
+            {/* Domain-specific fields */}
+            {fields.length > 0 && (
+              <div className="space-y-3">
+                {fields.map(f => (
+                  <div key={f.key}>
+                    <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">{f.label}</label>
+                    {f.type === 'number' ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          placeholder={f.placeholder}
                           value={values[f.key] || ''}
                           onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
-                          className="w-full px-3 py-1.5 text-xs rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] text-[var(--foreground)]"
-                        >
-                          <option value="">Select...</option>
-                          {f.options?.map(o => (
-                            <option key={o.value} value={o.value}>{o.label}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Selected nodes summary */}
-              <div className="text-[11px] text-[var(--muted)]">
-                {selectedMetas.length} node(s) selected
+                          className="flex-1 px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
+                        />
+                        {f.unit && <span className="text-[11px] text-[var(--muted)] whitespace-nowrap">{f.unit}</span>}
+                      </div>
+                    ) : (
+                      <select
+                        value={values[f.key] || ''}
+                        onChange={e => setValues(v => ({ ...v, [f.key]: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]"
+                      >
+                        <option value="">Select...</option>
+                        {f.options?.map(o => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                ))}
               </div>
-            </div>
+            )}
           </div>
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-[var(--subtle-border)]">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
-          >
+        <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0 flex items-center justify-between">
+          <button onClick={onClose} className="px-4 py-2 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--overlay-bg)] transition-colors">
             Cancel
           </button>
-          <div className="flex items-center gap-2">
+          <div className="flex gap-2">
             {step === 2 && (
-              <button
-                onClick={() => setStep(1)}
-                className="px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--subtle-border)] text-[var(--foreground)] hover:bg-[var(--surface)] transition-colors"
-              >
+              <button onClick={() => setStep(1)} className="px-4 py-2 text-xs font-medium rounded-md text-[var(--muted)] hover:text-[var(--foreground)] hover:bg-[var(--overlay-bg)] transition-colors">
                 Back
               </button>
             )}
             {step === 1 ? (
-              <button
-                onClick={() => setStep(2)}
-                disabled={selectedNodeIds.length === 0}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Continue <ChevronRight className="w-3 h-3" />
+              <button onClick={() => setStep(2)} disabled={selectedNodeIds.length === 0}
+                className="px-5 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity">
+                Continue
               </button>
             ) : (
-              <button
-                onClick={handleSave}
-                disabled={!selectedDomain || saving}
-                className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
-              >
+              <button onClick={handleSave} disabled={!selectedDomain || saving}
+                className="px-5 py-2 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity">
                 {saving ? 'Creating...' : 'Create Pipeline SLA'}
               </button>
             )}
