@@ -24,12 +24,14 @@ export async function GET(request: NextRequest) {
   const tierFilter = searchParams.get('tier');
 
   try {
+    // Pipeline SLA domains — excludes 'warehouse' and null which are data lineage SLAs
+    const PIPELINE_DOMAINS = ['ingestion', 'orchestration', 'transform', 'bi'];
+
     const where: any = {
       organizationId,
       assignmentType: 'direct',
+      nodeDomain: domainFilter ? domainFilter : { in: PIPELINE_DOMAINS },
     };
-
-    if (domainFilter) where.nodeDomain = domainFilter;
 
     const assignments = await prisma.policyAssignment.findMany({
       where,
