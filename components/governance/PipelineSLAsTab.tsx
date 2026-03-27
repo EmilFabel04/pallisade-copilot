@@ -8,56 +8,12 @@ import { PipelineSLACard, type PipelineSLAItem } from './PipelineSLACard';
 import { NodeSelectionSurface, type NodeMeta } from '@/components/schedule/NodeSelectionSurface';
 import { toast } from 'sonner';
 import { SLAViewDrawer } from './SLAViewDrawer';
+import { PIPELINE_SLA_FIELDS, PIPELINE_SLA_DOMAINS, type PipelineSLAFieldDef } from '@/lib/pipeline-sla-fields';
 
 /* ------------------------------------------------------------------ */
-/*  Domain-specific SLA fields                                         */
+/*  Component types and constants                                      */
 /* ------------------------------------------------------------------ */
 
-type FieldDef = {
-  key: string;
-  label: string;
-  type: 'number' | 'select';
-  unit?: string;
-  placeholder?: string;
-  options?: { value: string; label: string }[];
-};
-
-const DOMAIN_FIELDS: Record<string, FieldDef[]> = {
-  ingestion: [
-    { key: 'ingestion.syncLagToleranceMinutes', label: 'Sync Lag Tolerance', type: 'number', placeholder: '30', unit: 'min' },
-    { key: 'ingestion.failureTolerance', label: 'Failure Tolerance', type: 'select', options: [
-      { value: 'strict', label: 'Strict' }, { value: 'normal', label: 'Normal' }, { value: 'relaxed', label: 'Relaxed' },
-    ]},
-    { key: 'ingestion.schemaDriftStrictness', label: 'Schema Drift', type: 'select', options: [
-      { value: 'strict', label: 'Strict' }, { value: 'warn', label: 'Warn' }, { value: 'ignore', label: 'Ignore' },
-    ]},
-  ],
-  orchestration: [
-    { key: 'orchestration.runLatencyMinutes', label: 'Run Latency', type: 'number', placeholder: '60', unit: 'min' },
-    { key: 'orchestration.scheduleLagMinutes', label: 'Schedule Lag', type: 'number', placeholder: '15', unit: 'min' },
-    { key: 'orchestration.failureTolerance', label: 'Failure Tolerance', type: 'select', options: [
-      { value: 'strict', label: 'Strict' }, { value: 'normal', label: 'Normal' }, { value: 'relaxed', label: 'Relaxed' },
-    ]},
-  ],
-  transform: [
-    { key: 'transform.testFailureTolerance', label: 'Test Failure Tolerance', type: 'select', options: [
-      { value: 'strict', label: 'Strict' }, { value: 'normal', label: 'Normal' }, { value: 'relaxed', label: 'Relaxed' },
-    ]},
-    { key: 'transform.modelFreshnessHours', label: 'Model Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-  ],
-  bi: [
-    { key: 'bi.freshnessHours', label: 'Dashboard Freshness', type: 'number', placeholder: '12', unit: 'hrs' },
-    { key: 'bi.upstreamBreakStrictness', label: 'Upstream Break', type: 'select', options: [
-      { value: 'strict', label: 'Strict' }, { value: 'warn', label: 'Warn' }, { value: 'ignore', label: 'Ignore' },
-    ]},
-  ],
-  warehouse: [
-    { key: 'freshness.maxHours', label: 'Max Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'freshness.warningHours', label: 'Warning Threshold', type: 'number', placeholder: '12', unit: 'hrs' },
-  ],
-};
-
-const DOMAINS = ['ingestion', 'orchestration', 'transform', 'bi', 'warehouse'] as const;
 const TIERS = ['T0', 'T1', 'T2', 'T3'] as const;
 
 /* ------------------------------------------------------------------ */
@@ -92,13 +48,13 @@ function PipelineSLACreatorModal({
     const domains = new Set(selectedMetas.map(n => n.domain).filter(Boolean));
     if (domains.size === 1) {
       const detected = [...domains][0];
-      if (DOMAINS.includes(detected as typeof DOMAINS[number])) {
+      if (PIPELINE_SLA_DOMAINS.includes(detected as typeof PIPELINE_SLA_DOMAINS[number])) {
         setSelectedDomain(detected);
       }
     }
   }, [step, selectedMetas]);
 
-  const fields = selectedDomain ? DOMAIN_FIELDS[selectedDomain] || [] : [];
+  const fields = selectedDomain ? PIPELINE_SLA_FIELDS[selectedDomain] || [] : [];
 
   const handleSave = async () => {
     if (!selectedDomain || selectedMetas.length === 0) return;
@@ -208,7 +164,7 @@ function PipelineSLACreatorModal({
                   className="w-full px-3 py-2 text-xs rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] text-[var(--foreground)]"
                 >
                   <option value="">Select domain...</option>
-                  {DOMAINS.map(d => (
+                  {PIPELINE_SLA_DOMAINS.map(d => (
                     <option key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</option>
                   ))}
                 </select>
