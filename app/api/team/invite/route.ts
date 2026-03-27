@@ -10,6 +10,7 @@ import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
 import { notifyEvents } from '@/lib/notifications';
+import { sendInviteEmail } from '@/lib/email/invite';
 
 // POST - Send invite
 export async function POST(request: NextRequest) {
@@ -34,7 +35,10 @@ export async function POST(request: NextRequest) {
           organizationId,
         },
       },
-      include: { user: true },
+      include: {
+        user: true,
+        organization: { select: { name: true } },
+      },
     });
 
     if (!currentMember || (currentMember.role !== 'OWNER' && currentMember.role !== 'ADMIN')) {
@@ -133,8 +137,22 @@ export async function POST(request: NextRequest) {
     const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const inviteLink = `${baseUrl}/signup?invite=${invite.token}`;
 
-    // TODO: Send invite email
-    // await sendInviteEmail(email, inviteLink, currentMember.user.name || 'Your team', personalNote);
+    // Fire-and-forget email send (don't block the API response)
+    sendInviteEmail({
+      recipientEmail: email,
+      inviterName: currentMember.user.name || currentMember.user.email,
+      organizationName: currentMember.organization?.name || 'your team',
+      role,
+      personalNote: personalNote || undefined,
+      inviteLink,
+    }).then((sent) => {
+      if (sent) {
+        prisma.teamInvite.update({
+          where: { id: invite.id },
+          data: { emailSentAt: new Date() },
+        }).catch((err) => console.error('[invite-email] Failed to update emailSentAt:', err));
+      }
+    }).catch((err) => console.error('[invite-email] Failed to send:', err));
 
     // Fire-and-forget notification
     notifyEvents.teamInviteSent(organizationId, currentUserId, email);
