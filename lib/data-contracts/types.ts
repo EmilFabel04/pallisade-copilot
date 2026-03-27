@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-// ─── Contract Scope ────────────────────────────────────────
-export const ContractScope = z.enum(['schema', 'dbt_model_group', 'dashboard', 'exception']);
-export type ContractScope = z.infer<typeof ContractScope>;
+// ─── Data SLA Scope ────────────────────────────────────────
+export const DataSLAScope = z.enum(['schema', 'dbt_model_group', 'dashboard', 'exception']);
+export type DataSLAScope = z.infer<typeof DataSLAScope>;
 
 // ─── Schema Expectation ────────────────────────────────────
 export const SchemaExpectationSchema = z.object({
@@ -21,39 +21,113 @@ export const QualityRuleSchema = z.object({
 });
 export type QualityRule = z.infer<typeof QualityRuleSchema>;
 
-// ─── Data Contract Input ───────────────────────────────────
-export const DataContractInputSchema = z.object({
-  scope: ContractScope,
+// ─── Domain SLA Config Schemas ─────────────────────────────
+// These match the PolicyProfile config shapes in types/sla.ts
+
+const FreshnessConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxHours: z.number().min(0).optional(),
+  warningHours: z.number().min(0).optional(),
+}).passthrough().nullable().optional();
+
+const SchemaConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  strictness: z.enum(['strict', 'warn', 'ignore']).optional(),
+  allowEvolution: z.boolean().optional(),
+}).passthrough().nullable().optional();
+
+const VolumeConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  minRows: z.number().min(0).optional(),
+  maxRows: z.number().min(0).optional(),
+  growthRateThreshold: z.number().min(0).max(1).optional(),
+}).passthrough().nullable().optional();
+
+const AnomalyConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  sensitivity: z.number().min(0).max(1).optional(),
+  lookbackDays: z.number().min(1).optional(),
+}).passthrough().nullable().optional();
+
+const QualityConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  maxNullRate: z.number().min(0).max(1).optional(),
+  maxDuplicateRate: z.number().min(0).max(1).optional(),
+}).passthrough().nullable().optional();
+
+const IngestionConfigSchema = z.object({
+  syncLagToleranceMinutes: z.number().min(0).optional(),
+  failureTolerance: z.enum(['strict', 'normal', 'relaxed']).optional(),
+  schemaDriftStrictness: z.enum(['strict', 'warn', 'ignore']).optional(),
+}).passthrough().nullable().optional();
+
+const BIConfigSchema = z.object({
+  freshnessHours: z.number().min(0).optional(),
+  contentHealthEnabled: z.boolean().optional(),
+  upstreamBreakStrictness: z.enum(['strict', 'warn', 'ignore']).optional(),
+  refreshFailureAlerting: z.boolean().optional(),
+}).passthrough().nullable().optional();
+
+const OrchestrationConfigSchema = z.object({
+  runLatencyMinutes: z.number().min(0).optional(),
+  scheduleLagMinutes: z.number().min(0).optional(),
+  failureTolerance: z.enum(['strict', 'normal', 'relaxed']).optional(),
+}).passthrough().nullable().optional();
+
+const TransformConfigSchema = z.object({
+  testFailureTolerance: z.enum(['strict', 'normal', 'relaxed']).optional(),
+  modelFreshnessHours: z.number().min(0).optional(),
+}).passthrough().nullable().optional();
+
+// ─── Data SLA Input ────────────────────────────────────────
+export const DataSLAInputSchema = z.object({
+  scope: DataSLAScope,
   scopeRef: z.string().min(1),
-  ownerUser: z.string().nullable().optional(),
-  ownerTeam: z.string().nullable().optional(),
-  contactChannel: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  nodeFqns: z.array(z.string()).nullable().optional(),
+
+  // SLA tier
   slaTier: z.enum(['T0', 'T1', 'T2', 'T3']).nullable().optional(),
+  notes: z.string().nullable().optional(),
+
+  // Domain-specific SLA config sections
+  freshnessConfig: FreshnessConfigSchema,
+  schemaConfig: SchemaConfigSchema,
+  volumeConfig: VolumeConfigSchema,
+  anomalyConfig: AnomalyConfigSchema,
+  qualityConfig: QualityConfigSchema,
+  ingestionConfig: IngestionConfigSchema,
+  biConfig: BIConfigSchema,
+  orchestrationConfig: OrchestrationConfigSchema,
+  transformConfig: TransformConfigSchema,
+
+  // Legacy fields
   expectedFreshnessMinutes: z.number().min(0).nullable().optional(),
   expectedExtractionFrequencyMinutes: z.number().min(0).nullable().optional(),
   alertPolicyJson: z.any().nullable().optional(),
-  notes: z.string().nullable().optional(),
+
+  // Data-asset-specific
   schemaExpectations: z.array(SchemaExpectationSchema).nullable().optional(),
   qualityRules: z.array(QualityRuleSchema).nullable().optional(),
   overridesJson: z.record(z.string(), z.unknown()).nullable().optional(),
   isException: z.boolean().default(false),
   parentContractId: z.string().nullable().optional(),
 });
-export type DataContractInput = z.infer<typeof DataContractInputSchema>;
+export type DataSLAInput = z.infer<typeof DataSLAInputSchema>;
 
-// ─── Contract Compliance Result ────────────────────────────
-export interface ContractFieldCompliance {
+// ─── Data SLA Compliance Result ────────────────────────────
+export interface DataSLAFieldCompliance {
   fieldName: string;
-  contractValue: unknown;
+  definedValue: unknown;
   slaValue: unknown | null;
   actualValue: unknown | null;
   status: 'compliant' | 'override' | 'violation' | 'unknown';
 }
 
-export interface ContractComplianceResult {
-  contractId: string;
+export interface DataSLAComplianceResult {
+  dataSlaId: string;
   nodeId: string;
   overallStatus: 'PASS' | 'WARN' | 'FAIL';
-  fields: ContractFieldCompliance[];
+  fields: DataSLAFieldCompliance[];
   checkedAt: string;
 }
