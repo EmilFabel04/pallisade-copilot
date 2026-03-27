@@ -1,0 +1,66 @@
+'use client';
+
+import React from 'react';
+
+interface PipelineSLAModeToolbarProps {
+  selectedCount: number;
+  totalNodes: number;
+  onSaveAll: () => void;
+  onExit: () => void;
+  saving?: boolean;
+}
+
+export function PipelineSLAModeToolbar({
+  selectedCount,
+  totalNodes,
+  onSaveAll,
+  onExit,
+  saving,
+}: PipelineSLAModeToolbarProps) {
+  return (
+    <div className="flex items-center gap-4 mt-4 pt-4 border-t border-slate-500/20">
+      <div className="flex items-center gap-2">
+        <div className="w-2 h-2 bg-[var(--accent)] rounded-full animate-pulse" />
+        <span className="text-[13px] font-medium" style={{ color: 'var(--text)' }}>Pipeline SLA Mode</span>
+      </div>
+
+      <div className="text-[12px] text-[var(--muted)]">
+        {selectedCount > 0 ? (
+          <span className="font-medium" style={{ color: 'var(--text)' }}>{selectedCount}</span>
+        ) : (
+          <span>0</span>
+        )}
+        {' of '}
+        {totalNodes} nodes selected
+      </div>
+
+      <div className="flex items-center gap-3 ml-auto text-[11px]">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block px-1.5 py-0.5 rounded-sm text-[8px] font-semibold uppercase" style={{ background: 'var(--subtle-bg)', color: 'var(--muted)', border: '1px solid var(--subtle-border)' }}>Profile</span>
+          <span style={{ color: 'var(--text-secondary)' }}>= Pipeline SLA assigned</span>
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2 h-2 rounded-full" style={{ background: 'var(--text-faint)', border: '1px dashed var(--muted)' }} />
+          <span style={{ color: 'var(--text-secondary)' }}>= no Pipeline SLA</span>
+        </span>
+      </div>
+
+      <button
+        onClick={onSaveAll}
+        disabled={saving}
+        className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-[var(--accent)] text-white hover:bg-[var(--accent-2)] transition-all disabled:opacity-50"
+      >
+        {saving ? 'Saving...' : 'Save All'}
+      </button>
+      <button
+        onClick={onExit}
+        className="px-3 py-1.5 text-[12px] font-medium rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-all flex items-center gap-1"
+      >
+        Exit Pipeline SLA Mode
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
