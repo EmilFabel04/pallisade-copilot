@@ -1997,14 +1997,12 @@ function LineagePageInner() {
             laneOverview={laneOverview}
             stackId={stackId}
             allMonitors={lineageData?.allMonitors}
-            nodeSLAs={nodeSLAs}
             onClose={() => {
               setPipelineInspectorTarget(null);
               setMultiSelectedNodeIds(new Set());
             }}
             onCreateSingleMonitor={handleCreateSingleMonitor}
             onCreateMultiMonitor={(nodeIds: string[]) => handleCreateMultiMonitor(nodeIds)}
-            onSLAUpdated={refreshSLAs}
           />
         )}
 
