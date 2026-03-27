@@ -2,6 +2,10 @@
  * Shared Pipeline SLA field definitions per domain.
  * Single source of truth — used by PipelineSLAEditor, PipelineSLAEditorPanel,
  * and PipelineSLAsTab (governance create modal).
+ *
+ * Pipeline SLAs are about TOOL-LEVEL operational health — sync failures,
+ * DAG runs, build times, connector health — NOT data quality.
+ * Data quality (schema, volume, anomaly, nulls) belongs in Data SLAs.
  */
 
 export interface PipelineSLAFieldDef {
@@ -13,98 +17,104 @@ export interface PipelineSLAFieldDef {
   unit?: string;
 }
 
-const STRICTNESS = [
-  { value: 'strict', label: 'Strict — block on violation' },
-  { value: 'warn', label: 'Warn — alert but continue' },
-  { value: 'ignore', label: 'Ignore — no enforcement' },
-];
-
-const TOLERANCE = [
-  { value: 'none', label: 'None — alert immediately' },
+const FAILURE_TOLERANCE = [
+  { value: 'none', label: 'None — alert on first failure' },
   { value: 'low', label: 'Low — 1 consecutive failure' },
   { value: 'medium', label: 'Medium — 2-3 consecutive' },
   { value: 'high', label: 'High — 4+ consecutive' },
 ];
 
+const ALERTING_URGENCY = [
+  { value: 'immediate', label: 'Immediate — page on-call' },
+  { value: 'urgent', label: 'Urgent — Slack + email' },
+  { value: 'batched', label: 'Batched — daily digest' },
+  { value: 'off', label: 'Off — log only' },
+];
+
 /**
- * Complete field definitions per domain, aligned with DOMAIN_SLA_SECTIONS in types/sla.ts:
- *   warehouse:     freshness, schema, volume, anomaly, quality
- *   ingestion:     freshness, ingestion
- *   bi:            bi, freshness
- *   orchestration: orchestration
- *   transform:     transform, freshness, schema
+ * Tool-level operational SLA fields per pipeline domain.
+ *
+ *   ingestion:     Fivetran, Airbyte, Stitch — sync health
+ *   orchestration: Airflow, Dagster, Prefect — DAG/pipeline runs
+ *   transform:     dbt, Dataform — build & test health
+ *   bi:            Looker, Tableau, Power BI — dashboard refresh health
+ *   warehouse:     BigQuery, Snowflake, Redshift — platform operations
  */
 export const PIPELINE_SLA_FIELDS: Record<string, PipelineSLAFieldDef[]> = {
   ingestion: [
-    // --- Ingestion ---
-    { key: 'ingestion.syncLagToleranceMinutes', label: 'Sync Lag Tolerance', type: 'number', placeholder: '30', unit: 'min' },
-    { key: 'ingestion.failureTolerance', label: 'Failure Tolerance', type: 'select', options: TOLERANCE },
-    { key: 'ingestion.schemaDriftStrictness', label: 'Schema Drift Strictness', type: 'select', options: STRICTNESS },
-    // --- Freshness ---
-    { key: 'freshness.maxHours', label: 'Max Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'freshness.warningHours', label: 'Freshness Warning', type: 'number', placeholder: '12', unit: 'hrs' },
+    { key: 'ingestion.syncFrequencyMinutes', label: 'Expected Sync Frequency', type: 'number', placeholder: '60', unit: 'min' },
+    { key: 'ingestion.syncLagToleranceMinutes', label: 'Max Sync Lag', type: 'number', placeholder: '30', unit: 'min' },
+    { key: 'ingestion.failureTolerance', label: 'Sync Failure Tolerance', type: 'select', options: FAILURE_TOLERANCE },
+    { key: 'ingestion.schemaDriftStrictness', label: 'Schema Change Handling', type: 'select', options: [
+      { value: 'block', label: 'Block — pause sync on schema change' },
+      { value: 'warn', label: 'Warn — continue but alert' },
+      { value: 'allow', label: 'Allow — auto-propagate changes' },
+    ]},
+    { key: 'ingestion.connectorHealthCheck', label: 'Connector Health Check', type: 'select', options: [
+      { value: 'strict', label: 'Strict — alert on any degradation' },
+      { value: 'normal', label: 'Normal — alert on failures only' },
+      { value: 'relaxed', label: 'Relaxed — alert on extended outage' },
+    ]},
+    { key: 'ingestion.alerting', label: 'Failure Alerting', type: 'select', options: ALERTING_URGENCY },
   ],
 
   orchestration: [
-    // --- Orchestration ---
-    { key: 'orchestration.runLatencyMinutes', label: 'Run Latency Threshold', type: 'number', placeholder: '60', unit: 'min' },
-    { key: 'orchestration.scheduleLagMinutes', label: 'Schedule Lag Tolerance', type: 'number', placeholder: '15', unit: 'min' },
-    { key: 'orchestration.failureTolerance', label: 'Failure Tolerance', type: 'select', options: TOLERANCE },
+    { key: 'orchestration.maxRunDurationMinutes', label: 'Max Run Duration', type: 'number', placeholder: '120', unit: 'min' },
+    { key: 'orchestration.scheduleLagMinutes', label: 'Max Schedule Lag', type: 'number', placeholder: '15', unit: 'min' },
+    { key: 'orchestration.failureTolerance', label: 'DAG Failure Tolerance', type: 'select', options: FAILURE_TOLERANCE },
+    { key: 'orchestration.retryPolicy', label: 'Retry Policy', type: 'select', options: [
+      { value: 'none', label: 'No retries — fail immediately' },
+      { value: '1', label: '1 retry' },
+      { value: '2', label: '2 retries' },
+      { value: '3', label: '3 retries' },
+    ]},
+    { key: 'orchestration.taskFailureThreshold', label: 'Task Failure Threshold', type: 'number', placeholder: '1', unit: 'tasks' },
+    { key: 'orchestration.slaDeadlineMinutes', label: 'SLA Deadline (from schedule)', type: 'number', placeholder: '60', unit: 'min' },
+    { key: 'orchestration.alerting', label: 'Failure Alerting', type: 'select', options: ALERTING_URGENCY },
   ],
 
   transform: [
-    // --- Transform ---
-    { key: 'transform.testFailureTolerance', label: 'Test Failure Tolerance', type: 'select', options: [
-      { value: 'none', label: 'None — block on any failure' },
-      { value: 'warn', label: 'Warn — alert but continue' },
-      { value: 'relaxed', label: 'Relaxed — allow failures' },
+    { key: 'transform.maxBuildDurationMinutes', label: 'Max Build Duration', type: 'number', placeholder: '60', unit: 'min' },
+    { key: 'transform.testFailureTolerance', label: 'Test Failure Handling', type: 'select', options: [
+      { value: 'block', label: 'Block — fail build on test failure' },
+      { value: 'warn', label: 'Warn — continue but alert' },
+      { value: 'skip', label: 'Skip — ignore test results' },
     ]},
-    { key: 'transform.modelFreshnessHours', label: 'Model Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    // --- Freshness ---
-    { key: 'freshness.maxHours', label: 'Source Freshness', type: 'number', placeholder: '48', unit: 'hrs' },
-    { key: 'freshness.warningHours', label: 'Freshness Warning', type: 'number', placeholder: '24', unit: 'hrs' },
-    // --- Schema ---
-    { key: 'schema.strictness', label: 'Schema Strictness', type: 'select', options: STRICTNESS },
-    { key: 'schema.allowEvolution', label: 'Allow Schema Evolution', type: 'select', options: [
-      { value: 'true', label: 'Yes — allow additive changes' },
-      { value: 'false', label: 'No — lock schema' },
-    ]},
+    { key: 'transform.modelFailureTolerance', label: 'Model Build Failure Tolerance', type: 'select', options: FAILURE_TOLERANCE },
+    { key: 'transform.staleDependencyHours', label: 'Stale Dependency Threshold', type: 'number', placeholder: '24', unit: 'hrs' },
+    { key: 'transform.expectedRunFrequencyHours', label: 'Expected Run Frequency', type: 'number', placeholder: '24', unit: 'hrs' },
+    { key: 'transform.alerting', label: 'Build Failure Alerting', type: 'select', options: ALERTING_URGENCY },
   ],
 
   bi: [
-    // --- BI ---
-    { key: 'bi.freshnessHours', label: 'Dashboard Freshness', type: 'number', placeholder: '12', unit: 'hrs' },
-    { key: 'bi.upstreamBreakStrictness', label: 'Upstream Break Strictness', type: 'select', options: STRICTNESS },
-    { key: 'bi.refreshFailureAlerting', label: 'Refresh Failure Alerting', type: 'select', options: [
-      { value: 'immediate', label: 'Immediate' },
-      { value: 'batched', label: 'Batched (daily digest)' },
-      { value: 'off', label: 'Off' },
+    { key: 'bi.refreshFrequencyMinutes', label: 'Expected Refresh Frequency', type: 'number', placeholder: '60', unit: 'min' },
+    { key: 'bi.maxRefreshLagMinutes', label: 'Max Refresh Lag', type: 'number', placeholder: '30', unit: 'min' },
+    { key: 'bi.refreshFailureTolerance', label: 'Refresh Failure Tolerance', type: 'select', options: FAILURE_TOLERANCE },
+    { key: 'bi.brokenContentHandling', label: 'Broken Content Handling', type: 'select', options: [
+      { value: 'block', label: 'Block — alert on any broken content' },
+      { value: 'warn', label: 'Warn — flag but keep serving' },
+      { value: 'ignore', label: 'Ignore — no content checks' },
     ]},
-    // --- Freshness ---
-    { key: 'freshness.maxHours', label: 'Data Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'freshness.warningHours', label: 'Freshness Warning', type: 'number', placeholder: '12', unit: 'hrs' },
+    { key: 'bi.upstreamBreakHandling', label: 'Upstream Break Handling', type: 'select', options: [
+      { value: 'strict', label: 'Strict — alert when upstream fails' },
+      { value: 'warn', label: 'Warn — degrade gracefully' },
+      { value: 'ignore', label: 'Ignore — independent of upstream' },
+    ]},
+    { key: 'bi.alerting', label: 'Refresh Failure Alerting', type: 'select', options: ALERTING_URGENCY },
   ],
 
   warehouse: [
-    // --- Freshness ---
-    { key: 'freshness.maxHours', label: 'Max Freshness', type: 'number', placeholder: '24', unit: 'hrs' },
-    { key: 'freshness.warningHours', label: 'Warning Threshold', type: 'number', placeholder: '12', unit: 'hrs' },
-    // --- Schema ---
-    { key: 'schema.strictness', label: 'Schema Strictness', type: 'select', options: STRICTNESS },
-    { key: 'schema.allowEvolution', label: 'Allow Schema Evolution', type: 'select', options: [
-      { value: 'true', label: 'Yes — allow additive changes' },
-      { value: 'false', label: 'No — lock schema' },
+    { key: 'warehouse.maxQueryDurationSeconds', label: 'Max Query Duration', type: 'number', placeholder: '300', unit: 'sec' },
+    { key: 'warehouse.loadJobFailureTolerance', label: 'Load Job Failure Tolerance', type: 'select', options: FAILURE_TOLERANCE },
+    { key: 'warehouse.slotUtilizationThreshold', label: 'Slot/Credit Usage Threshold', type: 'number', placeholder: '80', unit: '%' },
+    { key: 'warehouse.tableLoadFrequencyHours', label: 'Expected Table Load Frequency', type: 'number', placeholder: '24', unit: 'hrs' },
+    { key: 'warehouse.maintenanceWindow', label: 'Maintenance Window', type: 'select', options: [
+      { value: 'none', label: 'None — always available' },
+      { value: 'weekly', label: 'Weekly (Sunday 2-6 AM)' },
+      { value: 'daily', label: 'Daily (2-4 AM)' },
+      { value: 'custom', label: 'Custom schedule' },
     ]},
-    // --- Volume ---
-    { key: 'volume.growthRateThreshold', label: 'Growth Rate Threshold', type: 'number', placeholder: '15', unit: '%' },
-    { key: 'volume.minRows', label: 'Min Row Count', type: 'number', placeholder: '1' },
-    { key: 'volume.maxRows', label: 'Max Row Count', type: 'number', placeholder: '1000000000' },
-    // --- Anomaly ---
-    { key: 'anomaly.sensitivity', label: 'Anomaly Sensitivity', type: 'number', placeholder: '95', unit: '%' },
-    { key: 'anomaly.lookbackDays', label: 'Lookback Window', type: 'number', placeholder: '14', unit: 'days' },
-    // --- Quality ---
-    { key: 'quality.maxNullRate', label: 'Max Null Rate', type: 'number', placeholder: '5', unit: '%' },
-    { key: 'quality.maxDuplicateRate', label: 'Max Duplicate Rate', type: 'number', placeholder: '2', unit: '%' },
+    { key: 'warehouse.alerting', label: 'Operations Alerting', type: 'select', options: ALERTING_URGENCY },
   ],
 };
 
