@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { DataSLAsTab } from '@/components/sources/DataSLAsTab';
+import { PipelineSLAsTab } from '@/components/governance/PipelineSLAsTab';
 
 type GovernanceTab = 'data-slas' | 'pipeline-slas';
 
@@ -60,9 +61,7 @@ export default function GovernancePage() {
         {activeTab === 'data-slas' ? (
           <DataSLAsTab />
         ) : (
-          <div className="text-center py-12 text-[var(--muted)]">
-            Pipeline SLAs — coming soon
-          </div>
+          <PipelineSLAsTab />
         )}
       </div>
     </div>
