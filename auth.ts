@@ -83,17 +83,73 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
     async signIn({ user, account, profile }) {
       // Credentials provider — check SSO enforcement before allowing
       if (account?.provider === 'credentials') {
-        // Check SSO enforcement for the user's org
         const dbUser = await prisma.user.findUnique({
           where: { id: user.id! },
           include: { organization: true },
         });
 
+        // Check SSO enforcement for the user's org
         if (dbUser?.organization?.authPolicy === 'SSO_ONLY') {
-          // Check grace period
           const graceUntil = dbUser.organization.authPolicyGraceUntil;
           if (!graceUntil || new Date() > graceUntil) {
             return '/login?error=SSORequired';
+          }
+        }
+
+        // If user has no org, check for a pending invite (covers existing users
+        // who were invited after creating their account)
+        if (!dbUser?.organizationId && dbUser?.email) {
+          const invite = await prisma.teamInvite.findFirst({
+            where: {
+              email: dbUser.email,
+              status: 'PENDING',
+              expiresAt: { gt: new Date() },
+            },
+          });
+
+          if (invite) {
+            await prisma.$transaction(async (tx) => {
+              await tx.teamMember.create({
+                data: {
+                  userId: dbUser.id,
+                  organizationId: invite.organizationId,
+                  role: invite.role,
+                  status: 'ACTIVE',
+                  joinedAt: new Date(),
+                },
+              });
+              await tx.user.update({
+                where: { id: dbUser.id },
+                data: { organizationId: invite.organizationId },
+              });
+              await tx.teamInvite.update({
+                where: { id: invite.id },
+                data: { status: 'ACCEPTED', respondedAt: new Date() },
+              });
+
+              // Grant pipeline access — VIEWER on all org pipelines
+              const orgPipelines = await tx.pipelineStack.findMany({
+                where: { organizationId: invite.organizationId },
+                select: { id: true },
+              });
+              for (const pipeline of orgPipelines) {
+                await tx.pipelineAccess.upsert({
+                  where: {
+                    userId_pipelineId: {
+                      userId: dbUser.id,
+                      pipelineId: pipeline.id,
+                    },
+                  },
+                  create: {
+                    userId: dbUser.id,
+                    pipelineId: pipeline.id,
+                    accessLevel: 'VIEWER',
+                    grantedBy: invite.invitedById || dbUser.id,
+                  },
+                  update: {},
+                });
+              }
+            });
           }
         }
 
@@ -132,26 +188,49 @@ export const { auth, handlers, signIn, signOut } = NextAuth({
         }
 
         // Redeem invite in a transaction
-        const userId = existingUser?.id || user.id;
-        await prisma.$transaction([
-          prisma.teamMember.create({
+        const userId = (existingUser?.id || user.id) as string;
+        await prisma.$transaction(async (tx) => {
+          await tx.teamMember.create({
             data: {
-              userId: userId as string,
+              userId,
               organizationId: invite.organizationId,
               role: invite.role,
               status: 'ACTIVE',
               joinedAt: new Date(),
             },
-          }),
-          prisma.user.update({
-            where: { id: userId as string },
+          });
+          await tx.user.update({
+            where: { id: userId },
             data: { organizationId: invite.organizationId },
-          }),
-          prisma.teamInvite.update({
+          });
+          await tx.teamInvite.update({
             where: { id: invite.id },
             data: { status: 'ACCEPTED', respondedAt: new Date() },
-          }),
-        ]);
+          });
+
+          // Grant pipeline access — VIEWER on all org pipelines
+          const orgPipelines = await tx.pipelineStack.findMany({
+            where: { organizationId: invite.organizationId },
+            select: { id: true },
+          });
+          for (const pipeline of orgPipelines) {
+            await tx.pipelineAccess.upsert({
+              where: {
+                userId_pipelineId: {
+                  userId,
+                  pipelineId: pipeline.id,
+                },
+              },
+              create: {
+                userId,
+                pipelineId: pipeline.id,
+                accessLevel: 'VIEWER',
+                grantedBy: invite.invitedById || userId,
+              },
+              update: {},
+            });
+          }
+        });
       }
 
       // Allow sign-in — users without an invite go through
