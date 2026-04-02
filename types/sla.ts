@@ -97,7 +97,7 @@ export interface SLAProfile {
 // SLA Assignment
 // ---------------------------------------------------------------------------
 
-export type SLAAssignmentType = 'direct' | 'branch' | 'domain_default' | 'criticality_default';
+export type SLAAssignmentType = 'direct' | 'branch' | 'auto_discovered' | 'domain_default' | 'criticality_default';
 
 export interface SLAAssignment {
   id: string;
@@ -124,7 +124,7 @@ export type SLAStatus = 'assigned' | 'inherited' | 'override' | 'none';
 // ---------------------------------------------------------------------------
 
 export interface EffectiveSLAPolicy {
-  source: string;  // data_contract | direct_override | direct_profile | branch | criticality_default | domain_default | builtin
+  source: string;  // direct_override | direct_profile | imported_dbt | branch | auto_discovered | criticality_default | domain_default | builtin
   profileId?: string | null;
   profileName?: string | null;
   status: SLAStatus;
@@ -215,12 +215,3 @@ export function categoryToSLADomain(category: string): SLADomain | null {
   return mapping[category] ?? null;
 }
 
-/**
- * Criticality → default built-in profile mapping.
- */
-export const CRITICALITY_PROFILE_MAP: Record<string, string> = {
-  critical: 'T0 — Critical',
-  high: 'T1 — High',
-  medium: 'T2 — Standard',
-  low: 'T3 — Low',
-};
