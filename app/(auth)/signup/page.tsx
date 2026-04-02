@@ -20,7 +20,7 @@ function SignUpForm() {
   const [error, setError] = useState('');
   const [orgSsoOnly, setOrgSsoOnly] = useState(false);
 
-  const inviteToken = searchParams.get('token');
+  const inviteToken = searchParams.get('invite');
 
   useEffect(() => {
     if (inviteToken) {
