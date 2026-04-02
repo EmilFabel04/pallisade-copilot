@@ -472,7 +472,40 @@ class DatabaseAdapter(ABC):
         
         # Fall back to any timestamp column
         return timestamp_columns[0] if timestamp_columns else None
-    
+
+    def get_freshness_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return modification timestamps over the lookback window.
+
+        Returns:
+            List of dicts with key 'timestamp' (datetime).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_freshness_history")
+
+    def get_row_count_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return daily row counts over the lookback window.
+
+        Returns:
+            List of dicts with keys 'date' (date) and 'row_count' (int).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_row_count_history")
+
+    def get_daily_null_rates(self, table: str, timestamp_column: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return daily null rates over the lookback window, partitioned by timestamp_column.
+
+        Returns:
+            List of dicts with keys 'date' (date) and 'null_rate' (float, 0.0-1.0).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_daily_null_rates")
+
+    def get_schema_change_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return schema changes over the lookback window.
+
+        Returns:
+            List of dicts with keys 'date' (date), 'change_type' ('added'|'removed'),
+            and 'column_name' (str).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_schema_change_history")
+
     # =========================================================================
     # DATA SAMPLING
     # =========================================================================
