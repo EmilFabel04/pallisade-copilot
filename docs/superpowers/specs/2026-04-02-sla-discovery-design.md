@@ -19,7 +19,8 @@ When Pallisade builds or refreshes lineage for an asset, it traverses the asset'
 
 - Real-time or continuous profiling.
 - Suggesting monitors (that comes later).
-- Anything beyond four core categories: freshness, volume, quality, schema.
+- Quality discovery — point-in-time column stats are too noisy for threshold calibration. Deferred to the drift engine which will have historical baselines.
+- Anything beyond three core categories: freshness, volume, schema.
 
 ---
 
@@ -29,7 +30,7 @@ Auto-discovered profiles use the existing `PolicyAssignment` + `PolicyProfile` t
 
 ### How it works
 
-1. Discovery computes suggested config values (freshness, volume, quality, schema).
+1. Discovery computes suggested config values (freshness, volume, schema).
 2. It upserts a `PolicyProfile` with `name: "Auto-discovered"`, `isBuiltIn: true`, and the computed config blobs.
 3. It creates a `PolicyAssignment` with `assignmentType: 'auto_discovered'`, `nodeFqn: <fqn>`, pointing at the profile.
 
@@ -134,16 +135,6 @@ All computations query the warehouse adapter for the node's nearest warehouse an
   - `volumeConfig.growthRateThreshold`: if the table shows consistent day-over-day growth, set to `mean_daily_growth_rate * 2`. Otherwise `null`.
 - Edge case: if fewer than 7 data points exist in the window, skip volume discovery for this node (insufficient history).
 
-### Quality
-
-- Query: null rates and duplicate rates. Uses the existing `get_column_stats()` adapter method which already returns null counts and distinct counts per column.
-- Computation: per-column null rate (`null_count / total_rows`), per-column duplicate rate (`1 - distinct_count / total_rows`). Compute mean and stddev across columns for each metric. Threshold is set to the cross-column mean plus two standard deviations.
-- Output:
-  - `qualityConfig.enabled`: `true`
-  - `qualityConfig.maxNullRate`: `min(0.5, mean_null_rate + 2 * stddev_null_rate)`. Capped at 50%.
-  - `qualityConfig.maxDuplicateRate`: `min(0.5, mean_dup_rate + 2 * stddev_dup_rate)`. Capped at 50%.
-- Note: quality stats are point-in-time (current snapshot), not historical. The cross-column stddev buffer accounts for variation between columns.
-
 ### Schema
 
 - Query: schema change history. The existing `supports_schema_changes` adapter capability. For BigQuery, `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` with `INFORMATION_SCHEMA.SCHEMATA` history. For Snowflake, `ACCOUNT_USAGE.COLUMNS` history.
@@ -172,7 +163,6 @@ class DiscoveryResult:
     warehouse_ancestor_fqn: str | None
     freshness: FreshnessConfig | None
     volume: VolumeConfig | None
-    quality: QualityConfig | None
     schema: SchemaConfig | None
     unsupported: bool  # True if no warehouse ancestor found
     skipped_reason: str | None  # "user_defined", "no_warehouse_ancestor", "insufficient_history"
@@ -196,7 +186,6 @@ Internal functions (private):
 - `_find_warehouse_ancestor(node, graph) -> LineageNode | None`
 - `_compute_freshness(adapter, table_fqn) -> FreshnessConfig | None`
 - `_compute_volume(adapter, table_fqn) -> VolumeConfig | None`
-- `_compute_quality(adapter, table_fqn) -> QualityConfig | None`
 - `_compute_schema(adapter, table_fqn) -> SchemaConfig | None`
 
 ### Adapter extensions
@@ -207,7 +196,7 @@ Three new methods on `BaseAdapter` (with `NotImplementedError` defaults):
 - `get_row_count_history(table: str, days: int = 30) -> List[Dict]` — returns `[{date: date, row_count: int}]`
 - `get_schema_change_history(table: str, days: int = 30) -> List[Dict]` — returns `[{date: date, change_type: str, column_name: str}]`
 
-Implemented in BigQuery and Snowflake adapters first. Postgres/Redshift get freshness and quality only (no row count history or schema change history available via standard metadata views).
+Implemented in BigQuery and Snowflake adapters first. Postgres/Redshift get freshness only (no row count history or schema change history available via standard metadata views).
 
 ---
 
@@ -225,18 +214,48 @@ if self.discovery_enabled:
         nodes=list(graph.nodes.values()),
         graph=graph,
         adapter_registry=self._adapter_registry,
+        node_limit=org_discovery_node_limit,
     )
     result.discovery_results = discovery_results
 ```
 
-The Next.js API that receives the scan results then writes the `PolicyProfile` + `PolicyAssignment` records for each successful discovery.
+### Record ownership — scanner writes
+
+The Python scanner owns writing `PolicyProfile` + `PolicyAssignment` records after discovery. It writes directly via the FastAPI layer's DB connection (same pattern as the policy resolver's read path, extended with write operations). No round-trip to Next.js for persistence.
+
+The write path lives in `scanner/lineage/sla_discovery.py` alongside the computation logic:
+
+```python
+async def _persist_discovery_results(
+    results: List[DiscoveryResult],
+    organization_id: str,
+    db: AsyncSession,
+) -> None:
+    """Upsert PolicyProfile + PolicyAssignment for each successful discovery."""
+```
+
+For each `DiscoveryResult` where `unsupported == False` and `skipped_reason is None`:
+1. Upsert a `PolicyProfile` with `name: "Auto-discovered: {node_fqn}"`, `isBuiltIn: True`, org-scoped.
+2. Upsert a `PolicyAssignment` with `assignmentType: "auto_discovered"`, `nodeFqn: node_fqn`, pointing at the profile.
+
+On re-scan, existing auto-discovered profiles and assignments are updated in place (matched by org + nodeFqn + assignmentType).
 
 ### Performance
 
 Discovery adds warehouse queries. To bound the cost:
 - Batch queries where possible (one `INFORMATION_SCHEMA` query per dataset, not per table).
-- Cap at 100 nodes per scan. If more nodes are eligible, prioritize by criticality (critical first), then by upstream depth (sources first).
+- Node cap per scan is configurable per organization. Stored as `slaDiscoveryNodeLimit` on the `Organization` model in Prisma (default: `100`). If more nodes are eligible, prioritize by criticality (critical first), then by upstream depth (sources first).
 - Total discovery timeout: 60 seconds. If exceeded, return whatever results completed.
+
+### Node limit config
+
+Add to `prisma/schema.prisma` on the `Organization` model:
+
+```prisma
+slaDiscoveryNodeLimit  Int  @default(100)
+```
+
+The orchestrator reads this value before starting discovery and passes it to `discover_sla_profiles_bulk()` as the `node_limit` parameter. No UI for editing this in V1 — it's an admin-level setting changeable via the database directly.
 
 ---
 
@@ -298,7 +317,6 @@ On-demand discovery for a single node. Does NOT write — returns the suggested 
     "warehouseAncestorFqn": "project.dataset.orders",
     "freshness": { "enabled": true, "maxHours": 6, "warningHours": 3 },
     "volume": { "enabled": true, "minRows": 8000, "maxRows": 52000 },
-    "quality": { "enabled": true, "maxNullRate": 0.05, "maxDuplicateRate": 0.02 },
     "schema": { "enabled": true, "strictness": "strict", "allowEvolution": false }
   }
 }
@@ -339,7 +357,6 @@ Currently shows an "Edit SLA" button that opens the SLA editor. Add a second act
 │                                         │
 │  Freshness     max 6h, warn 3h         │
 │  Volume        8,000 – 52,000 rows     │
-│  Quality       null ≤5%, dup ≤2%       │
 │  Schema        strict, no evolution     │
 │                                         │
 │  [Accept]  [Edit & Accept]  [Dismiss]   │
@@ -396,11 +413,12 @@ auto_discovered: { label: 'Auto-discovered', color: 'text-cyan-400', bg: 'bg-cya
 
 ## 10. Build Order
 
-1. Write `scanner/lineage/sla_discovery.py` with the four statistical functions and `_find_warehouse_ancestor`.
-2. Add `get_freshness_history`, `get_row_count_history`, `get_schema_change_history` to `BaseAdapter` with `NotImplementedError` defaults. Implement in BigQuery and Snowflake adapters.
-3. Update the resolver chain: add `auto_discovered` layer in Python `policy_resolver.py` and TypeScript `resolve/route.ts`. Update types.
-4. Hook discovery into `CrossToolLineageOrchestrator.extract_all()`.
-5. Add `POST /api/nodes/[nodeId]/sla/discover` route.
-6. Update `DataAssetDetailPanel` — empty state with "Discover from data", confirmation UI, auto-discovered banner, discovery-unsupported state.
-7. Add `auto_discovered` to `SlaProfileModal` source labels.
-8. Test: run a lineage scan on a warehouse with history, verify profiles are written, verify user-defined nodes are skipped, verify on-demand discovery returns correct suggestions.
+1. Add `slaDiscoveryNodeLimit` field to `Organization` model in Prisma. Run migration.
+2. Write `scanner/lineage/sla_discovery.py` with the three statistical functions (`_compute_freshness`, `_compute_volume`, `_compute_schema`), `_find_warehouse_ancestor`, and `_persist_discovery_results`.
+3. Add `get_freshness_history`, `get_row_count_history`, `get_schema_change_history` to `BaseAdapter` with `NotImplementedError` defaults. Implement in BigQuery and Snowflake adapters.
+4. Update the resolver chain: add `auto_discovered` layer in Python `policy_resolver.py` and TypeScript `resolve/route.ts`. Update types.
+5. Hook discovery into `CrossToolLineageOrchestrator.extract_all()`, reading `slaDiscoveryNodeLimit` from the org.
+6. Add `POST /api/nodes/[nodeId]/sla/discover` route.
+7. Update `DataAssetDetailPanel` — empty state with "Discover from data", confirmation UI, auto-discovered banner, discovery-unsupported state.
+8. Add `auto_discovered` to `SlaProfileModal` source labels.
+9. Test: run a lineage scan on a warehouse with history, verify profiles are written, verify user-defined nodes are skipped, verify on-demand discovery returns correct suggestions.
