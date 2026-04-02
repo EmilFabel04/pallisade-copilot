@@ -636,6 +636,92 @@ class BigQueryAdapter(DatabaseAdapter):
             return []
     
     # =========================================================================
+    # HISTORICAL QUERIES
+    # =========================================================================
+
+    def get_freshness_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get modification timestamp history from TABLE_STORAGE_TIMELINE."""
+        parts = table.replace("`", "").split(".")
+        if len(parts) == 3:
+            project, dataset, tbl = parts
+        elif len(parts) == 2:
+            project, dataset, tbl = self.project, parts[0], parts[1]
+        else:
+            project, dataset, tbl = self.project, self.dataset, parts[0]
+
+        query = f"""
+            SELECT DISTINCT DATE(storage_last_modified_time) as mod_date,
+                   MAX(storage_last_modified_time) as timestamp
+            FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE_TIMELINE`
+            WHERE table_name = '{tbl}'
+              AND storage_last_modified_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
+            GROUP BY mod_date
+            ORDER BY mod_date
+        """
+        rows = self.query(query)
+        return [{"timestamp": row["timestamp"]} for row in rows]
+
+    def get_row_count_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get daily row count history from TABLE_STORAGE_TIMELINE."""
+        parts = table.replace("`", "").split(".")
+        if len(parts) == 3:
+            project, dataset, tbl = parts
+        elif len(parts) == 2:
+            project, dataset, tbl = self.project, parts[0], parts[1]
+        else:
+            project, dataset, tbl = self.project, self.dataset, parts[0]
+
+        query = f"""
+            SELECT DATE(storage_last_modified_time) as date,
+                   MAX(total_rows) as row_count
+            FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE_TIMELINE`
+            WHERE table_name = '{tbl}'
+              AND storage_last_modified_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
+            GROUP BY date
+            ORDER BY date
+        """
+        rows = self.query(query)
+        return [{"date": row["date"], "row_count": int(row["row_count"])} for row in rows]
+
+    def get_daily_null_rates(self, table: str, timestamp_column: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get daily null rates across all columns, partitioned by timestamp_column."""
+        parts = table.replace("`", "").split(".")
+        if len(parts) == 3:
+            project, dataset, tbl = parts
+        elif len(parts) == 2:
+            project, dataset, tbl = self.project, parts[0], parts[1]
+        else:
+            project, dataset, tbl = self.project, self.dataset, parts[0]
+
+        cols_query = f"""
+            SELECT column_name FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS`
+            WHERE table_name = '{tbl}' AND column_name != '{timestamp_column}'
+        """
+        col_rows = self.query(cols_query)
+        columns = [r["column_name"] for r in col_rows]
+        if not columns:
+            return []
+
+        null_exprs = " + ".join(f"COUNTIF(`{c}` IS NULL)" for c in columns)
+        total_expr = f"COUNT(*) * {len(columns)}"
+
+        query = f"""
+            SELECT DATE(`{timestamp_column}`) as date,
+                   SAFE_DIVIDE({null_exprs}, {total_expr}) as null_rate
+            FROM `{project}.{dataset}.{tbl}`
+            WHERE `{timestamp_column}` >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
+            GROUP BY date
+            ORDER BY date
+        """
+        rows = self.query(query)
+        return [{"date": row["date"], "null_rate": float(row["null_rate"] or 0)} for row in rows]
+
+    def get_schema_change_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """BigQuery INFORMATION_SCHEMA doesn't track column-level change history.
+        Return empty — discovery will suggest strict/no-evolution (safe default)."""
+        return []
+
+    # =========================================================================
     # SQL GENERATION
     # =========================================================================
     
