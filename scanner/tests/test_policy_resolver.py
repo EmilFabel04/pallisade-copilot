@@ -11,7 +11,6 @@ from scanner.monitors.policy_resolver import (
     _compute_branch_distances,
     _extract_all_fields_from_profile,
     _extract_fields_from_config,
-    _extract_fields_from_data_contract,
     get_policy_status,
     resolve_policy,
     resolve_policies_bulk,
@@ -131,19 +130,6 @@ class TestConfigExtraction:
         assert fields["anomaly_sensitivity"] == 0.99
         assert fields["quality_max_null_rate"] == 0.01
 
-    def test_data_contract_extraction(self):
-        contract = {
-            "freshnessEnabled": True,
-            "freshnessHours": 1,
-            "anomalyEnabled": True,
-            "anomalyThreshold": 0.999,
-            "maxNullRate": 0.001,
-        }
-        fields = _extract_fields_from_data_contract(contract)
-        assert fields["freshness_enabled"] is True
-        assert fields["freshness_max_hours"] == 1
-        assert fields["anomaly_sensitivity"] == 0.999
-        assert fields["quality_max_null_rate"] == 0.001
 
 
 # ---------------------------------------------------------------------------
@@ -239,33 +225,6 @@ class TestResolutionPrecedence:
         # Non-overridden fields come from the profile
         assert policy.freshness_warning_hours == 6
 
-    def test_data_contract_beats_everything(self):
-        """Layer 1 beats Layer 2."""
-        profiles = _make_profiles(
-            ("p1", "Custom", {
-                "freshnessConfig": {"enabled": True, "maxHours": 4, "warningHours": 2},
-            }),
-        )
-        assignments = [
-            {
-                "assignmentType": "direct",
-                "nodeFqn": "db.schema.t1",
-                "profileId": "p1",
-                "overrides": {"freshnessConfig": {"maxHours": 3}},
-            },
-        ]
-        contract = {"freshnessHours": 1, "freshnessEnabled": True}
-        policy = resolve_policy(
-            node_fqn="db.schema.t1",
-            node_domain="warehouse",
-            node_criticality="medium",
-            assignments=assignments,
-            profiles=profiles,
-            data_contract=contract,
-        )
-        assert policy.source == "data_contract"
-        assert policy.freshness_max_hours == 1
-
     def test_domain_default_used_when_no_direct(self):
         """Layer 6: domain default."""
         profiles = _make_profiles(
@@ -287,7 +246,7 @@ class TestResolutionPrecedence:
         assert policy.bi_freshness_hours == 8
 
     def test_criticality_default_beats_domain_default(self):
-        """Layer 5 beats Layer 6."""
+        """Layer 6 beats Layer 7."""
         profiles = _make_profiles(
             ("p1", "Crit Default", {
                 "freshnessConfig": {"maxHours": 3},
@@ -309,6 +268,55 @@ class TestResolutionPrecedence:
         )
         assert policy.source == "criticality_default"
         assert policy.freshness_max_hours == 3
+
+    def test_auto_discovered_used_when_no_direct_or_branch(self):
+        """auto_discovered layer sits between branch and criticality_default."""
+        profiles = _make_profiles(
+            ("p1", "Auto-discovered: db.schema.t1", {
+                "freshnessConfig": {"enabled": True, "maxHours": 6, "warningHours": 3},
+            }),
+        )
+        assignments = [
+            {
+                "assignmentType": "auto_discovered",
+                "nodeFqn": "db.schema.t1",
+                "profileId": "p1",
+            },
+        ]
+        policy = resolve_policy(
+            node_fqn="db.schema.t1",
+            node_domain="warehouse",
+            node_criticality="medium",
+            assignments=assignments,
+            profiles=profiles,
+        )
+        assert policy.source == "auto_discovered"
+        assert policy.freshness_max_hours == 6
+        assert policy.freshness_warning_hours == 3
+
+    def test_direct_beats_auto_discovered(self):
+        """direct_profile takes precedence over auto_discovered."""
+        profiles = _make_profiles(
+            ("p1", "User Profile", {
+                "freshnessConfig": {"enabled": True, "maxHours": 2, "warningHours": 1},
+            }),
+            ("p2", "Auto-discovered: db.schema.t1", {
+                "freshnessConfig": {"enabled": True, "maxHours": 12, "warningHours": 6},
+            }),
+        )
+        assignments = [
+            {"assignmentType": "direct", "nodeFqn": "db.schema.t1", "profileId": "p1"},
+            {"assignmentType": "auto_discovered", "nodeFqn": "db.schema.t1", "profileId": "p2"},
+        ]
+        policy = resolve_policy(
+            node_fqn="db.schema.t1",
+            node_domain="warehouse",
+            node_criticality="medium",
+            assignments=assignments,
+            profiles=profiles,
+        )
+        assert policy.source == "direct_profile"
+        assert policy.freshness_max_hours == 2
 
 
 # ---------------------------------------------------------------------------
@@ -560,16 +568,6 @@ class TestBulkResolution:
         assert results["db.schema.t1"].profile_name == "Critical SLA"
         assert results["db.schema.t2"].profile_name == "Relaxed"
 
-    def test_bulk_with_data_contracts(self):
-        nodes = [
-            {"fqn": "db.schema.t1", "domain": "warehouse", "criticality": "low"},
-        ]
-        contracts = {
-            "db.schema.t1": {"freshnessHours": 1, "freshnessEnabled": True},
-        }
-        results = resolve_policies_bulk(nodes, assignments=[], profiles={}, data_contracts=contracts)
-        assert results["db.schema.t1"].freshness_max_hours == 1
-        assert results["db.schema.t1"].source == "data_contract"
 
 
 # ---------------------------------------------------------------------------

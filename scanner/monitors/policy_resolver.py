@@ -5,10 +5,10 @@ Centralized policy resolution logic. All policy precedence decisions live here �
 no duplication in recommender, scope, or UI.
 
 Resolution chain (field-by-field, first non-null wins):
-1. DataContract — governance override (highest precedence)
-2. Direct assignment override — per-node overrides JSON
-3. Direct assignment profile — linked PolicyProfile values
-4. Branch assignment — nearest ancestor's branch policy wins
+1. Direct assignment override — per-node overrides JSON
+2. Direct assignment profile — linked PolicyProfile values
+3. Branch assignment — nearest ancestor's branch policy wins
+4. Auto-discovered — inferred from warehouse history analysis
 5. Criticality default — matches node domain + criticality
 6. Domain default — matches node domain
 7. Built-in fallback — hardcoded defaults
@@ -33,7 +33,7 @@ class EffectivePolicy:
     """Resolved monitoring policy for a node, after applying the full resolution chain."""
 
     # Where this policy came from
-    source: str = "builtin"  # data_contract | direct_override | direct_profile | branch | criticality_default | domain_default | builtin
+    source: str = "builtin"  # direct_override | direct_profile | imported_dbt | branch | auto_discovered | criticality_default | domain_default | builtin
     profile_id: Optional[str] = None
     profile_name: Optional[str] = None
 
@@ -305,36 +305,6 @@ def _extract_all_fields_from_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# DataContract → EffectivePolicy field extraction
-# ---------------------------------------------------------------------------
-
-def _extract_fields_from_data_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract EffectivePolicy fields from a DataContract record."""
-    result = {}
-    mapping = {
-        "freshnessEnabled": "freshness_enabled",
-        "freshnessHours": "freshness_max_hours",
-        "freshnessWarningHours": "freshness_warning_hours",
-        "schemaEnabled": "schema_enabled",
-        "allowSchemaEvolution": "schema_allow_evolution",
-        "volumeEnabled": "volume_enabled",
-        "minRowCount": "volume_min_rows",
-        "maxRowCount": "volume_max_rows",
-        "expectedGrowthRate": "volume_growth_threshold",
-        "anomalyEnabled": "anomaly_enabled",
-        "anomalyThreshold": "anomaly_sensitivity",
-        "qualityEnabled": "quality_enabled",
-        "maxNullRate": "quality_max_null_rate",
-        "maxDuplicateRate": "quality_max_duplicate_rate",
-    }
-    for contract_key, policy_field in mapping.items():
-        val = contract.get(contract_key)
-        if val is not None:
-            result[policy_field] = val
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Branch distance calculation
 # ---------------------------------------------------------------------------
 
@@ -404,7 +374,6 @@ def resolve_policy(
     assignments: List[Dict[str, Any]],
     profiles: Dict[str, Dict[str, Any]],
     graph: Any = None,
-    data_contract: Optional[Dict[str, Any]] = None,
 ) -> EffectivePolicy:
     """
     Resolve the effective monitoring policy for a node.
@@ -416,7 +385,6 @@ def resolve_policy(
         assignments: All PolicyAssignment records for the organization (as dicts)
         profiles: Profile ID → profile dict mapping
         graph: Optional LineageGraph for branch distance calculation
-        data_contract: Optional DataContract record for this node (as dict)
 
     Returns:
         EffectivePolicy with all resolved fields and source attribution
@@ -427,13 +395,7 @@ def resolve_policy(
     layers: List[Tuple[str, Dict[str, Any], Optional[str], Optional[str]]] = []
     # Each tuple: (source_label, field_values, profile_id, profile_name)
 
-    # Layer 1: DataContract
-    if data_contract:
-        dc_fields = _extract_fields_from_data_contract(data_contract)
-        if dc_fields:
-            layers.append(("data_contract", dc_fields, None, None))
-
-    # Layer 2+3: Direct assignment (override + profile)
+    # Direct assignment (override + profile)
     direct_assignments = [
         a for a in assignments
         if a.get("assignmentType") == "direct" and a.get("nodeFqn") == node_fqn
@@ -481,7 +443,22 @@ def resolve_policy(
             if profile_fields:
                 layers.append(("branch", profile_fields, pid, pname))
 
-    # Layer 5: Criticality default
+    # Layer 5: Auto-discovered (from warehouse history analysis)
+    auto_discovered_assignments = [
+        a for a in assignments
+        if a.get("assignmentType") == "auto_discovered"
+        and a.get("nodeFqn") == node_fqn
+    ]
+    if auto_discovered_assignments:
+        ad = auto_discovered_assignments[0]
+        profile = profiles.get(ad.get("profileId", ""), {})
+        pid = ad.get("profileId")
+        pname = profile.get("name")
+        profile_fields = _extract_all_fields_from_profile(profile)
+        if profile_fields:
+            layers.append(("auto_discovered", profile_fields, pid, pname))
+
+    # Layer 6: Criticality default
     crit_defaults = [
         a for a in assignments
         if a.get("assignmentType") == "criticality_default"
@@ -497,7 +474,7 @@ def resolve_policy(
         if profile_fields:
             layers.append(("criticality_default", profile_fields, pid, pname))
 
-    # Layer 6: Domain default
+    # Layer 7: Domain default
     domain_defaults = [
         a for a in assignments
         if a.get("assignmentType") == "domain_default"
@@ -513,7 +490,7 @@ def resolve_policy(
         if profile_fields:
             layers.append(("domain_default", profile_fields, pid, pname))
 
-    # Layer 7: Built-in fallback (use criticality mapping)
+    # Layer 8: Built-in fallback (use criticality mapping)
     builtin_name = CRITICALITY_PROFILE_MAP.get(node_criticality, "Standard")
     builtin_profile = BUILTIN_PROFILES.get(builtin_name, {})
     builtin_fields = _extract_all_fields_from_profile(builtin_profile)
@@ -546,7 +523,6 @@ def resolve_policies_bulk(
     assignments: List[Dict[str, Any]],
     profiles: Dict[str, Dict[str, Any]],
     graph: Any = None,
-    data_contracts: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, EffectivePolicy]:
     """
     Resolve effective policies for multiple nodes efficiently.
@@ -556,19 +532,16 @@ def resolve_policies_bulk(
         assignments: All PolicyAssignment records for the org
         profiles: Profile ID → profile dict
         graph: Optional LineageGraph
-        data_contracts: Optional fqn → DataContract dict
 
     Returns:
         fqn → EffectivePolicy mapping
     """
-    contracts = data_contracts or {}
     results = {}
 
     for node in nodes:
         fqn = node.get("fqn", "")
         domain = node.get("domain", "warehouse")
         criticality = node.get("criticality", "medium")
-        contract = contracts.get(fqn)
 
         results[fqn] = resolve_policy(
             node_fqn=fqn,
@@ -577,7 +550,6 @@ def resolve_policies_bulk(
             assignments=assignments,
             profiles=profiles,
             graph=graph,
-            data_contract=contract,
         )
 
     return results
