@@ -174,6 +174,32 @@ export async function POST(request: NextRequest) {
         },
       });
       created.push(assignment);
+    } else if (assignmentType === 'auto_discovered') {
+      if (!nodeFqns || nodeFqns.length === 0) {
+        return NextResponse.json({ error: 'nodeFqns required for auto_discovered assignments' }, { status: 400 });
+      }
+
+      for (const fqn of nodeFqns) {
+        const assignment = await prisma.policyAssignment.upsert({
+          where: {
+            organizationId_assignmentType_nodeFqn: {
+              organizationId,
+              assignmentType: 'auto_discovered',
+              nodeFqn: fqn,
+            },
+          },
+          create: {
+            organizationId,
+            profileId: resolvedProfileId,
+            assignmentType: 'auto_discovered',
+            nodeFqn: fqn,
+          },
+          update: {
+            profileId: resolvedProfileId,
+          },
+        });
+        created.push(assignment);
+      }
     } else {
       return NextResponse.json({ error: `Unknown assignmentType: ${assignmentType}` }, { status: 400 });
     }
