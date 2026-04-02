@@ -38,32 +38,6 @@ export async function POST(request: NextRequest) {
       }),
     ]);
 
-    // Load data SLAs for this pipeline (if enabled, they take priority)
-    let contractsEnabled = false;
-    const contractsByFqn = new Map<string, any>();
-    if (stackId) {
-      try {
-        const pipeline = await prisma.pipelineStack.findUnique({
-          where: { id: stackId },
-          select: { dataContractsEnabled: true },
-        });
-        contractsEnabled = pipeline?.dataContractsEnabled ?? false;
-
-        if (contractsEnabled) {
-          const contracts = await prisma.pipelineDataContract.findMany({
-            where: { pipelineStackId: stackId },
-          });
-          // Build a map: FQN → contract (only explicit nodeFqns)
-          for (const contract of contracts) {
-            const fqns = (contract.nodeFqns as string[] | null) || [];
-            for (const fqn of fqns) {
-              contractsByFqn.set(fqn, contract);
-            }
-          }
-        }
-      } catch {}
-    }
-
     // Build profile lookup
     const profileMap: Record<string, any> = {};
     for (const p of profiles) {
@@ -97,29 +71,6 @@ export async function POST(request: NextRequest) {
 
       if (res.ok) {
         const data = await res.json();
-        // Apply contract overrides on top of FastAPI results
-        if (contractsEnabled && contractsByFqn.size > 0 && data.policies) {
-          for (const node of nodes) {
-            const contract = contractsByFqn.get(node.fqn);
-            if (contract) {
-              data.policies[node.fqn] = {
-                source: 'data_contract',
-                profileId: null,
-                profileName: contract.slaTier ? `Contract ${contract.slaTier}` : 'Data SLA',
-                status: 'assigned',
-                freshness: contract.freshnessConfig || {},
-                schema: contract.schemaConfig || {},
-                volume: contract.volumeConfig || {},
-                anomaly: contract.anomalyConfig || {},
-                quality: contract.qualityConfig || {},
-                ingestion: contract.ingestionConfig || {},
-                bi: contract.biConfig || {},
-                orchestration: contract.orchestrationConfig || {},
-                transform: contract.transformConfig || {},
-              };
-            }
-          }
-        }
         return NextResponse.json(data);
       }
     } catch {
@@ -135,61 +86,19 @@ export async function POST(request: NextRequest) {
     const directByFqn = new Map<string, typeof assignments[0]>();
     const critDefaults = new Map<string, typeof assignments[0]>(); // key: domain:criticality
     const domainDefaults = new Map<string, typeof assignments[0]>(); // key: domain
+    const autoDiscoveredByFqn = new Map<string, typeof assignments[0]>();
 
     for (const a of assignments) {
       if (a.assignmentType === 'direct' && a.nodeFqn) {
         directByFqn.set(a.nodeFqn, a);
+      } else if (a.assignmentType === 'auto_discovered' && a.nodeFqn) {
+        autoDiscoveredByFqn.set(a.nodeFqn, a);
       } else if (a.assignmentType === 'criticality_default' && a.nodeDomain && a.nodeCriticality) {
         critDefaults.set(`${a.nodeDomain}:${a.nodeCriticality}`, a);
       } else if (a.assignmentType === 'domain_default' && a.nodeDomain && !a.nodeCriticality) {
         domainDefaults.set(a.nodeDomain, a);
       }
     }
-
-    // Built-in profiles keyed by name (for criticality fallback)
-    const builtinProfiles: Record<string, any> = {
-      'Critical SLA': {
-        freshnessConfig: { enabled: true, maxHours: 2, warningHours: 1 },
-        schemaConfig: { enabled: true, strictness: 'strict', allowEvolution: false },
-        volumeConfig: { enabled: true, growthRateThreshold: 0.05, minRows: 1 },
-        anomalyConfig: { enabled: true, sensitivity: 0.99, lookbackDays: 30 },
-        qualityConfig: { enabled: true, maxNullRate: 0.01, maxDuplicateRate: 0.005 },
-        ingestionConfig: { syncLagToleranceMinutes: 15, failureTolerance: 'strict', schemaDriftStrictness: 'strict' },
-        biConfig: { freshnessHours: 2, contentHealthEnabled: true, upstreamBreakStrictness: 'strict' },
-        orchestrationConfig: { runLatencyMinutes: 15, scheduleLagMinutes: 5, failureTolerance: 'strict' },
-        transformConfig: { testFailureTolerance: 'strict', modelFreshnessHours: 2 },
-      },
-      'Standard': {
-        freshnessConfig: { enabled: true, maxHours: 12, warningHours: 6 },
-        schemaConfig: { enabled: true, strictness: 'warn', allowEvolution: true },
-        volumeConfig: { enabled: true, growthRateThreshold: 0.15, minRows: 1 },
-        anomalyConfig: { enabled: true, sensitivity: 0.95, lookbackDays: 14 },
-        qualityConfig: { enabled: true, maxNullRate: 0.05, maxDuplicateRate: 0.02 },
-        ingestionConfig: { syncLagToleranceMinutes: 60, failureTolerance: 'normal', schemaDriftStrictness: 'warn' },
-        biConfig: { freshnessHours: 6, contentHealthEnabled: true, upstreamBreakStrictness: 'warn' },
-        orchestrationConfig: { runLatencyMinutes: 30, scheduleLagMinutes: 15, failureTolerance: 'normal' },
-        transformConfig: { testFailureTolerance: 'normal', modelFreshnessHours: 12 },
-      },
-      'Relaxed': {
-        freshnessConfig: { enabled: true, maxHours: 48, warningHours: 24 },
-        schemaConfig: { enabled: false, strictness: 'ignore', allowEvolution: true },
-        volumeConfig: { enabled: false },
-        anomalyConfig: { enabled: false },
-        qualityConfig: { enabled: true, maxNullRate: 0.10, maxDuplicateRate: 0.05 },
-        ingestionConfig: { syncLagToleranceMinutes: 180, failureTolerance: 'relaxed', schemaDriftStrictness: 'ignore' },
-        biConfig: { freshnessHours: 24, contentHealthEnabled: false, upstreamBreakStrictness: 'ignore' },
-        orchestrationConfig: { runLatencyMinutes: 60, scheduleLagMinutes: 30, failureTolerance: 'relaxed' },
-        transformConfig: { testFailureTolerance: 'relaxed', modelFreshnessHours: 48 },
-      },
-    };
-
-    // Criticality → built-in profile name mapping
-    const critMap: Record<string, string> = {
-      critical: 'Critical SLA',
-      high: 'Critical SLA',
-      medium: 'Standard',
-      low: 'Relaxed',
-    };
 
     const configFromProfile = (profile: any) => ({
       freshness: profile?.freshnessConfig || {},
@@ -204,32 +113,7 @@ export async function POST(request: NextRequest) {
     });
 
     for (const node of nodes) {
-      // When data SLAs are enabled and a data SLA covers this node, use SLA values
-      if (contractsEnabled) {
-        const contract = contractsByFqn.get(node.fqn);
-        if (contract) {
-          policies[node.fqn] = {
-            source: 'data_contract',
-            profileId: null,
-            profileName: contract.slaTier ? `Contract ${contract.slaTier}` : 'Data SLA',
-            status: 'assigned',
-            ...configFromProfile({
-              freshnessConfig: contract.freshnessConfig,
-              schemaConfig: contract.schemaConfig,
-              volumeConfig: contract.volumeConfig,
-              anomalyConfig: contract.anomalyConfig,
-              qualityConfig: contract.qualityConfig,
-              ingestionConfig: contract.ingestionConfig,
-              biConfig: contract.biConfig,
-              orchestrationConfig: contract.orchestrationConfig,
-              transformConfig: contract.transformConfig,
-            }),
-          };
-          continue;
-        }
-      }
-
-      // Resolution chain: direct → criticality_default → domain_default → builtin
+      // Resolution chain: direct → auto_discovered → criticality_default → domain_default → builtin
       const direct = directByFqn.get(node.fqn);
       if (direct) {
         const profile = profileMap[direct.profileId];
@@ -252,6 +136,19 @@ export async function POST(request: NextRequest) {
           profileName: profile?.name || null,
           status: 'assigned',
           ...effectiveConfig,
+        };
+        continue;
+      }
+
+      const autoDiscovered = autoDiscoveredByFqn.get(node.fqn);
+      if (autoDiscovered) {
+        const profile = profileMap[autoDiscovered.profileId];
+        policies[node.fqn] = {
+          source: 'auto_discovered',
+          profileId: autoDiscovered.profileId,
+          profileName: profile?.name || null,
+          status: 'assigned',
+          ...configFromProfile(profile),
         };
         continue;
       }
@@ -282,15 +179,13 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // Built-in fallback: use criticality to pick a profile
-      const builtinName = critMap[node.criticality] || 'Standard';
-      const builtinConfig = builtinProfiles[builtinName] || builtinProfiles['Standard'];
+      // No SLA assigned — return empty policy with status 'none'
       policies[node.fqn] = {
-        source: 'builtin',
+        source: 'none',
         profileId: null,
-        profileName: builtinName,
+        profileName: null,
         status: 'none' as const,
-        ...configFromProfile(builtinConfig),
+        ...configFromProfile({}),
       };
     }
 
