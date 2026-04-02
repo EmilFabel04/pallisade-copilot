@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { toast } from 'sonner';
 import {
   ChevronDown,
   Table,
@@ -394,6 +395,62 @@ export function DataAssetDetailPanel({
   // Monitor recommendations
   const [recommendations, setRecommendations] = useState<MonitorRecommendation[] | null>(null);
   const [recsLoading, setRecsLoading] = useState(false);
+
+  // SLA discovery state
+  const [discoveryState, setDiscoveryState] = useState<'idle' | 'loading' | 'confirm' | 'unsupported'>('idle');
+  const [discoveryResult, setDiscoveryResult] = useState<{
+    freshness?: { enabled: boolean; maxHours: number; warningHours: number };
+    volume?: { enabled: boolean; minRows: number; maxRows: number };
+    quality?: { enabled: boolean; maxNullRate: number };
+    schema?: { enabled: boolean; strictness: string; allowEvolution: boolean };
+  } | null>(null);
+
+  const handleDiscover = async () => {
+    setDiscoveryState('loading');
+    try {
+      const res = await fetch(`/api/nodes/${node.id}/sla/discover`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveryResult(data.result);
+        setDiscoveryState('confirm');
+      } else if (res.status === 422) {
+        const data = await res.json();
+        if (data.reason === 'no_warehouse_ancestor') {
+          setDiscoveryState('unsupported');
+        } else {
+          setDiscoveryState('idle');
+        }
+      } else {
+        setDiscoveryState('idle');
+        toast.error('Discovery failed');
+      }
+    } catch {
+      setDiscoveryState('idle');
+      toast.error('Discovery failed');
+    }
+  };
+
+  const handleAcceptDiscovery = async () => {
+    if (!discoveryResult) return;
+    try {
+      const res = await fetch('/api/schedule/policies/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profileId: `auto-discovered-${node.id}`,
+          assignmentType: 'auto_discovered',
+          nodeFqns: [node.fullName || node.name],
+        }),
+      });
+      if (res.ok) {
+        toast.success('SLA profile applied');
+        setDiscoveryState('idle');
+        setDiscoveryResult(null);
+      }
+    } catch {
+      toast.error('Failed to apply profile');
+    }
+  };
 
   const hasIssues = node.issues && node.issues.total > 0;
   const hasCritical = node.issues && node.issues.critical > 0;
@@ -1316,8 +1373,63 @@ export function DataAssetDetailPanel({
         {/* ─── Data SLA ────────────────────────────── */}
         <div className="border-t border-[var(--subtle-border)] pt-3">
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Data SLA</label>
-          {slaInfo && slaInfo.status !== 'none' ? (
+
+          {/* Confirmation UI after discovery */}
+          {discoveryState === 'confirm' && discoveryResult && (
+            <div className="mt-2 p-3 rounded-lg border border-cyan-500/30 bg-cyan-500/10">
+              <p className="text-[12px] font-medium text-cyan-300 mb-2">Suggested SLA Profile</p>
+              <p className="text-[10px] text-[var(--muted)] mb-3">Based on 30 days of warehouse history</p>
+              <div className="space-y-1.5 text-[12px]">
+                {discoveryResult.freshness && (
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Freshness</span><span className="text-[var(--text)]">max {discoveryResult.freshness.maxHours}h, warn {discoveryResult.freshness.warningHours}h</span></div>
+                )}
+                {discoveryResult.volume && (
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Volume</span><span className="text-[var(--text)]">{discoveryResult.volume.minRows.toLocaleString()} – {discoveryResult.volume.maxRows.toLocaleString()} rows</span></div>
+                )}
+                {discoveryResult.quality && (
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Quality</span><span className="text-[var(--text)]">null rate ≤{Math.round(discoveryResult.quality.maxNullRate * 100)}%</span></div>
+                )}
+                {discoveryResult.schema && (
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Schema</span><span className="text-[var(--text)]">{discoveryResult.schema.strictness}, {discoveryResult.schema.allowEvolution ? 'evolution ok' : 'no evolution'}</span></div>
+                )}
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button onClick={handleAcceptDiscovery} className="px-3 py-1 text-[11px] font-medium rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30">Accept</button>
+                <button onClick={() => { onEditSLA?.(node.id); setDiscoveryState('idle'); }} className="px-3 py-1 text-[11px] font-medium rounded bg-[var(--overlay-bg)] text-[var(--muted)] hover:text-[var(--text)]">Edit & Accept</button>
+                <button onClick={() => { setDiscoveryState('idle'); setDiscoveryResult(null); }} className="px-3 py-1 text-[11px] font-medium rounded text-[var(--muted)] hover:text-[var(--text)]">Dismiss</button>
+              </div>
+            </div>
+          )}
+
+          {/* Loading state */}
+          {discoveryState === 'loading' && (
+            <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)] flex items-center gap-2">
+              <div className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+              <span className="text-[12px] text-[var(--muted)]">Analyzing warehouse history...</span>
+            </div>
+          )}
+
+          {/* Discovery unsupported */}
+          {discoveryState === 'unsupported' && (
+            <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
+              <p className="text-[12px] text-[var(--muted)]">No SLA profile assigned</p>
+              <p className="text-[11px] text-[var(--text-faint)] mt-1">Discovery not available — no upstream warehouse table found.</p>
+              {onEditSLA && (
+                <button onClick={() => onEditSLA(node.id)} className="mt-1.5 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1">
+                  <Plus className="w-3 h-3" /> Assign manually
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Assigned state (existing or auto-discovered) */}
+          {discoveryState === 'idle' && slaInfo && slaInfo.status !== 'none' && (
             <div className="mt-2 p-2.5 rounded-lg border border-slate-500/30 bg-slate-500/10">
+              {slaInfo.source === 'auto_discovered' && (
+                <div className="mb-2 p-2 rounded bg-cyan-500/10 border border-cyan-500/20">
+                  <p className="text-[11px] text-cyan-400">Auto-discovered from data. Edit to make user-defined.</p>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-slate-400" />
@@ -1329,33 +1441,28 @@ export function DataAssetDetailPanel({
                   {slaInfo.status}
                 </span>
               </div>
-              {slaInfo.source && (
-                <p className="text-[11px] text-[var(--muted)] mt-1">{slaInfo.source}</p>
-              )}
               {onEditSLA && (
-                <button
-                  onClick={() => onEditSLA(node.id)}
-                  className="mt-2 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                  </svg>
+                <button onClick={() => onEditSLA(node.id)} className="mt-2 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1">
                   Edit Data SLA
                 </button>
               )}
             </div>
-          ) : (
+          )}
+
+          {/* Empty state — no profile */}
+          {discoveryState === 'idle' && (!slaInfo || slaInfo.status === 'none') && (
             <div className="mt-2 p-2.5 rounded-lg border border-dashed border-[var(--subtle-border)] bg-[var(--overlay-faint)]">
-              <p className="text-[12px] text-[var(--muted)]">No Data SLA assigned</p>
-              {onEditSLA && (
-                <button
-                  onClick={() => onEditSLA(node.id)}
-                  className="mt-1.5 text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" />
-                  Add Data SLA
+              <p className="text-[12px] text-[var(--muted)]">No SLA profile assigned</p>
+              <div className="flex gap-2 mt-1.5">
+                <button onClick={handleDiscover} className="text-[11px] text-cyan-400 hover:text-cyan-300 hover:underline flex items-center gap-1">
+                  Discover from data
                 </button>
-              )}
+                {onEditSLA && (
+                  <button onClick={() => onEditSLA(node.id)} className="text-[11px] text-slate-400 hover:text-slate-300 hover:underline flex items-center gap-1">
+                    <Plus className="w-3 h-3" /> Assign manually
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
