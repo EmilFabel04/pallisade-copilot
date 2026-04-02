@@ -16,6 +16,7 @@ export default function OnboardingPage() {
   const [completedSteps, setCompletedSteps] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+  const [isInvitedUser, setIsInvitedUser] = useState(false);
 
   // Data from previous steps (for passing to later steps)
   const [userName, setUserName] = useState('');
@@ -57,17 +58,19 @@ export default function OnboardingPage() {
       // Pre-fill name from session
       setUserName((session?.user as any)?.name || '');
 
-      // Load org name if exists
+      // Check if user already has an org (invited user)
       try {
         const orgRes = await fetch('/api/organization');
         if (orgRes.ok) {
           const data = await orgRes.json();
           if (data.organization?.name) {
             setOrgName(data.organization.name);
+            // User has org but hasn't completed onboarding → joined via invite
+            setIsInvitedUser(true);
           }
         }
       } catch {
-        // No org yet
+        // No org yet — normal new user flow
       }
 
       setInitialDataLoaded(true);
@@ -98,6 +101,28 @@ export default function OnboardingPage() {
       await saveStep(1);
       setCompletedSteps(1);
       setCurrentStep(2);
+    } catch (err) {
+      console.error('Profile save error:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function handleInvitedProfileComplete(data: { name: string; timezone: string; role: string }) {
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error('Failed to save profile');
+
+      // Mark onboarding as fully complete — skip steps 2-4
+      await saveStep(4, true);
+      await update();
+      router.push('/dashboard');
+      router.refresh();
     } catch (err) {
       console.error('Profile save error:', err);
     } finally {
@@ -200,42 +225,59 @@ export default function OnboardingPage() {
       <div className="text-center mb-6">
         <img src="/pallisade_emblem.svg" alt="Pallisade" className="w-14 h-14 mx-auto mb-3" />
       </div>
-      <StepProgress currentStep={currentStep} completedSteps={completedSteps} />
 
-      {currentStep === 1 && (
-        <ProfileStep
-          initialName={userName}
-          onComplete={handleProfileComplete}
-          isLoading={isLoading}
-        />
-      )}
+      {isInvitedUser ? (
+        <>
+          <div className="text-center mb-6">
+            <h2 className="text-lg font-semibold text-[var(--text)]">Welcome to {orgName}!</h2>
+            <p className="text-sm text-[var(--muted)] mt-1">Set up your profile to get started</p>
+          </div>
+          <ProfileStep
+            initialName={userName}
+            onComplete={handleInvitedProfileComplete}
+            isLoading={isLoading}
+          />
+        </>
+      ) : (
+        <>
+          <StepProgress currentStep={currentStep} completedSteps={completedSteps} />
 
-      {currentStep === 2 && (
-        <CompanyStep
-          initialName={orgName}
-          onComplete={handleCompanyComplete}
-          onBack={() => setCurrentStep(1)}
-          isLoading={isLoading}
-        />
-      )}
+          {currentStep === 1 && (
+            <ProfileStep
+              initialName={userName}
+              onComplete={handleProfileComplete}
+              isLoading={isLoading}
+            />
+          )}
 
-      {currentStep === 3 && (
-        <WarehouseStep
-          onComplete={handleWarehouseComplete}
-          onSkip={handleSkipWarehouse}
-          onBack={() => setCurrentStep(2)}
-          isLoading={isLoading}
-        />
-      )}
+          {currentStep === 2 && (
+            <CompanyStep
+              initialName={orgName}
+              onComplete={handleCompanyComplete}
+              onBack={() => setCurrentStep(1)}
+              isLoading={isLoading}
+            />
+          )}
 
-      {currentStep === 4 && (
-        <MonitorStep
-          pipelineName={pipelineName}
-          warehouseType={warehouseType}
-          onComplete={handleFinish}
-          onSkip={handleSkipMonitor}
-          onBack={() => setCurrentStep(3)}
-        />
+          {currentStep === 3 && (
+            <WarehouseStep
+              onComplete={handleWarehouseComplete}
+              onSkip={handleSkipWarehouse}
+              onBack={() => setCurrentStep(2)}
+              isLoading={isLoading}
+            />
+          )}
+
+          {currentStep === 4 && (
+            <MonitorStep
+              pipelineName={pipelineName}
+              warehouseType={warehouseType}
+              onComplete={handleFinish}
+              onSkip={handleSkipMonitor}
+              onBack={() => setCurrentStep(3)}
+            />
+          )}
+        </>
       )}
     </div>
   );
