@@ -19,8 +19,7 @@ When Pallisade builds or refreshes lineage for an asset, it traverses the asset'
 
 - Real-time or continuous profiling.
 - Suggesting monitors (that comes later).
-- Quality discovery — point-in-time column stats are too noisy for threshold calibration. Deferred to the drift engine which will have historical baselines.
-- Anything beyond three core categories: freshness, volume, schema.
+- Anything beyond four core categories: freshness, volume, quality, schema.
 
 ---
 
@@ -30,7 +29,7 @@ Auto-discovered profiles use the existing `PolicyAssignment` + `PolicyProfile` t
 
 ### How it works
 
-1. Discovery computes suggested config values (freshness, volume, schema).
+1. Discovery computes suggested config values (freshness, volume, quality, schema).
 2. It upserts a `PolicyProfile` with `name: "Auto-discovered"`, `isBuiltIn: true`, and the computed config blobs.
 3. It creates a `PolicyAssignment` with `assignmentType: 'auto_discovered'`, `nodeFqn: <fqn>`, pointing at the profile.
 
@@ -135,6 +134,19 @@ All computations query the warehouse adapter for the node's nearest warehouse an
   - `volumeConfig.growthRateThreshold`: if the table shows consistent day-over-day growth, set to `mean_daily_growth_rate * 2`. Otherwise `null`.
 - Edge case: if fewer than 7 data points exist in the window, skip volume discovery for this node (insufficient history).
 
+### Quality
+
+- Prerequisite: a timestamp column must be discoverable on the warehouse ancestor table. Uses the existing `discover_timestamp_column()` from `scanner/monitors/freshness.py`, which scores candidates by name patterns (e.g. `created_at`, `_fivetran_synced`), non-null rate, and recency, returning the best match or `None`.
+- If no timestamp column is found: skip quality discovery silently for this node. Omit `qualityConfig` from the `DiscoveryResult` — do not fail the overall discovery run.
+- Query: daily null rates over the 30-day window, grouped by date using the inferred timestamp column. One query per table, counting nulls across all non-timestamp columns per day.
+- Adapter method: new `get_daily_null_rates(table, timestamp_column, days=30)` returning `List[{date: date, null_rate: float}]`. The null rate is computed as total nulls across all columns divided by (row_count * column_count) for that day's partition.
+- Computation: mean and standard deviation of daily null rates (same statistical approach as volume).
+- Output:
+  - `qualityConfig.enabled`: `true`
+  - `qualityConfig.maxNullRate`: `min(0.5, mean + 2 * stddev)`. Capped at 50%.
+  - `qualityConfig.maxDuplicateRate`: omitted (no historical duplicate rate available without full-table scans per day).
+- Edge case: if fewer than 7 daily observations exist in the window, skip quality discovery for this node (insufficient history).
+
 ### Schema
 
 - Query: schema change history. The existing `supports_schema_changes` adapter capability. For BigQuery, `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` with `INFORMATION_SCHEMA.SCHEMATA` history. For Snowflake, `ACCOUNT_USAGE.COLUMNS` history.
@@ -163,6 +175,7 @@ class DiscoveryResult:
     warehouse_ancestor_fqn: str | None
     freshness: FreshnessConfig | None
     volume: VolumeConfig | None
+    quality: QualityConfig | None  # None if no timestamp column found
     schema: SchemaConfig | None
     unsupported: bool  # True if no warehouse ancestor found
     skipped_reason: str | None  # "user_defined", "no_warehouse_ancestor", "insufficient_history"
@@ -186,17 +199,19 @@ Internal functions (private):
 - `_find_warehouse_ancestor(node, graph) -> LineageNode | None`
 - `_compute_freshness(adapter, table_fqn) -> FreshnessConfig | None`
 - `_compute_volume(adapter, table_fqn) -> VolumeConfig | None`
+- `_compute_quality(adapter, table_fqn, timestamp_column) -> QualityConfig | None`
 - `_compute_schema(adapter, table_fqn) -> SchemaConfig | None`
 
 ### Adapter extensions
 
-Three new methods on `BaseAdapter` (with `NotImplementedError` defaults):
+Four new methods on `BaseAdapter` (with `NotImplementedError` defaults):
 
 - `get_freshness_history(table: str, days: int = 30) -> List[Dict]` — returns `[{timestamp: datetime}]`
 - `get_row_count_history(table: str, days: int = 30) -> List[Dict]` — returns `[{date: date, row_count: int}]`
+- `get_daily_null_rates(table: str, timestamp_column: str, days: int = 30) -> List[Dict]` — returns `[{date: date, null_rate: float}]`
 - `get_schema_change_history(table: str, days: int = 30) -> List[Dict]` — returns `[{date: date, change_type: str, column_name: str}]`
 
-Implemented in BigQuery and Snowflake adapters first. Postgres/Redshift get freshness only (no row count history or schema change history available via standard metadata views).
+Implemented in BigQuery and Snowflake adapters first. Postgres/Redshift get freshness only (no row count history, daily null rates, or schema change history available via standard metadata views).
 
 ---
 
@@ -317,6 +332,7 @@ On-demand discovery for a single node. Does NOT write — returns the suggested 
     "warehouseAncestorFqn": "project.dataset.orders",
     "freshness": { "enabled": true, "maxHours": 6, "warningHours": 3 },
     "volume": { "enabled": true, "minRows": 8000, "maxRows": 52000 },
+    "quality": { "enabled": true, "maxNullRate": 0.05 },
     "schema": { "enabled": true, "strictness": "strict", "allowEvolution": false }
   }
 }
@@ -357,6 +373,7 @@ Currently shows an "Edit SLA" button that opens the SLA editor. Add a second act
 │                                         │
 │  Freshness     max 6h, warn 3h         │
 │  Volume        8,000 – 52,000 rows     │
+│  Quality       null rate ≤5%           │
 │  Schema        strict, no evolution     │
 │                                         │
 │  [Accept]  [Edit & Accept]  [Dismiss]   │
@@ -414,8 +431,8 @@ auto_discovered: { label: 'Auto-discovered', color: 'text-cyan-400', bg: 'bg-cya
 ## 10. Build Order
 
 1. Add `slaDiscoveryNodeLimit` field to `Organization` model in Prisma. Run migration.
-2. Write `scanner/lineage/sla_discovery.py` with the three statistical functions (`_compute_freshness`, `_compute_volume`, `_compute_schema`), `_find_warehouse_ancestor`, and `_persist_discovery_results`.
-3. Add `get_freshness_history`, `get_row_count_history`, `get_schema_change_history` to `BaseAdapter` with `NotImplementedError` defaults. Implement in BigQuery and Snowflake adapters.
+2. Write `scanner/lineage/sla_discovery.py` with the four statistical functions (`_compute_freshness`, `_compute_volume`, `_compute_quality`, `_compute_schema`), `_find_warehouse_ancestor`, and `_persist_discovery_results`. Quality uses `discover_timestamp_column()` from `scanner/monitors/freshness.py` to find the partition column; skips silently if none found.
+3. Add `get_freshness_history`, `get_row_count_history`, `get_daily_null_rates`, `get_schema_change_history` to `BaseAdapter` with `NotImplementedError` defaults. Implement in BigQuery and Snowflake adapters.
 4. Update the resolver chain: add `auto_discovered` layer in Python `policy_resolver.py` and TypeScript `resolve/route.ts`. Update types.
 5. Hook discovery into `CrossToolLineageOrchestrator.extract_all()`, reading `slaDiscoveryNodeLimit` from the org.
 6. Add `POST /api/nodes/[nodeId]/sla/discover` route.
