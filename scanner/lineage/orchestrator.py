@@ -57,6 +57,7 @@ class OrchestrationResult:
     total_edges: int = 0
     duration_ms: int = 0
     errors: List[str] = field(default_factory=list)
+    discovery_results: List[Any] = field(default_factory=list)
 
 
 class CrossToolLineageOrchestrator:
@@ -101,6 +102,8 @@ class CrossToolLineageOrchestrator:
         self.resolver = CanonicalResolver()
         self.extraction_results: List[ExtractionResult] = []
         self.errors: List[str] = []
+        # Adapter registry for SLA discovery — populated during extraction if applicable
+        self._adapter_registry: Dict[str, Any] = {}
 
     async def extract_all(self) -> OrchestrationResult:
         """
@@ -141,6 +144,22 @@ class CrossToolLineageOrchestrator:
             self.graph.compute_depths()
             self.graph.built_at = datetime.utcnow()
 
+            # Step 6: SLA Discovery (optional)
+            discovery_results = []
+            try:
+                from scanner.lineage.sla_discovery import discover_sla_profiles_bulk
+                discovery_results = await discover_sla_profiles_bulk(
+                    nodes=list(self.graph.nodes.values()),
+                    graph=self.graph,
+                    adapter_registry=self._adapter_registry,
+                )
+                logger.info(
+                    f"[SLA Discovery] Discovered {sum(1 for r in discovery_results if not r.unsupported and not r.skipped_reason)} "
+                    f"profiles out of {len(discovery_results)} nodes"
+                )
+            except Exception as e:
+                logger.warning(f"[SLA Discovery] Discovery failed (non-fatal): {e}")
+
             duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
 
             logger.info(
@@ -157,6 +176,7 @@ class CrossToolLineageOrchestrator:
                 total_edges=len(self.graph.edges),
                 duration_ms=duration_ms,
                 errors=self.errors,
+                discovery_results=discovery_results,
             )
 
         except Exception as e:
