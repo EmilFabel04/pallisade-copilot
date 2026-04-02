@@ -119,6 +119,7 @@ model Organization {
   alertOnSLOBreach     Boolean    @default(true)
   authPolicy           AuthPolicy @default(FLEXIBLE)
   authPolicyGraceUntil DateTime?
+  slaDiscoveryNodeLimit Int @default(100)
 
   // Relations
   users            User[]
