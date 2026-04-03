@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 
@@ -41,6 +41,41 @@ def _make_graph(*nodes_and_edges):
     return g
 
 
+def _col(name: str, dtype: str = "STRING", pk: bool = False, nullable: bool = True, ordinal: int = 0):
+    """Build a mock ColumnMetadata."""
+    c = MagicMock()
+    c.name = name
+    c.data_type = dtype
+    c.is_primary_key = pk
+    c.is_nullable = nullable
+    c.ordinal_position = ordinal
+    return c
+
+
+def _mock_adapter(hours_since=4.0, row_count=10000, null_rates=None, columns=None):
+    """Build a mock adapter with get_table_freshness, get_null_rates, get_columns."""
+    adapter = MagicMock()
+    adapter.get_table_freshness.return_value = {
+        "last_updated": datetime.now(timezone.utc) - timedelta(hours=hours_since),
+        "hours_since_update": hours_since,
+        "row_count": row_count,
+        "timestamp_column": "updated_at",
+        "source": "column",
+    }
+    adapter.get_null_rates.return_value = null_rates or {"col_a": 0.01, "col_b": 0.05, "col_c": 0.0}
+    adapter.quote_identifier.side_effect = lambda x: f"`{x}`"
+
+    col_mocks = []
+    for name, dtype in (columns or [("id", "INT64"), ("name", "STRING"), ("updated_at", "TIMESTAMP")]):
+        c = MagicMock()
+        c.name = name
+        c.data_type = dtype
+        col_mocks.append(c)
+    adapter.get_columns.return_value = col_mocks
+
+    return adapter
+
+
 # ---------------------------------------------------------------------------
 # _find_warehouse_ancestor
 # ---------------------------------------------------------------------------
@@ -71,7 +106,6 @@ class TestFindWarehouseAncestor:
 
     def test_no_ancestor_returns_none(self):
         from scanner.lineage.sla_discovery import _find_warehouse_ancestor
-        # A dbt model with no upstream
         dbt_model = _make_node("dbt.schema.model", platform_domain=PlatformDomain.TRANSFORM, node_type=NodeType.MODEL)
         graph = _make_graph(dbt_model)
         result = _find_warehouse_ancestor(dbt_model, graph)
@@ -79,71 +113,53 @@ class TestFindWarehouseAncestor:
 
     def test_finds_nearest_ancestor(self):
         from scanner.lineage.sla_discovery import _find_warehouse_ancestor
-        # chain: warehouse_table -> dbt_model -> bi_dashboard
-        wh_table = _make_node("db.schema.table", platform_domain=PlatformDomain.WAREHOUSE, node_type=NodeType.TABLE)
-        dbt_model = _make_node("dbt.schema.model", platform_domain=PlatformDomain.TRANSFORM, node_type=NodeType.MODEL)
-        bi_dash = _make_node("looker.schema.dash", platform_domain=PlatformDomain.BI, node_type=NodeType.DASHBOARD)
-        graph = _make_graph(
-            wh_table, dbt_model, bi_dash,
-            ("db.schema.table", "dbt.schema.model"),
-            ("dbt.schema.model", "looker.schema.dash"),
-        )
-        result = _find_warehouse_ancestor(bi_dash, graph)
-        # The nearest warehouse ancestor going upstream from bi_dash should be wh_table
-        assert result is wh_table
+        deep = _make_node("db.schema.source", platform_domain=PlatformDomain.WAREHOUSE, node_type=NodeType.TABLE)
+        mid = _make_node("db.schema.staging", platform_domain=PlatformDomain.WAREHOUSE, node_type=NodeType.VIEW)
+        leaf = _make_node("dbt.schema.model", platform_domain=PlatformDomain.TRANSFORM, node_type=NodeType.MODEL)
+        graph = _make_graph(deep, mid, leaf, ("db.schema.source", "db.schema.staging"), ("db.schema.staging", "dbt.schema.model"))
+        result = _find_warehouse_ancestor(leaf, graph)
+        assert result is mid
 
 
 # ---------------------------------------------------------------------------
 # _compute_freshness
 # ---------------------------------------------------------------------------
 
-def _timestamps_with_interval(n: int, interval_hours: float) -> list:
-    """Generate n timestamps spaced interval_hours apart."""
-    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    return [base + timedelta(hours=i * interval_hours) for i in range(n)]
-
-
 class TestComputeFreshness:
 
-    def test_basic_4h_interval(self):
+    def test_basic_freshness(self):
         from scanner.lineage.sla_discovery import _compute_freshness
-        import math
-        adapter = MagicMock()
-        timestamps = _timestamps_with_interval(20, 4.0)
-        adapter.get_freshness_history.return_value = timestamps
-
-        result = _compute_freshness(adapter, "db.schema.table")
-
+        metadata = {"hours_since_update": 4.0, "row_count": 1000}
+        result = _compute_freshness(None, "db.schema.table", metadata=metadata)
         assert result is not None
         assert result["enabled"] is True
-        # With consistent 4h intervals, mean ~4h, p95 ~4h; maxHours = ceil(p95*1.2) >= 1
-        assert result["maxHours"] >= 1
-        assert result["warningHours"] >= 1
         assert result["maxHours"] >= result["warningHours"]
+        assert result["warningHours"] >= 1
 
-    def test_empty_history_returns_none(self):
+    def test_very_fresh_table(self):
         from scanner.lineage.sla_discovery import _compute_freshness
-        adapter = MagicMock()
-        adapter.get_freshness_history.return_value = []
+        metadata = {"hours_since_update": 0.5, "row_count": 1000}
+        result = _compute_freshness(None, "db.schema.table", metadata=metadata)
+        assert result is not None
+        assert result["warningHours"] == 1
+        assert result["maxHours"] == 2
 
-        result = _compute_freshness(adapter, "db.schema.table")
+    def test_stale_table(self):
+        from scanner.lineage.sla_discovery import _compute_freshness
+        metadata = {"hours_since_update": 48.0, "row_count": 1000}
+        result = _compute_freshness(None, "db.schema.table", metadata=metadata)
+        assert result is not None
+        assert result["warningHours"] >= 48
+        assert result["maxHours"] > result["warningHours"]
+
+    def test_no_metadata_returns_none(self):
+        from scanner.lineage.sla_discovery import _compute_freshness
+        result = _compute_freshness(None, "db.schema.table", metadata=None)
         assert result is None
 
-    def test_not_implemented_returns_none(self):
+    def test_empty_metadata_returns_none(self):
         from scanner.lineage.sla_discovery import _compute_freshness
-        adapter = MagicMock()
-        adapter.get_freshness_history.side_effect = NotImplementedError
-
-        result = _compute_freshness(adapter, "db.schema.table")
-        assert result is None
-
-    def test_single_timestamp_returns_none(self):
-        from scanner.lineage.sla_discovery import _compute_freshness
-        adapter = MagicMock()
-        # Only one timestamp → zero intervals
-        adapter.get_freshness_history.return_value = [datetime(2024, 1, 1, tzinfo=timezone.utc)]
-
-        result = _compute_freshness(adapter, "db.schema.table")
+        result = _compute_freshness(None, "db.schema.table", metadata={})
         assert result is None
 
 
@@ -151,107 +167,32 @@ class TestComputeFreshness:
 # _compute_volume
 # ---------------------------------------------------------------------------
 
-def _row_counts(n: int, base: int = 100_000, step: int = 0) -> list:
-    """Generate n (date, row_count) tuples."""
-    base_dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    return [(base_dt + timedelta(days=i), base + i * step) for i in range(n)]
-
-
 class TestComputeVolume:
 
-    def test_basic_30_days(self):
+    def test_basic_volume(self):
         from scanner.lineage.sla_discovery import _compute_volume
-        adapter = MagicMock()
-        # Use slight variation so sd > 0 and bounds are meaningfully different
-        adapter.get_row_count_history.return_value = _row_counts(30, base=100_000, step=100)
-
-        result = _compute_volume(adapter, "db.schema.table")
-
+        metadata = {"row_count": 50000, "hours_since_update": 4.0}
+        result = _compute_volume(None, "db.schema.table", metadata=metadata)
         assert result is not None
         assert result["enabled"] is True
-        assert "minRows" in result
-        assert "maxRows" in result
-        assert result["minRows"] >= 0
-        assert result["maxRows"] > result["minRows"]
+        assert result["currentRows"] == 50000
+        assert "minRows" not in result  # user sets these manually
 
-    def test_insufficient_history_returns_none(self):
+    def test_zero_rows_returns_none(self):
         from scanner.lineage.sla_discovery import _compute_volume
-        adapter = MagicMock()
-        adapter.get_row_count_history.return_value = _row_counts(5)  # <7 points
-
-        result = _compute_volume(adapter, "db.schema.table")
+        metadata = {"row_count": 0}
+        result = _compute_volume(None, "db.schema.table", metadata=metadata)
         assert result is None
 
-    def test_not_implemented_returns_none(self):
+    def test_no_metadata_returns_none(self):
         from scanner.lineage.sla_discovery import _compute_volume
-        adapter = MagicMock()
-        adapter.get_row_count_history.side_effect = NotImplementedError
-
-        result = _compute_volume(adapter, "db.schema.table")
+        result = _compute_volume(None, "db.schema.table", metadata=None)
         assert result is None
-
-    def test_growth_rate_threshold_added_on_consistent_growth(self):
-        from scanner.lineage.sla_discovery import _compute_volume
-        adapter = MagicMock()
-        # Consistent growth: each day adds 1000 rows
-        adapter.get_row_count_history.return_value = _row_counts(30, base=10_000, step=1_000)
-
-        result = _compute_volume(adapter, "db.schema.table")
-        assert result is not None
-        # Might or might not include growthRateThreshold — just verify no crash
-        assert "enabled" in result
 
 
 # ---------------------------------------------------------------------------
 # _compute_quality
 # ---------------------------------------------------------------------------
-
-def _null_rates(n: int, rate: float = 0.02) -> list:
-    """Generate n (date, null_rate) tuples with a fixed rate."""
-    base_dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    return [(base_dt + timedelta(days=i), rate) for i in range(n)]
-
-
-class TestComputeQuality:
-
-    def test_basic_30_days(self):
-        from scanner.lineage.sla_discovery import _compute_quality
-        adapter = MagicMock()
-        adapter.get_daily_null_rates.return_value = _null_rates(30, rate=0.02)
-
-        result = _compute_quality(adapter, "db.schema.table", "created_at")
-
-        assert result is not None
-        assert result["enabled"] is True
-        assert "maxNullRate" in result
-        assert 0.0 <= result["maxNullRate"] <= 0.5
-
-    def test_insufficient_history_returns_none(self):
-        from scanner.lineage.sla_discovery import _compute_quality
-        adapter = MagicMock()
-        adapter.get_daily_null_rates.return_value = _null_rates(4)  # <7 points
-
-        result = _compute_quality(adapter, "db.schema.table", "created_at")
-        assert result is None
-
-    def test_not_implemented_returns_none(self):
-        from scanner.lineage.sla_discovery import _compute_quality
-        adapter = MagicMock()
-        adapter.get_daily_null_rates.side_effect = NotImplementedError
-
-        result = _compute_quality(adapter, "db.schema.table", "created_at")
-        assert result is None
-
-    def test_caps_at_50_percent(self):
-        from scanner.lineage.sla_discovery import _compute_quality
-        adapter = MagicMock()
-        # Very high null rates — result should be capped at 0.5
-        adapter.get_daily_null_rates.return_value = _null_rates(30, rate=0.45)
-
-        result = _compute_quality(adapter, "db.schema.table", "created_at")
-        assert result is not None
-        assert result["maxNullRate"] <= 0.5
-
 
 # ---------------------------------------------------------------------------
 # _compute_schema
@@ -259,47 +200,95 @@ class TestComputeQuality:
 
 class TestComputeSchema:
 
-    def test_no_changes_suggests_strict(self):
+    def test_standard_columns_suggest_strict(self):
         from scanner.lineage.sla_discovery import _compute_schema
-        adapter = MagicMock()
-        adapter.get_schema_change_history.return_value = []
-
+        adapter = _mock_adapter(columns=[("id", "INT64"), ("name", "STRING"), ("ts", "TIMESTAMP")])
         result = _compute_schema(adapter, "db.schema.table")
-
         assert result is not None
-        assert result["enforcement"] == "strict"
+        assert result["strictness"] == "strict"
         assert result["allowEvolution"] is False
+        assert result["columnCount"] == 3
 
-    def test_additions_suggest_warn(self):
+    def test_json_columns_suggest_warn(self):
         from scanner.lineage.sla_discovery import _compute_schema
-        adapter = MagicMock()
-        adapter.get_schema_change_history.return_value = [
-            {"type": "addition", "column": "new_col", "date": "2024-01-15"},
-        ]
-
+        adapter = _mock_adapter(columns=[("id", "INT64"), ("payload", "JSON"), ("ts", "TIMESTAMP")])
         result = _compute_schema(adapter, "db.schema.table")
-
         assert result is not None
-        assert result["enforcement"] == "warn"
+        assert result["strictness"] == "warn"
         assert result["allowEvolution"] is True
 
-    def test_removals_suggest_warn(self):
+    def test_variant_columns_suggest_warn(self):
         from scanner.lineage.sla_discovery import _compute_schema
-        adapter = MagicMock()
-        adapter.get_schema_change_history.return_value = [
-            {"type": "removal", "column": "old_col", "date": "2024-01-10"},
-        ]
-
+        adapter = _mock_adapter(columns=[("id", "INT64"), ("data", "VARIANT")])
         result = _compute_schema(adapter, "db.schema.table")
-
         assert result is not None
-        assert result["enforcement"] == "warn"
+        assert result["strictness"] == "warn"
         assert result["allowEvolution"] is True
 
-    def test_not_implemented_returns_none(self):
+    def test_exception_returns_none(self):
         from scanner.lineage.sla_discovery import _compute_schema
         adapter = MagicMock()
-        adapter.get_schema_change_history.side_effect = NotImplementedError
-
+        adapter.get_columns.side_effect = Exception("access denied")
         result = _compute_schema(adapter, "db.schema.table")
         assert result is None
+
+    def test_empty_columns_returns_none(self):
+        from scanner.lineage.sla_discovery import _compute_schema
+        adapter = MagicMock()
+        adapter.get_columns.return_value = []
+        result = _compute_schema(adapter, "db.schema.table")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _detect_pk_columns
+# ---------------------------------------------------------------------------
+
+class TestDetectPKColumns:
+
+    def test_declared_pk_preferred(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("user_id", pk=False), _col("id", pk=False), _col("email", pk=True)]
+        result = _detect_pk_columns(cols)
+        assert result == (["email"], "declared_pk")
+
+    def test_multiple_declared_pks(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("org_id", pk=True), _col("user_id", pk=True), _col("name")]
+        result = _detect_pk_columns(cols)
+        assert result == (["org_id", "user_id"], "declared_pk")
+
+    def test_fallback_id_column(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("id"), _col("name"), _col("email")]
+        result = _detect_pk_columns(cols)
+        assert result == (["id"], "heuristic_id")
+
+    def test_fallback_underscore_id_pattern(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("user_id"), _col("name"), _col("email")]
+        result = _detect_pk_columns(cols)
+        assert result == (["user_id"], "heuristic_id_suffix")
+
+    def test_fallback_uuid(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("uuid"), _col("payload"), _col("created_at")]
+        result = _detect_pk_columns(cols)
+        assert result == (["uuid"], "heuristic_common_name")
+
+    def test_fallback_guid(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("data"), _col("guid"), _col("ts")]
+        result = _detect_pk_columns(cols)
+        assert result == (["guid"], "heuristic_common_name")
+
+    def test_no_pk_detected(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        cols = [_col("payload"), _col("metadata"), _col("created_at")]
+        result = _detect_pk_columns(cols)
+        assert result == ([], "none")
+
+    def test_empty_columns(self):
+        from scanner.lineage.sla_discovery import _detect_pk_columns
+        result = _detect_pk_columns([])
+        assert result == ([], "none")

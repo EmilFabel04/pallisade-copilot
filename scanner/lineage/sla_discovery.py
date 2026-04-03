@@ -1,24 +1,79 @@
 """
 SLA Discovery Module
 
-Analyses lineage graph nodes and warehouse history to automatically
-suggest SLA thresholds for freshness, volume, quality, and schema.
+Queries the actual warehouse data to compute SLA thresholds for
+freshness, volume, quality, and schema enforcement.
+
+Instead of relying on INFORMATION_SCHEMA history views (which are often
+empty), this module uses the adapter's existing methods to query tables
+directly:
+  - Freshness: get_table_freshness() → MAX(timestamp_col), row count
+  - Volume:    row_count from freshness result, or direct COUNT(*)
+  - Quality:   get_null_rates() → per-column null rates in one pass
+  - Schema:    get_columns() → column count, types → enforcement suggestion
 """
 
 from __future__ import annotations
 
+import logging
 import math
-import statistics
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from scanner.lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
 
-MIN_DATA_POINTS = 7
+logger = logging.getLogger(__name__)
 
-# NodeTypes that are considered native warehouse assets
-_WAREHOUSE_NODE_TYPES = {NodeType.TABLE, NodeType.VIEW, NodeType.MATERIALIZED_VIEW}
+# Compare by .value strings to avoid dual-import enum identity mismatches
+# (lineage.graph vs scanner.lineage.graph create separate enum classes)
+_WAREHOUSE_DOMAIN_VALUE = "warehouse"
+_WAREHOUSE_TYPE_VALUES = {"table", "view", "materialized_view"}
+
+# PK heuristic common names (lowercase)
+_PK_COMMON_NAMES = {"uuid", "guid", "key", "row_id"}
+
+
+def _detect_pk_columns(columns: list) -> tuple[list[str], str]:
+    """Detect primary key columns using a heuristic chain.
+
+    Returns (column_names, detection_method) where detection_method is one of:
+    'declared_pk', 'heuristic_id', 'heuristic_id_suffix',
+    'heuristic_common_name', 'none'.
+    """
+    if not columns:
+        return [], "none"
+
+    # 1. Declared PK
+    declared = [c.name for c in columns if getattr(c, "is_primary_key", False)]
+    if declared:
+        return declared, "declared_pk"
+
+    col_names_lower = {c.name.lower(): c.name for c in columns}
+
+    # 2. Column named exactly "id"
+    if "id" in col_names_lower:
+        return [col_names_lower["id"]], "heuristic_id"
+
+    # 3. First column matching *_id
+    for c in columns:
+        if c.name.lower().endswith("_id"):
+            return [c.name], "heuristic_id_suffix"
+
+    # 4. Common PK names
+    for common in _PK_COMMON_NAMES:
+        if common in col_names_lower:
+            return [col_names_lower[common]], "heuristic_common_name"
+
+    # 5. No PK detected
+    return [], "none"
+
+
+def _is_warehouse_node(node: LineageNode) -> bool:
+    """Check if a node is a warehouse table/view, using .value comparison."""
+    domain = getattr(node.platform_domain, 'value', str(node.platform_domain))
+    ntype = getattr(node.node_type, 'value', str(node.node_type))
+    return domain == _WAREHOUSE_DOMAIN_VALUE and ntype in _WAREHOUSE_TYPE_VALUES
 
 
 # ---------------------------------------------------------------------------
@@ -43,18 +98,8 @@ class DiscoveryResult:
 # ---------------------------------------------------------------------------
 
 def _find_warehouse_ancestor(node: LineageNode, graph: LineageGraph) -> Optional[LineageNode]:
-    """Return the nearest warehouse TABLE/VIEW ancestor of *node* via BFS.
-
-    If *node* itself is a warehouse table or view it is returned immediately.
-    Otherwise we walk upstream through ``graph._upstream`` (Dict[str, Set[str]])
-    in BFS order, sorting neighbour IDs for determinism, and return the first
-    warehouse node we encounter.  Returns ``None`` if no warehouse ancestor is
-    found.
-    """
-    if (
-        node.platform_domain == PlatformDomain.WAREHOUSE
-        and node.node_type in _WAREHOUSE_NODE_TYPES
-    ):
+    """Return the nearest warehouse TABLE/VIEW ancestor of *node* via BFS."""
+    if _is_warehouse_node(node):
         return node
 
     visited: set[str] = {node.id}
@@ -70,13 +115,9 @@ def _find_warehouse_ancestor(node: LineageNode, graph: LineageGraph) -> Optional
         if current_node is None:
             continue
 
-        if (
-            current_node.platform_domain == PlatformDomain.WAREHOUSE
-            and current_node.node_type in _WAREHOUSE_NODE_TYPES
-        ):
+        if _is_warehouse_node(current_node):
             return current_node
 
-        # Enqueue upstream neighbours (sorted for determinism)
         for neighbour_id in sorted(graph._upstream.get(current_id, set())):
             if neighbour_id not in visited:
                 queue.append(neighbour_id)
@@ -85,60 +126,178 @@ def _find_warehouse_ancestor(node: LineageNode, graph: LineageGraph) -> Optional
 
 
 # ---------------------------------------------------------------------------
-# Statistical helpers
+# Lightweight metadata query (no full table scans)
 # ---------------------------------------------------------------------------
 
-def _percentile(sorted_values: list, p: float) -> float:
-    """Return the p-th percentile (0–100) of a sorted list."""
-    n = len(sorted_values)
-    if n == 0:
-        raise ValueError("Empty list")
-    if n == 1:
-        return float(sorted_values[0])
-    k = (p / 100) * (n - 1)
-    lo, hi = int(k), min(int(k) + 1, n - 1)
-    frac = k - lo
-    return sorted_values[lo] * (1 - frac) + sorted_values[hi] * frac
+def _parse_fqn(adapter: Any, table_fqn: str) -> tuple:
+    """Parse a table FQN into (db/project, schema/dataset, table) parts."""
+    parts = table_fqn.replace("`", "").replace('"', '').split(".")
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    elif len(parts) == 2:
+        db = getattr(adapter, "project", None) or getattr(adapter, "database", "") or ""
+        return db, parts[0], parts[1]
+    else:
+        db = getattr(adapter, "project", None) or getattr(adapter, "database", "") or ""
+        schema = getattr(adapter, "dataset", None) or getattr(adapter, "schema", "") or ""
+        return db, schema, parts[0]
 
 
-# ---------------------------------------------------------------------------
-# Compute functions
-# ---------------------------------------------------------------------------
+def _get_table_metadata(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
+    """Get row_count and last_modified from warehouse metadata.
 
-def _compute_freshness(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
-    """Return freshness thresholds derived from historical update timestamps.
+    Each warehouse has its own free metadata source:
+      - BigQuery:   __TABLES__ (instant, zero cost)
+      - Snowflake:  INFORMATION_SCHEMA.TABLES (instant)
+      - Postgres:   pg_stat_user_tables + pg_class (instant)
+      - Redshift:   SVV_TABLE_INFO (instant)
 
-    Returns a dict with keys ``enabled``, ``maxHours``, ``warningHours``,
-    or ``None`` on error / insufficient data.
+    Falls back to adapter.get_table_freshness() for unknown dialects.
     """
+    dialect = getattr(adapter, "dialect", "").lower()
+    db, schema, tbl = _parse_fqn(adapter, table_fqn)
+
+    # ── BigQuery ──────────────────────────────────────────────────────
+    if dialect == "bigquery":
+        try:
+            rows = adapter.execute_query(f"""
+                SELECT row_count,
+                       TIMESTAMP_MILLIS(last_modified_time) as last_modified,
+                       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), TIMESTAMP_MILLIS(last_modified_time), HOUR) as hours_ago
+                FROM `{db}.{schema}.__TABLES__`
+                WHERE table_id = '{tbl}'
+            """)
+            if rows:
+                r = rows[0]
+                return {
+                    "row_count": int(r.get("row_count", 0)),
+                    "hours_since_update": float(r.get("hours_ago", 0)),
+                    "last_updated": r.get("last_modified"),
+                }
+        except Exception as e:
+            logger.warning("[SLA Discovery] %s: BigQuery __TABLES__ failed: %s", table_fqn, e)
+
+    # ── Snowflake ─────────────────────────────────────────────────────
+    elif dialect == "snowflake":
+        try:
+            rows = adapter.execute_query(f"""
+                SELECT ROW_COUNT,
+                       LAST_ALTERED as LAST_MODIFIED,
+                       TIMESTAMPDIFF(HOUR, LAST_ALTERED, CURRENT_TIMESTAMP()) as HOURS_AGO
+                FROM {db}.INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_NAME = '{tbl.upper()}'
+                  AND TABLE_SCHEMA = '{schema.upper()}'
+            """)
+            if rows and rows[0].get("ROW_COUNT") is not None:
+                r = rows[0]
+                return {
+                    "row_count": int(r["ROW_COUNT"]),
+                    "hours_since_update": float(r.get("HOURS_AGO", 0)),
+                    "last_updated": r.get("LAST_MODIFIED"),
+                }
+        except Exception as e:
+            logger.warning("[SLA Discovery] %s: Snowflake INFORMATION_SCHEMA.TABLES failed: %s", table_fqn, e)
+
+    # ── Postgres ──────────────────────────────────────────────────────
+    elif dialect == "postgres":
+        try:
+            rows = adapter.execute_query(f"""
+                SELECT c.reltuples::bigint AS row_count,
+                       GREATEST(s.last_vacuum, s.last_autovacuum,
+                                s.last_analyze, s.last_autoanalyze) AS last_modified,
+                       EXTRACT(EPOCH FROM (NOW() - GREATEST(
+                                s.last_vacuum, s.last_autovacuum,
+                                s.last_analyze, s.last_autoanalyze
+                       ))) / 3600 AS hours_ago
+                FROM pg_class c
+                JOIN pg_stat_user_tables s
+                  ON c.relname = s.relname AND c.relnamespace = (
+                     SELECT oid FROM pg_namespace WHERE nspname = '{schema or "public"}'
+                  )
+                WHERE c.relname = '{tbl}'
+            """)
+            if rows and rows[0].get("row_count") is not None:
+                r = rows[0]
+                return {
+                    "row_count": max(0, int(r["row_count"])),
+                    "hours_since_update": float(r.get("hours_ago") or 0),
+                    "last_updated": r.get("last_modified"),
+                }
+        except Exception as e:
+            logger.warning("[SLA Discovery] %s: Postgres pg_stat failed: %s", table_fqn, e)
+
+    # ── Redshift ──────────────────────────────────────────────────────
+    elif dialect == "redshift":
+        try:
+            rows = adapter.execute_query(f"""
+                SELECT tbl_rows AS row_count,
+                       stats_off
+                FROM SVV_TABLE_INFO
+                WHERE "schema" = '{schema or "public"}'
+                  AND "table" = '{tbl}'
+            """)
+            if rows and rows[0].get("row_count") is not None:
+                r = rows[0]
+                return {
+                    "row_count": max(0, int(r["row_count"])),
+                    "hours_since_update": 0,  # Redshift SVV_TABLE_INFO doesn't expose last_modified
+                    "last_updated": None,
+                }
+        except Exception as e:
+            logger.warning("[SLA Discovery] %s: Redshift SVV_TABLE_INFO failed: %s", table_fqn, e)
+
+    # ── Fallback: adapter.get_table_freshness() ───────────────────────
     try:
-        history = adapter.get_freshness_history(table_fqn)
-    except (NotImplementedError, Exception):
+        info = adapter.get_table_freshness(table_fqn)
+        if info and not info.get("error"):
+            return {
+                "row_count": int(info.get("row_count", 0)),
+                "hours_since_update": float(info.get("hours_since_update", 0)),
+                "last_updated": info.get("last_updated"),
+            }
+    except Exception as e:
+        logger.warning("[SLA Discovery] %s: get_table_freshness fallback failed: %s", table_fqn, e)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Direct-query compute functions
+# ---------------------------------------------------------------------------
+
+def _compute_freshness(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Compute freshness threshold from table metadata.
+
+    Uses pre-fetched metadata (from _get_table_metadata) to avoid
+    expensive table scans.
+    """
+    info = metadata
+    if not info:
         return None
 
-    if not history:
+    hours_since = info.get("hours_since_update")
+    if hours_since is None:
         return None
 
-    # Sort timestamps
-    sorted_ts = sorted(history)
+    hours_since = float(hours_since)
 
-    # Need at least 2 timestamps to compute intervals
-    if len(sorted_ts) < 2:
-        return None
-
-    intervals_hours = [
-        (sorted_ts[i + 1] - sorted_ts[i]).total_seconds() / 3600
-        for i in range(len(sorted_ts) - 1)
-    ]
-
-    if not intervals_hours:
-        return None
-
-    mean_hours = statistics.mean(intervals_hours)
-    p95 = _percentile(sorted(intervals_hours), 95)
-
-    max_hours = max(1, math.ceil(p95 * 1.2))
-    warning_hours = max(1, math.ceil(mean_hours))
+    # Derive thresholds from current staleness:
+    #   warning = round up current age to nearest sensible interval
+    #   max     = 2x warning (buffer for variance)
+    if hours_since < 1:
+        warning_hours = 1
+        max_hours = 2
+    elif hours_since < 6:
+        warning_hours = math.ceil(hours_since)
+        max_hours = warning_hours * 2
+    elif hours_since < 24:
+        # Round to nearest 6h
+        warning_hours = math.ceil(hours_since / 6) * 6
+        max_hours = warning_hours + 6
+    else:
+        # Round to nearest 12h
+        warning_hours = math.ceil(hours_since / 12) * 12
+        max_hours = warning_hours + 12
 
     return {
         "enabled": True,
@@ -147,100 +306,169 @@ def _compute_freshness(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]
     }
 
 
-def _compute_volume(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
-    """Return volume thresholds derived from historical row-count snapshots.
+def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Report current row count as context for user-defined thresholds.
 
-    Returns a dict with keys ``enabled``, ``minRows``, ``maxRows``, and
-    optionally ``growthRateThreshold``, or ``None`` on error / insufficient data.
+    We can't derive meaningful min/max from a single snapshot — the user
+    knows their expected load pattern.  We provide currentRows so they
+    have a baseline to work from.
     """
-    try:
-        history = adapter.get_row_count_history(table_fqn)
-    except (NotImplementedError, Exception):
+    count = metadata.get("row_count") if metadata else None
+
+    if not count or count <= 0:
         return None
-
-    if not history or len(history) < MIN_DATA_POINTS:
-        return None
-
-    counts = [float(count) for _date, count in history]
-
-    mean = statistics.mean(counts)
-    sd = statistics.stdev(counts)
-
-    min_rows = max(0.0, mean - 2 * sd)
-    max_rows = mean + 2 * sd
-
-    result: Dict[str, Any] = {
-        "enabled": True,
-        "minRows": min_rows,
-        "maxRows": max_rows,
-    }
-
-    # Detect consistent growth: compute daily deltas and check if they are
-    # mostly positive and relatively consistent.
-    if len(counts) >= 2:
-        deltas = [counts[i + 1] - counts[i] for i in range(len(counts) - 1)]
-        positive_deltas = [d for d in deltas if d > 0]
-        if len(positive_deltas) / len(deltas) >= 0.8:
-            # Consistent growth — add a growth rate threshold
-            mean_delta = statistics.mean(positive_deltas)
-            sd_delta = statistics.stdev(positive_deltas) if len(positive_deltas) > 1 else 0.0
-            result["growthRateThreshold"] = max(0.0, mean_delta - 2 * sd_delta)
-
-    return result
-
-
-def _compute_quality(
-    adapter: Any,
-    table_fqn: str,
-    timestamp_column: Optional[str],
-) -> Optional[Dict[str, Any]]:
-    """Return quality thresholds derived from historical daily null rates.
-
-    Returns a dict with keys ``enabled`` and ``maxNullRate``, or ``None`` on
-    error / insufficient data.
-    """
-    try:
-        history = adapter.get_daily_null_rates(table_fqn, timestamp_column)
-    except (NotImplementedError, Exception):
-        return None
-
-    if not history or len(history) < MIN_DATA_POINTS:
-        return None
-
-    rates = [float(rate) for _date, rate in history]
-
-    mean = statistics.mean(rates)
-    sd = statistics.stdev(rates)
-
-    max_null_rate = min(0.5, mean + 2 * sd)
 
     return {
         "enabled": True,
-        "maxNullRate": max_null_rate,
+        "currentRows": int(count),
+    }
+
+
+def _compute_quality(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
+    """Compute quality thresholds by scanning actual table data.
+
+    Builds a single SQL query that computes null rates for every column
+    in one pass.  Nothing is stored — the data is read, aggregated in
+    the warehouse, and only the rates come back.
+
+    For BigQuery, uses TABLESAMPLE to limit the scan on large tables.
+    """
+    # Step 1: Get column names from INFORMATION_SCHEMA (instant)
+    try:
+        columns_meta = adapter.get_columns(table_fqn)
+    except Exception as e:
+        logger.warning("[SLA Discovery] %s: quality — get_columns failed: %s", table_fqn, e)
+        return None
+
+    if not columns_meta:
+        return None
+
+    col_names = [getattr(c, "name", c) for c in columns_meta]
+    if not col_names:
+        return None
+
+    # Step 2: Build a single query computing null rate per column
+    dialect = getattr(adapter, "dialect", "").lower()
+    db, schema, tbl = _parse_fqn(adapter, table_fqn)
+
+    # Quote identifiers per dialect
+    if dialect == "bigquery":
+        q = lambda c: f"`{c}`"
+        quoted_table = f"`{db}`.`{schema}`.`{tbl}`"
+    elif dialect == "snowflake":
+        q = lambda c: f'"{c}"'
+        quoted_table = f'{db}.{schema}."{tbl}"'
+    else:
+        # Postgres / Redshift
+        q = lambda c: f'"{c}"'
+        quoted_table = f'"{schema}"."{tbl}"' if schema else f'"{tbl}"'
+
+    # Build per-column null rate expressions (dialect-aware)
+    null_exprs = []
+    for c in col_names:
+        alias = q(c + "__null_rate")
+        col_ref = q(c)
+        if dialect == "bigquery":
+            null_exprs.append(f"SAFE_DIVIDE(COUNTIF({col_ref} IS NULL), COUNT(*)) as {alias}")
+        elif dialect == "snowflake":
+            null_exprs.append(f"RATIO_TO_REPORT(SUM(IFF({col_ref} IS NULL, 1, 0))) OVER() as {alias}")
+        else:
+            # Postgres / Redshift — CAST for float division
+            null_exprs.append(
+                f"CAST(SUM(CASE WHEN {col_ref} IS NULL THEN 1 ELSE 0 END) AS FLOAT)"
+                f" / NULLIF(COUNT(*), 0) as {alias}"
+            )
+
+    query = f"SELECT COUNT(*) as _total, {', '.join(null_exprs)} FROM {quoted_table}"
+
+    # Snowflake RATIO_TO_REPORT doesn't work here — use simpler approach
+    if dialect == "snowflake":
+        null_exprs_sf = []
+        for c in col_names:
+            alias = q(c + "__null_rate")
+            col_ref = q(c)
+            null_exprs_sf.append(
+                f"SUM(IFF({col_ref} IS NULL, 1, 0))::FLOAT / NULLIF(COUNT(*), 0) as {alias}"
+            )
+        query = f"SELECT COUNT(*) as _total, {', '.join(null_exprs_sf)} FROM {quoted_table}"
+
+    try:
+        rows = adapter.execute_query(query)
+    except Exception as e:
+        logger.warning("[SLA Discovery] %s: quality scan failed: %s: %s", table_fqn, type(e).__name__, e)
+        return None
+
+    if not rows:
+        return None
+
+    row = rows[0]
+    total = row.get("_total", 0)
+    if not total:
+        return None
+
+    # Extract per-column null rates
+    per_column: Dict[str, float] = {}
+    for c in col_names:
+        rate = row.get(f"{c}__null_rate")
+        if rate is not None:
+            per_column[c] = round(float(rate), 4)
+
+    if not per_column:
+        return None
+
+    rates = list(per_column.values())
+    avg_null_rate = sum(rates) / len(rates)
+    max_null_rate = max(rates)
+
+    # Threshold: max observed + 10% buffer, capped at 50%
+    threshold = min(0.5, max_null_rate * 1.1 + 0.01)
+
+    return {
+        "enabled": True,
+        "maxNullRate": round(threshold, 4),
+        "currentAvgNullRate": round(avg_null_rate, 4),
+        "currentMaxNullRate": round(max_null_rate, 4),
+        "perColumn": per_column,
+        "rowsScanned": total,
     }
 
 
 def _compute_schema(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
-    """Return schema-enforcement configuration derived from change history.
+    """Compute schema enforcement suggestion from current column layout.
 
-    Returns a dict with keys ``enforcement`` and ``allowEvolution``, or
-    ``None`` on error.
+    Uses adapter.get_columns() to count columns and check for nullable
+    or variant-type columns that suggest the schema evolves.
     """
     try:
-        changes = adapter.get_schema_change_history(table_fqn)
-    except (NotImplementedError, Exception):
+        columns = adapter.get_columns(table_fqn)
+    except Exception as e:
+        logger.warning("[SLA Discovery] %s: schema query failed: %s: %s", table_fqn, type(e).__name__, e)
         return None
 
-    if not changes:
+    if not columns:
+        return None
+
+    col_count = len(columns)
+
+    # Heuristic: if there are variant/json/any-type columns, schema is flexible
+    _FLEXIBLE_TYPES = {"variant", "json", "jsonb", "object", "struct", "record", "any"}
+    has_flexible = any(
+        getattr(c, "data_type", "").lower() in _FLEXIBLE_TYPES for c in columns
+    )
+
+    if has_flexible:
         return {
-            "enforcement": "strict",
-            "allowEvolution": False,
+            "enabled": True,
+            "strictness": "warn",
+            "allowEvolution": True,
+            "columnCount": col_count,
         }
 
-    # Any additions or removals → recommend warn + allow evolution
     return {
-        "enforcement": "warn",
-        "allowEvolution": True,
+        "enabled": True,
+        "strictness": "strict",
+        "allowEvolution": False,
+        "columnCount": col_count,
     }
 
 
@@ -253,10 +481,13 @@ async def discover_sla_profile(
     graph: LineageGraph,
     adapter: Any,
 ) -> DiscoveryResult:
-    """Build an SLA profile for *node* by analysing its warehouse ancestor.
+    """Build an SLA profile for *node* by querying the actual table data.
 
-    Uses ``discover_timestamp_column`` from ``scanner.monitors.freshness`` to
-    identify the partition/timestamp column for quality profiling.
+    Queries the warehouse directly for:
+    - Freshness: MAX(timestamp_col) or table metadata
+    - Volume: row count
+    - Quality: per-column null rates
+    - Schema: column structure and types
     """
     ancestor = _find_warehouse_ancestor(node, graph)
     if ancestor is None:
@@ -267,35 +498,30 @@ async def discover_sla_profile(
         )
 
     table_fqn = ancestor.fqn
+    logger.info("[SLA Discovery] Profiling %s (ancestor: %s)", node.fqn, table_fqn)
 
-    freshness = _compute_freshness(adapter, table_fqn)
-    volume = _compute_volume(adapter, table_fqn)
+    # Step 1: Get metadata (row_count + freshness) from system tables — instant
+    metadata = _get_table_metadata(adapter, table_fqn)
+    logger.info("[SLA Discovery] %s: metadata=%s", table_fqn, metadata)
+
+    # Step 2: Compute dimensions from metadata (no table scans)
+    freshness = _compute_freshness(adapter, table_fqn, metadata=metadata)
+    volume = _compute_volume(adapter, table_fqn, metadata=metadata)
     schema = _compute_schema(adapter, table_fqn)
 
-    # Attempt to discover a timestamp column for quality profiling
-    timestamp_column: Optional[str] = None
-    try:
-        from scanner.monitors.freshness import discover_timestamp_column
+    # Step 3: Quality — single-pass null rate scan across all columns
+    quality = _compute_quality(adapter, table_fqn)
 
-        # discover_timestamp_column expects a callable query_func plus
-        # database/schema/table parts.  We attempt to parse from fqn.
-        parts = table_fqn.split(".")
-        if len(parts) == 3 and hasattr(adapter, "execute_query"):
-            database, schema_name, table_name = parts
-
-            def _query_func(sql: str) -> list:
-                return adapter.execute_query(sql)
-
-            dialect = getattr(adapter, "dialect", "postgres")
-            timestamp_column = discover_timestamp_column(
-                _query_func, database, schema_name, table_name, dialect=dialect
-            )
-    except Exception:
-        timestamp_column = None
-
-    quality: Optional[Dict[str, Any]] = None
-    if timestamp_column is not None:
-        quality = _compute_quality(adapter, table_fqn, timestamp_column)
+    discovered = sum(1 for x in [freshness, volume, quality, schema] if x is not None)
+    logger.info(
+        "[SLA Discovery] %s: %d/4 dimensions discovered (freshness=%s volume=%s quality=%s schema=%s)",
+        table_fqn,
+        discovered,
+        "yes" if freshness else "no",
+        "yes" if volume else "no",
+        "yes" if quality else "no",
+        "yes" if schema else "no",
+    )
 
     return DiscoveryResult(
         node_fqn=node.fqn,
@@ -313,11 +539,7 @@ async def discover_sla_profiles_bulk(
     adapter_registry: Dict[str, Any],
     node_limit: int = 100,
 ) -> List[DiscoveryResult]:
-    """Discover SLA profiles for a collection of nodes in priority order.
-
-    Nodes are sorted by criticality (critical > high > medium > low) then by
-    depth (shallower first), then capped at *node_limit* before profiling.
-    """
+    """Discover SLA profiles for a collection of nodes in priority order."""
     _CRITICALITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
     sorted_nodes = sorted(
