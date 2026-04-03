@@ -41,6 +41,17 @@ class NodeDiscoveryResponse(BaseModel):
     skipped_reason: Optional[str] = None
 
 
+class BulkDiscoveryRequest(BaseModel):
+    """Request body for bulk SLA discovery."""
+    nodeIds: list[str] = Field(..., description="Engine stable_ids of the nodes", max_length=50)
+    stackId: Optional[str] = None
+
+
+class BulkDiscoveryResponse(BaseModel):
+    """Response with discovery results for multiple nodes."""
+    results: list[NodeDiscoveryResponse]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -198,3 +209,128 @@ async def discover_node_sla(
         unsupported=result.unsupported,
         skipped_reason=result.skipped_reason,
     )
+
+
+@router.post("/discovery/bulk", response_model=BulkDiscoveryResponse)
+async def discover_bulk_sla(request: BulkDiscoveryRequest):
+    """
+    Run on-demand SLA discovery for multiple lineage nodes.
+
+    Groups nodes by platform to reuse adapter connections. Each node is
+    discovered independently — results are per-node, not merged.
+    """
+    from .lineage import _get_engine_store, _engine_tool_configs_map
+
+    stack_id = request.stackId
+    store = _get_engine_store(stack_id)
+    if not store.graph or not store.graph.nodes:
+        raise HTTPException(
+            status_code=404,
+            detail="No lineage graph found for this pipeline. Run an investigation first.",
+        )
+
+    try:
+        from lineage.sla_discovery import _find_warehouse_ancestor, discover_sla_profile
+    except ImportError:
+        from scanner.lineage.sla_discovery import _find_warehouse_ancestor, discover_sla_profile
+
+    cache_key = stack_id or "default"
+    tool_configs = _engine_tool_configs_map.get(cache_key, {})
+
+    # Group nodes by platform to reuse adapter connections
+    platform_nodes: Dict[str, list] = {}  # platform -> [(node, ancestor)]
+    skipped_results: list[NodeDiscoveryResponse] = []
+
+    for node_id in request.nodeIds:
+        node = store.graph.nodes.get(node_id)
+        if not node:
+            skipped_results.append(NodeDiscoveryResponse(
+                node_fqn=node_id,
+                unsupported=True,
+                skipped_reason=f"Node '{node_id}' not found in lineage graph",
+            ))
+            continue
+
+        ancestor = _find_warehouse_ancestor(node, store.graph)
+        if ancestor is None:
+            skipped_results.append(NodeDiscoveryResponse(
+                node_fqn=node.fqn,
+                unsupported=True,
+                skipped_reason="No warehouse ancestor found",
+            ))
+            continue
+
+        platform = (ancestor.platform or "").lower()
+        if platform not in _WAREHOUSE_PLATFORMS:
+            skipped_results.append(NodeDiscoveryResponse(
+                node_fqn=node.fqn,
+                unsupported=True,
+                skipped_reason=f"Platform '{platform}' not supported",
+            ))
+            continue
+
+        if platform not in tool_configs:
+            skipped_results.append(NodeDiscoveryResponse(
+                node_fqn=node.fqn,
+                unsupported=True,
+                skipped_reason=f"No cached config for '{platform}'. Re-run investigation.",
+            ))
+            continue
+
+        platform_nodes.setdefault(platform, []).append((node, ancestor))
+
+    # Discover per-platform with adapter reuse
+    discovered_results: list[NodeDiscoveryResponse] = []
+
+    for platform, node_pairs in platform_nodes.items():
+        adapter = _create_warehouse_adapter(platform, tool_configs[platform])
+        if not adapter:
+            for node, _ in node_pairs:
+                discovered_results.append(NodeDiscoveryResponse(
+                    node_fqn=node.fqn,
+                    unsupported=True,
+                    skipped_reason=f"Could not create adapter for '{platform}'",
+                ))
+            continue
+
+        try:
+            adapter.connect()
+        except Exception as e:
+            logger.warning("[SLA Discovery] Bulk: failed to connect %s: %s", platform, e)
+            for node, _ in node_pairs:
+                discovered_results.append(NodeDiscoveryResponse(
+                    node_fqn=node.fqn,
+                    unsupported=True,
+                    skipped_reason=f"Failed to connect to {platform}",
+                ))
+            continue
+
+        try:
+            for node, ancestor in node_pairs:
+                try:
+                    result = await discover_sla_profile(node, store.graph, adapter)
+                    discovered_results.append(NodeDiscoveryResponse(
+                        node_fqn=result.node_fqn,
+                        warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
+                        freshness=result.freshness,
+                        volume=result.volume,
+                        quality=result.quality,
+                        schema_profile=result.schema,
+                        uniqueness=result.uniqueness,
+                        unsupported=result.unsupported,
+                        skipped_reason=result.skipped_reason,
+                    ))
+                except Exception as e:
+                    logger.error("[SLA Discovery] Bulk: node %s failed: %s", node.fqn, e)
+                    discovered_results.append(NodeDiscoveryResponse(
+                        node_fqn=node.fqn,
+                        unsupported=True,
+                        skipped_reason=f"Discovery failed: {e}",
+                    ))
+        finally:
+            try:
+                adapter.disconnect()
+            except Exception:
+                pass
+
+    return BulkDiscoveryResponse(results=[*skipped_results, *discovered_results])
