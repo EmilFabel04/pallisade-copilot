@@ -574,7 +574,7 @@ def get_policy_status(
         "none" — no explicit policy (uses defaults)
     """
     for a in assignments:
-        if a.get("assignmentType") == "direct" and a.get("nodeFqn") == node_fqn:
+        if a.get("assignmentType") in ("direct", "auto_discovered") and a.get("nodeFqn") == node_fqn:
             # Node-level status is always "assigned" — customized values
             # within the profile are the user's SLA/SLO configuration, not
             # an override.  "Override" only applies at the monitor level when
