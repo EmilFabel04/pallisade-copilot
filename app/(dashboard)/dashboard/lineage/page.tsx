@@ -2181,6 +2181,7 @@ function LineagePageInner() {
                   schema: entry.overrides.schemaConfig || null,
                 }));
 
+                console.log('[Policy] Bulk discovery payload:', discoveryResults.map(r => ({ fqn: r.nodeFqn, hasF: !!r.freshness, hasV: !!r.volume, hasQ: !!r.quality, hasS: !!r.schema })));
                 const res = await fetch('/api/lineage/discovery', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
@@ -2190,8 +2191,11 @@ function LineagePageInner() {
                 if (res.ok) {
                   const data = await res.json();
                   const persisted = data.persisted || 0;
+                  console.log('[Policy] Bulk discovery persisted:', persisted);
                   toast.success(`SLA applied to ${persisted} node${persisted !== 1 ? 's' : ''}`);
                 } else {
+                  const errText = await res.text().catch(() => '');
+                  console.error('[Policy] Bulk discovery failed:', res.status, errText);
                   toast.error('Failed to apply SLAs');
                 }
 
