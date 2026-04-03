@@ -304,19 +304,34 @@ export function SLAEditorPanel({
 
   const handleApplyAll = useCallback(() => {
     if (!onApplyBulkDiscovery) return;
+
+    // Build a map from engine node FQN → UI node FQN (fullName || name)
+    // The assign endpoint needs the UI FQN, not the engine FQN
+    const engineFqnToUiFqn = new Map<string, string>();
+    for (const node of selectedNodes) {
+      const uiFqn = node.fullName || node.name;
+      // The engine FQN might match fullName, name, or the ID (minus lineage- prefix)
+      engineFqnToUiFqn.set(uiFqn, uiFqn);
+      engineFqnToUiFqn.set(node.name, uiFqn);
+      engineFqnToUiFqn.set(node.id, uiFqn);
+      engineFqnToUiFqn.set(node.id.replace(/^lineage-/, ''), uiFqn);
+    }
+
     const entries: Array<{ nodeFqn: string; overrides: Record<string, any> }> = [];
     for (const r of bulkResults) {
       if (r.unsupported) continue;
+      // Map back to UI FQN for the assign endpoint
+      const uiFqn = engineFqnToUiFqn.get(r.node_fqn) || r.node_fqn;
       const overrides: Record<string, any> = {};
       if (r.freshness) overrides.freshnessConfig = r.freshness;
       if (r.volume) overrides.volumeConfig = r.volume;
       if (r.quality) overrides.qualityConfig = r.quality;
       if (r.schema_profile) overrides.schemaConfig = r.schema_profile;
       if (r.uniqueness) overrides.uniquenessConfig = r.uniqueness;
-      entries.push({ nodeFqn: r.node_fqn, overrides });
+      entries.push({ nodeFqn: uiFqn, overrides });
     }
     onApplyBulkDiscovery(entries);
-  }, [bulkResults, onApplyBulkDiscovery]);
+  }, [bulkResults, onApplyBulkDiscovery, selectedNodes]);
 
   const discoveredCount = bulkResults.filter((r) => !r.unsupported).length;
   const skippedCount = bulkResults.filter((r) => r.unsupported).length;

@@ -2170,22 +2170,29 @@ function LineagePageInner() {
             }}
             onApplyBulkDiscovery={async (entries) => {
               setPolicySaving(true);
+              console.log('[Policy] Bulk assign entries:', entries.map(e => ({ fqn: e.nodeFqn, overrideKeys: Object.keys(e.overrides) })));
               try {
                 const results = await Promise.allSettled(
-                  entries.map((entry) =>
-                    fetch('/api/schedule/policies/assign', {
+                  entries.map(async (entry) => {
+                    const payload = {
+                      profileId: `auto-discovered-${entry.nodeFqn}`,
+                      assignmentType: 'auto_discovered',
+                      nodeFqns: [entry.nodeFqn],
+                      overrides: entry.overrides,
+                      stackId,
+                      _profileName: 'Discovered from Data',
+                    };
+                    const res = await fetch('/api/schedule/policies/assign', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        profileId: `auto-discovered-${entry.nodeFqn}`,
-                        assignmentType: 'auto_discovered',
-                        nodeFqns: [entry.nodeFqn],
-                        overrides: entry.overrides,
-                        stackId,
-                        _profileName: 'Discovered from Data',
-                      }),
-                    })
-                  )
+                      body: JSON.stringify(payload),
+                    });
+                    if (!res.ok) {
+                      const errText = await res.text().catch(() => '');
+                      console.error('[Policy] Bulk assign failed for', entry.nodeFqn, ':', res.status, errText);
+                    }
+                    return res;
+                  })
                 );
 
                 const succeeded = results.filter((r) => r.status === 'fulfilled' && (r.value as Response).ok).length;
