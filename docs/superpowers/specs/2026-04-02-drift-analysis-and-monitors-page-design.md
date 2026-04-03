@@ -1,11 +1,11 @@
 # Drift Analysis Engine & Monitors Page Redesign
 
-**Date:** 2026-04-02
+**Date:** 2026-04-02 (updated 2026-04-03)
 **Status:** Approved
 
 ## Overview
 
-A weekly scheduled LLM-powered drift analysis system that reviews all monitor run history, detects sustained trends across 5 drift categories, and produces actionable SLA adjustment recommendations. Paired with a page restructure that renames the Tasks page to Monitors, moves it to `/dashboard/monitors`, and splits content into three tabs: Summary (drift recommendations), Data Monitors, and Pipeline Monitors.
+A weekly scheduled LLM-powered drift analysis system that reviews all monitor run history, detects sustained trends across 6 drift categories (freshness, volume, quality, schema, anomaly, uniqueness), and produces actionable SLA adjustment recommendations. Paired with a page restructure that renames the Tasks page to Monitors, moves it to `/dashboard/monitors`, and splits content into three tabs: Summary (drift recommendations), Data Monitors, and Pipeline Monitors.
 
 ## Goals
 
@@ -22,8 +22,10 @@ A weekly scheduled LLM-powered drift analysis system that reviews all monitor ru
 
 ## Dependencies
 
-- **SLA Auto-Discovery system** — assignment type `auto_discovered` in the policy resolution chain. The drift analyzer must be aware that SLAs can originate from auto-discovery (warehouse historical analysis via `sla_discovery.py`) in addition to `direct_profile`, `direct_override`, `imported_dbt`, and `branch` sources.
-- **DatabaseAdapter historical methods** — BigQuery and Snowflake adapters now expose `get_freshness_history()`, `get_volume_history()`, `get_null_rate_history()`, `get_schema_change_history()` which the drift analyzer can optionally use to supplement `MonitorRun`/`MonitorBaseline` data when monitor history is sparse.
+- **SLA Auto-Discovery system** — assignment type `auto_discovered` in the policy resolution chain. Discovery runs via `scanner/lineage/sla_discovery.py` and covers 5 dimensions: freshness, volume, quality, schema, and uniqueness. Bulk discovery is supported via `discover_sla_profiles_bulk()` with adapter connection pooling. Discovery uses instant zero-cost system views (`__TABLES__`, `INFORMATION_SCHEMA.TABLES`, `pg_stat_user_tables`) rather than historical queries.
+- **Discovery API** — `scanner/api/routers/discovery.py` exposes `POST /api/v1/discovery/node` (single) and `POST /api/v1/discovery/bulk` (batch). Persistence via `POST /api/lineage/discovery` creates `PolicyProfile` ("Discovered SLA — {table}") and `PolicyAssignment` with `assignmentType: 'auto_discovered'`.
+- **SLA Editor** — `SLAEditorPanel.tsx` is now profile-free with direct form fields and a "Discover from data" button that pre-fills values. Includes uniqueness section with PK detection results. No tiers or profile selection.
+- **Uniqueness detection** — `sla_discovery.py` detects PK columns via heuristic chain (declared PK → id → *_id → common names), computes duplicate rate via approximate distinct counting. Note: uniqueness config is not yet persisted to the database — this needs to be added before drift analysis can track uniqueness drift.
 
 ---
 
@@ -41,7 +43,7 @@ model DriftRecommendation {
   targetFqn        String
 
   // Drift detection
-  driftCategory    String    // freshness | volume | quality | schema | anomaly
+  driftCategory    String    // freshness | volume | quality | schema | anomaly | uniqueness
   severity         String    // low | medium | high
 
   // Current vs recommended
@@ -89,17 +91,18 @@ Returns the `runId` for the batch.
 
 1. Fetch all enabled monitors for the organization
 2. For each monitor, query all `MonitorRun` results and `MonitorBaseline` entries
-3. Resolve the effective SLA policy for each monitor's `targetFqn` — this includes policies from all sources in the resolution chain: `direct_profile`, `direct_override`, `imported_dbt`, `auto_discovered`, `branch`, `criticality_default`, `domain_default`. The `auto_discovered` source is particularly relevant as it provides SLA baselines derived from actual warehouse history via `sla_discovery.py`.
-4. Skip monitors with fewer than 5 runs (insufficient data). For monitors with sparse run history but an `auto_discovered` SLA, optionally supplement with warehouse adapter historical methods (`get_freshness_history()`, `get_volume_history()`, etc.) to get a fuller picture.
+3. Resolve the effective SLA policy for each monitor's `targetFqn` — this includes policies from all sources in the resolution chain: `direct_profile`, `direct_override`, `imported_dbt`, `auto_discovered`, `branch`, `criticality_default`, `domain_default`. The `auto_discovered` source is particularly relevant as it provides SLA baselines derived from actual warehouse system views via `sla_discovery.py`, covering freshness, volume, quality, schema, and uniqueness dimensions.
+4. Skip monitors with fewer than 5 runs (insufficient data). For monitors with sparse run history but an `auto_discovered` SLA, the discovery baselines themselves serve as the historical reference — the drift analyzer compares current monitor results against the discovered thresholds.
 5. Compute statistical summaries per drift category:
 
 | Category | What It Analyzes | Key Stats |
 |----------|-----------------|-----------|
 | **Freshness** | hours-since-update values vs SLA `maxHours` | mean, p95, trend slope, consistency ratio |
 | **Volume** | row counts over time | linear regression slope, variance coefficient, growth rate vs threshold |
-| **Quality** | null rates, duplicate rates | trend direction, sudden shift detection (>2 stddev), mean vs SLA threshold |
-| **Schema** | schema change event frequency | events per period, ratio of additions vs removals, stability windows |
+| **Quality** | null rates vs SLA `maxNullRate` | trend direction, sudden shift detection (>2 stddev), mean vs threshold |
+| **Schema** | schema changes vs discovered column baseline | events per period, additions vs removals, diff against discovery snapshot |
 | **Anomaly** | false positive rate from LLM validation history | `raw_status` vs `adjusted_status` ratio, sensitivity fit score |
+| **Uniqueness** | duplicate rates on detected PK columns vs `maxDuplicateRate` | trend direction, rate vs threshold, PK column stability |
 
 6. Bundle monitors with significant drift into LLM prompt, batched by category (keeps context focused, avoids token bloat). Include the SLA source in context so the LLM knows whether the current threshold came from manual config, auto-discovery, or dbt import — this affects recommendation confidence.
 7. LLM returns structured JSON array of recommendations
@@ -129,7 +132,7 @@ Rules:
 Return a JSON array where each element has:
 {
   "monitorId": "...",
-  "driftCategory": "freshness|volume|quality|schema|anomaly",
+  "driftCategory": "freshness|volume|quality|schema|anomaly|uniqueness",
   "currentField": "section.field",
   "currentValue": "...",
   "recommendedValue": "...",
@@ -145,9 +148,10 @@ Add to `drift_analyzer.py`:
 
 - `compute_freshness_stats(runs)` — mean, p95, trend slope of hours-since-update
 - `compute_volume_stats(baselines)` — linear regression, variance shift detection
-- `compute_quality_stats(runs)` — null/duplicate rate trends, sudden shift detection
-- `compute_schema_stats(runs)` — schema change frequency, stability windows
+- `compute_quality_stats(runs)` — null rate trends, sudden shift detection
+- `compute_schema_stats(runs, discovery_snapshot)` — schema change frequency, diff against discovered column baseline (name, type, nullable, ordinal)
 - `compute_anomaly_stats(runs)` — false positive rate from validation history
+- `compute_uniqueness_stats(runs)` — duplicate rate trends on detected PK columns, threshold fit
 
 These feed pre-digested numbers to the LLM so it reasons over stats rather than raw data points (token-efficient).
 
@@ -237,7 +241,7 @@ Top of the Summary tab:
 
 ### Filters
 
-- Category: freshness, volume, quality, schema, anomaly (multi-select pills)
+- Category: freshness, volume, quality, schema, anomaly, uniqueness (multi-select pills)
 - Severity: low, medium, high
 - Status: pending, accepted, dismissed
 
@@ -245,7 +249,7 @@ Top of the Summary tab:
 
 Each card displays:
 - **Header row**: Monitor name, target FQN, drift category badge (color-coded)
-  - freshness = blue, volume = purple, quality = amber, schema = orange, anomaly = red
+  - freshness = blue, volume = purple, quality = amber, schema = orange, anomaly = red, uniqueness = cyan
 - **Change row**: Current value → Recommended value with field label (e.g., "Max Freshness: 6h → 2h")
 - **Severity indicator**: Dot or badge (low = gray, medium = amber, high = red)
 - **Reasoning**: LLM explanation, 1-2 sentences, expandable for full evidence
@@ -313,7 +317,16 @@ When user clicks Edit:
 - **LLM failure during analysis**: Log error, store partial results if any, set run status to `partial`. Don't discard the statistical work.
 - **No drift detected**: Store an empty run (runId with zero recommendations). Summary tab shows "No drift detected in latest analysis" message.
 - **Accept fails** (e.g., monitor deleted since recommendation): Show error toast, mark recommendation as dismissed with a note.
-- **Insufficient data**: Monitors with <5 runs are skipped silently (unless supplemented by warehouse adapter history for `auto_discovered` SLAs). Summary shows "X monitors skipped (insufficient data)" in the stats bar.
+- **Insufficient data**: Monitors with <5 runs are skipped silently (unless they have an `auto_discovered` SLA, in which case the discovery baselines provide the reference). Summary shows "X monitors skipped (insufficient data)" in the stats bar.
+
+---
+
+## 10. Prerequisites
+
+Before implementing the drift analyzer, the following gaps must be addressed:
+
+1. **Persist uniqueness config** — the discovery API (`/api/lineage/discovery`) does not yet save uniqueness config to the `PolicyProfile`. Add `uniquenessConfig` Json field to the profile upsert so the drift analyzer can compare monitor results against discovered uniqueness baselines.
+2. **Schema snapshot storage** — discovery computes full column baselines (name, type, nullable, ordinal) but this needs to be accessible for schema drift comparison. Currently stored in `schemaConfig` on the profile — verify this includes the column list, not just `strictness`/`allowEvolution`.
 
 ---
 
@@ -325,7 +338,7 @@ The drift analyzer is aware of all SLA policy sources in the resolution chain:
 |--------|------------------------|
 | `direct_profile` | Compare monitor results against manually configured SLA thresholds |
 | `direct_override` | Same as direct_profile — user-set overrides on a profile |
-| `auto_discovered` | High-confidence recommendations — these SLAs were derived from warehouse history and the drift analyzer has newer run data to refine them. Can supplement sparse monitor history with adapter `get_*_history()` methods. |
+| `auto_discovered` | High-confidence recommendations — these SLAs were derived from warehouse system views (freshness, volume, quality, schema, uniqueness) via `sla_discovery.py`. The drift analyzer has newer monitor run data to refine the discovered baselines. Discovery snapshots (especially schema column lists and uniqueness PK columns) serve as the baseline reference for detecting drift. |
 | `imported_dbt` | Note dbt origin in reasoning. Recommend adjustments when actual performance consistently differs from dbt-defined expectations. |
 | `branch` | Evaluate whether branch-inherited SLA still fits the node's actual behavior |
 | `domain_default` / `criticality_default` | Lower priority — these are broad defaults. Recommendations here suggest the node deserves a more specific SLA. |
