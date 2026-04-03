@@ -174,7 +174,7 @@ export type SLADomain = 'warehouse' | 'ingestion' | 'bi' | 'orchestration' | 'tr
  * Used by SLAEditorPanel to show only applicable controls.
  */
 export const DOMAIN_SLA_SECTIONS: Record<SLADomain, string[]> = {
-  warehouse: ['freshness', 'schema', 'volume', 'anomaly', 'quality'],
+  warehouse: ['freshness', 'schema', 'volume', 'anomaly', 'quality', 'uniqueness'],
   ingestion: ['freshness', 'ingestion'],
   bi: ['bi', 'freshness'],
   orchestration: ['orchestration'],

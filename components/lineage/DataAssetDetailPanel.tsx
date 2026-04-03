@@ -77,7 +77,7 @@ interface DataAssetDetailPanelProps {
   onCreateSingleMonitor?: (prefill: AssetPrefill) => void;
   onCreateMultiMonitor?: (preselectedNodeIds: string[]) => void;
   slaInfo?: SLAInfo | null;
-  onEditSLA?: (nodeId: string) => void;
+  onEditSLA?: (nodeId: string, discoveryDefaults?: Record<string, any>) => void;
 }
 
 // ─── Collapsible Section ───────────────────────────────────────────
@@ -402,23 +402,40 @@ export function DataAssetDetailPanel({
     freshness?: { enabled: boolean; maxHours: number; warningHours: number };
     volume?: { enabled: boolean; minRows: number; maxRows: number };
     quality?: { enabled: boolean; maxNullRate: number };
-    schema?: { enabled: boolean; strictness: string; allowEvolution: boolean };
+    schema?: { enabled: boolean; strictness: string; allowEvolution: boolean; columnCount: number; columns?: { name: string; type: string; nullable: boolean; ordinal: number }[] };
+    uniqueness?: { enabled: boolean; duplicateRate: number; primaryKeyColumns: string[]; detectionMethod: string; totalRows: number; distinctRows: number; approximate: boolean; suggestedThreshold: number; skipped?: boolean; reason?: string };
   } | null>(null);
 
   const handleDiscover = async () => {
     setDiscoveryState('loading');
     try {
-      const res = await fetch(`/api/nodes/${node.id}/sla/discover`, { method: 'POST' });
+      const engineId = node.id.replace(/^lineage-/, '');
+      const res = await fetch(`/api/nodes/${engineId}/sla/discover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stackId }),
+      });
       if (res.ok) {
         const data = await res.json();
-        setDiscoveryResult(data.result);
+        const r = data.result || {};
+        console.log('[SLA Discovery] Raw API response:', JSON.stringify(data, null, 2));
+        console.log('[SLA Discovery] Mapped result r:', JSON.stringify(r, null, 2));
+        // Map snake_case response fields to frontend shape
+        setDiscoveryResult({
+          freshness: r.freshness || undefined,
+          volume: r.volume || undefined,
+          quality: r.quality || undefined,
+          schema: r.schema_profile || r.schema || undefined,
+          uniqueness: r.uniqueness || undefined,
+        });
         setDiscoveryState('confirm');
       } else if (res.status === 422) {
         const data = await res.json();
-        if (data.reason === 'no_warehouse_ancestor') {
+        if (data.reason === 'no_warehouse_ancestor' || data.reason === 'unsupported') {
           setDiscoveryState('unsupported');
         } else {
           setDiscoveryState('idle');
+          toast.error(data.reason || 'Discovery unavailable');
         }
       } else {
         setDiscoveryState('idle');
@@ -1392,10 +1409,27 @@ export function DataAssetDetailPanel({
                 {discoveryResult.schema && (
                   <div className="flex justify-between"><span className="text-[var(--muted)]">Schema</span><span className="text-[var(--text)]">{discoveryResult.schema.strictness}, {discoveryResult.schema.allowEvolution ? 'evolution ok' : 'no evolution'}</span></div>
                 )}
+                {discoveryResult.uniqueness && discoveryResult.uniqueness.enabled && (
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Uniqueness</span><span className="text-[var(--text)]">{(discoveryResult.uniqueness.duplicateRate * 100).toFixed(1)}% dup rate ({discoveryResult.uniqueness.primaryKeyColumns.join(', ')})</span></div>
+                )}
+                {discoveryResult.uniqueness && !discoveryResult.uniqueness.enabled && (
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Uniqueness</span><span className="text-[var(--text-faint)]">skipped — {discoveryResult.uniqueness.reason}</span></div>
+                )}
               </div>
               <div className="flex gap-2 mt-3">
                 <button onClick={handleAcceptDiscovery} className="px-3 py-1 text-[11px] font-medium rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30">Accept</button>
-                <button onClick={() => { onEditSLA?.(node.id); setDiscoveryState('idle'); }} className="px-3 py-1 text-[11px] font-medium rounded bg-[var(--overlay-bg)] text-[var(--muted)] hover:text-[var(--text)]">Edit & Accept</button>
+                <button onClick={() => {
+                  const defaults: Record<string, any> = {};
+                  if (discoveryResult?.freshness) defaults.freshnessConfig = discoveryResult.freshness;
+                  if (discoveryResult?.volume) defaults.volumeConfig = discoveryResult.volume;
+                  if (discoveryResult?.quality) defaults.qualityConfig = discoveryResult.quality;
+                  if (discoveryResult?.schema) defaults.schemaConfig = discoveryResult.schema;
+                  if (discoveryResult?.uniqueness) defaults.uniquenessConfig = discoveryResult.uniqueness;
+                  console.log('[SLA Discovery] discoveryResult:', JSON.stringify(discoveryResult, null, 2));
+                  console.log('[SLA Discovery] defaults passed to editor:', JSON.stringify(defaults, null, 2));
+                  onEditSLA?.(node.id, defaults);
+                  setDiscoveryState('idle');
+                }} className="px-3 py-1 text-[11px] font-medium rounded bg-[var(--overlay-bg)] text-[var(--muted)] hover:text-[var(--text)]">Edit & Accept</button>
                 <button onClick={() => { setDiscoveryState('idle'); setDiscoveryResult(null); }} className="px-3 py-1 text-[11px] font-medium rounded text-[var(--muted)] hover:text-[var(--text)]">Dismiss</button>
               </div>
             </div>
