@@ -2223,7 +2223,13 @@ function LineagePageInner() {
                       }
                     }
                     console.log('[Policy] Resolve after bulk: total policies =', Object.keys(policies).length, ', assigned =', assigned.length, ', assigned FQNs:', assigned);
-                    console.log('[Policy] Resolve: all node FQNs sent:', nodesPayload.map(n => n.fqn).slice(0, 10));
+                    const publicNodes = nodesPayload.filter(n => n.fqn.includes('.public.'));
+                    console.log('[Policy] Resolve: public.* nodes in payload:', publicNodes.map(n => n.fqn));
+                    // Check which stored FQNs have matching policies
+                    const storedFqns = ['acme-484520.public.customers', 'acme-484520.public.events', 'acme-484520.public.orders', 'acme-484520.public.products'];
+                    for (const fqn of storedFqns) {
+                      console.log(`[Policy] Resolve result for ${fqn}:`, policies[fqn] || 'NOT IN RESPONSE');
+                    }
                     setNodeSLAs(map);
                   }
                 } catch {
