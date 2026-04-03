@@ -400,7 +400,7 @@ export function DataAssetDetailPanel({
   const [discoveryState, setDiscoveryState] = useState<'idle' | 'loading' | 'confirm' | 'unsupported'>('idle');
   const [discoveryResult, setDiscoveryResult] = useState<{
     freshness?: { enabled: boolean; maxHours: number; warningHours: number };
-    volume?: { enabled: boolean; minRows: number; maxRows: number };
+    volume?: { enabled: boolean; currentRows: number };
     quality?: { enabled: boolean; maxNullRate: number };
     schema?: { enabled: boolean; strictness: string; allowEvolution: boolean; columnCount: number; columns?: { name: string; type: string; nullable: boolean; ordinal: number }[] };
     uniqueness?: { enabled: boolean; duplicateRate: number; primaryKeyColumns: string[]; detectionMethod: string; totalRows: number; distinctRows: number; approximate: boolean; suggestedThreshold: number; skipped?: boolean; reason?: string };
@@ -1401,7 +1401,7 @@ export function DataAssetDetailPanel({
                   <div className="flex justify-between"><span className="text-[var(--muted)]">Freshness</span><span className="text-[var(--text)]">max {discoveryResult.freshness.maxHours}h, warn {discoveryResult.freshness.warningHours}h</span></div>
                 )}
                 {discoveryResult.volume && (
-                  <div className="flex justify-between"><span className="text-[var(--muted)]">Volume</span><span className="text-[var(--text)]">{discoveryResult.volume.minRows.toLocaleString()} – {discoveryResult.volume.maxRows.toLocaleString()} rows</span></div>
+                  <div className="flex justify-between"><span className="text-[var(--muted)]">Volume</span><span className="text-[var(--text)]">{(discoveryResult.volume.currentRows ?? 0).toLocaleString()} rows</span></div>
                 )}
                 {discoveryResult.quality && (
                   <div className="flex justify-between"><span className="text-[var(--muted)]">Quality</span><span className="text-[var(--text)]">null rate ≤{Math.round(discoveryResult.quality.maxNullRate * 100)}%</span></div>
