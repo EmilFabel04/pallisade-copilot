@@ -2170,38 +2170,29 @@ function LineagePageInner() {
             }}
             onApplyBulkDiscovery={async (entries) => {
               setPolicySaving(true);
-              console.log('[Policy] Bulk assign entries:', entries.map(e => ({ fqn: e.nodeFqn, overrideKeys: Object.keys(e.overrides) })));
               try {
-                const results = await Promise.allSettled(
-                  entries.map(async (entry) => {
-                    const payload = {
-                      profileId: `auto-discovered-${entry.nodeFqn}`,
-                      assignmentType: 'auto_discovered',
-                      nodeFqns: [entry.nodeFqn],
-                      overrides: entry.overrides,
-                      stackId,
-                      _profileName: 'Discovered from Data',
-                    };
-                    const res = await fetch('/api/schedule/policies/assign', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(payload),
-                    });
-                    if (!res.ok) {
-                      const errText = await res.text().catch(() => '');
-                      console.error('[Policy] Bulk assign failed for', entry.nodeFqn, ':', res.status, errText);
-                    }
-                    return res;
-                  })
-                );
+                // Use /api/lineage/discovery which upserts profiles + assignments in one call
+                // (the /api/schedule/policies/assign endpoint requires pre-existing profiles)
+                const discoveryResults = entries.map((entry) => ({
+                  nodeFqn: entry.nodeFqn,
+                  freshness: entry.overrides.freshnessConfig || null,
+                  volume: entry.overrides.volumeConfig || null,
+                  quality: entry.overrides.qualityConfig || null,
+                  schema: entry.overrides.schemaConfig || null,
+                }));
 
-                const succeeded = results.filter((r) => r.status === 'fulfilled' && (r.value as Response).ok).length;
-                const failed = entries.length - succeeded;
+                const res = await fetch('/api/lineage/discovery', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ results: discoveryResults }),
+                });
 
-                if (failed === 0) {
-                  toast.success(`SLA applied to ${succeeded} node${succeeded !== 1 ? 's' : ''}`);
+                if (res.ok) {
+                  const data = await res.json();
+                  const persisted = data.persisted || 0;
+                  toast.success(`SLA applied to ${persisted} node${persisted !== 1 ? 's' : ''}`);
                 } else {
-                  toast.success(`Applied to ${succeeded} of ${entries.length} nodes (${failed} failed)`);
+                  toast.error('Failed to apply SLAs');
                 }
 
                 // Re-fetch resolved policies
