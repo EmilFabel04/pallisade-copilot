@@ -41,7 +41,8 @@ export async function POST(request: NextRequest) {
       const hasConfig = result.freshness || result.volume || result.quality || result.schema;
       if (!hasConfig) continue;
 
-      const profileName = `Auto-discovered: ${result.nodeFqn}`;
+      const shortName = result.nodeFqn.split('.').pop() || result.nodeFqn;
+      const profileName = `Discovered SLA — ${shortName}`;
 
       const profile = await prisma.policyProfile.upsert({
         where: {

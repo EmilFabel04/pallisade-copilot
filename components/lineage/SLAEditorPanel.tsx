@@ -195,6 +195,25 @@ export function SLAEditorPanel({
     }
   }, [discoveryDefaults]);
 
+  // Pre-fill from existing resolved policy when a single node is selected
+  useEffect(() => {
+    if (discoveryDefaults) return; // discovery takes priority
+    if (selectedNodeIds.size !== 1) return;
+    const nodes = getSelectedNodes(selectedNodeIds, allNodes);
+    const fqn = nodes[0]?.fullName || nodes[0]?.name;
+    if (!fqn) return;
+    const policy = nodeSLAs.get(fqn);
+    if (!policy || policy.status === 'none') return;
+    const prefill: Record<string, any> = {};
+    if (policy.freshness && Object.keys(policy.freshness).length > 0) prefill.freshnessConfig = policy.freshness;
+    if (policy.schema && Object.keys(policy.schema).length > 0) prefill.schemaConfig = policy.schema;
+    if (policy.volume && Object.keys(policy.volume).length > 0) prefill.volumeConfig = policy.volume;
+    if (policy.quality && Object.keys(policy.quality).length > 0) prefill.qualityConfig = policy.quality;
+    if (Object.keys(prefill).length > 0) {
+      setValues(prefill);
+    }
+  }, [selectedNodeIds, nodeSLAs, discoveryDefaults, allNodes]);
+
   const hasDiscovery = !!discoveryDefaults;
 
   // Detect when saving transitions from true -> false (apply completed)
