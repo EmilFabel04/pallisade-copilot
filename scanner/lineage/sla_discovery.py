@@ -433,6 +433,105 @@ def _compute_quality(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def _compute_uniqueness(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
+    """Compute duplicate rate on detected PK columns.
+
+    Uses APPROX_COUNT_DISTINCT where available (BigQuery, Snowflake)
+    for performance on large tables. Falls back to exact COUNT(DISTINCT)
+    for Postgres/Redshift.
+    """
+    # Step 1: Get columns and detect PK
+    try:
+        columns = adapter.get_columns(table_fqn)
+    except Exception as e:
+        logger.warning("[SLA Discovery] %s: uniqueness — get_columns failed: %s", table_fqn, e)
+        return None
+
+    if not columns:
+        return None
+
+    pk_cols, detection_method = _detect_pk_columns(columns)
+
+    if not pk_cols:
+        return {
+            "enabled": False,
+            "skipped": True,
+            "reason": "no PK detected",
+            "detectionMethod": "none",
+        }
+
+    # Step 2: Build dialect-aware query
+    dialect = getattr(adapter, "dialect", "").lower()
+    db, schema, tbl = _parse_fqn(adapter, table_fqn)
+
+    # Quote identifiers
+    if dialect == "bigquery":
+        q = lambda c: f"`{c}`"
+        quoted_table = f"`{db}`.`{schema}`.`{tbl}`"
+    elif dialect == "snowflake":
+        q = lambda c: f'"{c}"'
+        quoted_table = f'{db}.{schema}."{tbl}"'
+    else:
+        q = lambda c: f'"{c}"'
+        quoted_table = f'"{schema}"."{tbl}"' if schema else f'"{tbl}"'
+
+    # Build the distinct expression — single column or composite
+    if len(pk_cols) == 1:
+        col_expr = q(pk_cols[0])
+    else:
+        # Composite PK: concat columns for distinct counting
+        if dialect == "bigquery":
+            col_expr = "CONCAT(" + ", '|', ".join(f"CAST({q(c)} AS STRING)" for c in pk_cols) + ")"
+        elif dialect == "snowflake":
+            col_expr = "CONCAT(" + ", '|', ".join(f"TO_VARCHAR({q(c)})" for c in pk_cols) + ")"
+        else:
+            col_expr = "CONCAT(" + " || '|' || ".join(f"CAST({q(c)} AS TEXT)" for c in pk_cols) + ")"
+
+    # Approximate vs exact distinct
+    approximate = True
+    if dialect in ("bigquery", "snowflake"):
+        distinct_expr = f"APPROX_COUNT_DISTINCT({col_expr})"
+    elif dialect == "redshift":
+        distinct_expr = f"APPROXIMATE COUNT(DISTINCT {col_expr})"
+    else:
+        # Postgres — no approximate built-in
+        distinct_expr = f"COUNT(DISTINCT {col_expr})"
+        approximate = False
+
+    query = f"SELECT COUNT(*) as _total, {distinct_expr} as _distinct FROM {quoted_table}"
+
+    try:
+        rows = adapter.execute_query(query)
+    except Exception as e:
+        logger.warning("[SLA Discovery] %s: uniqueness query failed: %s: %s", table_fqn, type(e).__name__, e)
+        return None
+
+    if not rows:
+        return None
+
+    row = rows[0]
+    total = int(row.get("_total", 0))
+    distinct = int(row.get("_distinct", 0))
+
+    if total == 0:
+        return None
+
+    duplicate_rate = round(1.0 - (distinct / total), 4)
+    # Threshold: 1.5x current rate, floor at 1%
+    suggested_threshold = round(max(duplicate_rate * 1.5, 0.01), 4)
+
+    return {
+        "enabled": True,
+        "duplicateRate": duplicate_rate,
+        "primaryKeyColumns": pk_cols,
+        "detectionMethod": detection_method,
+        "totalRows": total,
+        "distinctRows": distinct,
+        "approximate": approximate,
+        "suggestedThreshold": suggested_threshold,
+    }
+
+
 def _compute_schema(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
     """Compute schema enforcement suggestion from current column layout.
 

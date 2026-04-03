@@ -292,3 +292,95 @@ class TestDetectPKColumns:
         from scanner.lineage.sla_discovery import _detect_pk_columns
         result = _detect_pk_columns([])
         assert result == ([], "none")
+
+
+# ---------------------------------------------------------------------------
+# _compute_uniqueness
+# ---------------------------------------------------------------------------
+
+class TestComputeUniqueness:
+
+    def test_zero_duplicates(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.return_value = [_col("id", pk=True), _col("name")]
+        # APPROX_COUNT_DISTINCT returns 1000, COUNT(*) returns 1000
+        adapter.execute_query.return_value = [{"_total": 1000, "_distinct": 1000}]
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result is not None
+        assert result["enabled"] is True
+        assert result["duplicateRate"] == 0.0
+        assert result["primaryKeyColumns"] == ["id"]
+        assert result["totalRows"] == 1000
+        assert result["distinctRows"] == 1000
+
+    def test_some_duplicates(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.return_value = [_col("id"), _col("name")]
+        adapter.execute_query.return_value = [{"_total": 1000, "_distinct": 970}]
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result is not None
+        assert result["duplicateRate"] == pytest.approx(0.03, abs=0.001)
+        assert result["detectionMethod"] == "heuristic_id"
+        assert result["approximate"] is True
+
+    def test_no_pk_skips(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.return_value = [_col("payload"), _col("metadata")]
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result is not None
+        assert result["enabled"] is False
+        assert result["skipped"] is True
+        assert "no PK" in result["reason"]
+
+    def test_query_failure_returns_none(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.return_value = [_col("id")]
+        adapter.execute_query.side_effect = Exception("timeout")
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result is None
+
+    def test_get_columns_failure_returns_none(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.side_effect = Exception("access denied")
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result is None
+
+    def test_postgres_uses_exact_count(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "postgres"
+        adapter.get_columns.return_value = [_col("id")]
+        adapter.execute_query.return_value = [{"_total": 500, "_distinct": 500}]
+        result = _compute_uniqueness(adapter, "public.table")
+        assert result is not None
+        assert result["approximate"] is False
+
+    def test_threshold_suggestion(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.return_value = [_col("id")]
+        # 2% duplicate rate -> threshold should be max(0.02 * 1.5, 0.01) = 0.03
+        adapter.execute_query.return_value = [{"_total": 1000, "_distinct": 980}]
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result["suggestedThreshold"] == pytest.approx(0.03, abs=0.001)
+
+    def test_threshold_floor(self):
+        from scanner.lineage.sla_discovery import _compute_uniqueness
+        adapter = MagicMock()
+        adapter.dialect = "bigquery"
+        adapter.get_columns.return_value = [_col("id")]
+        # 0% duplicate rate -> threshold floor at 0.01
+        adapter.execute_query.return_value = [{"_total": 1000, "_distinct": 1000}]
+        result = _compute_uniqueness(adapter, "proj.ds.table")
+        assert result["suggestedThreshold"] == pytest.approx(0.01, abs=0.001)
