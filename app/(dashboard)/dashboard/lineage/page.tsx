@@ -60,6 +60,7 @@ import { CreateTaskModal } from '@/components/schedule/CreateTaskModal';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import type { NodeMeta } from '@/components/schedule/NodeSelectionSurface';
 import type { AssetPrefill } from '@/types/monitor-catalog';
+import { SlaProfileModal } from '@/components/lineage/SlaProfileModal';
 
 // Compute compliance status for a node given its resolved SLA policy
 function computeNodeCompliance(
@@ -263,6 +264,10 @@ function LineagePageInner() {
   const [slaSelectedNodeIds, setSlaSelectedNodeIds] = useState<Set<string>>(new Set());
   const [nodeSLAs, setNodeSLAs] = useState<Map<string, EffectiveSLAPolicy>>(new Map());
   const [policySaving, setPolicySaving] = useState(false);
+  const [slaDiscoveryDefaults, setSlaDiscoveryDefaults] = useState<Record<string, any> | null>(null);
+
+  // SLA profile modal state
+  const [selectedSlaNodeId, setSelectedSlaNodeId] = useState<string | null>(null);
 
   // Pipeline SLA mode state (control-plane tab)
   const [pipelineSlaMode, setPipelineSlaMode] = useState(false);
@@ -275,6 +280,7 @@ function LineagePageInner() {
       if (e.key === 'Escape') {
         setSlaMode(false);
         setSlaSelectedNodeIds(new Set());
+        setSlaDiscoveryDefaults(null);
       }
     };
     window.addEventListener('keydown', handler);
@@ -1047,6 +1053,7 @@ function LineagePageInner() {
             isSLASelected: slaMode && slaSelectedNodeIds.has(vn.id),
             slaStatus: (nodeSLAs.get(vn.metadata?.fqn || vn.name)?.status as any) || 'none',
             slaProfileName: nodeSLAs.get(vn.metadata?.fqn || vn.name)?.profileName || null,
+            onSLABadgeClick: nodeSLAs.has(vn.metadata?.fqn || vn.name) ? () => setSelectedSlaNodeId(vn.id) : undefined,
             complianceStatus: computeNodeCompliance(
               nodeSLAs.get(vn.metadata?.fqn || vn.name),
               vn.platformDomain || vn.originalType || '',
@@ -1138,6 +1145,7 @@ function LineagePageInner() {
         isSLASelected: slaMode && slaSelectedNodeIds.has(node.id),
         slaStatus: (nodeSLAs.get(node.fullName || node.name)?.status as any) || 'none',
         slaProfileName: nodeSLAs.get(node.fullName || node.name)?.profileName || null,
+        onSLABadgeClick: nodeSLAs.has(node.fullName || node.name) ? () => setSelectedSlaNodeId(node.id) : undefined,
         complianceStatus: computeNodeCompliance(
           nodeSLAs.get(node.fullName || node.name),
           node.category || '',
@@ -1719,6 +1727,7 @@ function LineagePageInner() {
             onExit={() => {
               setSlaMode(false);
               setSlaSelectedNodeIds(new Set());
+              setSlaDiscoveryDefaults(null);
             }}
           />
         ) : (
@@ -2066,7 +2075,7 @@ function LineagePageInner() {
             stackId={stackId || ''}
             nodeSLAs={nodeSLAs}
             saving={policySaving}
-            dataSLAsEnabled={dataSLAsEnabled}
+            discoveryDefaults={slaDiscoveryDefaults}
             onRemoveSLA={async (nodeFqns: string[]) => {
               try {
                 const res = await fetch('/api/schedule/policies/assign?' + new URLSearchParams({ stackId: stackId || '' }), {
@@ -2159,9 +2168,72 @@ function LineagePageInner() {
                 setPolicySaving(false);
               }
             }}
+            onApplyBulkDiscovery={async (entries) => {
+              setPolicySaving(true);
+              try {
+                const results = await Promise.allSettled(
+                  entries.map((entry) =>
+                    fetch('/api/schedule/policies/assign', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        profileId: `auto-discovered-${entry.nodeFqn}`,
+                        assignmentType: 'auto_discovered',
+                        nodeFqns: [entry.nodeFqn],
+                        overrides: entry.overrides,
+                        stackId,
+                        _profileName: 'Discovered from Data',
+                      }),
+                    })
+                  )
+                );
+
+                const succeeded = results.filter((r) => r.status === 'fulfilled' && (r.value as Response).ok).length;
+                const failed = entries.length - succeeded;
+
+                if (failed === 0) {
+                  toast.success(`SLA applied to ${succeeded} node${succeeded !== 1 ? 's' : ''}`);
+                } else {
+                  toast.success(`Applied to ${succeeded} of ${entries.length} nodes (${failed} failed)`);
+                }
+
+                // Re-fetch resolved policies
+                try {
+                  const nodesPayload = (lineageData?.nodes || []).map((n) => ({
+                    fqn: n.fullName || n.name,
+                    domain: n.layer?.toLowerCase() || 'warehouse',
+                    criticality: n.criticality?.toLowerCase() || 'medium',
+                  }));
+                  const resolveRes = await fetch('/api/schedule/policies/resolve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nodes: nodesPayload, stackId }),
+                  });
+                  if (resolveRes.ok) {
+                    const resolveData = await resolveRes.json();
+                    const policies = resolveData.policies || {};
+                    const map = new Map<string, EffectiveSLAPolicy>();
+                    for (const [fqn, pol] of Object.entries(policies)) {
+                      if ((pol as any).status !== 'none') {
+                        map.set(fqn, pol as EffectiveSLAPolicy);
+                      }
+                    }
+                    setNodeSLAs(map);
+                  }
+                } catch {
+                  // Non-critical
+                }
+              } catch (err) {
+                console.error('[Policy] Bulk assign error:', err);
+                toast.error('Failed to apply SLAs');
+              } finally {
+                setPolicySaving(false);
+              }
+            }}
             onClose={() => {
               setSlaMode(false);
               setSlaSelectedNodeIds(new Set());
+              setSlaDiscoveryDefaults(null);
             }}
             onClearSelection={() => setSlaSelectedNodeIds(new Set())}
           />
@@ -2573,11 +2645,12 @@ function LineagePageInner() {
                   source: p.source || undefined,
                 };
               })()}
-              onEditSLA={(nodeId) => {
+              onEditSLA={(nodeId, discoveryDefaults) => {
                 setSlaMode(true);
                 // Find the engine view node ID (without lineage- prefix)
                 const viewNodeId = nodeId.replace('lineage-', '');
                 setSlaSelectedNodeIds(new Set([viewNodeId]));
+                setSlaDiscoveryDefaults(discoveryDefaults || null);
                 setSelectedNode(null);
               }}
             />
@@ -2603,6 +2676,30 @@ function LineagePageInner() {
         stackId={stackId || undefined}
         initialMode="prompt"
       />
+
+      {/* SLA Profile modal */}
+      {selectedSlaNodeId != null && (() => {
+        // Resolve node name and FQN from rendered view or unified data
+        const viewNode = renderedView?.nodes.find(n => n.id === selectedSlaNodeId);
+        const unifiedNode = lineageData?.nodes.find(n => n.id === selectedSlaNodeId);
+        const fqn = viewNode?.metadata?.fqn || viewNode?.name || unifiedNode?.fullName || unifiedNode?.name || selectedSlaNodeId;
+        const displayName = viewNode?.name || unifiedNode?.name || selectedSlaNodeId;
+        const policy = nodeSLAs.get(fqn);
+        if (!policy) return null;
+        return (
+          <SlaProfileModal
+            nodeId={selectedSlaNodeId}
+            nodeName={displayName}
+            slaPolicy={policy}
+            onClose={() => setSelectedSlaNodeId(null)}
+            onEdit={(nodeId) => {
+              setSlaMode(true);
+              const viewNodeId = nodeId.replace('lineage-', '');
+              setSlaSelectedNodeIds(new Set([viewNodeId]));
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
