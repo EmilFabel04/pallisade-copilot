@@ -2215,11 +2215,15 @@ function LineagePageInner() {
                     const resolveData = await resolveRes.json();
                     const policies = resolveData.policies || {};
                     const map = new Map<string, EffectiveSLAPolicy>();
+                    const assigned: string[] = [];
                     for (const [fqn, pol] of Object.entries(policies)) {
                       if ((pol as any).status !== 'none') {
                         map.set(fqn, pol as EffectiveSLAPolicy);
+                        assigned.push(fqn);
                       }
                     }
+                    console.log('[Policy] Resolve after bulk: total policies =', Object.keys(policies).length, ', assigned =', assigned.length, ', assigned FQNs:', assigned);
+                    console.log('[Policy] Resolve: all node FQNs sent:', nodesPayload.map(n => n.fqn).slice(0, 10));
                     setNodeSLAs(map);
                   }
                 } catch {
