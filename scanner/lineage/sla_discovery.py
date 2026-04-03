@@ -89,6 +89,7 @@ class DiscoveryResult:
     volume: Optional[Dict[str, Any]] = None
     quality: Optional[Dict[str, Any]] = None
     schema: Optional[Dict[str, Any]] = None
+    uniqueness: Optional[Dict[str, Any]] = None
     unsupported: bool = False
     skipped_reason: Optional[str] = None
 
@@ -635,15 +636,20 @@ async def discover_sla_profile(
     # Step 3: Quality — single-pass null rate scan across all columns
     quality = _compute_quality(adapter, table_fqn)
 
-    discovered = sum(1 for x in [freshness, volume, quality, schema] if x is not None)
+    # Step 4: Uniqueness — approximate distinct count on PK columns
+    uniqueness = _compute_uniqueness(adapter, table_fqn)
+
+    dimensions = [freshness, volume, quality, schema, uniqueness]
+    discovered = sum(1 for x in dimensions if x is not None and x.get("enabled", True))
     logger.info(
-        "[SLA Discovery] %s: %d/4 dimensions discovered (freshness=%s volume=%s quality=%s schema=%s)",
+        "[SLA Discovery] %s: %d/5 dimensions discovered (freshness=%s volume=%s quality=%s schema=%s uniqueness=%s)",
         table_fqn,
         discovered,
         "yes" if freshness else "no",
         "yes" if volume else "no",
         "yes" if quality else "no",
         "yes" if schema else "no",
+        "yes" if uniqueness and uniqueness.get("enabled") else "no",
     )
 
     return DiscoveryResult(
@@ -653,6 +659,7 @@ async def discover_sla_profile(
         volume=volume,
         quality=quality,
         schema=schema,
+        uniqueness=uniqueness,
     )
 
 
