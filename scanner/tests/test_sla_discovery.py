@@ -239,6 +239,34 @@ class TestComputeSchema:
         result = _compute_schema(adapter, "db.schema.table")
         assert result is None
 
+    # --- New: column snapshot tests ---
+
+    def test_columns_list_populated(self):
+        from scanner.lineage.sla_discovery import _compute_schema
+        adapter = _mock_adapter(columns=[("id", "INT64"), ("name", "STRING"), ("ts", "TIMESTAMP")])
+        # Set ordinal and nullable on the mocks
+        for i, col in enumerate(adapter.get_columns.return_value):
+            col.ordinal_position = i + 1
+            col.is_nullable = i > 0  # id not nullable, rest nullable
+        result = _compute_schema(adapter, "db.schema.table")
+        assert "columns" in result
+        assert len(result["columns"]) == 3
+        assert result["columns"][0] == {"name": "id", "type": "INT64", "nullable": False, "ordinal": 1}
+        assert result["columns"][1] == {"name": "name", "type": "STRING", "nullable": True, "ordinal": 2}
+        assert result["columns"][2] == {"name": "ts", "type": "TIMESTAMP", "nullable": True, "ordinal": 3}
+
+    def test_columns_sorted_by_ordinal(self):
+        from scanner.lineage.sla_discovery import _compute_schema
+        adapter = _mock_adapter(columns=[("b_col", "STRING"), ("a_col", "INT64")])
+        cols = adapter.get_columns.return_value
+        cols[0].ordinal_position = 2
+        cols[0].is_nullable = True
+        cols[1].ordinal_position = 1
+        cols[1].is_nullable = False
+        result = _compute_schema(adapter, "db.schema.table")
+        assert result["columns"][0]["name"] == "a_col"
+        assert result["columns"][1]["name"] == "b_col"
+
 
 # ---------------------------------------------------------------------------
 # _detect_pk_columns

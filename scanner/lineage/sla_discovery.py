@@ -533,10 +533,11 @@ def _compute_uniqueness(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]
 
 
 def _compute_schema(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
-    """Compute schema enforcement suggestion from current column layout.
+    """Compute schema enforcement suggestion and full column snapshot.
 
-    Uses adapter.get_columns() to count columns and check for nullable
-    or variant-type columns that suggest the schema evolves.
+    Uses adapter.get_columns() to build a baseline snapshot of the
+    table's column layout: name, type, nullable, ordinal position.
+    Also checks for variant/json columns to suggest strictness level.
     """
     try:
         columns = adapter.get_columns(table_fqn)
@@ -555,12 +556,34 @@ def _compute_schema(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
         getattr(c, "data_type", "").lower() in _FLEXIBLE_TYPES for c in columns
     )
 
+    # Build column snapshot sorted by ordinal position
+    def _safe_ordinal(c: Any) -> int:
+        val = getattr(c, "ordinal_position", None)
+        try:
+            return int(val) if val is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    col_snapshot = sorted(
+        [
+            {
+                "name": c.name,
+                "type": getattr(c, "data_type", "UNKNOWN"),
+                "nullable": bool(getattr(c, "is_nullable", True)),
+                "ordinal": _safe_ordinal(c),
+            }
+            for c in columns
+        ],
+        key=lambda x: x["ordinal"],
+    )
+
     if has_flexible:
         return {
             "enabled": True,
             "strictness": "warn",
             "allowEvolution": True,
             "columnCount": col_count,
+            "columns": col_snapshot,
         }
 
     return {
@@ -568,6 +591,7 @@ def _compute_schema(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
         "strictness": "strict",
         "allowEvolution": False,
         "columnCount": col_count,
+        "columns": col_snapshot,
     }
 
 
