@@ -330,8 +330,9 @@ export function SLAEditorPanel({
       if (r.uniqueness) overrides.uniquenessConfig = r.uniqueness;
       entries.push({ nodeFqn: uiFqn, overrides });
     }
-    console.log('[SLA Bulk] FQN mapping:', Array.from(engineFqnToUiFqn.entries()));
-    console.log('[SLA Bulk] Entries to apply:', entries.map(e => ({ fqn: e.nodeFqn, keys: Object.keys(e.overrides) })));
+    console.log('[SLA Bulk] FQN mapping (engine→UI):', Array.from(engineFqnToUiFqn.entries()).map(([k, v]) => `${k} → ${v}`));
+    console.log('[SLA Bulk] bulkResults node_fqns:', bulkResults.map(r => r.node_fqn));
+    console.log('[SLA Bulk] Entries to apply:', entries.map(e => e.nodeFqn));
     onApplyBulkDiscovery(entries);
   }, [bulkResults, onApplyBulkDiscovery, selectedNodes]);
 
