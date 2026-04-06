@@ -87,6 +87,8 @@ def create_app() -> FastAPI:
     from .routers.presets import router as presets_router
     from .routers.plans import router as plans_router
     from .routers.policies import router as policies_router
+    from .routers.discovery import router as discovery_router
+    from .routers.drift import router as drift_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -126,6 +128,12 @@ def create_app() -> FastAPI:
 
     # Pipeline Monitoring Policies API
     app.include_router(policies_router, prefix="/api/v1", tags=["Policies"])
+
+    # SLA Discovery API
+    app.include_router(discovery_router, prefix="/api/v1", tags=["Discovery"])
+
+    # Drift Analysis API
+    app.include_router(drift_router, prefix="/api/v1", tags=["Drift Analysis"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 
