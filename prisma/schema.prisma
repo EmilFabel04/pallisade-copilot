@@ -183,6 +183,7 @@ model Organization {
   // Pipeline Monitoring Policies
   policyProfiles    PolicyProfile[]
   policyAssignments PolicyAssignment[]
+  driftRecommendations DriftRecommendation[]
 
   // SSO
   oidcConfig OrgOidcConfig?
@@ -3197,6 +3198,7 @@ model Monitor {
   monitorGroupId String?
   runs           MonitorRun[]
   baselines      MonitorBaseline[]
+  driftRecommendations DriftRecommendation[]
 
   @@unique([organizationId, targetFqn, monitorType])
   @@index([organizationId])
@@ -3456,4 +3458,42 @@ model MonitoringPlan {
 
   @@index([organizationId])
   @@index([enabled])
+}
+
+// ============================================
+// DRIFT RECOMMENDATIONS
+// ============================================
+
+model DriftRecommendation {
+  id               String    @id @default(cuid())
+  organizationId   String
+  monitorId        String
+  monitorName      String
+  monitorType      String
+  targetFqn        String
+
+  driftCategory    String
+  severity         String
+
+  currentField     String
+  currentValue     String
+  recommendedValue String
+
+  reasoning        String
+  confidence       Float
+  evidence         Json
+
+  status           String    @default("pending")
+  reviewedAt       DateTime?
+
+  runId            String
+
+  createdAt        DateTime  @default(now())
+
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  monitor          Monitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([monitorId])
+  @@index([runId])
 }
