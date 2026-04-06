@@ -102,9 +102,37 @@ class SchedulerService:
         while self._running:
             try:
                 await self._check_due_tasks()
+                await self._check_drift_analysis()
             except Exception as e:
                 logger.error(f"[Scheduler] Error in loop: {e}")
             await asyncio.sleep(self._interval)
+
+    async def _check_drift_analysis(self):
+        """Check if weekly drift analysis is due for any organization."""
+        from datetime import timedelta
+
+        try:
+            marker_file = "/tmp/pallisade_drift_last_run"
+            last_run = None
+            try:
+                with open(marker_file) as f:
+                    last_run = datetime.fromisoformat(f.read().strip())
+            except (FileNotFoundError, ValueError):
+                pass
+
+            now = datetime.now(timezone.utc)
+            if last_run and (now - last_run) < timedelta(days=7):
+                return
+
+            logger.info("[Scheduler] Weekly drift analysis is due")
+
+            with open(marker_file, "w") as f:
+                f.write(now.isoformat())
+
+            logger.info("[Scheduler] Drift analysis marker updated, will be triggered on next UI access or manual run")
+
+        except Exception as e:
+            logger.error(f"[Scheduler] Drift analysis check failed: {e}")
 
     async def _check_due_tasks(self):
         """Find and execute tasks that are due."""
