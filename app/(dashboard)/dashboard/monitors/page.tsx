@@ -279,8 +279,12 @@ export default function MonitorsPage() {
   // Filtered watches per tab
   // ---------------------------------------------------------------------------
 
-  const dataWatches = watches.filter((w) => watchMatchesBucket(w, DATA_MONITOR_TYPES));
-  const pipelineWatches = watches.filter((w) => watchMatchesBucket(w, PIPELINE_MONITOR_TYPES));
+  // Combine standalone watches + groups from plans into one list
+  const planGroups = plans.flatMap((p) => (p.monitorGroups || []) as WatchSummary[]);
+  const allWatches = [...watches, ...planGroups];
+
+  const dataWatches = allWatches.filter((w) => watchMatchesBucket(w, DATA_MONITOR_TYPES));
+  const pipelineWatches = allWatches.filter((w) => watchMatchesBucket(w, PIPELINE_MONITOR_TYPES));
 
   // Standalone monitors (not in a watch group)
   const dataTasks = tasks.filter((t) => DATA_MONITOR_TYPES.has((t.monitorType || '').toUpperCase()));
