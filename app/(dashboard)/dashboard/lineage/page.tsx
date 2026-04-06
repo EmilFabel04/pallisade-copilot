@@ -2098,14 +2098,43 @@ function LineagePageInner() {
             onApply={async (request: SLAAssignRequest, scope: ApplyScope) => {
               setPolicySaving(true);
               try {
-                const res = await fetch('/api/schedule/policies/assign', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ ...request, stackId }),
-                });
+                // If the profileId is a generated placeholder (not a real DB profile),
+                // route through the discovery endpoint which upserts profiles automatically
+                const isPlaceholderProfile = request.profileId.startsWith('auto-discovered-') || request.profileId.startsWith('manual-');
+                let res: Response;
+                let count = 0;
+
+                if (isPlaceholderProfile && request.nodeFqns && request.nodeFqns.length > 0) {
+                  // Use discovery endpoint to upsert profile + assignment
+                  const discoveryResults = request.nodeFqns.map((fqn) => ({
+                    nodeFqn: fqn,
+                    freshness: request.overrides?.freshnessConfig || null,
+                    volume: request.overrides?.volumeConfig || null,
+                    quality: request.overrides?.qualityConfig || null,
+                    schema: request.overrides?.schemaConfig || null,
+                  }));
+                  res = await fetch('/api/lineage/discovery', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ results: discoveryResults }),
+                  });
+                  if (res.ok) {
+                    const data = await res.json();
+                    count = data.persisted || 0;
+                  }
+                } else {
+                  res = await fetch('/api/schedule/policies/assign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...request, stackId }),
+                  });
+                  if (res.ok) {
+                    const data = await res.json();
+                    count = data.assignments?.length || 0;
+                  }
+                }
+
                 if (res.ok) {
-                  const data = await res.json();
-                  const count = data.assignments?.length || 0;
                   toast.success(`SLA applied to ${count} node${count !== 1 ? 's' : ''}`);
 
                   // Re-fetch resolved policies from DB so local state has full config
