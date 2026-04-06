@@ -182,3 +182,244 @@ def _compute_trend_slope(runs: List[Dict[str, Any]]) -> Optional[float]:
     if denominator == 0:
         return 0.0
     return numerator / denominator
+
+
+# ---------------------------------------------------------------------------
+# LLM prompt construction
+# ---------------------------------------------------------------------------
+
+DRIFT_SYSTEM_PROMPT = """You are a data quality analyst reviewing monitor performance trends.
+
+For each monitor below, I've provided:
+- Current SLA/config values and their source (direct_profile, auto_discovered, imported_dbt, etc.)
+- Statistical summary of all historical results
+- Trend direction and significance
+
+Recommend SLA adjustments where the data shows consistent drift.
+
+Rules:
+- Only recommend changes where confidence > 0.7 and the trend is sustained
+- Do NOT recommend changes for monitors with insufficient history
+- For tightening recommendations, ensure the new threshold still has buffer above actual performance
+- For loosening recommendations, explain why the current threshold causes false alerts
+- For auto_discovered SLAs, weight recommendations higher — these were derived from historical data and the drift analyzer has newer data to refine them
+- For imported_dbt SLAs, note in reasoning that the threshold originated from dbt config
+
+Return ONLY a JSON array (no markdown fencing) where each element has:
+{
+  "monitorId": "...",
+  "driftCategory": "freshness|volume|quality|schema|anomaly|uniqueness",
+  "currentField": "section.field",
+  "currentValue": "...",
+  "recommendedValue": "...",
+  "reasoning": "1-2 sentence explanation",
+  "confidence": 0.0-1.0,
+  "severity": "low|medium|high"
+}
+
+If no recommendations are warranted, return an empty array: []"""
+
+
+MONITOR_TYPE_TO_CATEGORY: Dict[str, str] = {
+    "FRESHNESS": "freshness",
+    "VOLUME": "volume",
+    "NULL_CHECK": "quality",
+    "SCHEMA_CHANGE": "schema",
+    "OUTLIER_DETECTION": "anomaly",
+    "ANOMALY": "anomaly",
+    "UNIQUENESS_CHECK": "uniqueness",
+    "RANGE_VALIDATION": "anomaly",
+    "ACCEPTED_VALUES": "quality",
+    "DATE_CONSISTENCY": "quality",
+    "DATA_TYPE_VALIDATION": "schema",
+}
+
+CATEGORY_STAT_FN = {
+    "freshness": compute_freshness_stats,
+    "volume": compute_volume_stats,
+    "quality": compute_quality_stats,
+    "schema": compute_schema_stats,
+    "anomaly": compute_anomaly_stats,
+    "uniqueness": compute_uniqueness_stats,
+}
+
+CATEGORY_SLA_FIELDS: Dict[str, List[tuple]] = {
+    "freshness": [("freshness", "maxHours"), ("freshness", "warningHours")],
+    "volume": [("volume", "growthRateThreshold"), ("volume", "minRows")],
+    "quality": [("quality", "maxNullRate"), ("quality", "maxDuplicateRate")],
+    "schema": [("schema", "strictness"), ("schema", "allowEvolution")],
+    "anomaly": [("anomaly", "sensitivity"), ("anomaly", "lookbackDays")],
+    "uniqueness": [("quality", "maxDuplicateRate")],
+}
+
+
+def _build_monitor_context(
+    monitor: Dict[str, Any],
+    runs: List[Dict[str, Any]],
+    stats: Dict[str, Any],
+    sla_policy: Optional[Dict[str, Any]],
+    category: str,
+) -> Dict[str, Any]:
+    """Build context dict for a single monitor to include in the LLM prompt."""
+    current_sla = {}
+    if sla_policy:
+        for section, field in CATEGORY_SLA_FIELDS.get(category, []):
+            val = (sla_policy.get(section) or {}).get(field)
+            if val is not None:
+                current_sla[f"{section}.{field}"] = val
+
+    return {
+        "monitorId": monitor["id"],
+        "monitorName": monitor["name"],
+        "monitorType": monitor.get("monitorType", ""),
+        "targetFqn": monitor.get("targetFqn", ""),
+        "driftCategory": category,
+        "slaSource": sla_policy.get("source", "none") if sla_policy else "none",
+        "currentSLA": current_sla,
+        "stats": stats,
+        "runCount": len(runs),
+        "config": monitor.get("config") or {},
+    }
+
+
+async def _call_llm(monitors_context: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Call the LLM with drift analysis context and parse recommendations."""
+    import httpx
+    import os
+
+    user_prompt = json.dumps(monitors_context, indent=2, default=str)
+
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    model = os.environ.get("DRIFT_LLM_MODEL", "gpt-4o")
+
+    if not api_key:
+        logger.warning("[DriftAnalyzer] No OPENAI_API_KEY set, skipping LLM analysis")
+        return []
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": model,
+                "temperature": 0.2,
+                "messages": [
+                    {"role": "system", "content": DRIFT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        recommendations = json.loads(content)
+        if not isinstance(recommendations, list):
+            logger.error("[DriftAnalyzer] LLM returned non-list: %s", type(recommendations))
+            return []
+        return recommendations
+    except json.JSONDecodeError as e:
+        logger.error("[DriftAnalyzer] Failed to parse LLM response: %s", e)
+        return []
+
+
+async def run_drift_analysis(
+    org_id: str,
+    monitors: List[Dict[str, Any]],
+    runs_by_monitor: Dict[str, List[Dict[str, Any]]],
+    policies: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Run drift analysis for an organization's monitors.
+
+    Args:
+        org_id: Organization ID
+        monitors: List of monitor dicts (from DB)
+        runs_by_monitor: Map of monitor_id -> list of MonitorRun dicts
+        policies: Map of targetFqn -> resolved SLA policy dict
+
+    Returns:
+        Dict with runId and list of recommendation dicts ready for DB insertion.
+    """
+    run_id = str(uuid.uuid4())
+    all_contexts: Dict[str, List[Dict[str, Any]]] = {}
+
+    for monitor in monitors:
+        if not monitor.get("enabled"):
+            continue
+
+        monitor_id = monitor["id"]
+        monitor_type = (monitor.get("monitorType") or "").upper()
+        category = MONITOR_TYPE_TO_CATEGORY.get(monitor_type)
+        if not category:
+            continue
+
+        runs = runs_by_monitor.get(monitor_id, [])
+        if len(runs) < 5:
+            fqn = monitor.get("targetFqn", "")
+            policy = policies.get(fqn)
+            if not policy or policy.get("source") != "auto_discovered":
+                continue
+
+        stat_fn = CATEGORY_STAT_FN.get(category)
+        if not stat_fn:
+            continue
+
+        stats = stat_fn(runs)
+        fqn = monitor.get("targetFqn", "")
+        policy = policies.get(fqn)
+
+        ctx = _build_monitor_context(monitor, runs, stats, policy, category)
+
+        if category not in all_contexts:
+            all_contexts[category] = []
+        all_contexts[category].append(ctx)
+
+    all_recommendations = []
+    for category, contexts in all_contexts.items():
+        if not contexts:
+            continue
+        try:
+            recs = await _call_llm(contexts)
+            all_recommendations.extend(recs)
+        except Exception as e:
+            logger.error("[DriftAnalyzer] LLM call failed for %s: %s", category, e)
+
+    monitor_map = {m["id"]: m for m in monitors}
+    results = []
+    for rec in all_recommendations:
+        mid = rec.get("monitorId", "")
+        mon = monitor_map.get(mid)
+        if not mon:
+            continue
+
+        results.append({
+            "organizationId": org_id,
+            "monitorId": mid,
+            "monitorName": mon.get("name", ""),
+            "monitorType": mon.get("monitorType", ""),
+            "targetFqn": mon.get("targetFqn", ""),
+            "driftCategory": rec.get("driftCategory", ""),
+            "severity": rec.get("severity", "medium"),
+            "currentField": rec.get("currentField", ""),
+            "currentValue": str(rec.get("currentValue", "")),
+            "recommendedValue": str(rec.get("recommendedValue", "")),
+            "reasoning": rec.get("reasoning", ""),
+            "confidence": float(rec.get("confidence", 0.0)),
+            "evidence": rec,
+            "status": "pending",
+            "runId": run_id,
+        })
+
+    logger.info(
+        "[DriftAnalyzer] Analysis complete",
+        org_id=org_id,
+        run_id=run_id,
+        monitors_analyzed=sum(len(c) for c in all_contexts.values()),
+        recommendations=len(results),
+    )
+
+    return {"runId": run_id, "recommendations": results}
