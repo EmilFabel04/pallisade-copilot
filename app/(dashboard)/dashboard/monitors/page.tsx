@@ -8,9 +8,11 @@ import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import { Button } from '@/components/ui/button';
 import { WatchCard } from '@/components/schedule/WatchCard';
 import { WatchDetailPanel } from '@/components/schedule/WatchDetailPanel';
+import { TaskCard } from '@/components/schedule/TaskCard';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import { DriftSummaryTab } from '@/components/monitors/DriftSummaryTab';
 import { cn } from '@/lib/utils';
+import type { ScheduledTask } from '@/types/schedule';
 import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
 import { getMonitorSLAStatus } from '@/lib/sla-utils';
 
@@ -71,6 +73,7 @@ export default function MonitorsPage() {
   // Core state
   const [watches, setWatches] = useState<WatchSummary[]>([]);
   const [plans, setPlans] = useState<MonitoringPlanSummary[]>([]);
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modal state
@@ -109,12 +112,20 @@ export default function MonitorsPage() {
     } catch (err) { console.error('[Monitors] Failed to fetch plans:', err); }
   }, [selectedPipeline?.id]);
 
+  const fetchTasks = useCallback(async () => {
+    try {
+      const res = await cachedFetch('/api/schedule/tasks');
+      if (res.ok) { const data = await res.json(); setTasks(data.tasks || []); }
+    } catch (err) { console.error('[Monitors] Failed to fetch tasks:', err); }
+  }, []);
+
   useEffect(() => {
     setSelectedWatch(null);
     setWatchDetailMonitors([]);
     fetchWatches();
     fetchPlans();
-  }, [fetchWatches, fetchPlans]);
+    fetchTasks();
+  }, [fetchWatches, fetchPlans, fetchTasks]);
 
   // Resolve policies
   useEffect(() => {
@@ -201,7 +212,8 @@ export default function MonitorsPage() {
     invalidateCache('/api/schedule');
     fetchWatches();
     fetchPlans();
-  }, [fetchWatches, fetchPlans]);
+    fetchTasks();
+  }, [fetchWatches, fetchPlans, fetchTasks]);
 
   const handleToggleWatchEnabled = async (watchId: string, enabled: boolean) => {
     try {
@@ -270,6 +282,10 @@ export default function MonitorsPage() {
   const dataWatches = watches.filter((w) => watchMatchesBucket(w, DATA_MONITOR_TYPES));
   const pipelineWatches = watches.filter((w) => watchMatchesBucket(w, PIPELINE_MONITOR_TYPES));
 
+  // Standalone monitors (not in a watch group)
+  const dataTasks = tasks.filter((t) => DATA_MONITOR_TYPES.has((t.monitorType || '').toUpperCase()));
+  const pipelineTasks = tasks.filter((t) => PIPELINE_MONITOR_TYPES.has((t.monitorType || '').toUpperCase()));
+
   // ---------------------------------------------------------------------------
   // Policy / override counts helper
   // ---------------------------------------------------------------------------
@@ -320,11 +336,27 @@ export default function MonitorsPage() {
     { key: 'pipeline', label: 'Pipeline Monitors' },
   ];
 
-  const renderWatchList = (list: WatchSummary[]) => {
+  const handleToggleTaskEnabled = async (taskId: string, enabled: boolean) => {
+    try {
+      await fetch(`/api/schedule/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+      invalidateCache('/api/schedule');
+      setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, enabled } : t)));
+    } catch (err) { console.error('[Monitors] Failed to toggle task:', err); }
+  };
+
+  const handleRunTask = async (taskId: string) => {
+    try {
+      await fetch(`/api/monitors/${taskId}/run`, { method: 'POST' });
+      invalidateCache('/api/schedule');
+      fetchTasks();
+    } catch (err) { console.error('[Monitors] Failed to run task:', err); }
+  };
+
+  const renderMonitorList = (watchList: WatchSummary[], taskList: ScheduledTask[]) => {
     if (loading) {
       return <div className="flex items-center justify-center py-20"><div className="w-6 h-6 red-spinner" /></div>;
     }
-    if (list.length === 0) {
+    if (watchList.length === 0 && taskList.length === 0) {
       return (
         <div className="flex flex-col items-center justify-center py-20">
           <svg className="w-12 h-12 text-[var(--text-faint)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -338,7 +370,7 @@ export default function MonitorsPage() {
     }
     return (
       <div className="space-y-2">
-        {list.map((watch) => {
+        {watchList.map((watch) => {
           const { policyMonitorCount, overrideMonitorCount } = policyCountsForWatch(watch);
           return (
             <WatchCard
@@ -352,6 +384,15 @@ export default function MonitorsPage() {
             />
           );
         })}
+        {taskList.map((task) => (
+          <TaskCard
+            key={task.id}
+            task={task}
+            onClick={() => {}}
+            onToggleEnabled={(enabled) => handleToggleTaskEnabled(task.id, enabled)}
+            onRunNow={() => handleRunTask(task.id)}
+          />
+        ))}
       </div>
     );
   };
@@ -390,8 +431,8 @@ export default function MonitorsPage() {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {activeTab === 'summary' && <DriftSummaryTab />}
-        {activeTab === 'data' && renderWatchList(dataWatches)}
-        {activeTab === 'pipeline' && renderWatchList(pipelineWatches)}
+        {activeTab === 'data' && renderMonitorList(dataWatches, dataTasks)}
+        {activeTab === 'pipeline' && renderMonitorList(pipelineWatches, pipelineTasks)}
       </div>
 
       {/* Modal */}
