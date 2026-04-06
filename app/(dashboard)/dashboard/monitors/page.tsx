@@ -279,9 +279,11 @@ export default function MonitorsPage() {
   // Filtered watches per tab
   // ---------------------------------------------------------------------------
 
-  // Combine standalone watches + groups from plans into one list
+  // Combine standalone watches + groups from plans, deduplicate by anchorFqn
   const planGroups = plans.flatMap((p) => (p.monitorGroups || []) as WatchSummary[]);
-  const allWatches = [...watches, ...planGroups];
+  const planFqns = new Set(planGroups.map((g) => g.anchorFqn).filter(Boolean));
+  const uniqueWatches = watches.filter((w) => !w.anchorFqn || !planFqns.has(w.anchorFqn));
+  const allWatches = [...uniqueWatches, ...planGroups];
 
   const dataWatches = allWatches.filter((w) => watchMatchesBucket(w, DATA_MONITOR_TYPES));
   const pipelineWatches = allWatches.filter((w) => watchMatchesBucket(w, PIPELINE_MONITOR_TYPES));
