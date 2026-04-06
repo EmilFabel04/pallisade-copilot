@@ -415,11 +415,8 @@ async def run_drift_analysis(
         })
 
     logger.info(
-        "[DriftAnalyzer] Analysis complete",
-        org_id=org_id,
-        run_id=run_id,
-        monitors_analyzed=sum(len(c) for c in all_contexts.values()),
-        recommendations=len(results),
+        "[DriftAnalyzer] Analysis complete org_id=%s run_id=%s monitors_analyzed=%d recommendations=%d",
+        org_id, run_id, sum(len(c) for c in all_contexts.values()), len(results),
     )
 
     return {"runId": run_id, "recommendations": results}
