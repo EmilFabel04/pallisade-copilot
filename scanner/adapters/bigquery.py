@@ -493,65 +493,79 @@ class BigQueryAdapter(DatabaseAdapter):
     # FRESHNESS
     # =========================================================================
     
-    def get_table_freshness(self, 
-                            table: str, 
+    def get_table_freshness(self,
+                            table: str,
                             timestamp_column: Optional[str] = None) -> Dict[str, Any]:
-        """Get freshness information for a BigQuery table."""
-        ts_col = timestamp_column or self.detect_timestamp_column(table)
-        
-        if not ts_col:
-            # Try to get from __TABLES__ metadata
-            parts = table.replace('`', '').split('.')
-            if len(parts) == 3:
-                project, dataset, tbl = parts
-            elif len(parts) == 2:
-                project, dataset, tbl = self.project, parts[0], parts[1]
-            else:
-                project, dataset, tbl = self.project, self.dataset, parts[0]
-            
-            query = f"""
-                SELECT 
-                    last_modified_time,
-                    row_count,
-                    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), TIMESTAMP_MILLIS(last_modified_time), HOUR) as hours_ago
+        """Get freshness information for a BigQuery table.
+
+        Uses __TABLES__ metadata for row_count (instant, no scan).
+        If a timestamp column exists, queries MAX(ts_col) for freshness.
+        """
+        parts = table.replace('`', '').split('.')
+        if len(parts) == 3:
+            project, dataset, tbl = parts
+        elif len(parts) == 2:
+            project, dataset, tbl = self.project, parts[0], parts[1]
+        else:
+            project, dataset, tbl = self.project, self.dataset, parts[0]
+
+        # Step 1: Always get row_count + last_modified from __TABLES__ (free, no scan)
+        row_count = 0
+        meta_hours_ago = None
+        meta_last_modified = None
+        try:
+            meta_query = f"""
+                SELECT last_modified_time, row_count,
+                       TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), TIMESTAMP_MILLIS(last_modified_time), HOUR) as hours_ago
                 FROM `{project}.{dataset}.__TABLES__`
                 WHERE table_id = '{tbl}'
             """
-            result = self.execute_query(query)
-            if result:
-                row = result[0]
-                return {
-                    'last_updated': row.get('last_modified_time'),
-                    'hours_since_update': row.get('hours_ago', 0),
-                    'row_count': row.get('row_count', 0),
-                    'timestamp_column': '_METADATA',
-                    'source': 'table_metadata'
-                }
-            
+            meta_result = self.execute_query(meta_query)
+            if meta_result:
+                row = meta_result[0]
+                row_count = row.get('row_count', 0)
+                meta_hours_ago = row.get('hours_ago', 0)
+                meta_last_modified = row.get('last_modified_time')
+        except Exception:
+            pass
+
+        # Step 2: Try to get precise freshness from a timestamp column
+        ts_col = timestamp_column or self.detect_timestamp_column(table)
+
+        if ts_col:
+            try:
+                ts_query = f"""
+                    SELECT MAX(`{ts_col}`) as last_update,
+                           TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), CAST(MAX(`{ts_col}`) AS TIMESTAMP), HOUR) as hours_ago
+                    FROM `{project}.{dataset}.{tbl}`
+                """
+                ts_result = self.execute_query(ts_query)
+                if ts_result and ts_result[0].get('last_update') is not None:
+                    row = ts_result[0]
+                    return {
+                        'last_updated': row.get('last_update'),
+                        'hours_since_update': row.get('hours_ago', 0),
+                        'row_count': row_count,
+                        'timestamp_column': ts_col,
+                        'source': 'column'
+                    }
+            except Exception:
+                pass  # Fall through to metadata
+
+        # Step 3: Fall back to __TABLES__ metadata
+        if meta_hours_ago is not None:
             return {
-                'error': 'No timestamp column found',
-                'timestamp_column': None
+                'last_updated': meta_last_modified,
+                'hours_since_update': meta_hours_ago,
+                'row_count': row_count,
+                'timestamp_column': '_METADATA',
+                'source': 'table_metadata'
             }
-        
-        query = f"""
-            SELECT 
-                MAX(`{ts_col}`) as last_update,
-                COUNT(*) as row_count,
-                TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(`{ts_col}`), HOUR) as hours_ago
-            FROM `{table}`
-        """
-        
-        result = self.execute_query(query)
-        
-        if result:
-            row = result[0]
-            return {
-                'last_updated': row.get('last_update'),
-                'hours_since_update': row.get('hours_ago', 0),
-                'row_count': row.get('row_count', 0),
-                'timestamp_column': ts_col,
-                'source': 'column'
-            }
+
+        return {
+            'error': 'No freshness data available',
+            'timestamp_column': None
+        }
         
         return {'error': 'Failed to get freshness', 'timestamp_column': ts_col}
     
@@ -639,49 +653,123 @@ class BigQueryAdapter(DatabaseAdapter):
     # HISTORICAL QUERIES
     # =========================================================================
 
-    def get_freshness_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
-        """Get modification timestamp history from TABLE_STORAGE_TIMELINE."""
+    def _parse_table_parts(self, table: str):
+        """Parse a table FQN into (project, dataset, table_name)."""
         parts = table.replace("`", "").split(".")
         if len(parts) == 3:
-            project, dataset, tbl = parts
+            return parts[0], parts[1], parts[2]
         elif len(parts) == 2:
-            project, dataset, tbl = self.project, parts[0], parts[1]
-        else:
-            project, dataset, tbl = self.project, self.dataset, parts[0]
+            return self.project, parts[0], parts[1]
+        return self.project, self.dataset, parts[0]
 
-        query = f"""
-            SELECT DISTINCT DATE(storage_last_modified_time) as mod_date,
-                   MAX(storage_last_modified_time) as timestamp
-            FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE_TIMELINE`
-            WHERE table_name = '{tbl}'
-              AND storage_last_modified_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
-            GROUP BY mod_date
-            ORDER BY mod_date
-        """
-        rows = self.query(query)
-        return [{"timestamp": row["timestamp"]} for row in rows]
+    def get_freshness_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get modification timestamp history. Tries TABLE_STORAGE_TIMELINE first,
+        falls back to TABLE_STORAGE, then TABLES metadata."""
+        project, dataset, tbl = self._parse_table_parts(table)
+
+        # Try 1: TABLE_STORAGE_TIMELINE (full history)
+        try:
+            query = f"""
+                SELECT DISTINCT DATE(storage_last_modified_time) as mod_date,
+                       MAX(storage_last_modified_time) as timestamp
+                FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE_TIMELINE`
+                WHERE table_name = '{tbl}'
+                  AND storage_last_modified_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
+                GROUP BY mod_date
+                ORDER BY mod_date
+            """
+            rows = self.execute_query(query)
+            if rows:
+                return [{"timestamp": row["timestamp"]} for row in rows]
+        except Exception:
+            pass
+
+        # Try 2: TABLE_STORAGE (current snapshot — single point)
+        try:
+            query = f"""
+                SELECT last_modified_time as timestamp
+                FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE`
+                WHERE table_name = '{tbl}'
+            """
+            rows = self.execute_query(query)
+            if rows:
+                return [{"timestamp": row["timestamp"]} for row in rows]
+        except Exception:
+            pass
+
+        # Try 3: TABLES metadata (last modified)
+        try:
+            query = f"""
+                SELECT TIMESTAMP_MILLIS(last_modified_time) as timestamp
+                FROM `{project}.{dataset}.__TABLES__`
+                WHERE table_id = '{tbl}'
+            """
+            rows = self.execute_query(query)
+            if rows:
+                return [{"timestamp": row["timestamp"]} for row in rows]
+        except Exception:
+            pass
+
+        return []
 
     def get_row_count_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
-        """Get daily row count history from TABLE_STORAGE_TIMELINE."""
-        parts = table.replace("`", "").split(".")
-        if len(parts) == 3:
-            project, dataset, tbl = parts
-        elif len(parts) == 2:
-            project, dataset, tbl = self.project, parts[0], parts[1]
-        else:
-            project, dataset, tbl = self.project, self.dataset, parts[0]
+        """Get row count history. Tries TABLE_STORAGE_TIMELINE first,
+        falls back to TABLE_STORAGE, then __TABLES__, then COUNT(*)."""
+        project, dataset, tbl = self._parse_table_parts(table)
 
-        query = f"""
-            SELECT DATE(storage_last_modified_time) as date,
-                   MAX(total_rows) as row_count
-            FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE_TIMELINE`
-            WHERE table_name = '{tbl}'
-              AND storage_last_modified_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
-            GROUP BY date
-            ORDER BY date
-        """
-        rows = self.query(query)
-        return [{"date": row["date"], "row_count": int(row["row_count"])} for row in rows]
+        # Try 1: TABLE_STORAGE_TIMELINE (full daily history)
+        try:
+            query = f"""
+                SELECT DATE(storage_last_modified_time) as date,
+                       MAX(total_rows) as row_count
+                FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE_TIMELINE`
+                WHERE table_name = '{tbl}'
+                  AND storage_last_modified_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days} DAY)
+                GROUP BY date
+                ORDER BY date
+            """
+            rows = self.execute_query(query)
+            if rows:
+                return [{"date": row["date"], "row_count": int(row["row_count"])} for row in rows]
+        except Exception:
+            pass
+
+        # Try 2: TABLE_STORAGE (current snapshot)
+        try:
+            query = f"""
+                SELECT CURRENT_DATE() as date, total_rows as row_count
+                FROM `{project}.{dataset}.INFORMATION_SCHEMA.TABLE_STORAGE`
+                WHERE table_name = '{tbl}' AND total_rows IS NOT NULL
+            """
+            rows = self.execute_query(query)
+            if rows and rows[0].get("row_count") is not None:
+                return [{"date": row["date"], "row_count": int(row["row_count"])} for row in rows]
+        except Exception:
+            pass
+
+        # Try 3: __TABLES__ metadata
+        try:
+            query = f"""
+                SELECT CURRENT_DATE() as date, row_count
+                FROM `{project}.{dataset}.__TABLES__`
+                WHERE table_id = '{tbl}'
+            """
+            rows = self.execute_query(query)
+            if rows and rows[0].get("row_count") is not None:
+                return [{"date": row["date"], "row_count": int(row["row_count"])} for row in rows]
+        except Exception:
+            pass
+
+        # Try 4: Direct COUNT(*)
+        try:
+            query = f"SELECT CURRENT_DATE() as date, COUNT(*) as row_count FROM `{project}.{dataset}.{tbl}`"
+            rows = self.execute_query(query)
+            if rows:
+                return [{"date": row["date"], "row_count": int(row["row_count"])} for row in rows]
+        except Exception:
+            pass
+
+        return []
 
     def get_daily_null_rates(self, table: str, timestamp_column: str, days: int = 30) -> List[Dict[str, Any]]:
         """Get daily null rates across all columns, partitioned by timestamp_column."""
@@ -697,7 +785,7 @@ class BigQueryAdapter(DatabaseAdapter):
             SELECT column_name FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS`
             WHERE table_name = '{tbl}' AND column_name != '{timestamp_column}'
         """
-        col_rows = self.query(cols_query)
+        col_rows = self.execute_query(cols_query)
         columns = [r["column_name"] for r in col_rows]
         if not columns:
             return []
@@ -713,7 +801,7 @@ class BigQueryAdapter(DatabaseAdapter):
             GROUP BY date
             ORDER BY date
         """
-        rows = self.query(query)
+        rows = self.execute_query(query)
         return [{"date": row["date"], "null_rate": float(row["null_rate"] or 0)} for row in rows]
 
     def get_schema_change_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:

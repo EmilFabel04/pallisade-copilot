@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Save, Loader2, ArrowDown } from 'lucide-react';
-import { ControlPlaneSource, SourceSLAData, SlaTier } from './types';
+import { ControlPlaneSource, SourceSLAData } from './types';
 import {
   EffectiveSLA,
   PipelineSLAData,
@@ -19,13 +19,6 @@ import WarehouseOverrides from '@/components/contracts/overrides/WarehouseOverri
 import TransformationOverrides from '@/components/contracts/overrides/TransformationOverrides';
 import OrchestrationOverrides from '@/components/contracts/overrides/OrchestrationOverrides';
 
-const SLA_OPTIONS: { value: SlaTier; label: string }[] = [
-  { value: 'T0', label: 'T0 — Critical' },
-  { value: 'T1', label: 'T1 — High' },
-  { value: 'T2', label: 'T2 — Medium' },
-  { value: 'T3', label: 'T3 — Low' },
-];
-
 interface Props {
   source: ControlPlaneSource;
   pipelineContract?: PipelineSLAData | null;
@@ -38,7 +31,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
   const [error, setError] = useState<string | null>(null);
 
   // Core fields
-  const [slaTier, setSlaTier] = useState<string>(source.contract?.slaTier || '');
   const [expectedFreshnessMinutes, setExpectedFreshnessMinutes] = useState<string>(
     source.contract?.expectedFreshnessMinutes?.toString() || ''
   );
@@ -67,7 +59,7 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
 
   // Build effective SLA preview
   const sourceForResolver: NodeSLAWithOverrides = {
-    slaTier: (slaTier || null) as SlaTier | null,
+    slaTier: null,
     expectedFreshnessMinutes: expectedFreshnessMinutes ? Number(expectedFreshnessMinutes) : null,
     expectedExtractionFrequencyMinutes: expectedExtractionFrequencyMinutes ? Number(expectedExtractionFrequencyMinutes) : null,
     notes: notes || null,
@@ -88,7 +80,7 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
       }
 
       const body: Record<string, any> = {
-        slaTier: slaTier || null,
+        slaTier: null,
         expectedFreshnessMinutes: expectedFreshnessMinutes ? Number(expectedFreshnessMinutes) : null,
         expectedExtractionFrequencyMinutes: expectedExtractionFrequencyMinutes ? Number(expectedExtractionFrequencyMinutes) : null,
         notes: notes || null,
@@ -179,22 +171,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
 
             {/* SLA & Expectations */}
             <Section title="SLA & Expectations">
-              <Field label="SLA Tier">
-                <select
-                  value={slaTier}
-                  onChange={(e) => setSlaTier(e.target.value)}
-                  className={inputClass}
-                >
-                  <option value="">
-                    {inheritFromPipeline && pipelineContract?.slaTier
-                      ? `Pipeline default: ${pipelineContract.slaTier}`
-                      : 'None'}
-                  </option>
-                  {SLA_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-              </Field>
               <Field label="Expected Freshness (minutes)">
                 <input
                   type="number"
@@ -264,7 +240,6 @@ export default function EditSLAModal({ source, pipelineContract, onClose, onSave
                 )}
               </div>
               <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
-                <PreviewField label="SLA Tier" value={effective.slaTier} />
                 <PreviewField label="Freshness" value={effective.expectedFreshnessMinutes ? `${effective.expectedFreshnessMinutes}m` : null} />
                 <PreviewField label="Extraction Freq" value={effective.expectedExtractionFrequencyMinutes ? `${effective.expectedExtractionFrequencyMinutes}m` : null} />
               </div>

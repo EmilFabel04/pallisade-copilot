@@ -9,12 +9,10 @@ import {
   ControlPlaneSource,
   SourceStatus,
   ExtractionStatus,
-  SlaTier,
   SourceFilters,
   SortField,
   STATUS_CONFIG,
   EXTRACTION_STATUS_CONFIG,
-  SLA_CONFIG,
   getDefaultFilters,
 } from '@/components/sources/types';
 import SourceSummaryBar from '@/components/sources/SourceSummaryBar';
@@ -25,7 +23,6 @@ import SourceDetailDrawer from '@/components/sources/SourceDetailDrawer';
 const ALL_LAYERS: PipelineLayer[] = ['INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
 const ALL_STATUSES: SourceStatus[] = ['healthy', 'degraded', 'disconnected', 'expiring_soon', 'pending'];
 const ALL_EXTRACTION_STATUSES: ExtractionStatus[] = ['ok', 'stale', 'failed', 'never'];
-const ALL_SLA_TIERS: SlaTier[] = ['T0', 'T1', 'T2', 'T3'];
 const SORT_OPTIONS: { field: SortField; label: string }[] = [
   { field: 'name', label: 'Name' },
   { field: 'status', label: 'Status' },
@@ -41,8 +38,6 @@ export default function SourcesPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [showLayerFilter, setShowLayerFilter] = useState(false);
   const [showExtractionFilter, setShowExtractionFilter] = useState(false);
-  const [showSlaFilter, setShowSlaFilter] = useState(false);
-
   const filtered = useMemo(() => filterAndSort(sources, filters), [sources, filters]);
 
   const updateSearch = useCallback((search: string) => {
@@ -70,14 +65,6 @@ export default function SourcesPage() {
       const next = new Set(f.extractionStatuses);
       if (next.has(es)) next.delete(es); else next.add(es);
       return { ...f, extractionStatuses: next };
-    });
-  }, []);
-
-  const toggleSlaTier = useCallback((tier: SlaTier) => {
-    setFilters(f => {
-      const next = new Set(f.slaTiers);
-      if (next.has(tier)) next.delete(tier); else next.add(tier);
-      return { ...f, slaTiers: next };
     });
   }, []);
 
@@ -225,7 +212,7 @@ export default function SourcesPage() {
           active={filters.layers.size > 0}
           count={filters.layers.size}
           open={showLayerFilter}
-          onToggle={() => { setShowLayerFilter(!showLayerFilter); setShowExtractionFilter(false); setShowSlaFilter(false); }}
+          onToggle={() => { setShowLayerFilter(!showLayerFilter); setShowExtractionFilter(false);}}
           onClear={() => setFilters(f => ({ ...f, layers: new Set() }))}
         >
           {ALL_LAYERS.map((layer) => (
@@ -245,7 +232,7 @@ export default function SourcesPage() {
           active={filters.extractionStatuses.size > 0}
           count={filters.extractionStatuses.size}
           open={showExtractionFilter}
-          onToggle={() => { setShowExtractionFilter(!showExtractionFilter); setShowLayerFilter(false); setShowSlaFilter(false); }}
+          onToggle={() => { setShowExtractionFilter(!showExtractionFilter); setShowLayerFilter(false);}}
           onClear={() => setFilters(f => ({ ...f, extractionStatuses: new Set() }))}
         >
           {ALL_EXTRACTION_STATUSES.map((es) => {
@@ -257,28 +244,6 @@ export default function SourcesPage() {
                 label={`${cfg.label} (${count})`}
                 active={filters.extractionStatuses.has(es)}
                 onClick={() => toggleExtractionStatus(es)}
-              />
-            );
-          })}
-        </FilterDropdown>
-
-        {/* SLA tier filter */}
-        <FilterDropdown
-          label="SLA"
-          active={filters.slaTiers.size > 0}
-          count={filters.slaTiers.size}
-          open={showSlaFilter}
-          onToggle={() => { setShowSlaFilter(!showSlaFilter); setShowLayerFilter(false); setShowExtractionFilter(false); }}
-          onClear={() => setFilters(f => ({ ...f, slaTiers: new Set() }))}
-        >
-          {ALL_SLA_TIERS.map((tier) => {
-            const cfg = SLA_CONFIG[tier];
-            return (
-              <FilterItem
-                key={tier}
-                label={cfg.label}
-                active={filters.slaTiers.has(tier)}
-                onClick={() => toggleSlaTier(tier)}
               />
             );
           })}

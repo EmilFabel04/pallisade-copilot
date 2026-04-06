@@ -153,12 +153,20 @@ class CrossToolLineageOrchestrator:
                     graph=self.graph,
                     adapter_registry=self._adapter_registry,
                 )
+                successful = sum(1 for r in discovery_results if not r.unsupported and not r.skipped_reason)
+                skipped = sum(1 for r in discovery_results if r.skipped_reason)
+                unsupported = sum(1 for r in discovery_results if r.unsupported)
                 logger.info(
-                    f"[SLA Discovery] Discovered {sum(1 for r in discovery_results if not r.unsupported and not r.skipped_reason)} "
-                    f"profiles out of {len(discovery_results)} nodes"
+                    f"[SLA Discovery] Discovered {successful} profiles out of "
+                    f"{len(discovery_results)} nodes ({skipped} skipped, {unsupported} unsupported)"
                 )
+                for r in discovery_results:
+                    if r.skipped_reason:
+                        logger.warning(f"[SLA Discovery] {r.node_fqn}: skipped — {r.skipped_reason}")
+            except NotImplementedError as e:
+                logger.warning(f"[SLA Discovery] Adapter missing history methods: {e}")
             except Exception as e:
-                logger.warning(f"[SLA Discovery] Discovery failed (non-fatal): {e}")
+                logger.warning(f"[SLA Discovery] Discovery failed (non-fatal): {type(e).__name__}: {e}")
 
             duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
 

@@ -121,6 +121,7 @@ interface DataAssetNodeData {
   isSLASelected?: boolean;
   slaStatus?: 'assigned' | 'inherited' | 'override' | 'none';
   slaProfileName?: string | null;
+  onSLABadgeClick?: () => void;
   // Compliance status against contract/tier baseline
   complianceStatus?: ComplianceBadgeStatus;
 }
@@ -608,7 +609,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
           </div>
           {/* Policy badge (inline, right side) */}
           <div className="flex items-center gap-1">
-            <SLABadge status={slaStatus} profileName={data.slaProfileName} />
+            <SLABadge status={slaStatus} profileName={data.slaProfileName} onClick={data.onSLABadgeClick} />
             {data.complianceStatus && (
               <ComplianceBadge status={data.complianceStatus} />
             )}

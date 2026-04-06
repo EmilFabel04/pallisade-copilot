@@ -107,7 +107,6 @@ export function DataSLAsTab() {
 
   const [viewContract, setViewContract] = useState<DataSLASummary | null>(null);
   const [search, setSearch] = useState('');
-  const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
   const [scopeFilter, setScopeFilter] = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
 
@@ -129,10 +128,6 @@ export function DataSLAsTab() {
       );
     }
 
-    if (tierFilter.size > 0) {
-      result = result.filter(c => c.slaTier && tierFilter.has(c.slaTier));
-    }
-
     if (scopeFilter.size > 0) {
       result = result.filter(c => scopeFilter.has(c.scope));
     }
@@ -142,7 +137,7 @@ export function DataSLAsTab() {
     }
 
     return result;
-  }, [contracts, search, tierFilter, scopeFilter, statusFilter]);
+  }, [contracts, search, scopeFilter, statusFilter]);
 
   const groupContracts = filteredSLAs.filter(c => !c.isException);
   const exceptionContracts = filteredSLAs.filter(c => c.isException);
@@ -214,17 +209,6 @@ export function DataSLAsTab() {
         searchPlaceholder="Search by name or scope..."
         filters={[
           {
-            label: 'Tier',
-            options: [
-              { value: 'T0', label: 'T0' },
-              { value: 'T1', label: 'T1' },
-              { value: 'T2', label: 'T2' },
-              { value: 'T3', label: 'T3' },
-            ],
-            selected: tierFilter,
-            onToggle: v => toggleFilter(tierFilter, setTierFilter, v),
-          },
-          {
             label: 'Scope',
             options: [
               { value: 'schema', label: 'Schema' },
@@ -248,11 +232,10 @@ export function DataSLAsTab() {
         ]}
         onClearAll={() => {
           setSearch('');
-          setTierFilter(new Set());
           setScopeFilter(new Set());
           setStatusFilter(new Set());
         }}
-        hasActiveFilters={search.length > 0 || tierFilter.size > 0 || scopeFilter.size > 0 || statusFilter.size > 0}
+        hasActiveFilters={search.length > 0 || scopeFilter.size > 0 || statusFilter.size > 0}
         totalCount={contracts.length}
         filteredCount={filteredSLAs.length}
         actionButton={
@@ -342,7 +325,6 @@ export function DataSLAsTab() {
         <SLAViewDrawer
           title={viewContract.name || viewContract.scopeRef}
           subtitle={viewContract.scopeRef}
-          slaTier={viewContract.slaTier}
           status={viewContract.status || 'active'}
           fields={buildViewFields(viewContract)}
           nodes={viewContract.nodeFqns || []}
@@ -452,7 +434,6 @@ function ContractEditorDrawer({ contract, pipelineId, editable, onClose, onSaved
     return c;
   });
   const [contractName, setContractName] = useState(contract.name || '');
-  const [slaTier, setSlaTier] = useState(contract.slaTier || '');
   const [notes, setNotes] = useState(contract.notes || '');
   const [editNodeFqns, setEditNodeFqns] = useState<string[]>(contract.nodeFqns || []);
   const [showNodePicker, setShowNodePicker] = useState(false);
@@ -479,7 +460,6 @@ function ContractEditorDrawer({ contract, pipelineId, editable, onClose, onSaved
     try {
       const body: Record<string, any> = {
         name: contractName.trim() || null,
-        slaTier: slaTier || null,
         notes: notes.trim() || null,
         nodeFqns: editNodeFqns.length > 0 ? editNodeFqns : null,
       };
@@ -521,9 +501,6 @@ function ContractEditorDrawer({ contract, pipelineId, editable, onClose, onSaved
             </button>
           </div>
           <div className="flex gap-2 mt-3">
-            {contract.slaTier && (
-              <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--accent)]/15 text-[var(--accent)] font-medium">{contract.slaTier}</span>
-            )}
             {contract.autoSynced && (
               <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/15 text-blue-400 font-medium">Auto-synced</span>
             )}
@@ -583,29 +560,6 @@ function ContractEditorDrawer({ contract, pipelineId, editable, onClose, onSaved
             ) : (
               <p className="text-[11px] text-[var(--muted)] italic">No nodes selected</p>
             )}
-          </div>
-
-          {/* SLA Tier */}
-          <div>
-            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">SLA Tier</label>
-            <select value={slaTier} disabled={!editable} onChange={e => {
-              const tier = e.target.value;
-              setSlaTier(tier);
-              if (tier && TIER_PRESETS[tier]) {
-                const preset = TIER_PRESETS[tier];
-                const newConfigs: Record<string, Record<string, any>> = {};
-                for (const [k, v] of Object.entries(preset)) newConfigs[k] = { ...v };
-                setConfigs(newConfigs);
-              }
-            }}
-              className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)] disabled:opacity-60">
-              <option value="">None</option>
-              <option value="T0">T0 - Critical</option>
-              <option value="T1">T1 - High</option>
-              <option value="T2">T2 - Standard</option>
-              <option value="T3">T3 - Low</option>
-            </select>
-            {slaTier && <p className="text-[10px] text-[var(--muted)] mt-1">Selecting a tier auto-populates SLA fields below. You can customize individual values.</p>}
           </div>
 
           {/* Domain SLA fields */}
@@ -682,7 +636,6 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [nodeMetas, setNodeMetas] = useState<NodeMeta[]>([]);
   const [contractName, setContractName] = useState('');
-  const [slaTier, setSlaTier] = useState('');
   const [configs, setConfigs] = useState<Record<string, Record<string, any>>>({});
   const [saving, setSaving] = useState(false);
 
@@ -727,7 +680,6 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
         scopeRef,
         name: contractName.trim() || null,
         nodeFqns: fqns,
-        slaTier: slaTier || null,
       };
       for (const [k, v] of Object.entries(configs)) {
         if (Object.keys(v).length > 0) body[k] = v;
@@ -830,29 +782,6 @@ function ContractCreatorModal({ pipelineId, onClose, onCreated }: {
               <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">Data SLA Name (optional)</label>
               <input type="text" value={contractName} onChange={e => setContractName(e.target.value)} placeholder="e.g., Analytics Tables, Raw Ingestion"
                 className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]" />
-            </div>
-
-            {/* SLA Tier */}
-            <div>
-              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">SLA Tier</label>
-              <select value={slaTier} onChange={e => {
-                const tier = e.target.value;
-                setSlaTier(tier);
-                if (tier && TIER_PRESETS[tier]) {
-                  const preset = TIER_PRESETS[tier];
-                  const newConfigs: Record<string, Record<string, any>> = {};
-                  for (const [k, v] of Object.entries(preset)) newConfigs[k] = { ...v };
-                  setConfigs(newConfigs);
-                }
-              }}
-                className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]">
-                <option value="">None</option>
-                <option value="T0">T0 - Critical</option>
-                <option value="T1">T1 - High</option>
-                <option value="T2">T2 - Standard</option>
-                <option value="T3">T3 - Low</option>
-              </select>
-              {slaTier && <p className="text-[10px] text-[var(--muted)] mt-1">Selecting a tier auto-populates SLA fields below. You can customize individual values.</p>}
             </div>
 
             {/* Domain SLA config */}

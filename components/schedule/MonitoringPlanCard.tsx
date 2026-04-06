@@ -212,7 +212,7 @@ export function MonitoringPlanCard({
               )}
               {overrideMonitorCount > 0 && (policyMonitorCount - overrideMonitorCount) > 0 && ', '}
               {(policyMonitorCount - overrideMonitorCount) > 0 && (
-                <span className="text-violet-400">{policyMonitorCount - overrideMonitorCount} policy-covered</span>
+                <span className="text-violet-400">{policyMonitorCount - overrideMonitorCount} SLA covered</span>
               )}
             </span>
           )}

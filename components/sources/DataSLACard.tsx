@@ -4,13 +4,6 @@ import React from 'react';
 import type { DataSLASummary } from './useDataSLAs';
 import { SLACardMenu, type SLAStatus } from '../governance/SLACardMenu';
 
-const TIER_STYLES: Record<string, { color: string; bg: string }> = {
-  T0: { color: 'text-red-400', bg: 'bg-red-500/15' },
-  T1: { color: 'text-amber-400', bg: 'bg-amber-500/15' },
-  T2: { color: 'text-blue-400', bg: 'bg-blue-500/15' },
-  T3: { color: 'text-zinc-400', bg: 'bg-zinc-500/15' },
-};
-
 const STATUS_STYLES: Record<string, { color: string; bg: string; label: string }> = {
   active: { color: 'text-emerald-400', bg: 'bg-emerald-500/15', label: 'Active' },
   inactive: { color: 'text-zinc-400', bg: 'bg-zinc-500/15', label: 'Inactive' },
@@ -45,7 +38,6 @@ export function DataSLACard({ contract, editable, onView, onClick, onDelete, onA
   const status: SLAStatus = (contract as any).status || 'active';
   const displayName = contract.name || contract.scopeRef;
   const nodeCount = contract.nodeFqns?.length || 0;
-  const tierStyle = TIER_STYLES[(contract.slaTier || '').toUpperCase()] || TIER_STYLES.T2;
   const scopeColor = SCOPE_COLORS[contract.scope] || '#6B7280';
   const scopeLabel = SCOPE_LABELS[contract.scope] || contract.scope;
 
@@ -59,11 +51,6 @@ export function DataSLACard({ contract, editable, onView, onClick, onDelete, onA
           {displayName}
         </span>
         <div className="flex items-center gap-2">
-          {contract.slaTier && (
-            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${tierStyle.color} ${tierStyle.bg}`}>
-              {contract.slaTier}
-            </span>
-          )}
           {status !== 'active' && (
             <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLES[status].color} ${STATUS_STYLES[status].bg}`}>
               {STATUS_STYLES[status].label}

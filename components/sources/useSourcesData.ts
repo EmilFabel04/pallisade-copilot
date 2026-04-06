@@ -248,11 +248,6 @@ export function filterAndSort(sources: ControlPlaneSource[], filters: SourceFilt
     result = result.filter(s => filters.extractionStatuses.has(s.extractionStatus));
   }
 
-  // SLA tier filter
-  if (filters.slaTiers.size > 0) {
-    result = result.filter(s => s.contract?.slaTier && filters.slaTiers.has(s.contract.slaTier));
-  }
-
   // Graph domain filter (DATA_PLANE / CONTROL_PLANE / ALL)
   if (filters.graphDomain && filters.graphDomain !== 'ALL') {
     result = result.filter(s => s.graphDomain === filters.graphDomain);

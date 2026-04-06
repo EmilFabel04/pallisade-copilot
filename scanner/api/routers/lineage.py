@@ -1028,6 +1028,9 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
 _engine_stores: dict = {}
 _run_registries: dict = {}
 
+# Per-pipeline cached tool configs — used by on-demand SLA discovery
+_engine_tool_configs_map: dict = {}
+
 # Per-pipeline cached engine adapter results — nodes/edges from each extraction
 _engine_collected_results_map: dict = {}
 
@@ -3049,6 +3052,11 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         run_id = await run_extraction_pipeline(tool_configs, registry, store, pipeline_config)
         store.tool_nodes = _tool_nodes
         store.pipeline_edges = _pipeline_edges
+
+        # Cache tool configs for on-demand SLA discovery
+        _engine_tool_configs_map[_current_stack_id] = {
+            tc.tool_type: tc.config for tc in request.tool_configs if tc.config
+        }
 
         # Build response from run record
         record = registry.get_run(run_id)

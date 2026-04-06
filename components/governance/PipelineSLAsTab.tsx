@@ -14,7 +14,6 @@ import { PIPELINE_SLA_FIELDS, PIPELINE_SLA_DOMAINS, type PipelineSLAFieldDef } f
 /*  Component types and constants                                      */
 /* ------------------------------------------------------------------ */
 
-const TIERS = ['T0', 'T1', 'T2', 'T3'] as const;
 
 /* ------------------------------------------------------------------ */
 /*  PipelineSLACreatorModal                                            */
@@ -32,7 +31,6 @@ function PipelineSLACreatorModal({
   const [step, setStep] = useState<1 | 2>(1);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [allNodes, setAllNodes] = useState<NodeMeta[]>([]);
-  const [slaTier, setSlaTier] = useState('');
   // values keyed by "domain:fieldKey" to support per-domain config
   const [values, setValues] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -86,7 +84,6 @@ function PipelineSLACreatorModal({
             assignmentType: 'direct',
             nodeFqns: nodes.map(n => n.fqn),
             nodeDomain: domain,
-            slaTier: slaTier || undefined,
             overrides,
           }),
         });
@@ -173,19 +170,6 @@ function PipelineSLACreatorModal({
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {/* SLA Tier */}
-            <div>
-              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide block mb-1">SLA Tier</label>
-              <select value={slaTier} onChange={e => setSlaTier(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] text-sm text-[var(--foreground)]">
-                <option value="">None</option>
-                <option value="T0">T0 - Critical</option>
-                <option value="T1">T1 - High</option>
-                <option value="T2">T2 - Standard</option>
-                <option value="T3">T3 - Low</option>
-              </select>
-            </div>
-
             {/* Per-domain config sections */}
             {domainKeys.map(domain => {
               const nodes = domainGroups[domain];
@@ -293,7 +277,6 @@ export function PipelineSLAsTab() {
   const [showCreate, setShowCreate] = useState(false);
 
   const [search, setSearch] = useState('');
-  const [tierFilter, setTierFilter] = useState<Set<string>>(new Set());
   const [domainFilter, setDomainFilter] = useState<Set<string>>(new Set());
   const [viewItem, setViewItem] = useState<PipelineSLAItem | null>(null);
   const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
@@ -329,10 +312,6 @@ export function PipelineSLAsTab() {
       );
     }
 
-    if (tierFilter.size > 0) {
-      result = result.filter(i => i.slaTier && tierFilter.has(i.slaTier.toUpperCase()));
-    }
-
     if (domainFilter.size > 0) {
       result = result.filter(i => i.nodeDomain && domainFilter.has(i.nodeDomain));
     }
@@ -342,9 +321,9 @@ export function PipelineSLAsTab() {
     }
 
     return result;
-  }, [items, search, tierFilter, domainFilter, statusFilter]);
+  }, [items, search, domainFilter, statusFilter]);
 
-  const hasActiveFilters = search.length > 0 || tierFilter.size > 0 || domainFilter.size > 0 || statusFilter.size > 0;
+  const hasActiveFilters = search.length > 0 || domainFilter.size > 0 || statusFilter.size > 0;
 
   const toggleFilter = (set: Set<string>, setter: (s: Set<string>) => void, value: string) => {
     const next = new Set(set);
@@ -407,17 +386,6 @@ export function PipelineSLAsTab() {
         searchPlaceholder="Search by node name, platform, or profile..."
         filters={[
           {
-            label: 'Tier',
-            options: [
-              { value: 'T0', label: 'T0' },
-              { value: 'T1', label: 'T1' },
-              { value: 'T2', label: 'T2' },
-              { value: 'T3', label: 'T3' },
-            ],
-            selected: tierFilter,
-            onToggle: v => toggleFilter(tierFilter, setTierFilter, v),
-          },
-          {
             label: 'Domain',
             options: [
               { value: 'ingestion', label: 'Ingestion', dot: '#10B981' },
@@ -442,7 +410,6 @@ export function PipelineSLAsTab() {
         ]}
         onClearAll={() => {
           setSearch('');
-          setTierFilter(new Set());
           setDomainFilter(new Set());
           setStatusFilter(new Set());
         }}
@@ -487,7 +454,6 @@ export function PipelineSLAsTab() {
         <SLAViewDrawer
           title={viewItem.nodeName || viewItem.nodeFqn.split('.').pop() || viewItem.nodeFqn}
           subtitle={viewItem.nodeFqn}
-          slaTier={viewItem.slaTier}
           status={viewItem.status || 'active'}
           fields={buildViewFields(viewItem)}
           notes={null}

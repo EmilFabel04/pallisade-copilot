@@ -3,13 +3,6 @@
 import React from 'react';
 import { X, Clock, Shield } from 'lucide-react';
 
-const TIER_STYLES: Record<string, { color: string; bg: string }> = {
-  T0: { color: 'text-red-400', bg: 'bg-red-500/15' },
-  T1: { color: 'text-amber-400', bg: 'bg-amber-500/15' },
-  T2: { color: 'text-blue-400', bg: 'bg-blue-500/15' },
-  T3: { color: 'text-zinc-400', bg: 'bg-zinc-500/15' },
-};
-
 const STATUS_STYLES: Record<string, { color: string; bg: string; label: string }> = {
   active: { color: 'text-emerald-400', bg: 'bg-emerald-500/15', label: 'Active' },
   inactive: { color: 'text-zinc-400', bg: 'bg-zinc-500/15', label: 'Inactive' },
@@ -24,7 +17,6 @@ interface SLAField {
 interface SLAViewDrawerProps {
   title: string;
   subtitle?: string;
-  slaTier?: string | null;
   status: string;
   fields: SLAField[];
   nodes?: string[];
@@ -37,7 +29,6 @@ interface SLAViewDrawerProps {
 export function SLAViewDrawer({
   title,
   subtitle,
-  slaTier,
   status,
   fields,
   nodes,
@@ -46,7 +37,6 @@ export function SLAViewDrawer({
   onClose,
   onEdit,
 }: SLAViewDrawerProps) {
-  const tierStyle = TIER_STYLES[(slaTier || '').toUpperCase()] || TIER_STYLES.T2;
   const statusStyle = STATUS_STYLES[status] || STATUS_STYLES.active;
 
   return (
@@ -70,11 +60,6 @@ export function SLAViewDrawer({
             </button>
           </div>
           <div className="flex gap-2 mt-3">
-            {slaTier && (
-              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${tierStyle.color} ${tierStyle.bg}`}>
-                {slaTier.toUpperCase()}
-              </span>
-            )}
             <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${statusStyle.color} ${statusStyle.bg}`}>
               {statusStyle.label}
             </span>
