@@ -279,58 +279,65 @@ async def discover_bulk_sla(request: BulkDiscoveryRequest):
 
         platform_nodes.setdefault(platform, []).append((node, ancestor))
 
-    # Discover per-platform with adapter reuse
-    discovered_results: list[NodeDiscoveryResponse] = []
+    # Discover concurrently — each task gets its own adapter to avoid shared state
+    # Concurrency capped at 5 to avoid hammering the warehouse
+    MAX_CONCURRENT = 5
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    for platform, node_pairs in platform_nodes.items():
-        adapter = _create_warehouse_adapter(platform, tool_configs[platform])
-        if not adapter:
-            for node, _ in node_pairs:
-                discovered_results.append(NodeDiscoveryResponse(
+    async def _discover_one(node, platform: str) -> NodeDiscoveryResponse:
+        async with semaphore:
+            adapter = _create_warehouse_adapter(platform, tool_configs[platform])
+            if not adapter:
+                return NodeDiscoveryResponse(
                     node_fqn=node.fqn,
                     unsupported=True,
                     skipped_reason=f"Could not create adapter for '{platform}'",
-                ))
-            continue
-
-        try:
-            adapter.connect()
-        except Exception as e:
-            logger.warning("[SLA Discovery] Bulk: failed to connect %s: %s", platform, e)
-            for node, _ in node_pairs:
-                discovered_results.append(NodeDiscoveryResponse(
+                )
+            try:
+                adapter.connect()
+            except Exception as e:
+                return NodeDiscoveryResponse(
                     node_fqn=node.fqn,
                     unsupported=True,
                     skipped_reason=f"Failed to connect to {platform}",
-                ))
-            continue
-
-        try:
-            for node, ancestor in node_pairs:
-                try:
-                    result = await discover_sla_profile(node, store.graph, adapter)
-                    discovered_results.append(NodeDiscoveryResponse(
-                        node_fqn=result.node_fqn,
-                        warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
-                        freshness=result.freshness,
-                        volume=result.volume,
-                        quality=result.quality,
-                        schema_profile=result.schema,
-                        uniqueness=result.uniqueness,
-                        unsupported=result.unsupported,
-                        skipped_reason=result.skipped_reason,
-                    ))
-                except Exception as e:
-                    logger.error("[SLA Discovery] Bulk: node %s failed: %s", node.fqn, e)
-                    discovered_results.append(NodeDiscoveryResponse(
-                        node_fqn=node.fqn,
-                        unsupported=True,
-                        skipped_reason=f"Discovery failed: {e}",
-                    ))
-        finally:
+                )
             try:
-                adapter.disconnect()
-            except Exception:
-                pass
+                # discover_sla_profile is async but calls sync adapter methods;
+                # run in thread pool to avoid blocking the event loop
+                result = await asyncio.to_thread(
+                    asyncio.run,
+                    discover_sla_profile(node, store.graph, adapter),
+                )
+                return NodeDiscoveryResponse(
+                    node_fqn=result.node_fqn,
+                    warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
+                    freshness=result.freshness,
+                    volume=result.volume,
+                    quality=result.quality,
+                    schema_profile=result.schema,
+                    uniqueness=result.uniqueness,
+                    unsupported=result.unsupported,
+                    skipped_reason=result.skipped_reason,
+                )
+            except Exception as e:
+                logger.error("[SLA Discovery] Bulk: node %s failed: %s", node.fqn, e)
+                return NodeDiscoveryResponse(
+                    node_fqn=node.fqn,
+                    unsupported=True,
+                    skipped_reason=f"Discovery failed: {e}",
+                )
+            finally:
+                try:
+                    adapter.disconnect()
+                except Exception:
+                    pass
+
+    # Flatten all nodes across platforms into concurrent tasks
+    tasks = []
+    for platform, node_pairs in platform_nodes.items():
+        for node, ancestor in node_pairs:
+            tasks.append(_discover_one(node, platform))
+
+    discovered_results = list(await asyncio.gather(*tasks))
 
     return BulkDiscoveryResponse(results=[*skipped_results, *discovered_results])

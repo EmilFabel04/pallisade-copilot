@@ -415,21 +415,15 @@ export function SLAEditorPanel({
       {/* Bulk discover button */}
       {bulkDiscoveryState === 'idle' && !hasDiscovery && selectedNodeIds.size >= 1 && (
         <div className="mx-4 mt-3">
-          {selectedNodeIds.size <= 10 ? (
-            <button
-              onClick={handleBulkDiscover}
-              className="w-full px-3 py-2 text-[12px] font-medium rounded-lg border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 transition-colors flex items-center justify-center gap-2"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
-              Discover from data ({selectedNodeIds.size} node{selectedNodeIds.size !== 1 ? 's' : ''})
-            </button>
-          ) : (
-            <p className="text-[11px] text-[var(--muted)] text-center py-1">
-              Select up to 10 nodes to discover SLAs from data ({selectedNodeIds.size} selected)
-            </p>
-          )}
+          <button
+            onClick={handleBulkDiscover}
+            className="w-full px-3 py-2 text-[12px] font-medium rounded-lg border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+            </svg>
+            Discover from data ({selectedNodeIds.size} node{selectedNodeIds.size !== 1 ? 's' : ''})
+          </button>
         </div>
       )}
 
