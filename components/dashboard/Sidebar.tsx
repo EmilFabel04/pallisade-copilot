@@ -53,15 +53,6 @@ const navigation = [
     ),
   },
   {
-    name: 'Governance',
-    href: '/dashboard/governance',
-    icon: (
-      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-      </svg>
-    ),
-  },
-  {
     name: 'Pipeline',
     href: '/dashboard/pipeline',
     icon: (
@@ -71,8 +62,8 @@ const navigation = [
     ),
   },
   {
-    name: 'Tasks',
-    href: '/dashboard/schedule',
+    name: 'Monitors',
+    href: '/dashboard/monitors',
     icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
