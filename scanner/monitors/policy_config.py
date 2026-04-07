@@ -81,6 +81,17 @@ _TOLERANCE_ORDER: Dict[str, int] = {
     "relaxed": 2,
 }
 
+_TOLERANCE_TO_FAILURE_PCT: Dict[str, float] = {
+    "strict": 5.0,
+    "normal": 10.0,
+    "relaxed": 25.0,
+}
+
+
+def tolerance_to_failure_pct(tolerance: Any) -> float:
+    """Convert a tolerance enum ('strict'/'normal'/'relaxed') to a failure percentage."""
+    return _TOLERANCE_TO_FAILURE_PCT.get(str(tolerance), 10.0)
+
 
 def is_less_strict(field: str, policy_value: Any, override_value: Any) -> bool:
     """Return True if override_value is less strict than policy_value for this field.
@@ -190,7 +201,7 @@ POLICY_TO_MONITOR_CONFIG: Dict[str, Dict[str, Any]] = {
         "schedule_lag_minutes": "max_schedule_lag_minutes",
     },
     "TASK_FAILURE_RATE": {
-        "orch_failure_tolerance": "max_failure_pct",
+        "orch_failure_tolerance": ("max_failure_pct", tolerance_to_failure_pct),
     },
     # ----- Transformation / dbt monitors -----
     "DBT_TEST_FAILURES": {
