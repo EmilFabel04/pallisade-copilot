@@ -163,78 +163,81 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
   return (
     <div className="space-y-6">
       {/* ── Monitor Status ──────────────────────────────────────── */}
-      <div className="rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] overflow-hidden">
-        <div className="px-5 py-3 border-b border-[var(--subtle-border)]">
-          <h2 className="text-[13px] font-semibold text-[var(--text)]">Monitor Status</h2>
+      <div className="grid grid-cols-2 gap-4">
+        {/* Data Monitors Card */}
+        <div className="rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                <Database className="w-3.5 h-3.5 text-blue-400" />
+              </div>
+              <span className="text-[13px] font-semibold text-[var(--text)]">Data Monitors</span>
+            </div>
+            {dataCounts.total > 0 && (
+              <span className="text-[11px] text-[var(--muted)]">{dataCounts.total} total</span>
+            )}
+          </div>
+          {dataCounts.total > 0 ? (
+            <>
+              <div className="flex h-2 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-4">
+                {dataCounts.passing > 0 && <div className="bg-emerald-500 h-full transition-all" style={{ width: `${(dataCounts.passing / dataCounts.total) * 100}%` }} />}
+                {dataCounts.failing > 0 && <div className="bg-red-500 h-full transition-all" style={{ width: `${(dataCounts.failing / dataCounts.total) * 100}%` }} />}
+                {(dataCounts.total - dataCounts.passing - dataCounts.failing) > 0 && <div className="bg-zinc-700 h-full flex-1" />}
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  <span className="text-[18px] font-semibold text-[var(--text)]">{dataCounts.passing}</span>
+                  <span className="text-[12px] text-[var(--muted)]">passing</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                  <span className="text-[18px] font-semibold text-[var(--text)]">{dataCounts.failing}</span>
+                  <span className="text-[12px] text-[var(--muted)]">failing</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-[12px] text-[var(--muted)]">No data monitors configured</p>
+          )}
         </div>
-        <div className="grid grid-cols-2 divide-x divide-[var(--subtle-border)]">
-          {/* Data Monitors */}
-          <div className="px-5 py-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Database className="w-4 h-4 text-blue-400" />
-              <span className="text-[12px] font-medium text-[var(--text)]">Data Monitors</span>
-            </div>
-            {dataCounts.total > 0 ? (
-              <>
-                <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-3">
-                  {dataCounts.passing > 0 && <div className="bg-emerald-500 h-full" style={{ width: `${(dataCounts.passing / dataCounts.total) * 100}%` }} />}
-                  {dataCounts.failing > 0 && <div className="bg-red-500 h-full" style={{ width: `${(dataCounts.failing / dataCounts.total) * 100}%` }} />}
-                  {(dataCounts.total - dataCounts.passing - dataCounts.failing) > 0 && <div className="bg-zinc-600 h-full flex-1" />}
-                </div>
-                <div className="flex items-center gap-4 text-[12px]">
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span className="text-[var(--text)] font-medium">{dataCounts.passing}</span>
-                    <span className="text-[var(--muted)]">passing</span>
-                  </div>
-                  {dataCounts.failing > 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-full bg-red-500" />
-                      <span className="text-[var(--text)] font-medium">{dataCounts.failing}</span>
-                      <span className="text-[var(--muted)]">failing</span>
-                    </div>
-                  )}
-                  <span className="text-[var(--muted)] ml-auto">{dataCounts.total} total</span>
-                </div>
-              </>
-            ) : (
-              <p className="text-[12px] text-[var(--muted)]">No data monitors configured</p>
-            )}
-          </div>
 
-          {/* Pipeline Monitors */}
-          <div className="px-5 py-5">
-            <div className="flex items-center gap-2 mb-3">
-              <Workflow className="w-4 h-4 text-purple-400" />
-              <span className="text-[12px] font-medium text-[var(--text)]">Pipeline Monitors</span>
+        {/* Pipeline Monitors Card */}
+        <div className="rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                <Workflow className="w-3.5 h-3.5 text-purple-400" />
+              </div>
+              <span className="text-[13px] font-semibold text-[var(--text)]">Pipeline Monitors</span>
             </div>
-            {pipelineCounts.total > 0 ? (
-              <>
-                <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-3">
-                  {pipelineCounts.passing > 0 && <div className="bg-emerald-500 h-full" style={{ width: `${(pipelineCounts.passing / pipelineCounts.total) * 100}%` }} />}
-                  {pipelineCounts.failing > 0 && <div className="bg-red-500 h-full" style={{ width: `${(pipelineCounts.failing / pipelineCounts.total) * 100}%` }} />}
-                  {(pipelineCounts.total - pipelineCounts.passing - pipelineCounts.failing) > 0 && <div className="bg-zinc-600 h-full flex-1" />}
-                </div>
-                <div className="flex items-center gap-4 text-[12px]">
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
-                    <span className="text-[var(--text)] font-medium">{pipelineCounts.passing}</span>
-                    <span className="text-[var(--muted)]">passing</span>
-                  </div>
-                  {pipelineCounts.failing > 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <div className="w-2 h-2 rounded-full bg-red-500" />
-                      <span className="text-[var(--text)] font-medium">{pipelineCounts.failing}</span>
-                      <span className="text-[var(--muted)]">failing</span>
-                    </div>
-                  )}
-                  <span className="text-[var(--muted)] ml-auto">{pipelineCounts.total} total</span>
-                </div>
-              </>
-            ) : (
-              <p className="text-[12px] text-[var(--muted)]">No pipeline monitors configured</p>
+            {pipelineCounts.total > 0 && (
+              <span className="text-[11px] text-[var(--muted)]">{pipelineCounts.total} total</span>
             )}
           </div>
+          {pipelineCounts.total > 0 ? (
+            <>
+              <div className="flex h-2 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-4">
+                {pipelineCounts.passing > 0 && <div className="bg-emerald-500 h-full transition-all" style={{ width: `${(pipelineCounts.passing / pipelineCounts.total) * 100}%` }} />}
+                {pipelineCounts.failing > 0 && <div className="bg-red-500 h-full transition-all" style={{ width: `${(pipelineCounts.failing / pipelineCounts.total) * 100}%` }} />}
+                {(pipelineCounts.total - pipelineCounts.passing - pipelineCounts.failing) > 0 && <div className="bg-zinc-700 h-full flex-1" />}
+              </div>
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  <span className="text-[18px] font-semibold text-[var(--text)]">{pipelineCounts.passing}</span>
+                  <span className="text-[12px] text-[var(--muted)]">passing</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
+                  <span className="text-[18px] font-semibold text-[var(--text)]">{pipelineCounts.failing}</span>
+                  <span className="text-[12px] text-[var(--muted)]">failing</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-[12px] text-[var(--muted)]">No pipeline monitors configured</p>
+          )}
         </div>
       </div>
 
