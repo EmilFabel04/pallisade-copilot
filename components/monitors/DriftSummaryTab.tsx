@@ -120,39 +120,39 @@ export function DriftSummaryTab() {
 
   return (
     <div className="space-y-5">
-      {/* Overview cards */}
-      <div className="grid grid-cols-4 gap-3">
-        <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--subtle-border)]">
-          <div className="flex items-center gap-2 mb-1">
+      {/* Overview bar */}
+      <div className="flex items-stretch gap-0 rounded-lg bg-[var(--surface)] border border-[var(--subtle-border)] divide-x divide-[var(--subtle-border)]">
+        <div className="flex-1 px-5 py-4">
+          <div className="flex items-center gap-2 mb-1.5">
             <Activity className="w-3.5 h-3.5 text-[var(--accent)]" />
             <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Last Analysis</span>
           </div>
-          <p className="text-[13px] font-medium text-[var(--text)]">
+          <p className="text-[15px] font-semibold text-[var(--text)]">
             {lastAnalyzedAt
-              ? new Date(lastAnalyzedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+              ? new Date(lastAnalyzedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
               : 'Never'}
           </p>
         </div>
-        <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--subtle-border)]">
-          <div className="flex items-center gap-2 mb-1">
+        <div className="flex-1 px-5 py-4">
+          <div className="flex items-center gap-2 mb-1.5">
             <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
             <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Pending</span>
           </div>
-          <p className="text-[13px] font-medium text-[var(--text)]">{pending}</p>
+          <p className="text-[15px] font-semibold text-[var(--text)]">{pending}</p>
         </div>
-        <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--subtle-border)]">
-          <div className="flex items-center gap-2 mb-1">
+        <div className="flex-1 px-5 py-4">
+          <div className="flex items-center gap-2 mb-1.5">
             <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Applied</span>
           </div>
-          <p className="text-[13px] font-medium text-[var(--text)]">{accepted}</p>
+          <p className="text-[15px] font-semibold text-[var(--text)]">{accepted}</p>
         </div>
-        <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--subtle-border)]">
-          <div className="flex items-center gap-2 mb-1">
+        <div className="flex-1 px-5 py-4">
+          <div className="flex items-center gap-2 mb-1.5">
             <XCircle className="w-3.5 h-3.5 text-zinc-400" />
             <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Dismissed</span>
           </div>
-          <p className="text-[13px] font-medium text-[var(--text)]">{dismissed}</p>
+          <p className="text-[15px] font-semibold text-[var(--text)]">{dismissed}</p>
         </div>
       </div>
 
