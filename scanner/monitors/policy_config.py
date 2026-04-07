@@ -213,6 +213,16 @@ POLICY_TO_MONITOR_CONFIG: Dict[str, Dict[str, Any]] = {
     "DBT_SOURCE_FRESHNESS": {
         "model_freshness_hours": "max_hours",
     },
+    # ----- Infrastructure monitors -----
+    "CERTIFICATE": {
+        "cert_expiry_warn_days": "warn_days",
+        "cert_expiry_fail_days": "fail_days",
+    },
+    "SERVER_HEALTH": {
+        "cpu_threshold_pct": "cpu_threshold_pct",
+        "memory_threshold_pct": "memory_threshold_pct",
+        "disk_threshold_pct": "disk_threshold_pct",
+    },
 }
 
 

@@ -319,13 +319,23 @@ export async function POST(
     let policyConfig: Record<string, any> | null = null;
     const policyOverrides: string[] = (task.policyOverrides as string[]) || [];
 
-    if (task.targetFqn && !isInfra && !isTool) {
+    if (task.targetFqn && !isInfra) {
+      // Derive domain from monitor type for accurate policy resolution
+      const MONITOR_DOMAIN_MAP: Record<string, string> = {
+        SYNC_LAG: 'ingestion', FAILED_SYNCS: 'ingestion', CONNECTOR_SCHEMA_DRIFT: 'ingestion',
+        DAG_LAST_RUN: 'orchestration', DAG_SCHEDULE_LAG: 'orchestration', TASK_FAILURE_RATE: 'orchestration',
+        DBT_TEST_FAILURES: 'transform', DBT_MODEL_FRESHNESS: 'transform', DBT_SOURCE_FRESHNESS: 'transform',
+        BI_FRESHNESS_PROXY: 'bi', BI_UPSTREAM_BREAK_RISK: 'bi', BI_CONTENT_HEALTH: 'bi', BI_REFRESH_FAILURE: 'bi',
+        QUERY_PERFORMANCE: 'warehouse', COST_ANOMALY: 'warehouse', STORAGE_GROWTH: 'warehouse',
+      };
+      const resolvedDomain = MONITOR_DOMAIN_MAP[task.monitorType || ''] || 'warehouse';
+
       try {
         const policyRes = await fetch(`${baseUrl}/api/schedule/policies/resolve`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', cookie },
           body: JSON.stringify({
-            nodes: [{ fqn: task.targetFqn, domain: 'warehouse', criticality: 'medium' }],
+            nodes: [{ fqn: task.targetFqn, domain: resolvedDomain, criticality: 'medium' }],
             stackId: undefined,
           }),
         });
@@ -344,6 +354,7 @@ export async function POST(
               ...resolved.bi,
               ...resolved.orchestration,
               ...resolved.transform,
+              ...resolved.infrastructure,
             };
           }
         }
