@@ -20,6 +20,7 @@ interface WatchCardProps {
   watch: WatchSummary;
   policyMonitorCount?: number;
   overrideMonitorCount?: number;
+  running?: boolean;
   onClick: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onRunAll: () => void;
@@ -49,7 +50,7 @@ function timeAgo(dateStr?: string | null): string {
   return `${days}d ago`;
 }
 
-export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount = 0, onClick, onToggleEnabled, onRunAll, onDelete }: WatchCardProps) {
+export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount = 0, running = false, onClick, onToggleEnabled, onRunAll, onDelete }: WatchCardProps) {
   const [showEditModal, setShowEditModal] = useState(false);
 
   const totalMonitors = watch.monitorCount;
@@ -73,7 +74,12 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
       onClick={onClick}
     >
       {/* Status bar at top */}
-      {hasRun && totalMonitors > 0 ? (
+      {running ? (
+        <div className="h-1.5 bg-[var(--accent)]/20 overflow-hidden">
+          <div className="h-full w-1/3 bg-[var(--accent)] animate-[shimmer_1.5s_ease-in-out_infinite]" style={{ animation: 'shimmer 1.5s ease-in-out infinite' }} />
+          <style>{`@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
+        </div>
+      ) : hasRun && totalMonitors > 0 ? (
         <div className="flex h-1.5">
           {watch.passCount > 0 && (
             <div className="bg-emerald-500 h-full" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
@@ -99,12 +105,17 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{watch.name}</h3>
-              {needsConfigCount > 0 && (
+              {running && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--accent)]/15 text-[var(--accent)] animate-pulse">
+                  Running...
+                </span>
+              )}
+              {!running && needsConfigCount > 0 && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400">
                   {needsConfigCount} needs config
                 </span>
               )}
-              {noRunYet && needsConfigCount === 0 && (
+              {!running && noRunYet && needsConfigCount === 0 && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
                   NEW
                 </span>

@@ -24,6 +24,7 @@ interface WatchDetailPanelProps {
   watch: WatchSummary;
   detailMonitors: any[];
   detailLoading: boolean;
+  running?: boolean;
   onBack: () => void;
   onRunAll: () => void;
   onDelete: () => void;
@@ -58,6 +59,7 @@ export function WatchDetailPanel({
   watch,
   detailMonitors,
   detailLoading,
+  running = false,
   onBack,
   onRunAll,
   onDelete,
@@ -150,8 +152,13 @@ export function WatchDetailPanel({
               )}
             />
           </button>
-          <Button variant="ghost" size="sm" onClick={onRunAll}>
-            Run All
+          <Button variant="ghost" size="sm" onClick={onRunAll} disabled={running}>
+            {running ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 border-2 border-[var(--accent)]/30 border-t-[var(--accent)] rounded-full animate-spin" />
+                Running...
+              </span>
+            ) : 'Run All'}
           </Button>
           <Button
             variant="ghost"

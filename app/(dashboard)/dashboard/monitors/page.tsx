@@ -87,6 +87,9 @@ export default function MonitorsPage() {
   // Integrations for modal
   const [integrations, setIntegrations] = useState<Array<{ id: string; name: string; type: string }>>([]);
 
+  // Running state for run-all indication
+  const [runningWatchIds, setRunningWatchIds] = useState<Set<string>>(new Set());
+
   // Resolved policies for SLA badges
   const [resolvedPolicies, setResolvedPolicies] = useState<Record<string, any>>({});
 
@@ -225,15 +228,17 @@ export default function MonitorsPage() {
   };
 
   const handleRunWatch = async (watchId: string) => {
+    setRunningWatchIds((prev) => new Set(prev).add(watchId));
     try {
       await fetch(`/api/schedule/watches/${watchId}/run`, { method: 'POST' });
       invalidateCache('/api/schedule');
-      fetchWatches();
+      await fetchWatches();
       if (selectedWatch?.id === watchId) {
         const res = await fetch(`/api/schedule/watches/${watchId}`);
         if (res.ok) { const data = await res.json(); if (data.watch) { setSelectedWatch(data.watch); setWatchDetailMonitors(data.watch.monitors || []); } }
       }
     } catch (err) { console.error('[Monitors] Failed to run watch:', err); }
+    finally { setRunningWatchIds((prev) => { const next = new Set(prev); next.delete(watchId); return next; }); }
   };
 
   const handleDeleteWatch = async (watchId: string) => {
@@ -324,6 +329,7 @@ export default function MonitorsPage() {
         detailMonitors={watchDetailMonitors}
         detailLoading={watchDetailLoading}
         onBack={() => { setSelectedWatch(null); setWatchDetailMonitors([]); }}
+        running={runningWatchIds.has(selectedWatch.id)}
         onRunAll={() => handleRunWatch(selectedWatch.id)}
         onDelete={() => handleDeleteWatch(selectedWatch.id)}
         onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
@@ -386,6 +392,7 @@ export default function MonitorsPage() {
               overrideMonitorCount={overrideMonitorCount}
               onClick={() => setSelectedWatch(watch)}
               onToggleEnabled={(enabled) => handleToggleWatchEnabled(watch.id, enabled)}
+              running={runningWatchIds.has(watch.id)}
               onRunAll={() => handleRunWatch(watch.id)}
               onDelete={() => handleDeleteWatch(watch.id)}
             />
