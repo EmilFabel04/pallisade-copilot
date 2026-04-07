@@ -50,8 +50,6 @@ import { InspectorPanel } from '@/components/lineage/pipeline-overview/Inspector
 import { SEMANTIC_EDGE_STYLES, type InspectorTarget } from '@/components/lineage/pipeline-overview/types';
 import { SLAEditorPanel, type ApplyScope } from '@/components/lineage/SLAEditorPanel';
 import { SLAModeToolbar } from '@/components/lineage/SLAModeToolbar';
-import { PipelineSLAEditorPanel } from '@/components/lineage/PipelineSLAEditorPanel';
-import { PipelineSLAModeToolbar } from '@/components/lineage/PipelineSLAModeToolbar';
 import type { EffectiveSLAPolicy, SLAAssignRequest, SLAStatus } from '@/types/sla';
 import { categoryToSLADomain, DOMAIN_SLA_SECTIONS } from '@/types/sla';
 import { evaluateNodeCompliance } from '@/lib/compliance/evaluate';
@@ -270,8 +268,6 @@ function LineagePageInner() {
   const [selectedSlaNodeId, setSelectedSlaNodeId] = useState<string | null>(null);
 
   // Pipeline SLA mode state (control-plane tab)
-  const [pipelineSlaMode, setPipelineSlaMode] = useState(false);
-  const [pipelineSlaSelectedNodeIds, setPipelineSlaSelectedNodeIds] = useState<Set<string>>(new Set());
 
   // Exit policy mode on Escape
   useEffect(() => {
@@ -286,19 +282,6 @@ function LineagePageInner() {
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [slaMode]);
-
-  // Exit Pipeline SLA mode on Escape
-  useEffect(() => {
-    if (!pipelineSlaMode) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setPipelineSlaMode(false);
-        setPipelineSlaSelectedNodeIds(new Set());
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [pipelineSlaMode]);
 
   // Load existing policy assignments from DB on page load
   useEffect(() => {
@@ -1453,16 +1436,6 @@ function LineagePageInner() {
         return;
       }
 
-      // Pipeline SLA mode: single node selection on control-plane tab
-      if (pipelineSlaMode && activeTab === 'control-plane') {
-        setPipelineSlaSelectedNodeIds(prev => {
-          // Single select — clicking the same node deselects, otherwise replace
-          if (prev.has(node.id)) return new Set();
-          return new Set([node.id]);
-        });
-        return; // Don't open inspector
-      }
-
       // Normal mode: Shift+Click for multi-select (only on control-plane tab where
       // ViewNodes and the InspectorPanel are available)
       if (event.shiftKey && activeTab === 'control-plane') {
@@ -1518,7 +1491,7 @@ function LineagePageInner() {
       }
       setSelectedEdge(null);
     },
-    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview, slaMode, pipelineSlaMode]
+    [lineageData?.nodes, activeTab, controlPlaneData?.nodes, laneOverview, renderedOverview, slaMode]
   );
 
   const handleEdgeClick = useCallback(
@@ -1633,22 +1606,6 @@ function LineagePageInner() {
                 Data SLA
               </button>
             )}
-            {/* Pipeline SLA button */}
-            {(controlPlaneData || laneOverview) && !pipelineSlaMode && activeTab === 'control-plane' && (
-              <button
-                onClick={() => {
-                  setPipelineSlaMode(true);
-                  setPipelineSlaSelectedNodeIds(new Set());
-                  setPipelineInspectorTarget(null);
-                }}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-500/30 text-slate-300 hover:bg-slate-500/10 text-[13px] font-medium transition-all"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                </svg>
-                Pipeline SLA
-              </button>
-            )}
             <button
               onClick={extractWithLLM}
               disabled={llmExtracting || extracting || !stackId}
@@ -1706,17 +1663,7 @@ function LineagePageInner() {
         </div>
 
         {/* Stats / Policy toolbar */}
-        {pipelineSlaMode && activeTab === 'control-plane' ? (
-          <PipelineSLAModeToolbar
-            selectedCount={pipelineSlaSelectedNodeIds.size}
-            totalNodes={laneOverview?.nodes?.length || controlPlaneData?.nodes?.length || 0}
-            onSaveAll={() => {}}
-            onExit={() => {
-              setPipelineSlaMode(false);
-              setPipelineSlaSelectedNodeIds(new Set());
-            }}
-          />
-        ) : slaMode ? (
+        {slaMode ? (
           <SLAModeToolbar
             selectedCount={slaSelectedNodeIds.size}
             totalNodes={lineageData?.nodes?.length || 0}
@@ -1999,7 +1946,7 @@ function LineagePageInner() {
         )}
 
         {/* Side panel - Pipeline Overview inspector */}
-        {activeTab === 'control-plane' && effectiveInspectorTarget && !pipelineSlaMode && (
+        {activeTab === 'control-plane' && effectiveInspectorTarget && (
           <InspectorPanel
             target={effectiveInspectorTarget}
             laneOverview={laneOverview}
@@ -2014,57 +1961,6 @@ function LineagePageInner() {
           />
         )}
 
-        {/* Side panel - Pipeline SLA editor */}
-        {pipelineSlaMode && activeTab === 'control-plane' && (
-          <PipelineSLAEditorPanel
-            selectedNodeIds={pipelineSlaSelectedNodeIds}
-            allNodes={laneOverview?.nodes || controlPlaneData?.nodes || []}
-            stackId={stackId || ''}
-            nodeSLAs={nodeSLAs}
-            saving={policySaving}
-            onApply={async (request: any, scope: string) => {
-              setPolicySaving(true);
-              try {
-                const res = await fetch('/api/schedule/policies/assign', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ ...request, stackId }),
-                });
-                if (res.ok) {
-                  toast.success('Pipeline SLA applied');
-                  await refreshSLAs();
-                } else {
-                  const data = await res.json().catch(() => ({}));
-                  toast.error(data.error || 'Failed to apply Pipeline SLA');
-                }
-              } catch {
-                toast.error('Failed to apply Pipeline SLA');
-              } finally {
-                setPolicySaving(false);
-              }
-            }}
-            onRemoveSLA={async (nodeFqns: string[]) => {
-              try {
-                const res = await fetch('/api/schedule/policies/assign?' + new URLSearchParams({ stackId: stackId || '' }), {
-                  method: 'DELETE',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ nodeFqns }),
-                });
-                if (res.ok) {
-                  toast.success('Pipeline SLA removed');
-                  await refreshSLAs();
-                }
-              } catch {
-                toast.error('Failed to remove Pipeline SLA');
-              }
-            }}
-            onClose={() => {
-              setPipelineSlaMode(false);
-              setPipelineSlaSelectedNodeIds(new Set());
-            }}
-            onClearSelection={() => setPipelineSlaSelectedNodeIds(new Set())}
-          />
-        )}
 
         {/* Side panel - Policy editor */}
         {slaMode && (
