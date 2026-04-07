@@ -56,14 +56,21 @@ class ToolRegistry:
 
     def _load_from_global_registry(self):
         """Import category modules to trigger decorators, then copy registry."""
-        try:
-            from scanner.copilot.tools import (
-                lineage, warehouse, dbt, orchestration, ingestion,
-                reporting, storage, knowledge, observability, coverage,
-                actions, github, onboarding, infrastructure,
-            )
-        except ImportError:
-            pass  # Category modules not yet created; tests populate _GLOBAL_REGISTRY directly
+        _modules = (
+            "lineage", "warehouse", "dbt", "orchestration", "ingestion",
+            "reporting", "storage", "knowledge", "observability", "coverage",
+            "actions", "github", "onboarding", "infrastructure",
+        )
+        # Try relative import first (works when running from scanner/ dir),
+        # then absolute scanner.copilot.tools path (works when running from repo root).
+        for prefix in ("copilot.tools", "scanner.copilot.tools"):
+            try:
+                import importlib
+                for mod in _modules:
+                    importlib.import_module(f"{prefix}.{mod}")
+                break
+            except ImportError:
+                continue
         self._tools = dict(_GLOBAL_REGISTRY)
 
     def _register(self, tool: Tool) -> None:
