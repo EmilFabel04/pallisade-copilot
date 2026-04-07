@@ -153,7 +153,7 @@ class CopilotLLM:
             else:
                 logger.warning("OpenAI SDK not available")
     
-    def build_system_prompt(self, context: CopilotContext) -> str:
+    def build_system_prompt(self, context: CopilotContext, query: str = "", available_tools: list = None) -> str:
         """
         Build the system prompt with context about the user's stack.
 
@@ -303,9 +303,16 @@ IMPORTANT: Always use pipeline_health unless the asset is clearly a BI dashboard
 Never use source_guard or full_pipeline — they are internal-only.
 """
 
-        # Inject preferred tools for the active mode so the LLM knows
-        # which tools to reach for first in this context
-        if context.mode_config and context.mode_config.preferred_tools:
+        # Inject dynamically scored tool recommendations
+        if query and context.intent_result and available_tools:
+            from copilot.tools.registry import build_tool_recommendations
+            recommendations = build_tool_recommendations(
+                available_tools, query, context.intent_result, top_n=5,
+            )
+            if recommendations:
+                prompt += f"\n{recommendations}\n"
+        elif context.mode_config and context.mode_config.preferred_tools:
+            # Fallback: static preferred tools when no query/intent available
             tools_list = ", ".join(
                 f"`{t}`" for t in context.mode_config.preferred_tools
             )
@@ -931,8 +938,15 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             except Exception as e:
                 logger.error(f"[Stream/Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
 
-        system = system_prompt_override if system_prompt_override else self.build_system_prompt(context)
         registry = get_tool_registry()
+        available_tool_objects = registry.get_available_tools(context.integration_types)
+        user_query = ""
+        if messages:
+            last_msg = messages[-1]
+            user_query = last_msg.content if isinstance(last_msg.content, str) else ""
+        system = system_prompt_override if system_prompt_override else self.build_system_prompt(
+            context, query=user_query, available_tools=available_tool_objects
+        )
         tools = registry.to_anthropic_tools(context.integration_types)
 
         # Start MCP servers
@@ -1369,8 +1383,15 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             except Exception as e:
                 logger.error(f"[Stream/OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
 
-        system = system_prompt_override if system_prompt_override else self.build_system_prompt(context)
         registry = get_tool_registry()
+        available_tool_objects = registry.get_available_tools(context.integration_types)
+        user_query = ""
+        if messages:
+            last_msg = messages[-1]
+            user_query = last_msg.content if isinstance(last_msg.content, str) else ""
+        system = system_prompt_override if system_prompt_override else self.build_system_prompt(
+            context, query=user_query, available_tools=available_tool_objects
+        )
         tools = registry.to_openai_tools(context.integration_types)
 
         # Start MCP servers
@@ -1866,10 +1887,17 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 logger.error(f"[Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
 
         # Build system prompt (now includes schema info)
-        system = self.build_system_prompt(context)
+        registry = get_tool_registry()
+        available_tool_objects = registry.get_available_tools(context.integration_types)
+        user_query = ""
+        if messages:
+            last_msg = messages[-1]
+            user_query = last_msg.content if isinstance(last_msg.content, str) else ""
+        system = self.build_system_prompt(
+            context, query=user_query, available_tools=available_tool_objects
+        )
 
         # Get available tools (legacy)
-        registry = get_tool_registry()
         tools = registry.to_anthropic_tools(context.integration_types)
 
         # Start MCP servers and merge their tools
@@ -2089,10 +2117,17 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 logger.error(f"[OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
 
         # Build system prompt (now includes schema info)
-        system = self.build_system_prompt(context)
+        registry = get_tool_registry()
+        available_tool_objects = registry.get_available_tools(context.integration_types)
+        user_query = ""
+        if messages:
+            last_msg = messages[-1]
+            user_query = last_msg.content if isinstance(last_msg.content, str) else ""
+        system = self.build_system_prompt(
+            context, query=user_query, available_tools=available_tool_objects
+        )
 
         # Get available tools in OpenAI format (legacy)
-        registry = get_tool_registry()
         tools = registry.to_openai_tools(context.integration_types)
 
         # Start MCP servers and merge their tools
