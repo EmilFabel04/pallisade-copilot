@@ -10,6 +10,7 @@ import { WatchCard } from '@/components/schedule/WatchCard';
 import { WatchDetailPanel } from '@/components/schedule/WatchDetailPanel';
 import { TaskCard } from '@/components/schedule/TaskCard';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
+import { MonitorGroupSettingsModal } from '@/components/schedule/MonitorGroupSettingsModal';
 import { DriftSummaryTab } from '@/components/monitors/DriftSummaryTab';
 import { cn } from '@/lib/utils';
 import type { ScheduledTask } from '@/types/schedule';
@@ -78,6 +79,7 @@ export default function MonitorsPage() {
 
   // Modal state
   const [showMonitorModal, setShowMonitorModal] = useState(false);
+  const [settingsWatchId, setSettingsWatchId] = useState<string | null>(null);
 
   // Detail view
   const [selectedWatch, setSelectedWatch] = useState<WatchSummary | null>(null);
@@ -374,6 +376,7 @@ export default function MonitorsPage() {
         onDelete={() => handleDeleteWatch(selectedWatch.id)}
         onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
         onRemoveMonitor={handleRemoveMonitorFromWatch}
+        onSettings={() => setSettingsWatchId(selectedWatch.id)}
       />
     );
   }
@@ -435,6 +438,7 @@ export default function MonitorsPage() {
               running={runningWatchIds.has(watch.id)}
               onRunAll={() => handleRunWatch(watch.id)}
               onDelete={() => handleDeleteWatch(watch.id)}
+              onSettings={() => setSettingsWatchId(watch.id)}
             />
           );
         })}
@@ -495,6 +499,18 @@ export default function MonitorsPage() {
         onClose={() => setShowMonitorModal(false)}
         onComplete={refreshAll}
         stackId={selectedPipeline?.id}
+        integrations={integrations}
+      />
+
+      {/* Settings modal */}
+      <MonitorGroupSettingsModal
+        watchId={settingsWatchId || ''}
+        open={!!settingsWatchId}
+        onClose={() => setSettingsWatchId(null)}
+        onSaved={() => {
+          setSettingsWatchId(null);
+          fetchWatches();
+        }}
         integrations={integrations}
       />
     </div>
