@@ -212,6 +212,50 @@ export async function PATCH(
         });
       }
 
+      // --- Add new monitors by type ---
+      const addMonitorTypes = body.addMonitorTypes as string[] | undefined;
+      if (addMonitorTypes?.length) {
+        const existingMonitors = await tx.monitor.findMany({
+          where: { monitorGroupId: watchId, organizationId },
+          select: { monitorType: true },
+        });
+        const existingTypes = new Set(existingMonitors.map((m) => m.monitorType));
+
+        const anchorFqn = group.anchorFqn || group.name;
+        const nextRunAt = group.schedule
+          ? (() => {
+              try {
+                const { parseExpression } = require('cron-parser');
+                return parseExpression(group.schedule, { tz: group.timezone || 'UTC' }).next().toDate();
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+
+        for (const monitorType of addMonitorTypes) {
+          if (existingTypes.has(monitorType as any)) continue; // skip duplicates
+
+          await tx.monitor.create({
+            data: {
+              name: `${monitorType.replace(/_/g, ' ').toLowerCase()} — ${anchorFqn.split('.').pop()}`,
+              monitorType: monitorType as any,
+              targetFqn: anchorFqn,
+              config: {},
+              enabled: group.enabled,
+              schedule: group.schedule,
+              timezone: group.timezone,
+              alertChannels: group.alertChannels as any || [],
+              alertOnStatus: group.alertOnStatus as any || [],
+              nextRunAt,
+              organizationId,
+              monitorGroupId: watchId,
+              taskMode: 'structured',
+            },
+          });
+        }
+      }
+
       await tx.monitorGroup.update({
         where: { id: watchId },
         data: updateData,
