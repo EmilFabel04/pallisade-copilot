@@ -27,8 +27,8 @@ model User {
   // Onboarding
   timezone            String?
   role                String?
-  onboardingCompleted Boolean   @default(false)
-  onboardingStep      Int       @default(0)
+  onboardingCompleted Boolean @default(false)
+  onboardingStep      Int     @default(0)
 
   // Relations
   organization   Organization? @relation(fields: [organizationId], references: [id])
@@ -41,18 +41,15 @@ model User {
   sentInvites     TeamInvite[] @relation("InviteSender")
 
   // App data
-  reports          Report[]
-  remediationPlans RemediationPlan[]
-  tasks            Task[]
-  chatSessions     ChatSession[]
-  copilotSessions  CopilotSession[]
+  reports              Report[]
+  copilotSessions      CopilotSession[]
   notificationReads    NotificationRead[]
   notificationsActored NotificationEvent[] @relation("NotificationActor")
   notificationMutes    NotificationMute[]
-  scanSchedules    ScanSchedule[]
-  auditLogs        AuditLog[]
-  appliedFixes     AppliedFix[]
-  artifacts        Artifact[]
+  scanSchedules        ScanSchedule[]
+  auditLogs            AuditLog[]
+  appliedFixes         AppliedFix[]
+  artifacts            Artifact[]
 
   @@index([organizationId])
 }
@@ -114,24 +111,21 @@ model Organization {
   dataTeamSize String?
 
   // SLO Configuration (default thresholds in hours)
-  sloDefaults      Json? // { default: 24, realtime: 1, hourly: 2, daily: 25 }
-  sloEnabled       Boolean @default(true)
-  alertOnSLOBreach     Boolean    @default(true)
-  authPolicy           AuthPolicy @default(FLEXIBLE)
-  authPolicyGraceUntil DateTime?
-  slaDiscoveryNodeLimit Int @default(100)
+  sloDefaults           Json? // { default: 24, realtime: 1, hourly: 2, daily: 25 }
+  sloEnabled            Boolean    @default(true)
+  alertOnSLOBreach      Boolean    @default(true)
+  authPolicy            AuthPolicy @default(FLEXIBLE)
+  authPolicyGraceUntil  DateTime?
+  slaDiscoveryNodeLimit Int        @default(100)
 
   // Relations
   users            User[]
   reports          Report[]
-  remediationPlans RemediationPlan[]
   integrations     Integration[]
-  tableConfigs     TableConfig[]
   dataContracts    DataContract[]
   lineageNodes     LineageNode[]
   lineageEdges     LineageEdge[]
   lineageSnapshots LineageSnapshot[]
-  metricBaselines  MetricBaseline[]
   scanSchedules    ScanSchedule[]
   auditLogs        AuditLog[]
   appliedFixes     AppliedFix[]
@@ -140,40 +134,20 @@ model Organization {
   teamMembers TeamMember[]
   teamInvites TeamInvite[]
 
-  // Risk Intelligence
-  scanSnapshots ScanSnapshot[]
-  riskProfile   OrganizationRiskProfile?
-
   // Finding Response System
-  findings     Finding[]
-  findingRules FindingRule[]
-  drrScores    DRRScore[]
+  findings Finding[]
 
   // Pipeline Stacks (Visual Pipeline Mapping)
   pipelineStacks PipelineStack[]
 
-  // Scanner Pattern Rules (Intelligent Context)
-  scannerPatternRules ScannerPatternRule[]
-
-  // User feedback on ML suppressions
-  suppressionOverrides SuppressionOverride[]
-
   // Copilot platform
   copilotSessions CopilotSession[]
-  lineageEvents   LineageEvent[]
-  debugSessions   DebugSession[]
   artifacts       Artifact[]
 
   // Coverage & Monitoring
-  monitors          Monitor[]
-  monitorGroups     MonitorGroup[]
-  monitoringPlans   MonitoringPlan[]
-  coverageSnapshots CoverageSnapshot[]
-
-  // Fix Patterns (Learning Loop)
-  issueFingerprints IssueFingerprint[]
-  fixPatterns       FixPattern[]
-  fixOutcomes       FixOutcome[]
+  monitors        Monitor[]
+  monitorGroups   MonitorGroup[]
+  monitoringPlans MonitoringPlan[]
 
   // Notifications
   notificationEvents NotificationEvent[]
@@ -181,8 +155,8 @@ model Organization {
   notificationMutes  NotificationMute[]
 
   // Pipeline Monitoring Policies
-  policyProfiles    PolicyProfile[]
-  policyAssignments PolicyAssignment[]
+  policyProfiles       PolicyProfile[]
+  policyAssignments    PolicyAssignment[]
   driftRecommendations DriftRecommendation[]
 
   // SSO
@@ -275,17 +249,17 @@ model TeamInvite {
 }
 
 model OrgOidcConfig {
-  id              String       @id @default(cuid())
-  organizationId  String       @unique
-  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  issuerUrl       String
-  clientId        String
-  clientSecret    String
-  scopes          String       @default("openid email profile")
-  displayName     String       @default("SSO")
-  enabled         Boolean      @default(true)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  issuerUrl      String
+  clientId       String
+  clientSecret   String
+  scopes         String       @default("openid email profile")
+  displayName    String       @default("SSO")
+  enabled        Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 }
 
 enum TeamRole {
@@ -362,12 +336,12 @@ model PipelineStack {
   context PipelineContext?
 
   // Contracts
-  pipelineContract     PipelineContract?
-  sourceContracts      SourceContract[]
-  dataContracts        PipelineDataContract[]
-  dataContractsEnabled         Boolean @default(false)
-  contractAllowOverrides       Boolean @default(false) // Allow node-level SLA overrides when contracts exist
-  contractViolationAlerting    Boolean @default(true)  // Send alerts on contract violations
+  pipelineContract          PipelineContract?
+  sourceContracts           SourceContract[]
+  dataContracts             PipelineDataContract[]
+  dataContractsEnabled      Boolean                @default(false)
+  contractAllowOverrides    Boolean                @default(false) // Allow node-level SLA overrides when contracts exist
+  contractViolationAlerting Boolean                @default(true) // Send alerts on contract violations
 
   // Notifications
   notificationEvents NotificationEvent[]
@@ -740,93 +714,11 @@ model DataContract {
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
 
-  // Contract violations history
-  violations ContractViolation[]
-
   @@unique([organizationId, fullName])
   @@index([organizationId])
   @@index([integrationId])
   @@index([fullName])
   @@index([status])
-}
-
-// Track violation history for analytics
-model ContractViolation {
-  id String @id @default(cuid())
-
-  contractId String
-  contract   DataContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-
-  // What was violated
-  violationType String // freshness, quality, schema, volume
-  severity      String // warning, error, critical
-  message       String @db.Text
-  details       Json? // Detailed violation info
-
-  // Resolution
-  resolvedAt DateTime?
-  resolvedBy String?
-  resolution String?   @db.Text
-
-  createdAt DateTime @default(now())
-
-  @@index([contractId])
-  @@index([createdAt])
-}
-
-// Keep TableConfig as alias for backward compatibility (will migrate)
-model TableConfig {
-  id String @id @default(cuid())
-
-  database  String
-  schema    String @default("public")
-  tableName String
-  fullName  String
-
-  freshnessHours  Int?
-  timestampColumn String?
-  sloTier         SLOTier @default(STANDARD)
-
-  description String?     @db.Text
-  owner       String?
-  criticality Criticality @default(MEDIUM)
-  tags        String[]
-
-  businessDomain   String?
-  dataTier         DataTier @default(SILVER)
-  stakeholders     String[]
-  usedInReports    String[]
-  businessImpact   String?  @db.Text
-  dataContract     Json?
-  slackChannel     String?
-  pagerDutyService String?
-
-  downstreamCount    Int?
-  downstreamCritical Int?
-  impactScore        Float?
-  lastImpactUpdate   DateTime?
-
-  expectedRowCountMin Int?
-  expectedRowCountMax Int?
-  nullRateThreshold   Float?
-  duplicateThreshold  Float?
-
-  historicalPatterns Json?
-  lastMLUpdate       DateTime?
-  anomalyThreshold   Float?    @default(0.95)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-
-  @@unique([organizationId, fullName])
-  @@index([organizationId])
-  @@index([integrationId])
-  @@index([fullName])
 }
 
 enum DataTier {
@@ -865,13 +757,13 @@ enum Criticality {
 // Users can assign these profiles to assets/nodes on the lineage graph.
 model PolicyProfile {
   id          String  @id @default(cuid())
-  name        String                      // "Critical SLA", "Standard", "Relaxed"
+  name        String // "Critical SLA", "Standard", "Relaxed"
   description String?
-  isBuiltIn   Boolean @default(false)     // System-provided, non-deletable
+  isBuiltIn   Boolean @default(false) // System-provided, non-deletable
 
   // Scope: which node types this profile targets (null = any)
-  targetDomain String?                    // "warehouse"|"ingestion"|"bi"|"orchestration"|"transform"|null
-  criticality  String?                    // Maps to Criticality enum. null = any.
+  targetDomain String? // "warehouse"|"ingestion"|"bi"|"orchestration"|"transform"|null
+  criticality  String? // Maps to Criticality enum. null = any.
 
   // Threshold configs (Json blobs, domain-specific sections)
   freshnessConfig     Json? // { enabled, maxHours, warningHours }
@@ -884,8 +776,8 @@ model PolicyProfile {
   orchestrationConfig Json? // { runLatencyMinutes, scheduleLagMinutes, failureTolerance }
   transformConfig     Json? // { testFailureTolerance, modelFreshnessHours }
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
 
@@ -903,7 +795,7 @@ model PolicyProfile {
 //   "criticality_default"— default for a (domain, criticality) pair
 //   "domain_default"     — default for an entire domain
 model PolicyAssignment {
-  id             String @id @default(cuid())
+  id String @id @default(cuid())
 
   profileId String
   profile   PolicyProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
@@ -921,11 +813,11 @@ model PolicyAssignment {
   overrides Json?
 
   // Status management
-  status     String   @default("active") // 'active' | 'inactive' | 'archived'
+  status     String    @default("active") // 'active' | 'inactive' | 'archived'
   archivedAt DateTime?
 
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
 
@@ -933,7 +825,6 @@ model PolicyAssignment {
   @@unique([organizationId, assignmentType, nodeFqn])
   @@unique([organizationId, assignmentType, branchRootFqn])
   @@unique([organizationId, assignmentType, nodeDomain, nodeCriticality])
-
   @@index([organizationId])
   @@index([nodeFqn])
   @@index([nodeDomain])
@@ -955,7 +846,7 @@ model LineageNode {
 
   // Node metadata
   nodeType       String      @default("table") // table, view, source, model
-  platform       String?     // Source tool: bigquery, dbt_core, n8n, airflow, etc.
+  platform       String? // Source tool: bigquery, dbt_core, n8n, airflow, etc.
   description    String?     @db.Text
   owner          String?
   tags           String[]
@@ -1091,15 +982,13 @@ model Report {
   updatedAt       DateTime  @updatedAt
 
   // Relations
-  user            User             @relation(fields: [userId], references: [id])
-  userId          String
-  organization    Organization?    @relation(fields: [organizationId], references: [id])
-  organizationId  String?
-  remediationPlan RemediationPlan?
+  user           User          @relation(fields: [userId], references: [id])
+  userId         String
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  organizationId String?
 
   // Finding Response System
   findingsTracked Finding[]
-  drrScores       DRRScore[]
 
   @@index([userId])
   @@index([organizationId])
@@ -1182,150 +1071,6 @@ model ScanSchedule {
   @@index([nextRunAt])
 }
 
-// ============================================
-// REMEDIATION PLANS
-// ============================================
-
-model RemediationPlan {
-  id          String            @id @default(cuid())
-  title       String
-  description String?           @db.Text
-  status      RemediationStatus @default(NOT_STARTED)
-  priority    Priority          @default(MEDIUM)
-
-  // Timeline
-  startDate   DateTime?
-  targetDate  DateTime?
-  completedAt DateTime?
-
-  // Progress tracking
-  progressPercent Int @default(0)
-
-  // Content
-  milestones Json? // Array of milestones with dates
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  report         Report?       @relation(fields: [reportId], references: [id])
-  reportId       String?       @unique
-  user           User          @relation(fields: [userId], references: [id])
-  userId         String
-  organization   Organization? @relation(fields: [organizationId], references: [id])
-  organizationId String?
-  tasks          Task[]
-
-  @@index([userId])
-  @@index([organizationId])
-  @@index([status])
-}
-
-enum RemediationStatus {
-  NOT_STARTED
-  IN_PROGRESS
-  ON_HOLD
-  COMPLETED
-  OVERDUE
-}
-
-enum Priority {
-  CRITICAL
-  HIGH
-  MEDIUM
-  LOW
-}
-
-// ============================================
-// TASKS / TO-DO
-// ============================================
-
-model Task {
-  id          String     @id @default(cuid())
-  title       String
-  description String?    @db.Text
-  status      TaskStatus @default(TODO)
-  priority    Priority   @default(MEDIUM)
-
-  // Timing
-  dueDate     DateTime?
-  completedAt DateTime?
-
-  // Categorization
-  category TaskCategory @default(GENERAL)
-  tags     String[]
-
-  // Effort estimation
-  estimatedHours Float?
-  actualHours    Float?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  user              User             @relation(fields: [userId], references: [id])
-  userId            String
-  remediationPlan   RemediationPlan? @relation(fields: [remediationPlanId], references: [id])
-  remediationPlanId String?
-
-  @@index([userId])
-  @@index([remediationPlanId])
-  @@index([status])
-  @@index([dueDate])
-}
-
-enum TaskStatus {
-  TODO
-  IN_PROGRESS
-  BLOCKED
-  COMPLETED
-  CANCELLED
-}
-
-enum TaskCategory {
-  GENERAL
-  SECURITY_FIX
-  CONFIGURATION
-  DOCUMENTATION
-  REVIEW
-  DEPLOYMENT
-}
-
-// ============================================
-// AI ASSISTANT CHAT
-// ============================================
-
-model ChatSession {
-  id        String   @id @default(cuid())
-  title     String   @default("New Chat")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  user     User          @relation(fields: [userId], references: [id])
-  userId   String
-  messages ChatMessage[]
-
-  @@index([userId])
-}
-
-model ChatMessage {
-  id        String      @id @default(cuid())
-  role      MessageRole
-  content   String      @db.Text
-  createdAt DateTime    @default(now())
-
-  // Context (what the user was looking at)
-  contextType String? // "report", "task", "remediation"
-  contextId   String?
-
-  // Relations
-  session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  sessionId String
-
-  @@index([sessionId])
-}
-
 enum MessageRole {
   USER
   ASSISTANT
@@ -1368,7 +1113,6 @@ model CopilotSession {
   organization   Organization     @relation(fields: [organizationId], references: [id])
   organizationId String
   messages       CopilotMessage[]
-  debugSession   DebugSession?
   changePlans    ChangePlan[]
   artifacts      Artifact[]
 
@@ -1411,104 +1155,6 @@ enum CopilotContextType {
 }
 
 // ============================================
-// OPENLINEAGE EVENT STORAGE
-// ============================================
-
-model LineageEvent {
-  id String @id @default(cuid())
-
-  // Event metadata
-  eventType String // START, RUNNING, COMPLETE, FAIL, ABORT
-  eventTime DateTime
-
-  // Job identification
-  jobNamespace String
-  jobName      String
-
-  // Run identification
-  runId       String
-  parentRunId String?
-
-  // Input/output datasets (JSON arrays)
-  inputs  Json // Array of input datasets
-  outputs Json // Array of output datasets
-
-  // Facets (additional metadata)
-  jobFacets Json?
-  runFacets Json?
-
-  // Processing status
-  processed   Boolean   @default(false)
-  processedAt DateTime?
-
-  createdAt DateTime @default(now())
-
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  organizationId String
-
-  @@index([organizationId])
-  @@index([jobNamespace, jobName])
-  @@index([runId])
-  @@index([eventTime])
-  @@index([processed])
-}
-
-// ============================================
-// DEBUG SESSION TRACKING
-// ============================================
-
-model DebugSession {
-  id String @id @default(cuid())
-
-  // Issue identification
-  issueType   String // sync_failure, test_failed, stale_data, query_error, etc.
-  title       String
-  description String? @db.Text
-
-  // Symptom tracking (where the issue was first observed)
-  symptomNodeId  String?
-  symptomDetails Json?
-
-  // Root cause analysis
-  rootCauseNodeId  String?
-  rootCauseType    String?
-  rootCauseDetails Json?
-
-  // Status and resolution
-  status     DebugStatus @default(INVESTIGATING)
-  resolution String?     @db.Text
-  resolvedAt DateTime?
-
-  // Timing
-  startedAt DateTime @default(now())
-  mttr      Int? // Mean time to resolution in minutes
-
-  // Investigation steps taken
-  investigationSteps Json? // Array of steps/findings during investigation
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  organization     Organization    @relation(fields: [organizationId], references: [id])
-  organizationId   String
-  copilotSession   CopilotSession? @relation(fields: [copilotSessionId], references: [id])
-  copilotSessionId String?         @unique
-
-  @@index([organizationId])
-  @@index([status])
-  @@index([issueType])
-}
-
-enum DebugStatus {
-  INVESTIGATING // Still looking into the issue
-  ROOT_CAUSE_FOUND // Identified the root cause
-  FIXING // Working on a fix
-  RESOLVED // Issue resolved
-  WONT_FIX // Decided not to fix
-}
-
-// ============================================
 // NOTIFICATIONS
 // ============================================
 
@@ -1528,9 +1174,9 @@ model NotificationEvent {
   metadata        Json?
   createdAt       DateTime             @default(now())
 
-  organization  Organization   @relation(fields: [organizationId], references: [id])
-  pipelineStack PipelineStack? @relation(fields: [pipelineStackId], references: [id])
-  actorUser     User?          @relation("NotificationActor", fields: [actorUserId], references: [id])
+  organization  Organization       @relation(fields: [organizationId], references: [id])
+  pipelineStack PipelineStack?     @relation(fields: [pipelineStackId], references: [id])
+  actorUser     User?              @relation("NotificationActor", fields: [actorUserId], references: [id])
   reads         NotificationRead[]
 
   @@index([organizationId, createdAt])
@@ -1548,10 +1194,10 @@ enum NotificationSeverity {
 }
 
 model NotificationRead {
-  id                  String            @id @default(cuid())
+  id                  String   @id @default(cuid())
   userId              String
   notificationEventId String
-  readAt              DateTime          @default(now())
+  readAt              DateTime @default(now())
 
   user              User              @relation(fields: [userId], references: [id])
   notificationEvent NotificationEvent @relation(fields: [notificationEventId], references: [id], onDelete: Cascade)
@@ -1696,9 +1342,6 @@ model AppliedFix {
   organization   Organization? @relation(fields: [organizationId], references: [id])
   organizationId String?
 
-  // Outcome tracking (one-to-one)
-  outcome FixOutcome?
-
   // Link from ChangePlan (one-to-one)
   changePlan ChangePlan?
 
@@ -1774,217 +1417,6 @@ enum ChangePlanStatus {
 }
 
 // ============================================
-// FIX OUTCOME TRACKING (Learning Loop)
-// ============================================
-
-// Tracks whether applied fixes actually resolved issues
-model FixOutcome {
-  id String @id @default(cuid())
-
-  // Link to the applied fix
-  appliedFix   AppliedFix @relation(fields: [appliedFixId], references: [id], onDelete: Cascade)
-  appliedFixId String     @unique
-
-  // === OUTCOME STATUS ===
-  outcome FixOutcomeStatus @default(PENDING)
-
-  // Detection method
-  detectionMethod OutcomeDetectionMethod @default(AUTOMATIC)
-
-  // === TIMING ===
-  detectedAt       DateTime? // When outcome was determined
-  timeToResolution Int? // Minutes from fix applied to issue resolved
-
-  // === METRICS COMPARISON ===
-  metricsBefore Json? // Snapshot of metrics before fix
-  metricsAfter  Json? // Snapshot of metrics after fix
-  // Example: { "null_rate": 0.35, "freshness_hours": 48, "row_count": 1000 }
-
-  improvement Float? // Percentage improvement (-1.0 to 1.0)
-  // -0.5 = 50% worse, 0 = no change, 0.5 = 50% better, 1.0 = fully fixed
-
-  // === USER FEEDBACK ===
-  userRating      Int? // 1-5 stars
-  userFeedback    String?   @db.Text
-  feedbackGivenAt DateTime?
-  feedbackUserId  String?
-
-  // === ISSUE CONTEXT (for similarity matching) ===
-  issueFingerprint   IssueFingerprint? @relation(fields: [issueFingerprintId], references: [id])
-  issueFingerprintId String?
-
-  // === TRACKING ===
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Organization
-  organizationId String?
-  Organization   Organization? @relation(fields: [organizationId], references: [id])
-
-  @@index([outcome])
-  @@index([organizationId])
-  @@index([detectedAt])
-  @@index([issueFingerprintId])
-}
-
-enum FixOutcomeStatus {
-  PENDING // Waiting to determine if fix worked
-  RESOLVED // Issue was fixed
-  PARTIALLY_RESOLVED // Issue improved but not fully fixed
-  UNRESOLVED // Issue persists
-  REGRESSED // Issue got worse
-  UNKNOWN // Couldn't determine (e.g., table deleted)
-}
-
-enum OutcomeDetectionMethod {
-  AUTOMATIC // Detected by subsequent scan
-  USER_CONFIRMED // User marked as resolved
-  PR_MERGED // PR was merged (assumed working)
-  TIMEOUT // No reoccurrence after X days
-}
-
-// Fingerprint for matching similar issues
-model IssueFingerprint {
-  id String @id @default(cuid())
-
-  // === ISSUE IDENTITY ===
-  issueType     String // 'freshness', 'null_spike', 'volume_drop', 'schema_change', etc.
-  issueCategory String // 'data_quality', 'pipeline', 'security'
-  severity      String // 'critical', 'high', 'medium', 'low'
-
-  // === CONTEXT ===
-  tablePattern  String? // Pattern like 'stg_*', 'dim_*', '*_events'
-  columnPattern String? // Pattern like '*_id', '*_at', 'email'
-  warehouseType String? // 'snowflake', 'bigquery', 'postgres'
-
-  // === STACK CONTEXT ===
-  hasDBT      Boolean @default(false)
-  hasAirflow  Boolean @default(false)
-  hasPrefect  Boolean @default(false)
-  hasFivetran Boolean @default(false)
-
-  // === ISSUE SPECIFICS ===
-  // Normalized values for similarity matching
-  thresholdExceededBy Float? // How much the threshold was exceeded (ratio)
-  // e.g., SLO is 4h, actual is 48h → 12.0
-
-  // Contextual clues
-  dayOfWeek    Int? // 0=Sunday, 6=Saturday
-  hourOfDay    Int? // 0-23
-  isWeekend    Boolean?
-  isMonthEnd   Boolean?
-  isQuarterEnd Boolean?
-
-  // === EMBEDDING (for ML similarity) ===
-  embedding      Bytes? // Vector embedding for similarity search
-  embeddingModel String? // Model used to generate embedding
-
-  // === STATISTICS ===
-  occurrenceCount Int      @default(1) // How many times this pattern occurred
-  lastSeenAt      DateTime @default(now())
-  firstSeenAt     DateTime @default(now())
-
-  // === RELATIONS ===
-  outcomes    FixOutcome[]
-  fixPatterns FixPatternMatch[]
-
-  // Organization
-  organizationId String?
-
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  Organization Organization? @relation(fields: [organizationId], references: [id])
-
-  @@unique([organizationId, issueType, tablePattern, columnPattern, warehouseType])
-  @@index([issueType])
-  @@index([issueCategory])
-  @@index([organizationId])
-  @@index([warehouseType])
-}
-
-// Learned patterns: which fixes work for which issue types
-model FixPattern {
-  id String @id @default(cuid())
-
-  // === PATTERN IDENTITY ===
-  name        String // Human-readable name
-  description String? @db.Text
-
-  // === APPLICABILITY ===
-  issueType     String // 'freshness', 'null_spike', etc.
-  issueCategory String // 'data_quality', 'pipeline'
-
-  // Stack requirements
-  requiredStack   Json? // { "dbt": true, "warehouse": "snowflake" }
-  requiredContext Json? // { "has_timestamp_column": true }
-
-  // === FIX TEMPLATE ===
-  fixType     String // 'dbt_freshness', 'sql_update', 'airflow_dag'
-  fixTemplate String  @db.Text // Template with placeholders
-  fixLanguage String // 'yaml', 'sql', 'python'
-  fixFilePath String? // Default file path
-
-  // Placeholders this template uses
-  placeholders Json? // ["{{table}}", "{{column}}", "{{threshold}}"]
-
-  // === EFFECTIVENESS ===
-  successCount Int   @default(0)
-  failureCount Int   @default(0)
-  successRate  Float @default(0) // Calculated: success / (success + failure)
-
-  totalApplications Int  @default(0)
-  avgTimeToResolve  Int? // Average minutes to resolution
-
-  // Confidence based on data
-  confidenceScore Float @default(0.5) // 0.0 - 1.0
-  // Starts at 0.5, increases with successes, decreases with failures
-
-  // === METADATA ===
-  isBuiltIn  Boolean @default(false) // System-provided vs learned
-  isApproved Boolean @default(true) // Admin approved for auto-apply
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // === RELATIONS ===
-  matches FixPatternMatch[]
-
-  // Organization (null = global pattern)
-  organizationId String?
-  Organization   Organization? @relation(fields: [organizationId], references: [id])
-
-  @@index([issueType])
-  @@index([successRate])
-  @@index([organizationId])
-}
-
-// Links fingerprints to patterns (many-to-many with metadata)
-model FixPatternMatch {
-  id String @id @default(cuid())
-
-  fingerprint   IssueFingerprint @relation(fields: [fingerprintId], references: [id], onDelete: Cascade)
-  fingerprintId String
-
-  pattern   FixPattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
-  patternId String
-
-  // Match quality
-  matchScore Float @default(1.0) // How well this pattern fits (0.0 - 1.0)
-
-  // Usage stats for this specific match
-  usageCount       Int   @default(0)
-  successCount     Int   @default(0)
-  localSuccessRate Float @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([fingerprintId, patternId])
-  @@index([patternId])
-  @@index([fingerprintId])
-}
-
-// ============================================
 // N8N INTEGRATIONS
 // ============================================
 
@@ -2020,10 +1452,10 @@ model Integration {
   lastScanAt DateTime?
 
   // Extraction timestamps (populated by extraction flows)
-  lastExtractedAt         DateTime?
-  lastLineageExtractedAt  DateTime?
-  lastSchemaExtractedAt   DateTime?
-  lastLogsExtractedAt     DateTime?
+  lastExtractedAt        DateTime?
+  lastLineageExtractedAt DateTime?
+  lastSchemaExtractedAt  DateTime?
+  lastLogsExtractedAt    DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2031,19 +1463,14 @@ model Integration {
   // Relations
   organization     Organization      @relation(fields: [organizationId], references: [id])
   organizationId   String
-  tableConfigs     TableConfig[]
   dataContracts    DataContract[]
   lineageNodes     LineageNode[]
   lineageSnapshots LineageSnapshot[]
-  metricBaselines  MetricBaseline[]
   scanSchedules    ScanSchedule[]
   findings         Finding[]
 
   // Pipeline nodes that use this integration
   pipelineNodes PipelineNode[]
-
-  // User feedback on ML suppressions for this integration
-  suppressionOverrides SuppressionOverride[]
 
   // Universal monitors
   monitors Monitor[]
@@ -2132,12 +1559,12 @@ model PipelineDataContract {
   id String @id @default(cuid())
 
   // Scope — scopeRef is the unique identifier, scope is legacy type
-  scope    String  // 'schema' | 'dbt_model_group' | 'dashboard' | 'exception'
-  scopeRef String  // e.g., "bigquery:public", "staging", dashboard ID
+  scope    String // 'schema' | 'dbt_model_group' | 'dashboard' | 'exception'
+  scopeRef String // e.g., "bigquery:public", "staging", dashboard ID
   name     String? // Optional human-friendly name for this contract
 
   // Covered nodes
-  nodeFqns Json?   // string[] — FQNs of lineage nodes covered by this contract
+  nodeFqns Json? // string[] — FQNs of lineage nodes covered by this contract
 
   // Ownership
   ownerUser      String?
@@ -2160,9 +1587,9 @@ model PipelineDataContract {
   transformConfig     Json? // { testFailureTolerance, modelFreshnessHours }
 
   // Legacy fields (kept for backwards compat with existing records)
-  expectedFreshnessMinutes          Int?
+  expectedFreshnessMinutes           Int?
   expectedExtractionFrequencyMinutes Int?
-  alertPolicyJson                   Json?
+  alertPolicyJson                    Json?
 
   // Data-asset-specific
   schemaExpectations Json? // SchemaExpectation[]
@@ -2172,7 +1599,7 @@ model PipelineDataContract {
   overridesJson Json?
 
   // Exception contract support
-  isException      Boolean              @default(false)
+  isException      Boolean                @default(false)
   parentContractId String?
   parentContract   PipelineDataContract?  @relation("ExceptionParent", fields: [parentContractId], references: [id])
   exceptions       PipelineDataContract[] @relation("ExceptionParent")
@@ -2181,7 +1608,7 @@ model PipelineDataContract {
   autoSynced Boolean @default(false)
 
   // Status management
-  status     String   @default("active") // 'active' | 'inactive' | 'archived'
+  status     String    @default("active") // 'active' | 'inactive' | 'archived'
   archivedAt DateTime?
 
   createdAt DateTime @default(now())
@@ -2223,7 +1650,7 @@ enum IntegrationType {
   AIRFLOW // Apache Airflow orchestration
   DAGSTER // Dagster orchestration
   PREFECT // Prefect orchestration
-  N8N     // n8n workflow automation
+  N8N // n8n workflow automation
 
   // ===========================================
   // REPORTING (Layer: REPORTING)
@@ -2232,14 +1659,6 @@ enum IntegrationType {
   LOOKER // Looker / Looker Studio
   POWERBI // Microsoft Power BI
   METABASE // Open-source BI
-
-  // ===========================================
-  // DATA OBSERVABILITY (Layer: OBSERVABILITY)
-  // ===========================================
-  ELEMENTARY // dbt-native data observability
-  MONTE_CARLO // Monte Carlo data observability
-  BIGEYE // Bigeye data quality monitoring
-  SODA // Soda data quality checks
 
   // ===========================================
   // DATA WAREHOUSES (Additional)
@@ -2284,418 +1703,6 @@ enum IntegrationStatus {
   ACTIVE
   INACTIVE
   ERROR
-}
-
-// ============================================
-// N8N WORKFLOW TRACKING
-// ============================================
-
-model WorkflowRun {
-  id           String         @id @default(cuid())
-  workflowId   String // orchestration workflow ID
-  workflowName String
-  status       WorkflowStatus @default(PENDING)
-
-  // Input/Output
-  inputData    Json?
-  outputData   Json?
-  errorMessage String?
-
-  // Timing
-  startedAt   DateTime  @default(now())
-  completedAt DateTime?
-
-  // Links
-  reportId String? // If workflow generated a report
-  userId   String?
-
-  @@index([workflowId])
-  @@index([status])
-  @@index([userId])
-}
-
-enum WorkflowStatus {
-  PENDING
-  RUNNING
-  COMPLETED
-  FAILED
-}
-
-// ============================================
-// ML METRIC BASELINES (Persistent Learning)
-// ============================================
-
-model MetricBaseline {
-  id String @id @default(cuid())
-
-  // Metric identification
-  metricKey  String // Unique key: "table.column.metric_type" e.g., "ORDERS.AMOUNT.null_rate"
-  tableName  String // Full table name
-  columnName String? // Optional column (null for table-level metrics)
-  metricType MetricType
-
-  // Learned statistics
-  mean     Float
-  stdDev   Float
-  median   Float
-  minValue Float?
-  maxValue Float?
-
-  // Quartiles for IQR
-  percentile25 Float?
-  percentile50 Float?
-  percentile75 Float?
-  percentile90 Float?
-  percentile99 Float?
-
-  // Time patterns (JSON for hourly/daily patterns)
-  hourlyPatterns Json? // { "0": 100, "1": 95, ..., "23": 110 }
-  dailyPatterns  Json? // { "0": 100, "1": 105, ..., "6": 80 } (0=Mon, 6=Sun)
-
-  // Trend
-  trendDirection String @default("stable") // increasing, decreasing, stable
-  trendSlope     Float  @default(0)
-
-  // Learning metadata
-  sampleCount    Int       @default(0)
-  windowDays     Int       @default(30)
-  lastValue      Float?
-  lastObservedAt DateTime?
-
-  // Configuration
-  sensitivity Float   @default(0.5) // 0.0-1.0, higher = more sensitive
-  enabled     Boolean @default(true)
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-
-  // Historical observations (last N points)
-  observations MetricObservation[]
-
-  @@unique([organizationId, metricKey])
-  @@index([organizationId])
-  @@index([integrationId])
-  @@index([tableName])
-  @@index([metricType])
-}
-
-model MetricObservation {
-  id String @id @default(cuid())
-
-  // Value
-  value     Float
-  timestamp DateTime @default(now())
-
-  // Context
-  hourOfDay Int? // 0-23
-  dayOfWeek Int? // 0-6 (Mon-Sun)
-
-  // Anomaly detection result (if flagged)
-  isAnomaly       Boolean @default(false)
-  anomalyScore    Float?
-  anomalySeverity String? // critical, high, medium, low
-
-  // Relation
-  baseline   MetricBaseline @relation(fields: [baselineId], references: [id], onDelete: Cascade)
-  baselineId String
-
-  @@index([baselineId])
-  @@index([timestamp])
-}
-
-enum MetricType {
-  // Column-level metrics
-  NULL_RATE
-  DISTINCT_COUNT
-  DISTINCT_RATE
-  MIN_VALUE
-  MAX_VALUE
-  AVG_VALUE
-  SUM_VALUE
-  STDDEV
-
-  // Table-level metrics
-  ROW_COUNT
-  FRESHNESS_HOURS
-  SIZE_BYTES
-
-  // Quality metrics
-  DUPLICATE_RATE
-  EMPTY_STRING_RATE
-  OUTLIER_COUNT
-
-  // Custom
-  CUSTOM
-}
-
-// ============================================
-// RISK INTELLIGENCE & DATA COLLECTION
-// (For Insurance API Business)
-// ============================================
-
-// Comprehensive snapshot of each scan for historical analysis
-model ScanSnapshot {
-  id String @id @default(cuid())
-
-  // Organization context (anonymized for benchmarking)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-
-  // Scan metadata
-  scanType       String // freshness, quality, schema, secrets, volume
-  scanTimestamp  DateTime @default(now())
-  scanDurationMs Int? // How long the scan took
-
-  // Results summary
-  overallScore  Int // 0-100
-  tablesScanned Int
-  findingsCount Int
-  criticalCount Int
-  highCount     Int
-  mediumCount   Int
-  lowCount      Int
-
-  // Auto-fix metrics
-  autoFixAvailable Int @default(0)
-  autoFixApplied   Int @default(0)
-
-  // Detailed metrics (for trend analysis)
-  avgFreshnessHours Float?
-  avgNullRate       Float?
-  avgDuplicateRate  Float?
-  schemaChanges     Int?
-  secretsExposed    Int?
-  piiTablesFound    Int?
-
-  // Coverage metrics
-  coveragePercent Float? // % of tables monitored vs total
-  testCoverage    Float? // % of tables with dbt tests
-
-  // Response metrics
-  incidentsCreated Int  @default(0)
-  mttr             Int? // Minutes to resolve (if incidents closed)
-
-  // Industry classification (for benchmarking)
-  industry    String? // fintech, saas, ecommerce, healthcare, etc.
-  companySize String? // startup, smb, mid-market, enterprise
-
-  // Raw data (encrypted, for detailed analysis)
-  findingsJson Json? // Anonymized findings
-  metricsJson  Json? // Detailed metrics by table
-
-  createdAt DateTime @default(now())
-
-  @@index([organizationId])
-  @@index([scanType])
-  @@index([scanTimestamp])
-  @@index([industry])
-}
-
-// Aggregated risk profile per organization (updated daily)
-model OrganizationRiskProfile {
-  id String @id @default(cuid())
-
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String       @unique
-
-  // Overall risk scores (0-100, higher = more risk)
-  overallRiskScore    Int @default(50)
-  dataQualityRisk     Int @default(50)
-  dataFreshnessRisk   Int @default(50)
-  schemaStabilityRisk Int @default(50)
-  securityRisk        Int @default(50)
-  operationalRisk     Int @default(50) // Based on MTTR, coverage
-
-  // Trend indicators
-  riskTrend        String @default("stable") // improving, degrading, stable
-  riskTrendPercent Float  @default(0) // % change over 30 days
-
-  // Key metrics
-  avgDrrScore       Float @default(0) // Average Data Reliability Rating
-  avgMttr           Int   @default(0) // Minutes
-  avgMttd           Int   @default(0) // Mean time to detect (minutes)
-  incidentFrequency Float @default(0) // Incidents per week
-  coveragePercent   Float @default(0) // % of tables monitored
-
-  // Volume metrics
-  totalTables     Int @default(0)
-  monitoredTables Int @default(0)
-  totalScansRun   Int @default(0)
-  scansLast30Days Int @default(0)
-
-  // Quality metrics (averages)
-  avgNullRate           Float?
-  avgDuplicateRate      Float?
-  avgFreshnessHours     Float?
-  schemaChangeFrequency Float? // Changes per week
-
-  // Security metrics
-  secretsExposedEver Int    @default(0)
-  piiTablesCount     Int    @default(0)
-  encryptionCoverage Float? // % of PII tables encrypted
-
-  // Classification
-  industry          String?
-  companySize       String?
-  dataMaturityLevel String  @default("emerging") // emerging, developing, mature, advanced
-
-  // Computed at
-  lastCalculatedAt DateTime @default(now())
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  @@index([industry])
-  @@index([overallRiskScore])
-  @@index([dataMaturityLevel])
-}
-
-// Industry benchmarks (aggregated across all customers)
-model IndustryBenchmark {
-  id String @id @default(cuid())
-
-  // Benchmark identifier
-  industry    String // fintech, saas, ecommerce, healthcare, etc.
-  companySize String? // startup, smb, mid-market, enterprise (null = all sizes)
-  period      String // 2024-Q1, 2024-01, etc.
-
-  // Sample size
-  organizationCount Int @default(0)
-  scanCount         Int @default(0)
-
-  // Benchmark scores (percentiles)
-  drrScore_p25 Float?
-  drrScore_p50 Float?
-  drrScore_p75 Float?
-  drrScore_p90 Float?
-
-  // Risk scores
-  avgRiskScore  Float?
-  riskScore_p25 Float?
-  riskScore_p50 Float?
-  riskScore_p75 Float?
-
-  // Operational metrics
-  avgMttr  Int? // Minutes
-  mttr_p25 Int?
-  mttr_p50 Int?
-  mttr_p75 Int?
-
-  avgCoverage  Float?
-  coverage_p50 Float?
-
-  // Quality metrics
-  avgNullRate       Float?
-  avgFreshnessHours Float?
-  avgIncidentRate   Float? // Per week
-
-  // Calculated at
-  calculatedAt DateTime @default(now())
-
-  @@unique([industry, companySize, period])
-  @@index([industry])
-  @@index([period])
-}
-
-// ============================================
-// RISK API (For Insurance Partners)
-// ============================================
-
-// Insurance partners who subscribe to the Risk API
-model RiskAPISubscription {
-  id String @id @default(cuid())
-
-  // Partner info
-  partnerName  String
-  partnerType  String // cyber_insurer, data_insurer, tech_eo, broker
-  contactEmail String
-  contactName  String?
-
-  // API credentials
-  apiKey     String @unique
-  apiKeyHash String // Hashed version for verification
-
-  // Subscription details
-  plan   RiskAPIPlan   @default(STANDARD)
-  status RiskAPIStatus @default(ACTIVE)
-
-  // Rate limits
-  requestsPerMonth Int      @default(1000)
-  requestsUsed     Int      @default(0)
-  requestsResetAt  DateTime @default(now())
-
-  // Pricing
-  monthlyFee    Float? // Custom pricing
-  perRequestFee Float? // Pay-per-request pricing
-
-  // Access control
-  allowedEndpoints  String[] @default([]) // Which endpoints they can access
-  allowedIndustries String[] @default([]) // Which industries they can query
-
-  // Audit
-  lastRequestAt     DateTime?
-  totalRequestsEver Int       @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  requests RiskAPIRequest[]
-
-  @@index([apiKey])
-  @@index([partnerType])
-}
-
-// Log of all Risk API requests (for billing and audit)
-model RiskAPIRequest {
-  id String @id @default(cuid())
-
-  // Subscription
-  subscription   RiskAPISubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  subscriptionId String
-
-  // Request details
-  endpoint      String // /risk/score, /risk/benchmark, /risk/report
-  method        String // GET, POST
-  requestParams Json? // Query params or body (anonymized)
-
-  // Response
-  responseStatus Int // HTTP status code
-  responseTimeMs Int? // Response time
-
-  // Billing
-  billable     Boolean @default(true)
-  billedAmount Float?
-
-  // Client info
-  clientIp  String?
-  userAgent String?
-
-  timestamp DateTime @default(now())
-
-  @@index([subscriptionId])
-  @@index([timestamp])
-  @@index([endpoint])
-}
-
-enum RiskAPIPlan {
-  STARTER // 100 requests/month, basic endpoints
-  STANDARD // 1,000 requests/month, all endpoints
-  PROFESSIONAL // 10,000 requests/month, all + bulk
-  ENTERPRISE // Unlimited, custom
-}
-
-enum RiskAPIStatus {
-  ACTIVE
-  SUSPENDED
-  CANCELLED
-  TRIAL
 }
 
 // ============================================
@@ -2747,13 +1754,6 @@ model Finding {
   report         Report?      @relation(fields: [reportId], references: [id])
   reportId       String?
 
-  // Response tracking
-  responses FindingResponse[]
-
-  // Rule that might apply
-  matchedRule   FindingRule? @relation(fields: [matchedRuleId], references: [id])
-  matchedRuleId String?
-
   @@unique([organizationId, fingerprint])
   @@index([organizationId])
   @@index([integrationId])
@@ -2761,193 +1761,6 @@ model Finding {
   @@index([severity])
   @@index([scanType])
   @@index([fingerprint])
-}
-
-// User response to a finding
-model FindingResponse {
-  id String @id @default(cuid())
-
-  // Response type
-  responseType ResponseType
-
-  // Justification (required for some response types)
-  reason        String? @db.Text
-  justification String? @db.Text // Detailed explanation
-
-  // For ACCEPTED_RISK: who approved it
-  approvedBy String?
-  approvedAt DateTime?
-
-  // Expiration (for temporary suppressions)
-  expiresAt DateTime?
-
-  // Was this reviewed/verified?
-  verified   Boolean   @default(false)
-  verifiedBy String?
-  verifiedAt DateTime?
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Cascade)
-  findingId String
-
-  // Who responded
-  userId   String?
-  userName String? // Denormalized for audit
-
-  @@index([findingId])
-  @@index([responseType])
-  @@index([createdAt])
-}
-
-// Smart rules for expected patterns (replaces per-finding suppressions)
-model FindingRule {
-  id String @id @default(cuid())
-
-  // Rule identification
-  name        String
-  description String? @db.Text
-
-  // Rule conditions (all must match)
-  conditions Json // { table: "pattern", column: "pattern", findingType: "x", ... }
-
-  // What happens when matched
-  action RuleAction @default(REDUCE_SEVERITY)
-
-  // For REDUCE_SEVERITY
-  targetSeverity FindingSeverity?
-
-  // For SUPPRESS
-  suppressReason String?
-
-  // Rule metadata
-  isActive Boolean @default(true)
-  priority Int     @default(0) // Higher = checked first
-
-  // Audit
-  createdBy  String?
-  approvedBy String?
-  approvedAt DateTime?
-
-  // Expiration
-  expiresAt DateTime?
-
-  // Stats
-  matchCount  Int       @default(0)
-  lastMatchAt DateTime?
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-
-  // Findings matched by this rule
-  matchedFindings Finding[]
-
-  @@index([organizationId])
-  @@index([isActive])
-}
-
-// User feedback on ML/baseline suppression decisions
-// Allows users to approve or deny automatic suppressions
-model SuppressionOverride {
-  id String @id @default(cuid())
-
-  // What is being overridden
-  table       String // Table name (e.g., "analytics.daily_revenue")
-  column      String? // Column name (optional, for table-wide overrides)
-  findingType String? // Type of finding (e.g., "outlier", "duplicate")
-
-  // The suppression source being overridden
-  suppressionSource String // semantic_classification, correlation, baseline
-
-  // User's decision
-  decision OverrideDecision
-  reason   String?          @db.Text // User's explanation
-
-  // Original classification info (for context)
-  originalClassification Json? // The original LLM/baseline classification
-
-  // Audit trail
-  createdBy     String? // User ID
-  createdByName String? // User name (denormalized)
-  approvedBy    String? // For requiring approval on denials
-  approvedAt    DateTime?
-
-  // Expiration (optional - allow temporary overrides)
-  expiresAt DateTime?
-
-  // Stats
-  appliedCount  Int       @default(0) // How many times this override was applied
-  lastAppliedAt DateTime?
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-
-  @@unique([organizationId, table, column, findingType, suppressionSource])
-  @@index([organizationId])
-  @@index([table])
-  @@index([integrationId])
-}
-
-enum OverrideDecision {
-  APPROVE // User confirms suppression is correct
-  DENY // User says this should be an alert
-}
-
-// DRR Score tracking over time
-model DRRScore {
-  id String @id @default(cuid())
-
-  // Score components
-  totalFindings     Int
-  resolvedFindings  Int // Actually fixed
-  acknowledgedCount Int // Acknowledged but not fixed
-  falsePositives    Int // Verified false positives (excluded from calculation)
-  acceptedRisks     Int // Stakeholder-approved risks (tracked separately)
-  suppressedCount   Int // Suppressed by rules (tracked separately)
-
-  // The actual DRR score (resolved / (total - falsePositives))
-  drrScore Float
-
-  // Breakdown by severity
-  criticalTotal    Int @default(0)
-  criticalResolved Int @default(0)
-  highTotal        Int @default(0)
-  highResolved     Int @default(0)
-  mediumTotal      Int @default(0)
-  mediumResolved   Int @default(0)
-  lowTotal         Int @default(0)
-  lowResolved      Int @default(0)
-
-  // Context
-  scanType String? // null = overall, or specific scan type
-
-  // Timestamp
-  recordedAt DateTime @default(now())
-
-  // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  report         Report?      @relation(fields: [reportId], references: [id])
-  reportId       String?
-
-  @@index([organizationId])
-  @@index([recordedAt])
-  @@index([scanType])
 }
 
 enum FindingSeverity {
@@ -2966,133 +1779,6 @@ enum FindingStatus {
   FALSE_POSITIVE // Not a real issue
   ACCEPTED_RISK // Known risk, stakeholder approved
   SUPPRESSED // Matched a rule, hidden from view
-}
-
-enum ResponseType {
-  FIXED // User claims they fixed it
-  ACKNOWLEDGED // User saw it, hasn't fixed
-  FALSE_POSITIVE // Scanner got it wrong
-  ACCEPTED_RISK // Known issue, accepted by stakeholder
-  WONT_FIX // Low priority, not worth fixing
-  EXPECTED_BEHAVIOR // This is by design
-  NEEDS_REVIEW // Escalate for review
-}
-
-enum RuleAction {
-  SUPPRESS // Hide from normal view
-  REDUCE_SEVERITY // Downgrade severity
-  AUTO_ACKNOWLEDGE // Auto-mark as acknowledged
-  FLAG_FOR_REVIEW // Mark for human review
-}
-
-// ============================================
-// SCANNER PATTERN RULES (Intelligent Context)
-// ============================================
-
-// Learned patterns that tell the scanner what's "normal"
-model ScannerPatternRule {
-  id String @id @default(cuid())
-
-  // Rule identification
-  name        String
-  description String? @db.Text
-
-  // What this rule applies to
-  tablePattern  String // 'raw.customers', 'raw.*', '*' for wildcards
-  columnPattern String // '_batch_id', '*_id', '*'
-  findingType   String // 'duplicate', 'null_rate', 'outlier', etc.
-
-  // The detected pattern
-  patternType PatternType
-
-  // Pattern context (explains WHY this is expected)
-  context Json // { "correlates_with": "batch_id", "group_size": 8, "explanation": "..." }
-
-  // User confirmation status
-  status         PatternRuleStatus @default(PENDING)
-  confirmedBy    String?
-  confirmedAt    DateTime?
-  rejectedReason String?
-
-  // Auto-detection metadata
-  detectionConfidence Float    @default(0.5) // 0-1 confidence
-  timesSeen           Int      @default(1) // How many times this pattern was detected
-  lastSeenAt          DateTime @default(now())
-  firstSeenAt         DateTime @default(now())
-
-  // Rule behavior
-  isActive  Boolean   @default(true)
-  priority  Int       @default(0) // Higher = checked first
-  expiresAt DateTime? // Optional expiration
-
-  // Timestamps
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-
-  // Applications of this rule
-  applications PatternRuleApplication[]
-
-  @@unique([organizationId, tablePattern, columnPattern, findingType, patternType])
-  @@index([organizationId])
-  @@index([status])
-  @@index([patternType])
-  @@index([isActive])
-}
-
-// Track when pattern rules are applied
-model PatternRuleApplication {
-  id String @id @default(cuid())
-
-  // Which rule was applied
-  rule   ScannerPatternRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
-  ruleId String
-
-  // Scan context
-  scanId     String
-  tableName  String
-  columnName String?
-
-  // What action was taken
-  action PatternRuleAction
-
-  // Details
-  details Json? // Additional context about the application
-
-  // Timestamp
-  appliedAt DateTime @default(now())
-
-  @@index([ruleId])
-  @@index([scanId])
-  @@index([appliedAt])
-}
-
-enum PatternType {
-  COLUMN_CORRELATION // Duplicates correlate with another column (e.g., batch_id)
-  TIME_SNAPSHOT // Daily/weekly snapshots causing duplicates
-  SCD_VERSIONING // Slowly changing dimension versioning
-  FOREIGN_KEY // Column is a foreign key (expected duplicates)
-  GROUPING_KEY // Column is a grouping/partition key
-  EXPECTED_NULL // Nulls are expected in this column
-  EXPECTED_OUTLIER // Outliers are expected (e.g., large orders)
-  SEASONAL_PATTERN // Seasonal variations are normal
-  CUSTOM // Custom user-defined pattern
-}
-
-enum PatternRuleStatus {
-  PENDING // Detected, awaiting user confirmation
-  CONFIRMED // User confirmed this is expected
-  REJECTED // User said this is NOT expected (flag as issue)
-  AUTO_CONFIRMED // Confirmed automatically (high confidence + seen multiple times)
-}
-
-enum PatternRuleAction {
-  SUPPRESSED // Finding was suppressed due to rule
-  NEEDS_CONFIRMATION // Pattern detected, shown to user for confirmation
-  FLAGGED // No rule matched, flagged as issue
 }
 
 // ============================================
@@ -3146,11 +1832,11 @@ model Monitor {
 
   // Monitor configuration
   monitorType    MonitorKind?
-  targetFqn      String?       // database.schema.table (optional for prompt tasks)
+  targetFqn      String? // database.schema.table (optional for prompt tasks)
   targetDatabase String?
   targetSchema   String?
   targetTable    String?
-  config         Json?         // Monitor-specific config (thresholds, columns, etc.)
+  config         Json? // Monitor-specific config (thresholds, columns, etc.)
 
   // Scheduling
   enabled    Boolean           @default(true)
@@ -3166,20 +1852,20 @@ model Monitor {
   baselineUpdatedAt DateTime?
 
   // Task mode
-  taskMode       String?   // "prompt" | "structured"
-  prompt         String?   // Natural-language prompt (for prompt mode)
-  description    String?   // Human-readable description
+  taskMode    String? // "prompt" | "structured"
+  prompt      String? // Natural-language prompt (for prompt mode)
+  description String? // Human-readable description
 
   // Alert configuration
-  alertChannels   String[]  // ["slack", "email", "pagerduty"]
-  alertConfig     Json?     // Channel-specific config overrides
-  alertOnStatus   String[]  // ["FAIL", "WARN", "ERROR"] — which statuses trigger alerts
-  lastAlertStatus String?   // Last status that triggered an alert (for dedup)
+  alertChannels   String[] // ["slack", "email", "pagerduty"]
+  alertConfig     Json? // Channel-specific config overrides
+  alertOnStatus   String[] // ["FAIL", "WARN", "ERROR"] — which statuses trigger alerts
+  lastAlertStatus String? // Last status that triggered an alert (for dedup)
   lastAlertAt     DateTime? // When the last alert was sent (for suppression window)
   timezone        String?   @default("UTC")
 
   // Policy override tracking
-  policyOverrides String[]  // Config field keys overridden by user (e.g. ["max_hours"])
+  policyOverrides String[] // Config field keys overridden by user (e.g. ["max_hours"])
 
   // Metadata
   createdBy  String?
@@ -3190,14 +1876,14 @@ model Monitor {
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-  monitorGroup   MonitorGroup? @relation(fields: [monitorGroupId], references: [id], onDelete: SetNull)
-  monitorGroupId String?
-  runs           MonitorRun[]
-  baselines      MonitorBaseline[]
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId       String
+  integration          Integration?          @relation(fields: [integrationId], references: [id])
+  integrationId        String?
+  monitorGroup         MonitorGroup?         @relation(fields: [monitorGroupId], references: [id], onDelete: SetNull)
+  monitorGroupId       String?
+  runs                 MonitorRun[]
+  baselines            MonitorBaseline[]
   driftRecommendations DriftRecommendation[]
 
   @@unique([organizationId, targetFqn, monitorType])
@@ -3238,16 +1924,16 @@ model MonitorBaseline {
 
   // What was measured
   metricName  String // e.g. "row_count", "null_rate", "hours_since_update"
-  metricValue Float  // The observed metric value
+  metricValue Float // The observed metric value
 
   // Time context
   measuredAt DateTime @default(now())
-  dayOfWeek  Int?     // 0=Sunday..6=Saturday (for seasonality queries)
-  hourOfDay  Int?     // 0-23 (for sub-daily patterns)
+  dayOfWeek  Int? // 0=Sunday..6=Saturday (for seasonality queries)
+  hourOfDay  Int? // 0-23 (for sub-daily patterns)
 
   // Optional context
   targetFqn String? // Denormalized for fast queries without joining Monitor
-  details   Json?   // Extra context (e.g. { column: "email" })
+  details   Json? // Extra context (e.g. { column: "email" })
 
   // Relations
   monitor   Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
@@ -3258,48 +1944,6 @@ model MonitorBaseline {
   @@index([measuredAt])
 }
 
-model CoverageSnapshot {
-  id String @id @default(cuid())
-
-  // Aggregate scores
-  overallScore             Float
-  totalNodes               Int
-  nodesWithFullCoverage    Int
-  nodesWithPartialCoverage Int
-  nodesWithNoCoverage      Int
-
-  // Per-category scores
-  freshnessScore     Float?
-  volumeScore        Float?
-  schemaScore        Float?
-  qualityScore       Float?
-  lineageScore       Float?
-  ownershipScore     Float?
-  documentationScore Float?
-
-  // Gap counts
-  criticalGaps Int @default(0)
-  highGaps     Int @default(0)
-  mediumGaps   Int @default(0)
-  lowGaps      Int @default(0)
-
-  // Detailed data
-  nodeScores      Json? // Array of per-node coverage scores
-  gaps            Json? // Array of coverage gaps
-  recommendations Json? // Array of monitor recommendations
-
-  // Metadata
-  source    String? // What triggered this snapshot (e.g., "scan", "manual", "scheduled")
-  createdAt DateTime @default(now())
-
-  // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-
-  @@index([organizationId])
-  @@index([createdAt])
-}
-
 enum MonitorKind {
   // Warehouse data quality — canonical monitor set
   FRESHNESS
@@ -3307,22 +1951,22 @@ enum MonitorKind {
   SCHEMA_CHANGE
   REFERENTIAL
   CUSTOM_SQL
-  ANOMALY              // Backend for Outlier Detection
-  NULL_CHECK           // Null rate monitoring (replaces NULL_RATE)
-  UNIQUENESS_CHECK     // Duplicate detection (replaces UNIQUENESS)
-  RANGE_VALIDATION     // Numeric bounds checking
-  ACCEPTED_VALUES      // Categorical value set validation
-  DATE_CONSISTENCY     // Cross-column date assertions
+  ANOMALY // Backend for Outlier Detection
+  NULL_CHECK // Null rate monitoring (replaces NULL_RATE)
+  UNIQUENESS_CHECK // Duplicate detection (replaces UNIQUENESS)
+  RANGE_VALIDATION // Numeric bounds checking
+  ACCEPTED_VALUES // Categorical value set validation
+  DATE_CONSISTENCY // Cross-column date assertions
   DATA_TYPE_VALIDATION // Column type validation
-  OUTLIER_DETECTION    // Alias for ANOMALY in user-facing catalog
+  OUTLIER_DETECTION // Alias for ANOMALY in user-facing catalog
   // Legacy warehouse types — kept for backward compatibility
-  NULL_RATE            // Deprecated: use NULL_CHECK
-  UNIQUENESS           // Deprecated: use UNIQUENESS_CHECK
-  DISTRIBUTION         // Deprecated: use OUTLIER_DETECTION
+  NULL_RATE // Deprecated: use NULL_CHECK
+  UNIQUENESS // Deprecated: use UNIQUENESS_CHECK
+  DISTRIBUTION // Deprecated: use OUTLIER_DETECTION
   // Infrastructure monitors
-  CERTIFICATE      // Infrastructure: TLS/SSL cert expiry
-  SERVER_HEALTH    // Infrastructure: CPU, memory, disk
-  LOG_ANALYSIS     // Infrastructure: log file error scanning
+  CERTIFICATE // Infrastructure: TLS/SSL cert expiry
+  SERVER_HEALTH // Infrastructure: CPU, memory, disk
+  LOG_ANALYSIS // Infrastructure: log file error scanning
   // Ingestion monitors (Fivetran, Airbyte)
   SYNC_LAG
   FAILED_SYNCS
@@ -3342,7 +1986,7 @@ enum MonitorKind {
   BI_REFRESH_FAILURE
   BI_LOGIC_VALIDATION
   // AI-powered monitors
-  AI_PROMPT                // LLM-based custom business logic monitor
+  AI_PROMPT // LLM-based custom business logic monitor
 }
 
 enum MonitorRunStatus {
@@ -3358,7 +2002,7 @@ model MonitorGroup {
   id           String  @id @default(cuid())
   name         String
   description  String?
-  groupType    String  // "upstream_stability", "reporting_health", "asset_stability", "custom"
+  groupType    String // "upstream_stability", "reporting_health", "asset_stability", "custom"
   anchorFqn    String? // FQN of the anchor node whose upstream defines this group
   anchorNodeId String? // Engine lineage node ID for re-computing membership
 
@@ -3376,18 +2020,18 @@ model MonitorGroup {
   lastRunAt  DateTime?
 
   // Group Monitor fields (null for legacy bundles)
-  watchType      String?   // "pipeline_health"|"dashboard_shield"|"source_guard"|"model_quality"|"custom_watch"
-  scopeConfig    Json?     // { maxDepth, maxNodes, maxMonitors, domainFilters, includeNodeIds, excludeNodeIds }
-  coveragePct    Float?    // 0.0-1.0
-  healthScore    Float?    // 0.0-100.0
-  healthDetails  Json?     // HealthReport blob
+  watchType      String? // "pipeline_health"|"dashboard_shield"|"source_guard"|"model_quality"|"custom_watch"
+  scopeConfig    Json? // { maxDepth, maxNodes, maxMonitors, domainFilters, includeNodeIds, excludeNodeIds }
+  coveragePct    Float? // 0.0-1.0
+  healthScore    Float? // 0.0-100.0
+  healthDetails  Json? // HealthReport blob
   lastHealthAt   DateTime?
-  anchorNodeType String?   // cached: "dashboard"|"table"|"connector" etc.
-  anchorPlatform String?   // cached: "bigquery"|"looker" etc.
+  anchorNodeType String? // cached: "dashboard"|"table"|"connector" etc.
+  anchorPlatform String? // cached: "bigquery"|"looker" etc.
 
   // Preset group fields (null for non-preset watches)
-  presetGroupId  String?   // Groups watches from same preset application
-  presetKey      String?   // "pipeline_health"|"data_drift"|"ingestion_watch"|"bi_reliability"|"full_coverage"
+  presetGroupId String? // Groups watches from same preset application
+  presetKey     String? // "pipeline_health"|"data_drift"|"ingestion_watch"|"bi_reliability"|"full_coverage"
 
   // Monitoring Plan parent (null for standalone groups)
   monitoringPlan   MonitoringPlan? @relation(fields: [monitoringPlanId], references: [id], onDelete: SetNull)
@@ -3416,25 +2060,25 @@ model MonitoringPlan {
   description String?
 
   // Scope (user intent)
-  scopeType    String   // "pipeline" | "stream" | "asset" | "tool"
-  scopeConfig  Json?    // { anchorNodeIds, maxDepth, domainFilters }
+  scopeType    String // "pipeline" | "stream" | "asset" | "tool"
+  scopeConfig  Json? // { anchorNodeIds, maxDepth, domainFilters }
   anchorFqn    String?
   anchorNodeId String?
 
   // Configuration (user intent)
-  mode     String   // "recommended" | "manual"
+  mode     String // "recommended" | "manual"
   families String[] // selected family keys
 
   // Aggregate metrics (cached, recomputed after runs)
-  totalAssets      Int      @default(0)
-  totalMonitors    Int      @default(0)
+  totalAssets      Int       @default(0)
+  totalMonitors    Int       @default(0)
   coveragePct      Float?
   healthScore      Float?
-  healthStatus     String?  // "healthy"|"degraded"|"at_risk"|"unhealthy"
-  passCount        Int      @default(0)
-  warnCount        Int      @default(0)
-  failCount        Int      @default(0)
-  errorCount       Int      @default(0)
+  healthStatus     String? // "healthy"|"degraded"|"at_risk"|"unhealthy"
+  passCount        Int       @default(0)
+  warnCount        Int       @default(0)
+  failCount        Int       @default(0)
+  errorCount       Int       @default(0)
   lastAggregatedAt DateTime?
 
   // Schedule (plan-level, editing updates all child groups)
@@ -3452,7 +2096,7 @@ model MonitoringPlan {
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
   monitorGroups  MonitorGroup[]
 
@@ -3465,33 +2109,33 @@ model MonitoringPlan {
 // ============================================
 
 model DriftRecommendation {
-  id               String    @id @default(cuid())
-  organizationId   String
-  monitorId        String
-  monitorName      String
-  monitorType      String
-  targetFqn        String
+  id             String @id @default(cuid())
+  organizationId String
+  monitorId      String
+  monitorName    String
+  monitorType    String
+  targetFqn      String
 
-  driftCategory    String
-  severity         String
+  driftCategory String
+  severity      String
 
   currentField     String
   currentValue     String
   recommendedValue String
 
-  reasoning        String
-  confidence       Float
-  evidence         Json
+  reasoning  String
+  confidence Float
+  evidence   Json
 
-  status           String    @default("pending")
-  reviewedAt       DateTime?
+  status     String    @default("pending")
+  reviewedAt DateTime?
 
-  runId            String
+  runId String
 
-  createdAt        DateTime  @default(now())
+  createdAt DateTime @default(now())
 
-  organization     Organization @relation(fields: [organizationId], references: [id])
-  monitor          Monitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id])
+  monitor      Monitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, status])
   @@index([monitorId])

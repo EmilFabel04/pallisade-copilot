@@ -8,7 +8,7 @@
 export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'UNCATEGORIZED';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
-export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
+export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING';
 
 // Node status
 export type PipelineNodeStatus = 'PENDING' | 'CONNECTED' | 'TESTING' | 'ERROR' | 'ACTIVE';
@@ -30,7 +30,6 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
 export const INTEGRATION_COLORS: Record<IntegrationType, string> = {
   NOTIFICATIONS: '#EC4899',  // Pink
   TICKETING: '#F97316',      // Orange
-  OBSERVABILITY: '#14B8A6',  // Teal
 };
 
 // Status colors
@@ -59,7 +58,6 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
 export const INTEGRATION_LABELS: Record<IntegrationType, string> = {
   NOTIFICATIONS: 'Notifications',
   TICKETING: 'Ticketing',
-  OBSERVABILITY: 'Observability',
 };
 
 // Get tools by layer
@@ -654,47 +652,6 @@ export const INTEGRATIONS: Record<IntegrationType, IntegrationDefinition[]> = {
       ],
     },
   ],
-  OBSERVABILITY: [
-    {
-      id: 'monte_carlo',
-      name: 'Monte Carlo',
-      description: 'Data observability platform',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key_id', label: 'API Key ID', type: 'text', required: true, placeholder: 'Monte Carlo key ID' },
-        { name: 'api_key_secret', label: 'API Key Secret', type: 'password', required: true, placeholder: 'Monte Carlo key secret' },
-      ],
-    },
-    {
-      id: 'bigeye',
-      name: 'Bigeye',
-      description: 'Data quality monitoring',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Bigeye API key' },
-        { name: 'base_url', label: 'Base URL', type: 'text', required: false, placeholder: 'https://app.bigeye.com' },
-      ],
-    },
-    {
-      id: 'soda',
-      name: 'Soda',
-      description: 'Data quality testing',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key_id', label: 'API Key ID', type: 'text', required: true, placeholder: 'Soda Cloud key ID' },
-        { name: 'api_key_secret', label: 'API Key Secret', type: 'password', required: true, placeholder: 'Soda Cloud key secret' },
-      ],
-    },
-    {
-      id: 'elementary',
-      name: 'Elementary',
-      description: 'dbt-native data observability — queries test results directly in your warehouse',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'schema', label: 'Elementary Schema', type: 'text', required: false, placeholder: 'elementary (default)' },
-      ],
-    },
-  ],
 };
 
 // Get tool by ID
@@ -771,11 +728,6 @@ export const GRAPH_DOMAIN_MAP: Record<string, GraphDomain> = {
   tableau: 'DATA_PLANE',
   metabase: 'DATA_PLANE',
   powerbi: 'DATA_PLANE',
-  // Observability — DATA_PLANE
-  monte_carlo: 'DATA_PLANE',
-  bigeye: 'DATA_PLANE',
-  soda: 'DATA_PLANE',
-  elementary: 'DATA_PLANE',
   // Storage — DATA_PLANE
   amazon_s3: 'DATA_PLANE',
   gcs: 'DATA_PLANE',

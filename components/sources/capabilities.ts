@@ -33,12 +33,6 @@ const TOOL_CAPABILITIES: Record<string, SourceCapability[]> = {
   powerbi: ['Metadata', 'Lineage'],
   metabase: ['Metadata', 'Lineage'],
 
-  // Observability
-  elementary: ['Logs', 'Metadata'],
-  monte_carlo: ['Logs', 'Metadata'],
-  bigeye: ['Logs', 'Metadata'],
-  soda: ['Logs', 'Metadata'],
-
   // Storage
   amazon_s3: ['Metadata'],
   gcs: ['Metadata'],

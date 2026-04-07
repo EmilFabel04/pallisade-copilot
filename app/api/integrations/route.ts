@@ -447,10 +447,6 @@ function mapToolTypeToIntegrationType(toolType: string): string {
     'tableau': 'TABLEAU',
     'powerbi': 'POWERBI',
     'metabase': 'METABASE',
-    'elementary': 'ELEMENTARY',
-    'monte_carlo': 'MONTE_CARLO',
-    'bigeye': 'BIGEYE',
-    'soda': 'SODA',
     'databricks': 'DATABRICKS',
     'amazon_s3': 'AMAZON_S3',
     'gcs': 'GCS',
@@ -591,14 +587,6 @@ function generateConnectionInfo(type: string, credentials: any, config: any): st
       return `${credentials?.domain || config?.domain || 'atlassian'}.atlassian.net`;
     case 'LINEAR':
       return config?.team ? `Team: ${config.team}` : 'Linear workspace';
-    case 'ELEMENTARY':
-      return 'Elementary data observability';
-    case 'MONTE_CARLO':
-      return 'Monte Carlo data observability';
-    case 'BIGEYE':
-      return 'Bigeye data quality';
-    case 'SODA':
-      return 'Soda data quality';
     default:
       return '';
   }

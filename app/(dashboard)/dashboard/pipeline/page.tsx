@@ -56,7 +56,7 @@ const CONNECTION_STATUS_CATEGORIES: Array<{ key: string; label: string; connecto
   { key: 'bi', label: 'BI', connectorIds: ['looker', 'tableau', 'powerbi', 'metabase'] },
   { key: 'ingestion', label: 'Ingestion', connectorIds: ['fivetran', 'airbyte', 'stitch'] },
   { key: 'storage', label: 'Storage', connectorIds: ['amazon_s3', 'gcs', 'adls'] },
-  { key: 'alerts', label: 'Alerts', connectorIds: ['slack', 'teams', 'pagerduty', 'opsgenie', 'jira', 'linear', 'asana', 'github_issues', 'monte_carlo', 'bigeye', 'soda', 'elementary'] },
+  { key: 'alerts', label: 'Alerts', connectorIds: ['slack', 'teams', 'pagerduty', 'opsgenie', 'jira', 'linear', 'asana', 'github_issues'] },
 ];
 
 const VCS_PROVIDERS = [
@@ -94,14 +94,13 @@ function mapIntegrationTypeToConnectorId(type: string): string {
     LINUX_SERVER: 'linux_server',
     SLACK: 'slack', TEAMS: 'teams', PAGERDUTY: 'pagerduty', OPSGENIE: 'opsgenie',
     JIRA: 'jira', LINEAR: 'linear', ASANA: 'asana', GITHUB_ISSUES: 'github_issues',
-    MONTE_CARLO: 'monte_carlo', BIGEYE: 'bigeye', SODA: 'soda', ELEMENTARY: 'elementary',
   };
   return map[type] || normalizeConnectorId(type);
 }
 
 function categoryToGroup(category: string): ConnectorGroup {
   switch (category) {
-    case 'NOTIFICATIONS': case 'TICKETING': case 'OBSERVABILITY': return 'ALERTS';
+    case 'NOTIFICATIONS': case 'TICKETING': return 'ALERTS';
     default: return 'ALERTS';
   }
 }

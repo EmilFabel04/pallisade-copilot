@@ -168,31 +168,6 @@ def register_all_drivers() -> None:
     except Exception as e:
         logger.debug("Power BI driver not loaded: %s", e)
 
-    # ── Observability (DATA_PLANE) ─────────────────────────────────────
-    try:
-        from .observability.monte_carlo_driver import MonteCarloDriver
-        _register("MONTE_CARLO", MonteCarloDriver)
-    except Exception as e:
-        logger.debug("Monte Carlo driver not loaded: %s", e)
-
-    try:
-        from .observability.bigeye_driver import BigeyeDriver
-        _register("BIGEYE", BigeyeDriver)
-    except Exception as e:
-        logger.debug("Bigeye driver not loaded: %s", e)
-
-    try:
-        from .observability.soda_driver import SodaDriver
-        _register("SODA", SodaDriver)
-    except Exception as e:
-        logger.debug("Soda driver not loaded: %s", e)
-
-    try:
-        from .observability.elementary_driver import ElementaryDriver
-        _register("ELEMENTARY", ElementaryDriver)
-    except Exception as e:
-        logger.debug("Elementary driver not loaded: %s", e)
-
     # ── Storage (DATA_PLANE) ───────────────────────────────────────────
     try:
         from .storage.s3_driver import S3Driver

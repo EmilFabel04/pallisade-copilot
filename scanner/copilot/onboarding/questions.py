@@ -359,40 +359,6 @@ DAGSTER_QUESTIONS: List[OnboardingQuestion] = [
 ]
 
 
-# ============================================
-# OBSERVABILITY QUESTIONS (Monte Carlo, Soda, Elementary, Bigeye)
-# ============================================
-
-OBSERVABILITY_QUESTIONS: List[OnboardingQuestion] = [
-    OnboardingQuestion(
-        key="observability_alert_channels",
-        text="Where do you receive data quality alerts? (Slack, email, PagerDuty, etc.)",
-        category=QuestionCategory.WORKFLOW,
-        integration_type="OBSERVABILITY",
-        priority=8,
-        required=False,
-        example_answers=["Slack #data-alerts", "email", "PagerDuty for P1"],
-    ),
-    OnboardingQuestion(
-        key="observability_incident_process",
-        text="What's your process when a data quality issue is detected? (triage, investigation, fix)",
-        category=QuestionCategory.WORKFLOW,
-        integration_type="OBSERVABILITY",
-        priority=7,
-        required=False,
-        example_answers=["triage in Slack, create Jira ticket", "on-call investigates", "automated fix attempts"],
-    ),
-    OnboardingQuestion(
-        key="observability_critical_tables",
-        text="Which tables or datasets are most critical and need the closest monitoring?",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="OBSERVABILITY",
-        priority=6,
-        required=False,
-        example_answers=["revenue tables", "customer-facing dashboards", "anything in analytics_prod"],
-    ),
-]
-
 
 # ============================================
 # QUESTION LOOKUP FUNCTIONS
@@ -409,10 +375,6 @@ INTEGRATION_QUESTIONS: Dict[str, List[OnboardingQuestion]] = {
     "GITHUB": GITHUB_QUESTIONS,
     "DAGSTER": DAGSTER_QUESTIONS,
     "PREFECT": DAGSTER_QUESTIONS,  # Similar orchestration questions
-    "MONTE_CARLO": OBSERVABILITY_QUESTIONS,
-    "SODA": OBSERVABILITY_QUESTIONS,
-    "ELEMENTARY": OBSERVABILITY_QUESTIONS,
-    "BIGEYE": OBSERVABILITY_QUESTIONS,
 }
 
 
