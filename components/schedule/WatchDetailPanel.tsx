@@ -18,6 +18,7 @@ import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { TaskRun } from '@/types/schedule';
 import { RunHistoryTable } from './RunHistoryTable';
 import { MonitorEditPanel } from './MonitorEditPanel';
+import { getMonitorDefinition, MONITOR_CATEGORY_LABELS, type MonitorCategory } from '@/types/monitor-catalog';
 
 interface WatchDetailPanelProps {
   watch: WatchSummary;
@@ -317,6 +318,146 @@ export function WatchDetailPanel({
           </div>
         ) : detailMonitors.length === 0 ? (
           <p className="text-[13px] text-[var(--muted)] py-4">No monitors in this watch.</p>
+        ) : watch.watchType === 'tool_health' ? (
+          <div className="space-y-2">
+            {Object.entries(
+              detailMonitors.reduce<Record<string, any[]>>((acc, mon) => {
+                const def = getMonitorDefinition(mon.monitorType || '');
+                const cat = def?.category || 'other';
+                if (!acc[cat]) acc[cat] = [];
+                acc[cat].push(mon);
+                return acc;
+              }, {})
+            ).map(([category, monitors]) => {
+              const worstStatus = monitors.some((m) => m.lastStatus === 'FAIL') ? 'FAIL'
+                : monitors.some((m) => m.lastStatus === 'WARN') ? 'WARN'
+                : monitors.some((m) => m.lastStatus === 'PASS') ? 'PASS'
+                : 'PENDING';
+              const catLabel = MONITOR_CATEGORY_LABELS[category as MonitorCategory] || category;
+              return (
+                <div key={category} className="rounded-lg border border-[var(--border)] bg-[var(--surface)]">
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <span className={cn('w-2 h-2 rounded-full', {
+                      'bg-emerald-400': worstStatus === 'PASS',
+                      'bg-amber-400': worstStatus === 'WARN',
+                      'bg-red-400': worstStatus === 'FAIL',
+                      'bg-[var(--muted)]/40': worstStatus === 'PENDING',
+                    })} />
+                    <span className="text-[12px] font-medium text-[var(--text)]">{catLabel}</span>
+                    <span className="text-[10px] text-[var(--muted)] ml-auto">
+                      {monitors.filter((m) => m.lastStatus === 'PASS').length}/{monitors.length} passing
+                    </span>
+                  </div>
+                  <div className="px-3 pb-2 space-y-1">
+                    {monitors.map((mon: any) => {
+                      const monStatus = mon.lastStatus
+                        ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
+                        : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
+                      const isExpanded = expandedMonitorId === mon.id;
+                      return (
+                        <div
+                          key={mon.id}
+                          className="bg-[var(--surface)] border border-[var(--subtle-border)] rounded-lg overflow-hidden"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleToggleMonitor(mon.id)}
+                            className="flex items-center gap-3 p-3 w-full text-left hover:bg-[var(--hover-bg)] transition-colors"
+                          >
+                            <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
+                              {mon.lastStatus || 'NEW'}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>
+                              <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+                                {mon.monitorType && (
+                                  <span className="px-1 py-0.5 rounded bg-white/5 text-[10px] uppercase">
+                                    {mon.monitorType.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                                {mon.targetFqn && (
+                                  <span className="font-mono truncate max-w-[200px]" title={mon.targetFqn}>
+                                    {mon.targetFqn}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {mon.lastRunAt && (
+                              <span className="text-[11px] text-[var(--text-faint)] shrink-0">
+                                {timeAgo(mon.lastRunAt)}
+                              </span>
+                            )}
+                            <svg
+                              className={cn('w-4 h-4 text-[var(--muted)] shrink-0 transition-transform', isExpanded && 'rotate-180')}
+                              fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+                          {isExpanded && (
+                            <div className="px-4 pb-3 pt-1 border-t border-[var(--border-faint)]">
+                              <RunHistoryTable
+                                runs={monitorRuns[mon.id] || []}
+                                loading={monitorRunsLoading[mon.id] || false}
+                                taskName={mon.name}
+                                monitorType={mon.monitorType}
+                                targetFqn={mon.targetFqn}
+                              />
+                              {editingMonitorId === mon.id && (
+                                <MonitorEditPanel
+                                  monitor={{
+                                    id: mon.id,
+                                    name: mon.name,
+                                    monitorType: mon.monitorType || '',
+                                    targetFqn: mon.targetFqn,
+                                    config: mon.config || {},
+                                    policyOverrides: mon.policyOverrides || [],
+                                  }}
+                                  resolvedPolicy={mon.resolvedPolicy || null}
+                                  onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
+                                    await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
+                                      method: 'PUT',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ config, policyOverrides }),
+                                    });
+                                    setEditingMonitorId(null);
+                                  }}
+                                />
+                              )}
+                              <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex items-center justify-between">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingMonitorId(
+                                      editingMonitorId === mon.id ? null : mon.id
+                                    );
+                                  }}
+                                  className="text-[10px] text-[var(--text-faint)] hover:text-[var(--text-secondary)] underline"
+                                >
+                                  {editingMonitorId === mon.id ? 'Close' : 'Edit config'}
+                                </button>
+                                {onRemoveMonitor && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onRemoveMonitor(mon.id);
+                                    }}
+                                    className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors"
+                                  >
+                                    Remove from watch
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <div className="space-y-2">
             {detailMonitors.map((mon: any) => {
