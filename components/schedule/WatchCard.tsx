@@ -15,6 +15,15 @@ import {
   type FailureCategory,
 } from '@/types/health-watch';
 
+const DOMAIN_COLORS: Record<string, string> = {
+  warehouse: 'bg-indigo-500/15 text-indigo-400',
+  ingestion: 'bg-emerald-500/15 text-emerald-400',
+  transform: 'bg-amber-500/15 text-amber-400',
+  orchestration: 'bg-orange-500/15 text-orange-400',
+  bi: 'bg-cyan-500/15 text-cyan-400',
+  infrastructure: 'bg-slate-500/15 text-slate-400',
+};
+
 interface WatchCardProps {
   watch: WatchSummary;
   policyMonitorCount?: number;
@@ -98,6 +107,14 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
               {noRunYet && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
                   NEW
+                </span>
+              )}
+              {watch.watchType === 'tool_health' && watch.anchorPlatform && (
+                <span className={cn(
+                  'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                  DOMAIN_COLORS[watch.anchorPlatform?.toLowerCase()] || 'bg-white/10 text-white/50',
+                )}>
+                  {watch.anchorPlatform}
                 </span>
               )}
             </div>
