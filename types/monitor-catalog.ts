@@ -766,6 +766,45 @@ export const DOMAIN_MONITOR_MAP: Record<string, Set<string>> = {
   infrastructure: new Set(['CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS']),
 };
 
+/**
+ * Default thresholds for tool health monitors per domain.
+ * Used to pre-populate config when creating tool_health watches.
+ * Keys match monitor definition config_schema field keys.
+ */
+export const TOOL_HEALTH_DEFAULTS: Record<string, Record<string, Record<string, any>>> = {
+  ingestion: {
+    SYNC_LAG: { max_lag_minutes: 120 },
+    FAILED_SYNCS: { lookback_hours: 24 },
+    CONNECTOR_SCHEMA_DRIFT: {},
+  },
+  orchestration: {
+    DAG_LAST_RUN: { max_stale_hours: 48 },
+    DAG_SCHEDULE_LAG: { max_lag_minutes: 30 },
+    TASK_FAILURE_RATE: { max_failure_pct: 10, lookback_hours: 24 },
+  },
+  transform: {
+    DBT_TEST_FAILURES: { include_warnings: false },
+    DBT_MODEL_FRESHNESS: { max_hours: 24 },
+    DBT_SOURCE_FRESHNESS: {},
+  },
+  warehouse: {
+    QUERY_PERFORMANCE: { query_time_threshold_seconds: 300, lookback_hours: 24 },
+    COST_ANOMALY: { cost_spike_multiplier: 1.5, lookback_days: 7 },
+    STORAGE_GROWTH: { growth_rate_multiplier: 2.0, lookback_days: 30 },
+  },
+  bi: {
+    BI_FRESHNESS_PROXY: { max_stale_hours: 24, check_upstream: true },
+    BI_UPSTREAM_BREAK_RISK: { lookback_hours: 24 },
+    BI_CONTENT_HEALTH: { check_deliveries: true },
+    BI_REFRESH_FAILURE: { lookback_hours: 24 },
+  },
+  infrastructure: {
+    CERTIFICATE: { warn_days: 30, fail_days: 7 },
+    SERVER_HEALTH: {},
+    LOG_ANALYSIS: {},
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Asset prefill for monitor creation flows
 // ---------------------------------------------------------------------------
