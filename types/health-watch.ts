@@ -16,6 +16,7 @@ export type WatchType =
   | 'model_quality'     // Protect a dbt model
   | 'data_drift'        // Detect schema/quality drift
   | 'full_pipeline'     // Full pipeline coverage (data + tools)
+  | 'tool_health'       // Holistic tool health
   | 'custom_watch';     // User-assembled
 
 export const WATCH_TYPE_LABELS: Record<WatchType, string> = {
@@ -25,6 +26,7 @@ export const WATCH_TYPE_LABELS: Record<WatchType, string> = {
   model_quality: 'Transformation',
   data_drift: 'Data Drift',
   full_pipeline: 'Full Pipeline',
+  tool_health: 'Tool Health',
   custom_watch: 'Custom',
 };
 
@@ -35,6 +37,7 @@ export const WATCH_TYPE_DESCRIPTIONS: Record<WatchType, string> = {
   model_quality: 'Monitor a dbt model with test failures, freshness, and upstream source checks.',
   data_drift: 'Detect schema changes, volume anomalies, and quality drift across pipeline assets.',
   full_pipeline: 'Unified monitoring across your entire pipeline — data, orchestration, and BI.',
+  tool_health: 'Holistic health monitoring for a pipeline tool — checks all relevant categories with configurable thresholds.',
   custom_watch: 'Custom monitoring group — you choose the monitors.',
 };
 
@@ -86,6 +89,12 @@ export const DEFAULT_SCOPE_CONFIGS: Record<WatchType, ScopeConfig> = {
     maxDepth: 5,
     maxNodes: 30,
     maxMonitors: 40,
+    domainFilters: [],
+  },
+  tool_health: {
+    maxDepth: 0,
+    maxNodes: 1,
+    maxMonitors: 12,
     domainFilters: [],
   },
   custom_watch: {
