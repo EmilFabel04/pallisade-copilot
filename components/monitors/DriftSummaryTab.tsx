@@ -162,69 +162,110 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
 
   return (
     <div className="space-y-6">
-      {/* ── Overview Bar ────────────────────────────────────────── */}
-      <div className="flex items-stretch rounded-lg bg-[var(--surface)] border border-[var(--subtle-border)] divide-x divide-[var(--subtle-border)]">
-        {/* Data Monitors */}
-        <div className="flex-1 px-5 py-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Database className="w-3.5 h-3.5 text-blue-400" />
-            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Data Monitors</span>
-          </div>
-          {dataCounts.total > 0 ? (
-            <div className="flex items-baseline gap-3">
-              <span className="text-[20px] font-semibold text-[var(--text)]">{dataCounts.passing}<span className="text-[12px] text-[var(--muted)] font-normal">/{dataCounts.total}</span></span>
-              <span className="text-[11px] text-emerald-400 font-medium">passing</span>
-              {dataCounts.failing > 0 && <span className="text-[11px] text-red-400 font-medium">{dataCounts.failing} failing</span>}
+      {/* ── Monitor Status ──────────────────────────────────────── */}
+      <div className="rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] overflow-hidden">
+        <div className="px-5 py-3 border-b border-[var(--subtle-border)]">
+          <h2 className="text-[13px] font-semibold text-[var(--text)]">Monitor Status</h2>
+        </div>
+        <div className="grid grid-cols-2 divide-x divide-[var(--subtle-border)]">
+          {/* Data Monitors */}
+          <div className="px-5 py-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Database className="w-4 h-4 text-blue-400" />
+              <span className="text-[12px] font-medium text-[var(--text)]">Data Monitors</span>
             </div>
-          ) : (
-            <p className="text-[13px] text-[var(--muted)]">No monitors</p>
-          )}
-        </div>
-
-        {/* Pipeline Monitors */}
-        <div className="flex-1 px-5 py-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Workflow className="w-3.5 h-3.5 text-purple-400" />
-            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Pipeline Monitors</span>
+            {dataCounts.total > 0 ? (
+              <>
+                <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-3">
+                  {dataCounts.passing > 0 && <div className="bg-emerald-500 h-full" style={{ width: `${(dataCounts.passing / dataCounts.total) * 100}%` }} />}
+                  {dataCounts.failing > 0 && <div className="bg-red-500 h-full" style={{ width: `${(dataCounts.failing / dataCounts.total) * 100}%` }} />}
+                  {(dataCounts.total - dataCounts.passing - dataCounts.failing) > 0 && <div className="bg-zinc-600 h-full flex-1" />}
+                </div>
+                <div className="flex items-center gap-4 text-[12px]">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="text-[var(--text)] font-medium">{dataCounts.passing}</span>
+                    <span className="text-[var(--muted)]">passing</span>
+                  </div>
+                  {dataCounts.failing > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-red-500" />
+                      <span className="text-[var(--text)] font-medium">{dataCounts.failing}</span>
+                      <span className="text-[var(--muted)]">failing</span>
+                    </div>
+                  )}
+                  <span className="text-[var(--muted)] ml-auto">{dataCounts.total} total</span>
+                </div>
+              </>
+            ) : (
+              <p className="text-[12px] text-[var(--muted)]">No data monitors configured</p>
+            )}
           </div>
-          {pipelineCounts.total > 0 ? (
-            <div className="flex items-baseline gap-3">
-              <span className="text-[20px] font-semibold text-[var(--text)]">{pipelineCounts.passing}<span className="text-[12px] text-[var(--muted)] font-normal">/{pipelineCounts.total}</span></span>
-              <span className="text-[11px] text-emerald-400 font-medium">passing</span>
-              {pipelineCounts.failing > 0 && <span className="text-[11px] text-red-400 font-medium">{pipelineCounts.failing} failing</span>}
+
+          {/* Pipeline Monitors */}
+          <div className="px-5 py-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Workflow className="w-4 h-4 text-purple-400" />
+              <span className="text-[12px] font-medium text-[var(--text)]">Pipeline Monitors</span>
             </div>
-          ) : (
-            <p className="text-[13px] text-[var(--muted)]">No monitors</p>
-          )}
-        </div>
-
-        {/* Drift Pending */}
-        <div className="flex-1 px-5 py-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Drift Pending</span>
+            {pipelineCounts.total > 0 ? (
+              <>
+                <div className="flex h-1.5 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-3">
+                  {pipelineCounts.passing > 0 && <div className="bg-emerald-500 h-full" style={{ width: `${(pipelineCounts.passing / pipelineCounts.total) * 100}%` }} />}
+                  {pipelineCounts.failing > 0 && <div className="bg-red-500 h-full" style={{ width: `${(pipelineCounts.failing / pipelineCounts.total) * 100}%` }} />}
+                  {(pipelineCounts.total - pipelineCounts.passing - pipelineCounts.failing) > 0 && <div className="bg-zinc-600 h-full flex-1" />}
+                </div>
+                <div className="flex items-center gap-4 text-[12px]">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                    <span className="text-[var(--text)] font-medium">{pipelineCounts.passing}</span>
+                    <span className="text-[var(--muted)]">passing</span>
+                  </div>
+                  {pipelineCounts.failing > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-red-500" />
+                      <span className="text-[var(--text)] font-medium">{pipelineCounts.failing}</span>
+                      <span className="text-[var(--muted)]">failing</span>
+                    </div>
+                  )}
+                  <span className="text-[var(--muted)] ml-auto">{pipelineCounts.total} total</span>
+                </div>
+              </>
+            ) : (
+              <p className="text-[12px] text-[var(--muted)]">No pipeline monitors configured</p>
+            )}
           </div>
-          <p className="text-[20px] font-semibold text-[var(--text)]">{pending}</p>
-        </div>
-
-        {/* Last Analysis */}
-        <div className="flex-1 px-5 py-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Activity className="w-3.5 h-3.5 text-[var(--accent)]" />
-            <span className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Last Analysis</span>
-          </div>
-          <p className="text-[15px] font-semibold text-[var(--text)]">
-            {lastAnalyzedAt
-              ? new Date(lastAnalyzedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-              : 'Never'}
-          </p>
         </div>
       </div>
 
       {/* ── Drift Analysis ──────────────────────────────────────── */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
+      <div className="rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] overflow-hidden">
+        <div className="px-5 py-3 border-b border-[var(--subtle-border)] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h2 className="text-[13px] font-semibold text-[var(--text)]">Drift Analysis</h2>
+            {lastAnalyzedAt && (
+              <span className="text-[11px] text-[var(--muted)]">
+                Last run: {new Date(lastAnalyzedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </span>
+            )}
+            <div className="flex items-center gap-2 text-[11px]">
+              {pending > 0 && <span className="text-amber-400 font-medium">{pending} pending</span>}
+              {accepted > 0 && <span className="text-emerald-400">{accepted} applied</span>}
+              {dismissed > 0 && <span className="text-zinc-400">{dismissed} dismissed</span>}
+            </div>
+          </div>
+          <button
+            onClick={handleRunAnalysis}
+            disabled={running}
+            className="flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            {running ? 'Analyzing...' : 'Run Analysis'}
+          </button>
+        </div>
+
+        <div className="p-5">
+        <div className="flex items-center gap-2 mb-4">
             {/* Drift status tabs */}
             <div className="flex items-center bg-[var(--overlay-bg)] rounded-lg p-0.5">
               {[
@@ -265,16 +306,6 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
                 </button>
               ))}
             </div>
-          </div>
-
-          <button
-            onClick={handleRunAnalysis}
-            disabled={running}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-          >
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            {running ? 'Analyzing...' : 'Run Analysis'}
-          </button>
         </div>
 
         {/* Drift results */}
@@ -321,6 +352,7 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
