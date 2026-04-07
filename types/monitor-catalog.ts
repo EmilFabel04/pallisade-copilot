@@ -787,6 +787,23 @@ export const DOMAIN_COLORS: Record<string, string> = {
   infrastructure: 'bg-slate-500/15 text-slate-400',
 };
 
+/** Monitor types relevant for data asset groups (non-tool, non-BI) */
+export const ASSET_MONITOR_TYPES = [
+  'FRESHNESS',
+  'VOLUME',
+  'SCHEMA_CHANGE',
+  'NULL_CHECK',
+  'UNIQUENESS_CHECK',
+  'RANGE_VALIDATION',
+  'ACCEPTED_VALUES',
+  'CUSTOM_SQL',
+  'OUTLIER_DETECTION',
+  'REFERENTIAL',
+  'DATA_TYPE_VALIDATION',
+  'DATE_CONSISTENCY',
+  'CONTRACT_CHECK',
+] as const;
+
 export const DOMAIN_MONITOR_MAP: Record<string, Set<string>> = {
   ingestion: new Set(['SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT']),
   orchestration: new Set(['DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE']),

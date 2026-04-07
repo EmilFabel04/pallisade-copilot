@@ -213,46 +213,59 @@ export async function PATCH(
       }
 
       // --- Add new monitors by type ---
-      const addMonitorTypes = body.addMonitorTypes as string[] | undefined;
-      if (addMonitorTypes?.length) {
-        const existingMonitors = await tx.monitor.findMany({
-          where: { monitorGroupId: watchId, organizationId },
-          select: { monitorType: true },
-        });
-        const existingTypes = new Set(existingMonitors.map((m) => m.monitorType));
+      const addMonitorTypes = body.addMonitorTypes;
+      if (Array.isArray(addMonitorTypes) && addMonitorTypes.length > 0) {
+        // Validate monitor types against known MonitorKind values
+        const VALID_MONITOR_TYPES = new Set([
+          'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK', 'UNIQUENESS_CHECK',
+          'RANGE_VALIDATION', 'ACCEPTED_VALUES', 'CUSTOM_SQL', 'OUTLIER_DETECTION',
+          'REFERENTIAL', 'DATA_TYPE_VALIDATION', 'DATE_CONSISTENCY', 'CONTRACT_CHECK',
+          'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
+          'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
+          'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
+          'CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS',
+          'QUERY_PERFORMANCE', 'COST_ANOMALY', 'STORAGE_GROWTH',
+          'BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK', 'BI_CONTENT_HEALTH', 'BI_REFRESH_FAILURE',
+        ]);
+        const validTypes = addMonitorTypes.filter((t: unknown): t is string =>
+          typeof t === 'string' && VALID_MONITOR_TYPES.has(t)
+        );
 
-        const anchorFqn = group.anchorFqn || group.name;
-        const nextRunAt = group.schedule
-          ? (() => {
-              try {
-                const { parseExpression } = require('cron-parser');
-                return parseExpression(group.schedule, { tz: group.timezone || 'UTC' }).next().toDate();
-              } catch {
-                return null;
-              }
-            })()
-          : null;
-
-        for (const monitorType of addMonitorTypes) {
-          if (existingTypes.has(monitorType as any)) continue; // skip duplicates
-
-          await tx.monitor.create({
-            data: {
-              name: `${monitorType.replace(/_/g, ' ').toLowerCase()} — ${anchorFqn.split('.').pop()}`,
-              monitorType: monitorType as any,
-              targetFqn: anchorFqn,
-              config: {},
-              enabled: group.enabled,
-              schedule: group.schedule,
-              timezone: group.timezone,
-              alertChannels: group.alertChannels as any || [],
-              alertOnStatus: group.alertOnStatus as any || [],
-              nextRunAt,
-              organizationId,
-              monitorGroupId: watchId,
-              taskMode: 'structured',
-            },
+        if (validTypes.length > 0) {
+          const existingMonitors = await tx.monitor.findMany({
+            where: { monitorGroupId: watchId, organizationId },
+            select: { monitorType: true },
           });
+          const existingTypes = new Set(existingMonitors.map((m) => m.monitorType));
+
+          const anchorFqn = group.anchorFqn || group.name;
+          const effectiveSchedule = (body.schedule as string) || group.schedule;
+          const effectiveTimezone = (body.timezone as string) || group.timezone || 'UTC';
+          const nextRunAt = effectiveSchedule
+            ? computeNextRun(effectiveSchedule, effectiveTimezone)
+            : null;
+
+          for (const monitorType of validTypes) {
+            if (existingTypes.has(monitorType as any)) continue;
+
+            await tx.monitor.create({
+              data: {
+                name: `${monitorType.replace(/_/g, ' ').toLowerCase()} — ${anchorFqn.split('.').pop()}`,
+                monitorType: monitorType as any,
+                targetFqn: anchorFqn,
+                config: {},
+                enabled: group.enabled,
+                schedule: effectiveSchedule,
+                timezone: effectiveTimezone,
+                alertChannels: (body.alertChannels as string[]) || group.alertChannels as any || [],
+                alertOnStatus: (body.alertOnStatus as string[]) || group.alertOnStatus as any || [],
+                nextRunAt,
+                organizationId,
+                monitorGroupId: watchId,
+                taskMode: 'structured',
+              },
+            });
+          }
         }
       }
 

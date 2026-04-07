@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { X, Loader2, ChevronRight, ChevronLeft } from 'lucide-react';
 import { ScheduleInput } from '@/components/schedule/ScheduleInput';
 import { AlertChannelPicker } from '@/components/schedule/AlertChannelPicker';
-import { getMonitorDefinition } from '@/types/monitor-catalog';
+import { getMonitorDefinition, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
 
 interface AssetMonitorCreationModalProps {
   open: boolean;
@@ -27,23 +27,6 @@ const STEP_LABELS: Record<Step, string> = {
   2: 'Schedule',
   3: 'Alerts',
 };
-
-/** Monitor types available for data assets */
-const ASSET_MONITOR_TYPES = [
-  'FRESHNESS',
-  'VOLUME',
-  'SCHEMA_CHANGE',
-  'NULL_CHECK',
-  'UNIQUENESS_CHECK',
-  'RANGE_VALIDATION',
-  'ACCEPTED_VALUES',
-  'CUSTOM_SQL',
-  'OUTLIER_DETECTION',
-  'REFERENTIAL',
-  'DATA_TYPE_VALIDATION',
-  'DATE_CONSISTENCY',
-  'CONTRACT_CHECK',
-];
 
 export function AssetMonitorCreationModal({
   open,
@@ -101,6 +84,10 @@ export function AssetMonitorCreationModal({
       setSelectedTypes(new Set());
       setExistingTypes(new Set());
       setExistingGroupId(null);
+      setSchedule('0 */6 * * *');
+      setTimezone('UTC');
+      setAlertChannels([]);
+      setAlertOnStatus(['FAIL', 'WARN']);
       fetchExisting();
     }
   }, [open, fetchExisting]);

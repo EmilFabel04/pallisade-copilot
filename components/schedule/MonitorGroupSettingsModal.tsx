@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { X, Loader2 } from 'lucide-react';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
-import { getMonitorDefinition } from '@/types/monitor-catalog';
+import { getMonitorDefinition, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
 
 interface MonitorGroupSettingsModalProps {
   watchId: string;
@@ -33,23 +33,6 @@ interface WatchDetail {
   }>;
 }
 
-/** Monitor types relevant for data asset groups (non-tool, non-BI) */
-const ASSET_MONITOR_TYPES = [
-  'FRESHNESS',
-  'VOLUME',
-  'SCHEMA_CHANGE',
-  'NULL_CHECK',
-  'UNIQUENESS_CHECK',
-  'RANGE_VALIDATION',
-  'ACCEPTED_VALUES',
-  'CUSTOM_SQL',
-  'OUTLIER_DETECTION',
-  'REFERENTIAL',
-  'DATA_TYPE_VALIDATION',
-  'DATE_CONSISTENCY',
-  'CONTRACT_CHECK',
-];
-
 export function MonitorGroupSettingsModal({
   watchId,
   open,
@@ -72,6 +55,7 @@ export function MonitorGroupSettingsModal({
   const [originalTypes, setOriginalTypes] = useState<Set<string>>(new Set());
 
   const fetchWatch = useCallback(async () => {
+    if (!watchId) return;
     setLoading(true);
     try {
       const res = await fetch(`/api/schedule/watches/${watchId}`);
