@@ -18,7 +18,7 @@ import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { TaskRun } from '@/types/schedule';
 import { RunHistoryTable } from './RunHistoryTable';
 import { MonitorEditPanel } from './MonitorEditPanel';
-import { getMonitorDefinition, MONITOR_CATEGORY_LABELS, MONITOR_CATEGORY_ORDER, type MonitorCategory } from '@/types/monitor-catalog';
+import { getMonitorDefinition, isMonitorConfigIncomplete, MONITOR_CATEGORY_LABELS, MONITOR_CATEGORY_ORDER, type MonitorCategory } from '@/types/monitor-catalog';
 
 interface WatchDetailPanelProps {
   watch: WatchSummary;
@@ -361,9 +361,12 @@ export function WatchDetailPanel({
                   </div>
                   <div className="px-3 pb-2 space-y-1">
                     {monitors.map((mon: any) => {
-                      const monStatus = mon.lastStatus
-                        ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
-                        : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
+                      const monNeedsConfig = isMonitorConfigIncomplete(mon.monitorType, mon.config);
+                      const monStatus = monNeedsConfig
+                        ? 'bg-amber-500/15 text-amber-400'
+                        : mon.lastStatus
+                          ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
+                          : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
                       const isExpanded = expandedMonitorId === mon.id;
                       return (
                         <div
@@ -376,7 +379,7 @@ export function WatchDetailPanel({
                             className="flex items-center gap-3 p-3 w-full text-left hover:bg-[var(--hover-bg)] transition-colors"
                           >
                             <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
-                              {mon.lastStatus || 'NEW'}
+                              {monNeedsConfig ? 'NEEDS CONFIG' : mon.lastStatus || 'NEW'}
                             </span>
                             <div className="flex-1 min-w-0">
                               <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>
@@ -472,9 +475,12 @@ export function WatchDetailPanel({
         ) : (
           <div className="space-y-2">
             {detailMonitors.map((mon: any) => {
-              const monStatus = mon.lastStatus
-                ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
-                : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
+              const monNeedsConfig = isMonitorConfigIncomplete(mon.monitorType, mon.config);
+              const monStatus = monNeedsConfig
+                ? 'bg-amber-500/15 text-amber-400'
+                : mon.lastStatus
+                  ? RUN_STATUS_COLORS[mon.lastStatus] || 'bg-[var(--overlay-medium)] text-[var(--muted)]'
+                  : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
               const isExpanded = expandedMonitorId === mon.id;
               return (
                 <div
@@ -487,7 +493,7 @@ export function WatchDetailPanel({
                     className="flex items-center gap-3 p-3 w-full text-left hover:bg-[var(--hover-bg)] transition-colors"
                   >
                     <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium uppercase shrink-0', monStatus)}>
-                      {mon.lastStatus || 'NEW'}
+                      {monNeedsConfig ? 'NEEDS CONFIG' : mon.lastStatus || 'NEW'}
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] text-[var(--text)] truncate">{mon.name}</p>

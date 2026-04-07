@@ -720,6 +720,27 @@ export function getMonitorDefinition(key: string): MonitorDefinition | undefined
   return MONITOR_CATALOG.find((m) => m.key === key);
 }
 
+/**
+ * Check if a monitor is missing required config fields.
+ * Returns true if any required field from the monitor's config_schema is empty.
+ */
+export function isMonitorConfigIncomplete(
+  monitorType: string | undefined | null,
+  config: Record<string, any> | undefined | null,
+): boolean {
+  if (!monitorType) return false;
+  const def = getMonitorDefinition(monitorType);
+  if (!def) return false;
+  const requiredFields = def.config_schema.filter((f) => f.required);
+  if (requiredFields.length === 0) return false;
+  if (!config) return true;
+  return requiredFields.some((f) => {
+    const val = config[f.key];
+    if (Array.isArray(val)) return val.length === 0;
+    return !val && val !== 0 && val !== false;
+  });
+}
+
 // Tool monitor type sets for route-level detection
 export const TOOL_MONITOR_TYPES = [
   'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',

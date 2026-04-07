@@ -14,7 +14,7 @@ import {
   type HealthStatus,
   type FailureCategory,
 } from '@/types/health-watch';
-import { DOMAIN_COLORS } from '@/types/monitor-catalog';
+import { DOMAIN_COLORS, isMonitorConfigIncomplete } from '@/types/monitor-catalog';
 
 interface WatchCardProps {
   watch: WatchSummary;
@@ -55,6 +55,9 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
   const totalMonitors = watch.monitorCount;
   const hasRun = watch.passCount > 0 || watch.warnCount > 0 || watch.failCount > 0;
   const noRunYet = !hasRun && totalMonitors > 0;
+  const needsConfigCount = watch.monitors.filter(
+    (m) => isMonitorConfigIncomplete(m.monitorType, m.config),
+  ).length;
 
   const liveHealthScore = hasRun && totalMonitors > 0
     ? Math.round(((watch.passCount + watch.warnCount * 0.5) / totalMonitors) * 100)
@@ -96,7 +99,12 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{watch.name}</h3>
-              {noRunYet && (
+              {needsConfigCount > 0 && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400">
+                  {needsConfigCount} needs config
+                </span>
+              )}
+              {noRunYet && needsConfigCount === 0 && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
                   NEW
                 </span>
