@@ -97,29 +97,42 @@ export async function createWatchInTransaction(
 
   const nextRunAt = schedule ? computeNextRun(schedule, timezone) : undefined;
 
-  const group = await tx.monitorGroup.create({
-    data: {
-      name,
-      description: description || null,
-      groupType: watchType,
-      watchType,
-      anchorFqn: anchorFqn || null,
-      anchorNodeId: anchorNodeId || null,
-      anchorNodeType: anchorNodeType || null,
-      anchorPlatform: anchorPlatform || null,
-      scopeConfig: scopeConfig || null,
-      monitoringPlanId: monitoringPlanId || null,
-      presetGroupId: presetGroupId || null,
-      presetKey: presetKey || null,
-      enabled: true,
-      schedule: schedule || null,
-      timezone,
-      alertChannels,
-      alertOnStatus,
-      organizationId,
-      createdBy: userId,
-    },
-  });
+  // Dedup: reuse existing group with same anchor if it exists in this plan
+  let group = anchorFqn
+    ? await tx.monitorGroup.findFirst({
+        where: {
+          organizationId,
+          anchorFqn,
+          ...(monitoringPlanId ? { monitoringPlanId } : {}),
+        },
+      })
+    : null;
+
+  if (!group) {
+    group = await tx.monitorGroup.create({
+      data: {
+        name,
+        description: description || null,
+        groupType: watchType,
+        watchType,
+        anchorFqn: anchorFqn || null,
+        anchorNodeId: anchorNodeId || null,
+        anchorNodeType: anchorNodeType || null,
+        anchorPlatform: anchorPlatform || null,
+        scopeConfig: scopeConfig || null,
+        monitoringPlanId: monitoringPlanId || null,
+        presetGroupId: presetGroupId || null,
+        presetKey: presetKey || null,
+        enabled: true,
+        schedule: schedule || null,
+        timezone,
+        alertChannels,
+        alertOnStatus,
+        organizationId,
+        createdBy: userId,
+      },
+    });
+  }
 
   const createdMonitors = [];
 

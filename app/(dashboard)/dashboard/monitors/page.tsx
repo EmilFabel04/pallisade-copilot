@@ -131,7 +131,8 @@ export default function MonitorsPage() {
   }, [fetchWatches, fetchPlans, fetchTasks]);
 
   // Resolve policies
-  useEffect(() => {
+  // Stable key from monitor FQNs to avoid re-fetching when array refs change
+  const policyFqnKey = useMemo(() => {
     const allFqns = new Set<string>();
     for (const watch of watches) {
       for (const mon of watch.monitors || []) {
@@ -145,19 +146,28 @@ export default function MonitorsPage() {
         }
       }
     }
-    if (allFqns.size === 0) return;
-    fetch('/api/schedule/policies/resolve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nodes: [...allFqns].map((fqn) => ({ fqn, domain: 'warehouse', criticality: 'medium' })),
-        stackId: selectedPipeline?.id,
-      }),
-    })
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => { if (data?.policies) setResolvedPolicies(data.policies); })
-      .catch(() => {});
-  }, [watches, plans, selectedPipeline?.id]);
+    return [...allFqns].sort().join(',');
+  }, [watches, plans]);
+
+  useEffect(() => {
+    if (!policyFqnKey || !selectedPipeline?.id) return;
+    const fqns = policyFqnKey.split(',').filter(Boolean);
+    if (fqns.length === 0) return;
+    const timer = setTimeout(() => {
+      fetch('/api/schedule/policies/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nodes: fqns.map((fqn) => ({ fqn, domain: 'warehouse', criticality: 'medium' })),
+          stackId: selectedPipeline?.id,
+        }),
+      })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (data?.policies) setResolvedPolicies(data.policies); })
+        .catch(() => {});
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [policyFqnKey, selectedPipeline?.id]);
 
   // Fetch integrations for the modal
   useEffect(() => {
