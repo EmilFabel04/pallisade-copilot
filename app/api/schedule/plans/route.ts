@@ -98,21 +98,38 @@ export async function GET(request: NextRequest) {
         createdBy: plan.createdBy,
         createdAt: plan.createdAt.toISOString(),
         updatedAt: plan.updatedAt.toISOString(),
-        monitorGroups: groups.map((g) => ({
-          id: g.id,
-          name: g.name,
-          watchType: g.watchType,
-          anchorFqn: g.anchorFqn,
-          anchorNodeId: (g as any).anchorNodeId,
-          anchorNodeType: (g as any).anchorNodeType,
-          anchorPlatform: (g as any).anchorPlatform,
-          schedule: g.schedule,
-          timezone: (g as any).timezone,
-          monitorCount: g.monitors?.length || 0,
-          healthScore: (g as any).healthScore,
-          healthStatus: null,
-          monitors: g.monitors,
-        })),
+        monitorGroups: groups.map((g) => {
+          const mons = g.monitors || [];
+          let gPass = 0, gWarn = 0, gFail = 0;
+          for (const m of mons) {
+            if (m.lastStatus === 'PASS') gPass++;
+            else if (m.lastStatus === 'WARN') gWarn++;
+            else if (m.lastStatus === 'FAIL') gFail++;
+          }
+          return {
+            id: g.id,
+            name: g.name,
+            watchType: g.watchType,
+            anchorFqn: g.anchorFqn,
+            anchorNodeId: (g as any).anchorNodeId,
+            anchorNodeType: (g as any).anchorNodeType,
+            anchorPlatform: (g as any).anchorPlatform,
+            schedule: g.schedule,
+            timezone: (g as any).timezone,
+            monitorCount: mons.length,
+            passCount: gPass,
+            warnCount: gWarn,
+            failCount: gFail,
+            healthScore: (g as any).healthScore,
+            healthStatus: null,
+            lastRunAt: mons.reduce<string | null>((latest, m) => {
+              if (!m.lastRunAt) return latest;
+              const ts = new Date(m.lastRunAt).toISOString();
+              return !latest || ts > latest ? ts : latest;
+            }, null),
+            monitors: mons,
+          };
+        }),
       };
     });
 
