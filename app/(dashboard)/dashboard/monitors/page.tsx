@@ -122,6 +122,28 @@ export default function MonitorsPage() {
     } catch (err) { console.error('[Monitors] Failed to fetch tasks:', err); }
   }, []);
 
+  // Live-refresh: bypass cache to get fresh monitor statuses
+  const refreshLive = useCallback(async () => {
+    if (!selectedPipeline?.id) return;
+    invalidateCache('/api/schedule');
+    try {
+      const [watchRes, planRes] = await Promise.all([
+        fetch(`/api/schedule/watches?stackId=${selectedPipeline.id}`),
+        fetch(`/api/schedule/plans?stackId=${selectedPipeline.id}`),
+      ]);
+      if (watchRes.ok) { const d = await watchRes.json(); setWatches(d.watches || []); }
+      if (planRes.ok) { const d = await planRes.json(); setPlans(d.plans || []); }
+      // Also refresh detail panel if open
+      if (selectedWatch) {
+        const detailRes = await fetch(`/api/schedule/watches/${selectedWatch.id}`);
+        if (detailRes.ok) {
+          const d = await detailRes.json();
+          if (d.watch) { setSelectedWatch(d.watch); setWatchDetailMonitors(d.watch.monitors || []); }
+        }
+      }
+    } catch {}
+  }, [selectedPipeline?.id, selectedWatch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     setSelectedWatch(null);
     setWatchDetailMonitors([]);
@@ -129,6 +151,14 @@ export default function MonitorsPage() {
     fetchPlans();
     fetchTasks();
   }, [fetchWatches, fetchPlans, fetchTasks]);
+
+  // Poll every 5s while monitors are running, otherwise every 30s
+  useEffect(() => {
+    if (!selectedPipeline?.id) return;
+    const interval = runningWatchIds.size > 0 ? 5000 : 30000;
+    const timer = setInterval(refreshLive, interval);
+    return () => clearInterval(timer);
+  }, [selectedPipeline?.id, runningWatchIds.size, refreshLive]);
 
   // Resolve policies
   // Stable key from monitor FQNs to avoid re-fetching when array refs change
