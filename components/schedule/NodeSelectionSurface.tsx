@@ -126,6 +126,7 @@ export function NodeSelectionSurface({
   const [viewData, setViewData] = useState<RenderedViewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nodeSLAs, setNodeSLAs] = useState<Map<string, { status: string; profileName?: string | null }>>(new Map());
 
   // Fetch graph data
   useEffect(() => {
@@ -181,6 +182,36 @@ export function NodeSelectionSurface({
       });
   }, [stackId, mode]);
 
+  // Fetch SLA policies for nodes to show badges
+  useEffect(() => {
+    if (!viewData?.nodes?.length || !stackId) return;
+    const fqns = viewData.nodes
+      .filter((n) => n.canonicalType !== 'service')
+      .map((n) => n.metadata?.fqn || n.name)
+      .filter(Boolean);
+    if (fqns.length === 0) return;
+    fetch('/api/schedule/policies/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nodes: fqns.map((fqn) => ({ fqn, domain: 'warehouse', criticality: 'medium' })),
+        stackId,
+      }),
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (!data?.policies) return;
+        const map = new Map<string, { status: string; profileName?: string | null }>();
+        for (const [fqn, policy] of Object.entries(data.policies as Record<string, any>)) {
+          if (policy.status && policy.status !== 'none') {
+            map.set(fqn, { status: policy.status, profileName: policy.profileName });
+          }
+        }
+        setNodeSLAs(map);
+      })
+      .catch(() => {});
+  }, [viewData, stackId]);
+
   // Apply preselected nodes on mount
   useEffect(() => {
     if (preselectedNodeIds?.length && selectedNodeIds.length === 0) {
@@ -210,26 +241,32 @@ export function NodeSelectionSurface({
 
     const visibleIds = new Set(visibleNodes.map((n) => n.id));
 
-    const nodes: Node[] = visibleNodes.map((vn) => ({
-      id: vn.id,
-      type: vn.canonicalType === 'service' ? 'toolNode' : 'dataAssetNode',
-      position: { x: vn.x, y: vn.y },
-      targetPosition: Position.Left,
-      sourcePosition: Position.Right,
-      data: {
-        name: vn.name,
-        fullName: vn.metadata?.fqn || vn.name,
-        category: viewNodeToCategory(vn),
-        layer: vn.layer,
-        toolType: vn.platform,
-        database: vn.metadata?.database,
-        schema: vn.metadata?.schema,
-        tableName: vn.name,
-        nodeType: vn.originalType,
-        platforms: vn.metadata?.platforms,
-        isInferred: vn.inferred,
-      },
-    }));
+    const nodes: Node[] = visibleNodes.map((vn) => {
+      const fqn = vn.metadata?.fqn || vn.name;
+      const sla = nodeSLAs.get(fqn);
+      return {
+        id: vn.id,
+        type: vn.canonicalType === 'service' ? 'toolNode' : 'dataAssetNode',
+        position: { x: vn.x, y: vn.y },
+        targetPosition: Position.Left,
+        sourcePosition: Position.Right,
+        data: {
+          name: vn.name,
+          fullName: fqn,
+          category: viewNodeToCategory(vn),
+          layer: vn.layer,
+          toolType: vn.platform,
+          database: vn.metadata?.database,
+          schema: vn.metadata?.schema,
+          tableName: vn.name,
+          nodeType: vn.originalType,
+          platforms: vn.metadata?.platforms,
+          isInferred: vn.inferred,
+          slaStatus: sla?.status || 'none',
+          slaProfileName: sla?.profileName,
+        },
+      };
+    });
 
     const edges: Edge[] = viewData.edges
       .filter((e) => visibleIds.has(e.sourceId) && visibleIds.has(e.targetId))
@@ -266,7 +303,7 @@ export function NodeSelectionSurface({
       flowEdges: edges,
       allNodeIds: visibleNodes.map((n) => n.id),
     };
-  }, [viewData, mode]);
+  }, [viewData, mode, nodeSLAs]);
 
   // Build selectable node types with highlight ring
   const selectableNodeTypes = useMemo(
