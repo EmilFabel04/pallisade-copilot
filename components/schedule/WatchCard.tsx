@@ -14,15 +14,7 @@ import {
   type HealthStatus,
   type FailureCategory,
 } from '@/types/health-watch';
-
-const DOMAIN_COLORS: Record<string, string> = {
-  warehouse: 'bg-indigo-500/15 text-indigo-400',
-  ingestion: 'bg-emerald-500/15 text-emerald-400',
-  transform: 'bg-amber-500/15 text-amber-400',
-  orchestration: 'bg-orange-500/15 text-orange-400',
-  bi: 'bg-cyan-500/15 text-cyan-400',
-  infrastructure: 'bg-slate-500/15 text-slate-400',
-};
+import { DOMAIN_COLORS } from '@/types/monitor-catalog';
 
 interface WatchCardProps {
   watch: WatchSummary;

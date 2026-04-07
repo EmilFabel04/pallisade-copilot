@@ -18,7 +18,7 @@ import { RUN_STATUS_COLORS } from '@/types/schedule';
 import type { TaskRun } from '@/types/schedule';
 import { RunHistoryTable } from './RunHistoryTable';
 import { MonitorEditPanel } from './MonitorEditPanel';
-import { getMonitorDefinition, MONITOR_CATEGORY_LABELS, type MonitorCategory } from '@/types/monitor-catalog';
+import { getMonitorDefinition, MONITOR_CATEGORY_LABELS, MONITOR_CATEGORY_ORDER, type MonitorCategory } from '@/types/monitor-catalog';
 
 interface WatchDetailPanelProps {
   watch: WatchSummary;
@@ -320,20 +320,31 @@ export function WatchDetailPanel({
           <p className="text-[13px] text-[var(--muted)] py-4">No monitors in this watch.</p>
         ) : watch.watchType === 'tool_health' ? (
           <div className="space-y-2">
-            {Object.entries(
-              detailMonitors.reduce<Record<string, any[]>>((acc, mon) => {
+            {(() => {
+              const grouped = detailMonitors.reduce<Record<string, any[]>>((acc, mon) => {
                 const def = getMonitorDefinition(mon.monitorType || '');
                 const cat = def?.category || 'other';
                 if (!acc[cat]) acc[cat] = [];
                 acc[cat].push(mon);
                 return acc;
-              }, {})
-            ).map(([category, monitors]) => {
+              }, {});
+              const orderedKeys = [
+                ...MONITOR_CATEGORY_ORDER.filter((k) => grouped[k]),
+                ...Object.keys(grouped).filter((k) => !MONITOR_CATEGORY_ORDER.includes(k as MonitorCategory)),
+              ];
+              return orderedKeys;
+            })().map((category) => {
+              const monitors = detailMonitors.reduce<any[]>((acc, mon) => {
+                const def = getMonitorDefinition(mon.monitorType || '');
+                const cat = def?.category || 'other';
+                if (cat === category) acc.push(mon);
+                return acc;
+              }, []);
               const worstStatus = monitors.some((m) => m.lastStatus === 'FAIL') ? 'FAIL'
                 : monitors.some((m) => m.lastStatus === 'WARN') ? 'WARN'
                 : monitors.some((m) => m.lastStatus === 'PASS') ? 'PASS'
                 : 'PENDING';
-              const catLabel = MONITOR_CATEGORY_LABELS[category as MonitorCategory] || category;
+              const catLabel = MONITOR_CATEGORY_LABELS[category as MonitorCategory] || 'Uncategorized';
               return (
                 <div key={category} className="rounded-lg border border-[var(--border)] bg-[var(--surface)]">
                   <div className="flex items-center gap-2 px-3 py-2">

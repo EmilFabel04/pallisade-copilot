@@ -6,7 +6,7 @@ import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta, type Child
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
 import { ColumnPicker } from './ColumnPicker';
-import { getMonitorDefinition, DOMAIN_MONITOR_MAP, TOOL_HEALTH_DEFAULTS } from '@/types/monitor-catalog';
+import { getMonitorDefinition, DOMAIN_MONITOR_MAP, DOMAIN_COLORS, TOOL_HEALTH_DEFAULTS } from '@/types/monitor-catalog';
 import type { MonitoringPlanPreview } from '@/types/health-watch';
 
 // ---------------------------------------------------------------------------
@@ -83,14 +83,6 @@ const MONITOR_COLORS: Record<string, string> = {
   CUSTOM_SQL: 'bg-white/10 text-white/50 border-white/20',
 };
 
-const DOMAIN_COLORS: Record<string, string> = {
-  warehouse: 'bg-indigo-500/15 text-indigo-400',
-  ingestion: 'bg-emerald-500/15 text-emerald-400',
-  transform: 'bg-amber-500/15 text-amber-400',
-  orchestration: 'bg-orange-500/15 text-orange-400',
-  bi: 'bg-cyan-500/15 text-cyan-400',
-  infrastructure: 'bg-slate-500/15 text-slate-400',
-};
 
 
 /**

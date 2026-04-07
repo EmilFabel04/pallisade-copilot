@@ -757,6 +757,15 @@ export const TOOL_NODE_TYPE_MAP: Record<string, string[]> = {
  * that should appear when a tool node of that domain is selected.
  * Used by MultiMonitorModal for per-domain filtering.
  */
+export const DOMAIN_COLORS: Record<string, string> = {
+  warehouse: 'bg-indigo-500/15 text-indigo-400',
+  ingestion: 'bg-emerald-500/15 text-emerald-400',
+  transform: 'bg-amber-500/15 text-amber-400',
+  orchestration: 'bg-orange-500/15 text-orange-400',
+  bi: 'bg-cyan-500/15 text-cyan-400',
+  infrastructure: 'bg-slate-500/15 text-slate-400',
+};
+
 export const DOMAIN_MONITOR_MAP: Record<string, Set<string>> = {
   ingestion: new Set(['SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT']),
   orchestration: new Set(['DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE']),
