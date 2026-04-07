@@ -8,7 +8,7 @@ import type {
   SLAAssignRequest,
   SLADomain,
 } from '@/types/sla';
-import { categoryToSLADomain, DOMAIN_SLA_SECTIONS } from '@/types/sla';
+import { categoryToSLADomain, DOMAIN_SLA_SECTIONS, type SLADomain } from '@/types/sla';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -249,12 +249,18 @@ export function SLAEditorPanel({
 
   const domains = useMemo(() => getDomainsFromNodes(selectedNodes), [selectedNodes]);
 
+  // Tool/infrastructure nodes don't use pipeline SLAs — expectations are set on monitors
+  const TOOL_DOMAINS: Set<SLADomain> = new Set(['ingestion', 'orchestration', 'transform', 'bi', 'infrastructure']);
+  const isToolOnly = domains.size > 0 && [...domains].every((d) => TOOL_DOMAINS.has(d));
+  const hasNoKnownDomain = domains.size === 0 && selectedNodes.length > 0;
+  const isNonDataAsset = isToolOnly || hasNoKnownDomain;
+
   const applicableSections = useMemo(() => {
+    if (isNonDataAsset) return [];
     const domainSections = getApplicableSections(domains);
     if (domainSections.length > 0) return domainSections;
-    // Fallback for uncategorized nodes
     return ['freshness', 'schema', 'volume', 'quality'];
-  }, [domains]);
+  }, [domains, isNonDataAsset]);
 
   const downstreamCount = useMemo(
     () => countDownstream(selectedNodeIds, allEdges),
@@ -518,6 +524,21 @@ export function SLAEditorPanel({
           </div>
         )}
 
+        {/* Tool/infrastructure nodes — no SLA, configure via monitors */}
+        {isNonDataAsset && (
+          <div className="p-4 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-center space-y-2">
+            <svg className="w-8 h-8 mx-auto text-[var(--muted)]/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+            </svg>
+            <p className="text-[13px] font-medium text-[var(--text)]">
+              Tool expectations are set on monitors
+            </p>
+            <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+              Pipeline SLAs apply to data assets. To configure thresholds for this tool, create a monitor from the Monitors page.
+            </p>
+          </div>
+        )}
+
         {/* SLA Controls — always visible, no collapsible */}
         <div className="space-y-4">
           {/* Freshness section */}
@@ -767,49 +788,6 @@ export function SLAEditorPanel({
           )}
 
           {/* Infrastructure section */}
-          {applicableSections.includes('infrastructure') && (
-            <div className="space-y-2 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-              <h4 className="text-[11px] font-medium text-[var(--text)] uppercase tracking-wide">Infrastructure</h4>
-              <NumberInput
-                label="Cert expiry warn"
-                value={getVal('infrastructureConfig', 'certExpiryWarnDays')}
-                onChange={(v) => setVal('infrastructureConfig', 'certExpiryWarnDays', v)}
-                suffix="days"
-                min={1}
-              />
-              <NumberInput
-                label="Cert expiry fail"
-                value={getVal('infrastructureConfig', 'certExpiryFailDays')}
-                onChange={(v) => setVal('infrastructureConfig', 'certExpiryFailDays', v)}
-                suffix="days"
-                min={1}
-              />
-              <NumberInput
-                label="CPU threshold"
-                value={getVal('infrastructureConfig', 'cpuThresholdPct')}
-                onChange={(v) => setVal('infrastructureConfig', 'cpuThresholdPct', v)}
-                suffix="%"
-                min={1}
-                max={100}
-              />
-              <NumberInput
-                label="Memory threshold"
-                value={getVal('infrastructureConfig', 'memoryThresholdPct')}
-                onChange={(v) => setVal('infrastructureConfig', 'memoryThresholdPct', v)}
-                suffix="%"
-                min={1}
-                max={100}
-              />
-              <NumberInput
-                label="Disk threshold"
-                value={getVal('infrastructureConfig', 'diskThresholdPct')}
-                onChange={(v) => setVal('infrastructureConfig', 'diskThresholdPct', v)}
-                suffix="%"
-                min={1}
-                max={100}
-              />
-            </div>
-          )}
         </div>
 
         {/* Apply scope selector */}
