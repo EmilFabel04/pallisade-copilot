@@ -6,7 +6,6 @@ import type {
   SLAProfile,
   EffectiveSLAPolicy,
   SLAAssignRequest,
-  SLADomain,
 } from '@/types/sla';
 import { categoryToSLADomain, DOMAIN_SLA_SECTIONS, type SLADomain } from '@/types/sla';
 
@@ -790,8 +789,8 @@ export function SLAEditorPanel({
           {/* Infrastructure section */}
         </div>
 
-        {/* Apply scope selector */}
-        <div className="space-y-2">
+        {/* Apply scope selector — hidden for tool nodes */}
+        {!isNonDataAsset && <div className="space-y-2">
           <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Apply Scope</label>
           <div className="space-y-1.5">
             <label className="flex items-center gap-2 p-2 rounded-lg hover:bg-[var(--overlay-bg)] cursor-pointer transition-colors">
@@ -835,10 +834,12 @@ export function SLAEditorPanel({
               </label>
             )}
           </div>
-        </div>
+        </div>}
       </div>
 
-      {/* Footer (sticky) */}
+      {/* Footer (sticky) — hidden for tool nodes */}
+      {isNonDataAsset ? null : (
+      /* Footer (sticky) */
       <div className="p-4 border-t border-[var(--subtle-border)] flex-shrink-0 space-y-2">
         {applied ? (
           <div className="w-full px-4 py-2.5 text-[13px] font-medium rounded-lg bg-green-600/90 text-white text-center flex items-center justify-center gap-2">
@@ -879,6 +880,7 @@ export function SLAEditorPanel({
           </button>
         )}
       </div>
+      )}
         </>
       )}
 
