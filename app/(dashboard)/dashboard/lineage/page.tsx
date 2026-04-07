@@ -2172,7 +2172,7 @@ function LineagePageInner() {
                           profileName,
                           status: 'assigned',
                           freshness: {}, schema: {}, volume: {}, anomaly: {},
-                          quality: {}, ingestion: {}, bi: {}, orchestration: {}, transform: {},
+                          quality: {}, ingestion: {}, bi: {}, orchestration: {}, transform: {}, infrastructure: {},
                         });
                       }
                     }

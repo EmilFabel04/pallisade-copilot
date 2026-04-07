@@ -765,6 +765,51 @@ export function SLAEditorPanel({
               />
             </div>
           )}
+
+          {/* Infrastructure section */}
+          {applicableSections.includes('infrastructure') && (
+            <div className="space-y-2 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
+              <h4 className="text-[11px] font-medium text-[var(--text)] uppercase tracking-wide">Infrastructure</h4>
+              <NumberInput
+                label="Cert expiry warn"
+                value={getVal('infrastructureConfig', 'certExpiryWarnDays')}
+                onChange={(v) => setVal('infrastructureConfig', 'certExpiryWarnDays', v)}
+                suffix="days"
+                min={1}
+              />
+              <NumberInput
+                label="Cert expiry fail"
+                value={getVal('infrastructureConfig', 'certExpiryFailDays')}
+                onChange={(v) => setVal('infrastructureConfig', 'certExpiryFailDays', v)}
+                suffix="days"
+                min={1}
+              />
+              <NumberInput
+                label="CPU threshold"
+                value={getVal('infrastructureConfig', 'cpuThresholdPct')}
+                onChange={(v) => setVal('infrastructureConfig', 'cpuThresholdPct', v)}
+                suffix="%"
+                min={1}
+                max={100}
+              />
+              <NumberInput
+                label="Memory threshold"
+                value={getVal('infrastructureConfig', 'memoryThresholdPct')}
+                onChange={(v) => setVal('infrastructureConfig', 'memoryThresholdPct', v)}
+                suffix="%"
+                min={1}
+                max={100}
+              />
+              <NumberInput
+                label="Disk threshold"
+                value={getVal('infrastructureConfig', 'diskThresholdPct')}
+                onChange={(v) => setVal('infrastructureConfig', 'diskThresholdPct', v)}
+                suffix="%"
+                min={1}
+                max={100}
+              />
+            </div>
+          )}
         </div>
 
         {/* Apply scope selector */}

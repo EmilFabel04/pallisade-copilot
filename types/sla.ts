@@ -67,6 +67,14 @@ export interface TransformConfig {
   modelFreshnessHours?: number;
 }
 
+export interface InfrastructureConfig {
+  certExpiryWarnDays?: number;
+  certExpiryFailDays?: number;
+  cpuThresholdPct?: number;
+  memoryThresholdPct?: number;
+  diskThresholdPct?: number;
+}
+
 // ---------------------------------------------------------------------------
 // SLA Profile
 // ---------------------------------------------------------------------------
@@ -88,6 +96,7 @@ export interface SLAProfile {
   biConfig?: BIConfig | null;
   orchestrationConfig?: OrchestrationConfig | null;
   transformConfig?: TransformConfig | null;
+  infrastructureConfig?: InfrastructureConfig | null;
 
   createdAt?: string;
   updatedAt?: string;
@@ -138,6 +147,7 @@ export interface EffectiveSLAPolicy {
   bi: BIConfig;
   orchestration: OrchestrationConfig;
   transform: TransformConfig;
+  infrastructure: InfrastructureConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +177,7 @@ export interface SLAResolveResponse {
 // Domain → applicable SLA controls mapping
 // ---------------------------------------------------------------------------
 
-export type SLADomain = 'warehouse' | 'ingestion' | 'bi' | 'orchestration' | 'transform';
+export type SLADomain = 'warehouse' | 'ingestion' | 'bi' | 'orchestration' | 'transform' | 'infrastructure';
 
 /**
  * Maps node domains to which SLA config sections are relevant.
@@ -179,6 +189,7 @@ export const DOMAIN_SLA_SECTIONS: Record<SLADomain, string[]> = {
   bi: ['bi', 'freshness'],
   orchestration: ['orchestration'],
   transform: ['transform', 'freshness', 'schema'],
+  infrastructure: ['infrastructure'],
 };
 
 /**
@@ -211,6 +222,10 @@ export function categoryToSLADomain(category: string): SLADomain | null {
     // Transform
     transformation: 'transform',
     test: 'transform',  // dbt/elementary tests → transform domain
+    // Infrastructure
+    infrastructure: 'infrastructure',
+    linux_server: 'infrastructure',
+    server: 'infrastructure',
   };
   return mapping[category] ?? null;
 }

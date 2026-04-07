@@ -83,6 +83,13 @@ class EffectivePolicy:
     test_failure_tolerance: Optional[str] = None  # "strict" | "normal" | "relaxed"
     model_freshness_hours: Optional[int] = None
 
+    # --- Infrastructure-specific ---
+    cert_expiry_warn_days: Optional[int] = None
+    cert_expiry_fail_days: Optional[int] = None
+    cpu_threshold_pct: Optional[int] = None
+    memory_threshold_pct: Optional[int] = None
+    disk_threshold_pct: Optional[int] = None
+
 
 # Fields that can be resolved (all Optional fields on EffectivePolicy except metadata)
 _RESOLVABLE_FIELDS = [
@@ -108,6 +115,7 @@ BUILTIN_PROFILES: Dict[str, Dict[str, Any]] = {
         "biConfig": {"freshnessHours": 2, "contentHealthEnabled": True, "upstreamBreakStrictness": "strict"},
         "orchestrationConfig": {"runLatencyMinutes": 15, "scheduleLagMinutes": 5, "failureTolerance": "strict"},
         "transformConfig": {"testFailureTolerance": "strict", "modelFreshnessHours": 2},
+        "infrastructureConfig": {"certExpiryWarnDays": 30, "certExpiryFailDays": 14, "cpuThresholdPct": 80, "memoryThresholdPct": 80, "diskThresholdPct": 80},
     },
     "Standard": {
         "description": "Balanced monitoring for standard-priority assets",
@@ -121,6 +129,7 @@ BUILTIN_PROFILES: Dict[str, Dict[str, Any]] = {
         "biConfig": {"freshnessHours": 6, "contentHealthEnabled": True, "upstreamBreakStrictness": "warn"},
         "orchestrationConfig": {"runLatencyMinutes": 30, "scheduleLagMinutes": 15, "failureTolerance": "normal"},
         "transformConfig": {"testFailureTolerance": "normal", "modelFreshnessHours": 12},
+        "infrastructureConfig": {"certExpiryWarnDays": 30, "certExpiryFailDays": 7, "cpuThresholdPct": 90, "memoryThresholdPct": 90, "diskThresholdPct": 85},
     },
     "Relaxed": {
         "description": "Lenient monitoring for low-priority assets",
@@ -134,6 +143,7 @@ BUILTIN_PROFILES: Dict[str, Dict[str, Any]] = {
         "biConfig": {"freshnessHours": 24, "contentHealthEnabled": False, "upstreamBreakStrictness": "ignore"},
         "orchestrationConfig": {"runLatencyMinutes": 60, "scheduleLagMinutes": 30, "failureTolerance": "relaxed"},
         "transformConfig": {"testFailureTolerance": "relaxed", "modelFreshnessHours": 48},
+        "infrastructureConfig": {"certExpiryWarnDays": 14, "certExpiryFailDays": 3, "cpuThresholdPct": 95, "memoryThresholdPct": 95, "diskThresholdPct": 95},
     },
     "BI Shield": {
         "description": "Optimized for BI/reporting assets — focuses on freshness and upstream integrity",
@@ -279,6 +289,13 @@ def _extract_fields_from_config(config_json: Optional[Dict], config_key: str) ->
             "testFailureTolerance": "test_failure_tolerance",
             "modelFreshnessHours": "model_freshness_hours",
         },
+        "infrastructureConfig": {
+            "certExpiryWarnDays": "cert_expiry_warn_days",
+            "certExpiryFailDays": "cert_expiry_fail_days",
+            "cpuThresholdPct": "cpu_threshold_pct",
+            "memoryThresholdPct": "memory_threshold_pct",
+            "diskThresholdPct": "disk_threshold_pct",
+        },
     }
 
     field_map = mapping.get(config_key, {})
@@ -295,7 +312,7 @@ def _extract_all_fields_from_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     config_keys = [
         "freshnessConfig", "schemaConfig", "volumeConfig", "anomalyConfig",
         "qualityConfig", "ingestionConfig", "biConfig", "orchestrationConfig",
-        "transformConfig",
+        "transformConfig", "infrastructureConfig",
     ]
     for ck in config_keys:
         config_blob = profile.get(ck)
