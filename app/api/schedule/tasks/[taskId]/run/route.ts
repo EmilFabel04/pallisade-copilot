@@ -129,7 +129,7 @@ export async function POST(
         }
       }
 
-      // 3. Fallback: auto-discover first warehouse node in the org's pipeline stack
+      // 3. Fallback: match target FQN database to a warehouse, or pick first
       if (!integrationConfig) {
         const pipelineStack = await prisma.pipelineStack.findFirst({
           where: { organizationId },
@@ -140,15 +140,33 @@ export async function POST(
                 status: { in: ['CONNECTED', 'HEALTHY', 'WARNING'] },
               },
               select: nodeSelect,
-              take: 1,
             },
           },
         });
 
-        const warehouseNode = pipelineStack?.nodes[0];
+        const warehouseNodes = pipelineStack?.nodes || [];
+        const fqnDb = (task.targetFqn || '').split('.')[0]?.toLowerCase();
+
+        // Try to match the FQN database/project to a warehouse node's config
+        let matchedNode = null;
+        if (fqnDb) {
+          for (const wn of warehouseNodes) {
+            const cfg = pickConfig(wn) || {};
+            const dbNames = [
+              cfg.project_id, cfg.project, cfg.database, cfg.dbname,
+              cfg.default_dataset, cfg.schema, wn.name,
+            ].filter(Boolean).map((v: string) => v.toLowerCase());
+            if (dbNames.includes(fqnDb)) {
+              matchedNode = wn;
+              break;
+            }
+          }
+        }
+
+        const warehouseNode = matchedNode || warehouseNodes[0];
         if (warehouseNode) {
           integrationConfig = resolveNodeConfig({ ...warehouseNode, config: pickConfig(warehouseNode) });
-          console.log(`[Schedule] Auto-discovered warehouse: ${warehouseNode.name} (${warehouseNode.toolType})`);
+          console.log(`[Schedule] ${matchedNode ? 'Matched' : 'Auto-discovered'} warehouse: ${warehouseNode.name} (${warehouseNode.toolType}) for FQN db: ${fqnDb}`);
         } else {
           console.warn('[Schedule] No warehouse pipeline node found for org:', organizationId);
         }
