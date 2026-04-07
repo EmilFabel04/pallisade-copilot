@@ -59,6 +59,7 @@ import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import type { NodeMeta } from '@/components/schedule/NodeSelectionSurface';
 import type { AssetPrefill } from '@/types/monitor-catalog';
 import { SlaProfileModal } from '@/components/lineage/SlaProfileModal';
+import { AssetMonitorCreationModal } from '@/components/lineage/AssetMonitorCreationModal';
 
 // Compute compliance status for a node given its resolved SLA policy
 function computeNodeCompliance(
@@ -218,6 +219,11 @@ function LineagePageInner() {
   const [multiMonitorPreselect, setMultiMonitorPreselect] = useState<string[]>([]);
   const [multiMonitorPreMeta, setMultiMonitorPreMeta] = useState<NodeMeta[] | undefined>(undefined);
   const [promptModalOpen, setPromptModalOpen] = useState(false);
+  const [assetMonitorCreate, setAssetMonitorCreate] = useState<{
+    fqn: string;
+    nodeId: string;
+    name: string;
+  } | null>(null);
 
   const handleCreateSingleMonitor = useCallback((prefill: AssetPrefill) => {
     // Route through MultiMonitorModal with the node pre-selected + metadata
@@ -2590,6 +2596,9 @@ function LineagePageInner() {
                 setSlaDiscoveryDefaults(discoveryDefaults || null);
                 setSelectedNode(null);
               }}
+              onCreateAssetMonitor={(fqn, nodeId, name) =>
+                setAssetMonitorCreate({ fqn, nodeId, name })
+              }
             />
           )
         )}
@@ -2612,6 +2621,18 @@ function LineagePageInner() {
         onComplete={() => invalidateCache('/api/schedule')}
         stackId={stackId || undefined}
         initialMode="prompt"
+      />
+
+      {/* Asset Monitor Creation modal */}
+      <AssetMonitorCreationModal
+        open={!!assetMonitorCreate}
+        onClose={() => setAssetMonitorCreate(null)}
+        onCreated={() => {
+          setAssetMonitorCreate(null);
+        }}
+        assetFqn={assetMonitorCreate?.fqn || ''}
+        assetNodeId={assetMonitorCreate?.nodeId || ''}
+        assetName={assetMonitorCreate?.name || ''}
       />
 
       {/* SLA Profile modal */}
