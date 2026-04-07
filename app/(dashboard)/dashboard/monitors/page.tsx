@@ -437,7 +437,7 @@ export default function MonitorsPage() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {activeTab === 'summary' && <DriftSummaryTab />}
+        {activeTab === 'summary' && <DriftSummaryTab watches={allWatches} tasks={tasks} loading={loading} />}
         {activeTab === 'data' && renderMonitorList(dataWatches, dataTasks)}
         {activeTab === 'pipeline' && renderMonitorList(pipelineWatches, pipelineTasks)}
       </div>
