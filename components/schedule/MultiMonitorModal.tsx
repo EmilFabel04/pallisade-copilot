@@ -6,7 +6,7 @@ import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta, type Child
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
 import { ColumnPicker } from './ColumnPicker';
-import { getMonitorDefinition, DOMAIN_MONITOR_MAP } from '@/types/monitor-catalog';
+import { getMonitorDefinition, DOMAIN_MONITOR_MAP, TOOL_HEALTH_DEFAULTS } from '@/types/monitor-catalog';
 import type { MonitoringPlanPreview } from '@/types/health-watch';
 
 // ---------------------------------------------------------------------------
@@ -92,100 +92,6 @@ const DOMAIN_COLORS: Record<string, string> = {
   infrastructure: 'bg-slate-500/15 text-slate-400',
 };
 
-interface Preset {
-  key: string;
-  label: string;
-  description: string;
-  families: string[];
-  iconPath: string;
-}
-
-const PRESETS: Preset[] = [
-  {
-    key: 'full_operability',
-    label: 'Full Pipeline Operability',
-    description: 'Maximum coverage — all applicable monitors for every selected asset',
-    families: ['pipeline_health', 'data_drift', 'ingestion_reliability', 'bi_reliability', 'model_quality', 'ingestion_ops', 'orchestration_ops', 'transform_ops', 'warehouse_ops', 'bi_ops', 'infrastructure_ops'],
-    iconPath: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
-  },
-  {
-    key: 'pipeline_health',
-    label: 'Pipeline Health',
-    description: 'Freshness, volume & schema on data assets and upstream dependencies',
-    families: ['pipeline_health'],
-    iconPath: 'M13 10V3L4 14h7v7l9-11h-7z',
-  },
-  {
-    key: 'data_quality',
-    label: 'Data Quality',
-    description: 'Schema drift, null rates, anomaly detection & volume checks',
-    families: ['data_drift'],
-    iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4',
-  },
-  {
-    key: 'ingestion',
-    label: 'Ingestion Reliability',
-    description: 'Sync lag, failed syncs & connector schema drift',
-    families: ['ingestion_reliability'],
-    iconPath: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12',
-  },
-  {
-    key: 'bi_protection',
-    label: 'BI & Reporting',
-    description: 'Dashboard freshness, content health & upstream break risk',
-    families: ['bi_reliability'],
-    iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
-  },
-  {
-    key: 'ingestion_ops',
-    label: 'Ingestion Ops',
-    description: 'Sync lag, failed syncs & connector schema drift for ingestion tools',
-    families: ['ingestion_ops'],
-    iconPath: 'M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4-4m0 0L8 12m4-4v12',
-  },
-  {
-    key: 'orchestration_ops',
-    label: 'Orchestration Ops',
-    description: 'DAG run status, schedule lag & task failure rate for orchestrators',
-    families: ['orchestration_ops'],
-    iconPath: 'M5 12h14M12 5l7 7-7 7',
-  },
-  {
-    key: 'transform_ops',
-    label: 'Transform Ops',
-    description: 'dbt test failures, model & source freshness for transformation tools',
-    families: ['transform_ops'],
-    iconPath: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z',
-  },
-  {
-    key: 'warehouse_ops',
-    label: 'Warehouse Ops',
-    description: 'Query performance, cost anomalies & storage growth for your warehouse',
-    families: ['warehouse_ops'],
-    iconPath: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4',
-  },
-  {
-    key: 'bi_ops',
-    label: 'BI Ops',
-    description: 'Dashboard freshness, content health & refresh failures for BI tools',
-    families: ['bi_ops'],
-    iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z',
-  },
-  {
-    key: 'infrastructure_ops',
-    label: 'Infrastructure Ops',
-    description: 'Server health, certificate expiry & log analysis for Linux servers',
-    families: ['infrastructure_ops'],
-    iconPath: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-7-4h.01M12 16h.01',
-  },
-  {
-    key: 'transform',
-    label: 'Transform Quality',
-    description: 'dbt test failures, model freshness & source freshness',
-    families: ['model_quality'],
-    iconPath: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z',
-  },
-];
 
 /**
  * Monitor keys that strictly target tool-level nodes (connectors, DAGs,
@@ -489,7 +395,6 @@ export function MultiMonitorModal({
   const [configTab, setConfigTab] = useState<ConfigTab>('presets');
   // preview is derived via useMemo from rawPreview + tool monitor injection (see below)
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [monitorChecks, setMonitorChecks] = useState<Record<string, boolean>>({});
   const [monitorConfigs, setMonitorConfigs] = useState<Record<string, Record<string, any>>>({});
 
@@ -503,7 +408,6 @@ export function MultiMonitorModal({
   const [manualTargetFqn, setManualTargetFqn] = useState('');
 
   // Step 3: Finalize & Create
-  const [planName, setPlanName] = useState('');
   const [schedule, setSchedule] = useState('0 */6 * * *');
   const [alertChannels, setAlertChannels] = useState<string[]>([]);
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'ERROR']);
@@ -537,12 +441,10 @@ export function MultiMonitorModal({
       setPreviewFailed(false);
       setMonitorChecks({});
       setMonitorConfigs({});
-      setActivePreset(null);
       setConfigTab('presets');
       setAiPrompt('');
       setAiIntegrationId('');
       setManualMonitors([]);
-      setPlanName('');
       setSchedule('0 */6 * * *');
       setAlertChannels([]);
       setAlertOnStatus(['FAIL', 'ERROR']);
@@ -605,7 +507,6 @@ export function MultiMonitorModal({
     if (resolvedGraphNodeIds.length === 0) {
       setRawPreview(emptyPreview);
       setMonitorChecks({});
-      setActivePreset(null);
       setPreviewLoading(false);
       return;
     }
@@ -628,7 +529,6 @@ export function MultiMonitorModal({
         setRawPreview(emptyPreview);
       }
       setMonitorChecks({});
-      setActivePreset(null);
     } catch (err) {
       console.error('[MultiMonitor] Failed to fetch preview:', err);
       setRawPreview(emptyPreview);
@@ -668,7 +568,7 @@ export function MultiMonitorModal({
       toolGroups.push({
         group_index: rawPreview.groups.length + toolGroups.length,
         family: `${domain}_ops`,
-        watch_type: 'tool_monitor',
+        watch_type: 'tool_health',
         anchor_id: meta.id,
         anchor_name: meta.name,
         anchor_fqn: meta.fqn,
@@ -689,6 +589,46 @@ export function MultiMonitorModal({
       total_monitors: rawPreview.total_monitors + toolGroups.reduce((s, g) => s + g.recommendations.length, 0),
     };
   }, [rawPreview, allNodeMeta, selectedNodeIds]);
+
+  // Auto-check all tool monitors with default thresholds when preview loads
+  useEffect(() => {
+    if (!preview || previewLoading) return;
+
+    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
+    const autoChecks: Record<string, boolean> = {};
+    const autoConfigs: Record<string, Record<string, any>> = {};
+
+    for (const nid of selectedNodeIds) {
+      const meta = metaById.get(nid);
+      if (!meta?.subNodeIds?.length) continue;
+      const domain = meta.domain || '';
+      const domainDefaults = TOOL_HEALTH_DEFAULTS[domain];
+      if (!domainDefaults) continue;
+
+      for (const group of preview.groups) {
+        if (group.anchor_id !== meta.id) continue;
+        for (const rec of group.recommendations) {
+          const checkKey = `${rec.target_node_id}::${rec.monitor_key}`;
+          autoChecks[checkKey] = true;
+          const defaults = domainDefaults[rec.monitor_key];
+          if (defaults && Object.keys(defaults).length > 0) {
+            autoConfigs[checkKey] = { ...defaults };
+          }
+        }
+      }
+    }
+
+    if (Object.keys(autoChecks).length > 0) {
+      setMonitorChecks((prev) => ({ ...prev, ...autoChecks }));
+      setMonitorConfigs((prev) => {
+        const merged = { ...prev };
+        for (const [k, v] of Object.entries(autoConfigs)) {
+          merged[k] = { ...(prev[k] || {}), ...v };
+        }
+        return merged;
+      });
+    }
+  }, [preview, previewLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fetch preview when opening directly at step 2
   useEffect(() => {
@@ -776,6 +716,24 @@ export function MultiMonitorModal({
 
   // (resolvedGraphNodeIds, rawPreview, preview, fetchFullPreview moved above nodeMonitorMap)
 
+  // ---- Auto-generated plan name ----
+  const autoGeneratedName = useMemo(() => {
+    if (configTab === 'ai-prompt') return 'AI Monitor';
+    const names: string[] = [];
+    for (const { meta } of selectedNodesWithMonitors) {
+      if (meta.subNodeIds?.length) {
+        names.push(`${meta.name} Health`);
+      } else {
+        names.push(`${meta.name} Monitor`);
+      }
+    }
+    if (names.length === 0) return 'Monitor';
+    if (names.length === 1) return names[0];
+    return `${names[0]} +${names.length - 1} more`;
+  }, [selectedNodesWithMonitors, configTab]);
+
+  const planName = autoGeneratedName;
+
   // ---- Set of visible monitor keys after tool/data split filtering ----
   const visibleMonitorKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -786,67 +744,6 @@ export function MultiMonitorModal({
     }
     return keys;
   }, [selectedNodesWithMonitors]);
-
-  // ---- Apply preset (only checks monitors visible after tool/data split) ----
-  const applyPreset = useCallback(
-    (presetKey: string) => {
-      const preset = PRESETS.find((p) => p.key === presetKey);
-      if (!preset || !preview) return;
-
-      if (activePreset === presetKey) {
-        setActivePreset(null);
-        setMonitorChecks({});
-        return;
-      }
-
-      setActivePreset(presetKey);
-      const newChecks: Record<string, boolean> = {};
-
-      // First pass: mark all visible monitors as unchecked
-      preview.groups.forEach((group) => {
-        group.recommendations.forEach((rec) => {
-          const checkKey = `${rec.target_node_id}::${rec.monitor_key}`;
-          if (!visibleMonitorKeys.has(checkKey)) return; // skip filtered-out monitors
-          if (!(checkKey in newChecks)) {
-            newChecks[checkKey] = false;
-          }
-        });
-      });
-
-      // Second pass: check visible monitors belonging to matching families
-      preview.groups.forEach((group) => {
-        const familyMatch = preset.families.includes(group.family);
-        if (!familyMatch) return;
-        group.recommendations.forEach((rec) => {
-          const checkKey = `${rec.target_node_id}::${rec.monitor_key}`;
-          if (!visibleMonitorKeys.has(checkKey)) return;
-          newChecks[checkKey] = true;
-        });
-      });
-
-      setMonitorChecks(newChecks);
-    },
-    [preview, activePreset, visibleMonitorKeys],
-  );
-
-  // ---- Compute per-preset monitor counts for disabling empty presets ----
-  const presetMonitorCounts = useMemo(() => {
-    if (!preview) return new Map<string, number>();
-    const counts = new Map<string, number>();
-    for (const preset of PRESETS) {
-      const keys = new Set<string>();
-      preview.groups.forEach((group) => {
-        if (!preset.families.includes(group.family)) return;
-        group.recommendations.forEach((rec) => {
-          const k = `${rec.target_node_id}::${rec.monitor_key}`;
-          // Only count monitors that pass the tool/data filter
-          if (visibleMonitorKeys.has(k)) keys.add(k);
-        });
-      });
-      counts.set(preset.key, keys.size);
-    }
-    return counts;
-  }, [preview, visibleMonitorKeys]);
 
   // ---- Toggle individual monitor ----
   const toggleMonitor = useCallback((nodeId: string, monitorKey: string) => {
@@ -876,7 +773,6 @@ export function MultiMonitorModal({
 
       return { ...prev, [key]: willBeChecked };
     });
-    setActivePreset(null);
   }, []);
 
   // ---- Toggle all monitors for a node ----
@@ -890,7 +786,6 @@ export function MultiMonitorModal({
         newChecks[`${mon.targetNodeId}::${mon.key}`] = !allChecked;
       }
       setMonitorChecks(newChecks);
-      setActivePreset(null);
 
       // Seed default config values for tool monitors being checked
       if (!allChecked) {
@@ -989,11 +884,11 @@ export function MultiMonitorModal({
         if (totalMonitorCount === 0) return false;
         return !incompleteToolConfig;
       case 3:
-        return planName.trim().length > 0;
+        return true;
       default:
         return false;
     }
-  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, planName, incompleteToolConfig]);
+  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, incompleteToolConfig]);
 
   // ---- Create plan or task ----
   const handleCreate = useCallback(async () => {
@@ -1132,7 +1027,7 @@ export function MultiMonitorModal({
             name: planName,
             scopeType: 'custom',
             scopeConfig: { nodeIds: resolvedGraphNodeIds },
-            mode: activePreset || 'manual',
+            mode: 'manual',
             families: usedFamilies,
             schedule,
             timezone,
@@ -1170,7 +1065,6 @@ export function MultiMonitorModal({
     manualMonitors,
     planName,
     resolvedGraphNodeIds,
-    activePreset,
     schedule,
     alertChannels,
     alertOnStatus,
@@ -1327,50 +1221,6 @@ export function MultiMonitorModal({
               {/* ---- Presets Tab ---- */}
               {configTab === 'presets' && (
                 <div className="flex-1 overflow-y-auto">
-                  {/* Presets grid */}
-                  <div className="shrink-0 px-6 py-4 border-b border-[var(--border)]">
-                    <div className="flex items-center gap-2 mb-3">
-                      <h3 className="text-[13px] font-medium text-[var(--text)]">Quick Setup</h3>
-                      <span className="text-[11px] text-[var(--muted)]">— choose a preset or toggle monitors manually below</span>
-                    </div>
-                    <div className="grid grid-cols-3 lg:grid-cols-7 gap-2">
-                      {PRESETS.map((preset) => {
-                        const isActive = activePreset === preset.key;
-                        const monCount = presetMonitorCounts.get(preset.key) ?? 0;
-                        const isEmpty = !previewLoading && monCount === 0;
-                        return (
-                          <button
-                            key={preset.key}
-                            onClick={() => applyPreset(preset.key)}
-                            disabled={previewLoading || isEmpty}
-                            className={cn(
-                              'text-left p-3 rounded-lg border transition-all',
-                              isActive
-                                ? 'border-[var(--accent)] bg-[var(--accent)]/5 shadow-[0_0_0_1px_var(--accent)]'
-                                : isEmpty
-                                  ? 'border-[var(--border)] bg-[var(--surface)] opacity-35 cursor-not-allowed'
-                                  : 'border-[var(--border)] hover:border-[var(--accent)]/50 bg-[var(--surface)]',
-                              previewLoading && 'opacity-50 cursor-not-allowed',
-                            )}
-                          >
-                            <div className="flex items-center gap-2 mb-1">
-                              <svg
-                                className={cn('w-4 h-4 shrink-0', isActive ? 'text-[var(--accent)]' : 'text-[var(--muted)]')}
-                                fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                              >
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={preset.iconPath} />
-                              </svg>
-                              <span className="text-[12px] font-medium text-[var(--text)] truncate">{preset.label}</span>
-                            </div>
-                            <p className="text-[10px] text-[var(--muted)] leading-relaxed line-clamp-2">
-                              {isEmpty ? 'Not applicable for selected assets' : preset.description}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
                   {/* Per-node monitor configuration with rich cards */}
                   <div className="px-6 py-4">
                     {previewLoading ? (
@@ -1404,12 +1254,7 @@ export function MultiMonitorModal({
                           <span className="text-[13px] text-[var(--text)]">
                             <span className="font-medium text-[var(--accent)]">{checkedCount}</span> monitors selected
                           </span>
-                          {activePreset && (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[var(--accent)]/15 text-[var(--accent)]">
-                              {PRESETS.find((p) => p.key === activePreset)?.label}
-                            </span>
-                          )}
-                          {!activePreset && checkedCount > 0 && (
+                          {checkedCount > 0 && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/10 text-[var(--muted)]">
                               Custom
                             </span>
@@ -1629,7 +1474,7 @@ export function MultiMonitorModal({
                 {/* Title */}
                 <div className="text-center">
                   <h3 className="text-[18px] font-semibold text-[var(--text)]">
-                    {configTab === 'ai-prompt' ? 'Name Your AI Monitor' : 'Finalize Your Monitor'}
+                    {configTab === 'ai-prompt' ? 'Finalize Your AI Monitor' : 'Finalize Your Monitor'}
                   </h3>
                   <p className="text-[13px] text-[var(--muted)] mt-2">
                     {configTab === 'ai-prompt' ? (
@@ -1645,16 +1490,9 @@ export function MultiMonitorModal({
                   </p>
                 </div>
 
-                {/* Name */}
-                <div>
-                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Name</label>
-                  <input
-                    value={planName}
-                    onChange={(e) => setPlanName(e.target.value)}
-                    placeholder="e.g. Production Pipeline Health"
-                    className="w-full px-4 py-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] text-[14px] placeholder:text-[var(--muted)]/50 focus:outline-none focus:border-[var(--accent)] text-center"
-                    autoFocus
-                  />
+                {/* Auto-generated name */}
+                <div className="text-center">
+                  <span className="text-[14px] font-medium text-[var(--text)]">{planName}</span>
                 </div>
 
                 {/* Schedule */}
@@ -1675,14 +1513,6 @@ export function MultiMonitorModal({
                   />
                 </div>
 
-                {/* Summary badge */}
-                {activePreset && configTab === 'presets' && (
-                  <div className="text-center">
-                    <span className="px-3 py-1 rounded-full text-[11px] font-medium bg-[var(--accent)]/10 text-[var(--accent)]">
-                      {PRESETS.find((p) => p.key === activePreset)?.label}
-                    </span>
-                  </div>
-                )}
                 {/* Tool monitor config summary */}
                 {configTab === 'presets' && (() => {
                   const toolMons = selectedNodesWithMonitors.flatMap(({ meta, monitors }) => {
