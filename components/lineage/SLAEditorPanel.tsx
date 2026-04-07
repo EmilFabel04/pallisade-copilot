@@ -269,8 +269,8 @@ export function SLAEditorPanel({
   const dominantCategory = selectedNodes.length > 0 ? selectedNodes[0].category : null;
   const typeCount = dominantCategory ? countOfType(dominantCategory, allNodes) : 0;
 
-  // Only warehouse tables/views/models can discover SLAs from data
-  const DISCOVERABLE_CATEGORIES = new Set(['table', 'view', 'model']);
+  // Warehouse tables/views/models + queryable source DBs can discover SLAs from data
+  const DISCOVERABLE_CATEGORIES = new Set(['table', 'view', 'model', 'source', 'connector']);
   const discoverableNodes = selectedNodes.filter((n) => DISCOVERABLE_CATEGORIES.has(n.category));
   const hasDiscoverableNodes = discoverableNodes.length > 0;
 

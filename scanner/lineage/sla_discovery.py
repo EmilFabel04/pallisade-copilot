@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 _WAREHOUSE_DOMAIN_VALUE = "warehouse"
 _WAREHOUSE_TYPE_VALUES = {"table", "view", "materialized_view"}
 
+# Platforms that support SQL queries even outside the warehouse domain (e.g. Fivetran source DBs)
+_QUERYABLE_PLATFORMS = {"postgres", "mysql", "sqlserver", "redshift", "snowflake", "bigquery"}
+
 # PK heuristic common names (lowercase)
 _PK_COMMON_NAMES = {"uuid", "guid", "key", "row_id"}
 
@@ -76,6 +79,13 @@ def _is_warehouse_node(node: LineageNode) -> bool:
     return domain == _WAREHOUSE_DOMAIN_VALUE and ntype in _WAREHOUSE_TYPE_VALUES
 
 
+def _is_queryable_source(node: LineageNode) -> bool:
+    """Check if a node is a queryable source DB (e.g. Postgres ingested via Fivetran)."""
+    platform = (node.platform or "").lower()
+    ntype = getattr(node.node_type, 'value', str(node.node_type))
+    return platform in _QUERYABLE_PLATFORMS and ntype in _WAREHOUSE_TYPE_VALUES
+
+
 # ---------------------------------------------------------------------------
 # Result dataclass
 # ---------------------------------------------------------------------------
@@ -99,8 +109,12 @@ class DiscoveryResult:
 # ---------------------------------------------------------------------------
 
 def _find_warehouse_ancestor(node: LineageNode, graph: LineageGraph) -> Optional[LineageNode]:
-    """Return the nearest warehouse TABLE/VIEW ancestor of *node* via BFS."""
-    if _is_warehouse_node(node):
+    """Return the nearest warehouse TABLE/VIEW ancestor of *node* via BFS.
+
+    Also matches queryable source DBs (e.g. Postgres tables ingested via Fivetran)
+    so SLA discovery works for source databases too.
+    """
+    if _is_warehouse_node(node) or _is_queryable_source(node):
         return node
 
     visited: set[str] = {node.id}
@@ -116,7 +130,7 @@ def _find_warehouse_ancestor(node: LineageNode, graph: LineageGraph) -> Optional
         if current_node is None:
             continue
 
-        if _is_warehouse_node(current_node):
+        if _is_warehouse_node(current_node) or _is_queryable_source(current_node):
             return current_node
 
         for neighbour_id in sorted(graph._upstream.get(current_id, set())):
