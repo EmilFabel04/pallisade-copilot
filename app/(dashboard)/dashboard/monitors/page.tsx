@@ -387,6 +387,7 @@ export default function MonitorsPage() {
               onClick={() => setSelectedWatch(watch)}
               onToggleEnabled={(enabled) => handleToggleWatchEnabled(watch.id, enabled)}
               onRunAll={() => handleRunWatch(watch.id)}
+              onDelete={() => handleDeleteWatch(watch.id)}
             />
           );
         })}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Settings } from 'lucide-react';
+import { Settings, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WatchSummary } from '@/types/health-watch';
 import { WatchEditModal } from './WatchEditModal';
@@ -22,16 +22,8 @@ interface WatchCardProps {
   onClick: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onRunAll: () => void;
+  onDelete?: () => void;
 }
-
-const WATCH_TYPE_COLORS: Record<string, string> = {
-  pipeline_health: 'bg-blue-500/15 text-blue-400',
-  dashboard_shield: 'bg-purple-500/15 text-purple-400',
-  source_guard: 'bg-emerald-500/15 text-emerald-400',
-  model_quality: 'bg-amber-500/15 text-amber-400',
-  data_drift: 'bg-orange-500/15 text-orange-400',
-  custom_watch: 'bg-[var(--overlay-medium)] text-[var(--muted)]',
-};
 
 function cronToHuman(cron: string): string {
   const presets: Record<string, string> = {
@@ -56,13 +48,13 @@ function timeAgo(dateStr?: string | null): string {
   return `${days}d ago`;
 }
 
-export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount = 0, onClick, onToggleEnabled, onRunAll }: WatchCardProps) {
+export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount = 0, onClick, onToggleEnabled, onRunAll, onDelete }: WatchCardProps) {
   const [showEditModal, setShowEditModal] = useState(false);
 
   const totalMonitors = watch.monitorCount;
   const hasRun = watch.passCount > 0 || watch.warnCount > 0 || watch.failCount > 0;
+  const noRunYet = !hasRun && totalMonitors > 0;
 
-  // Derive health from actual monitor statuses, not potentially stale stored score
   const liveHealthScore = hasRun && totalMonitors > 0
     ? Math.round(((watch.passCount + watch.warnCount * 0.5) / totalMonitors) * 100)
     : watch.healthScore;
@@ -71,145 +63,148 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
     ? healthStatusFromScore(liveHealthScore)
     : watch.healthScore != null ? healthStatusFromScore(watch.healthScore) : null;
 
-  const healthColor = healthStatus
-    ? HEALTH_STATUS_COLORS[healthStatus]
-    : 'bg-[var(--overlay-medium)] text-[var(--muted)]';
-
-  const watchTypeColor = WATCH_TYPE_COLORS[watch.watchType] || WATCH_TYPE_COLORS.custom_watch;
-
-  const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
-  const failureGroups = watch.healthDetails?.failureGroups || [];
-
   return (
     <div
-      className="group relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl p-4 hover:border-[var(--overlay-strong)] transition-all cursor-pointer"
+      className="group relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl overflow-hidden hover:border-[var(--overlay-strong)] transition-all cursor-pointer"
       onClick={onClick}
     >
-      <div className="flex items-start justify-between gap-3">
-        {/* Left: Name + type + health */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{watch.name}</h3>
-            {healthStatus && (
-              <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', healthColor)}>
-                {HEALTH_STATUS_LABELS[healthStatus]}
-              </span>
-            )}
-            {!healthStatus && (
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
-                NEW
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 text-[12px] text-[var(--muted)]">
-            <span className="flex items-center gap-1">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              {cronToHuman(watch.schedule || '')}
-            </span>
-            <span>
-              {totalMonitors} monitor{totalMonitors !== 1 ? 's' : ''}
-              {policyMonitorCount > 0 && (
-                <>
-                  {' · '}
-                  {overrideMonitorCount > 0 && (
-                    <span className="text-amber-400">{overrideMonitorCount} overridden</span>
-                  )}
-                  {overrideMonitorCount > 0 && (policyMonitorCount - overrideMonitorCount) > 0 && ', '}
-                  {(policyMonitorCount - overrideMonitorCount) > 0 && (
-                    <span className="text-violet-400">{policyMonitorCount - overrideMonitorCount} SLA covered</span>
-                  )}
-                </>
-              )}
-            </span>
-            {coveragePct != null && policyMonitorCount === 0 && (
-              <span className="text-[var(--text-faint)]">{coveragePct}% coverage</span>
-            )}
-          </div>
+      {/* Status bar at top */}
+      {hasRun && totalMonitors > 0 ? (
+        <div className="flex h-1.5">
+          {watch.passCount > 0 && (
+            <div className="bg-emerald-500 h-full" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
+          )}
+          {watch.warnCount > 0 && (
+            <div className="bg-amber-500 h-full" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
+          )}
+          {watch.failCount > 0 && (
+            <div className="bg-red-500 h-full" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
+          )}
+          {/* Remaining = not yet run within group */}
+          {(watch.passCount + watch.warnCount + watch.failCount) < totalMonitors && (
+            <div className="bg-[var(--overlay-bg)] h-full flex-1" />
+          )}
         </div>
+      ) : (
+        <div className="h-1.5 bg-[var(--overlay-bg)]" />
+      )}
 
-        {/* Right: Actions */}
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={onRunAll}
-            className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors opacity-0 group-hover:opacity-100"
-            title="Run all monitors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </button>
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowEditModal(true); }}
-            className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] opacity-0 group-hover:opacity-100 transition-all"
-            title="Edit watch settings"
-          >
-            <Settings size={14} />
-          </button>
-          <button
-            onClick={() => onToggleEnabled(!watch.enabled)}
-            className={cn(
-              'relative w-8 h-[18px] rounded-full transition-colors',
-              watch.enabled ? 'bg-emerald-500/40' : 'bg-[var(--overlay-medium)]'
-            )}
-          >
-            <div className={cn(
-              'absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-transform',
-              watch.enabled ? 'left-[16px]' : 'left-[2px]'
-            )} />
-          </button>
-        </div>
-      </div>
-
-      {/* Health score bar */}
-      {hasRun && totalMonitors > 0 && (
-        <div className="flex items-center gap-2 mt-3 mb-1.5">
-          <div className="flex-1 h-1.5 rounded-full bg-[var(--overlay-bg)] overflow-hidden">
-            <div className="flex h-full">
-              {watch.passCount > 0 && (
-                <div className="bg-emerald-500/60 h-full" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
-              )}
-              {watch.warnCount > 0 && (
-                <div className="bg-amber-500/60 h-full" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
-              )}
-              {watch.failCount > 0 && (
-                <div className="bg-red-500/60 h-full" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
+      <div className="p-4">
+        {/* Row 1: Name + actions */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{watch.name}</h3>
+              {noRunYet && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
+                  NEW
+                </span>
               )}
             </div>
+            {watch.anchorFqn && (
+              <p className="text-[11px] text-[var(--text-faint)] font-mono truncate" title={watch.anchorFqn}>
+                {watch.anchorFqn}
+              </p>
+            )}
           </div>
-          <span className="text-[11px] text-[var(--muted)] shrink-0">
-            {watch.failCount > 0 ? `${watch.failCount} failed` : `${watch.passCount}/${totalMonitors} passing`}
-          </span>
-        </div>
-      )}
 
-      {/* Failure groups (compact) */}
-      {failureGroups.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1">
-          {failureGroups.slice(0, 3).map((fg, i) => (
-            <span
-              key={i}
+          {/* Actions */}
+          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-red-400 hover:bg-red-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                title="Delete"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button
+              onClick={onRunAll}
+              className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors opacity-0 group-hover:opacity-100"
+              title="Run all monitors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowEditModal(true); }}
+              className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] opacity-0 group-hover:opacity-100 transition-all"
+              title="Edit watch settings"
+            >
+              <Settings size={14} />
+            </button>
+            <button
+              onClick={() => onToggleEnabled(!watch.enabled)}
               className={cn(
-                'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                fg.severity === 'critical' ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'
+                'relative w-8 h-[18px] rounded-full transition-colors',
+                watch.enabled ? 'bg-emerald-500/40' : 'bg-[var(--overlay-medium)]'
               )}
             >
-              {FAILURE_CATEGORY_LABELS[fg.category as FailureCategory] || fg.category.replace(/_/g, ' ')}
-              {fg.signalCount > 1 && ` (${fg.signalCount})`}
-            </span>
-          ))}
+              <div className={cn(
+                'absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-transform',
+                watch.enabled ? 'left-[16px]' : 'left-[2px]'
+              )} />
+            </button>
+          </div>
         </div>
-      )}
 
-      {/* Bottom: Last run + anchor */}
-      <div className="flex items-center gap-3 mt-1 text-[11px] text-[var(--text-faint)]">
-        <span>Last run: {timeAgo(watch.lastRunAt)}</span>
-        {watch.anchorFqn && (
-          <span className="truncate max-w-[250px] font-mono" title={watch.anchorFqn}>
-            {watch.anchorFqn}
+        {/* Row 2: Stats */}
+        <div className="flex items-center gap-4 mt-3">
+          {/* Monitor counts */}
+          <div className="flex items-center gap-3 text-[12px]">
+            <span className="text-[var(--muted)]">{totalMonitors} monitor{totalMonitors !== 1 ? 's' : ''}</span>
+            {hasRun && (
+              <>
+                <span className="text-emerald-400 font-medium">{watch.passCount} pass</span>
+                {watch.warnCount > 0 && <span className="text-amber-400 font-medium">{watch.warnCount} warn</span>}
+                {watch.failCount > 0 && <span className="text-red-400 font-medium">{watch.failCount} fail</span>}
+              </>
+            )}
+          </div>
+
+          {/* SLA coverage */}
+          {policyMonitorCount > 0 && (
+            <div className="flex items-center gap-2 text-[11px] border-l border-[var(--subtle-border)] pl-3">
+              {overrideMonitorCount > 0 && (
+                <span className="text-amber-400">{overrideMonitorCount} overridden</span>
+              )}
+              {(policyMonitorCount - overrideMonitorCount) > 0 && (
+                <span className="text-violet-400">{policyMonitorCount - overrideMonitorCount} SLA covered</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Row 3: Schedule + last run */}
+        <div className="flex items-center gap-3 mt-2 text-[11px] text-[var(--text-faint)]">
+          <span className="flex items-center gap-1">
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {cronToHuman(watch.schedule || '')}
           </span>
+          <span>Last run: {timeAgo(watch.lastRunAt)}</span>
+        </div>
+
+        {/* Failure groups */}
+        {(watch.healthDetails?.failureGroups || []).length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {(watch.healthDetails?.failureGroups || []).slice(0, 3).map((fg, i) => (
+              <span
+                key={i}
+                className={cn(
+                  'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                  fg.severity === 'critical' ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'
+                )}
+              >
+                {FAILURE_CATEGORY_LABELS[fg.category as FailureCategory] || fg.category.replace(/_/g, ' ')}
+                {fg.signalCount > 1 && ` (${fg.signalCount})`}
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
