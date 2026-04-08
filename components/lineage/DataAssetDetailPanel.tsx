@@ -997,61 +997,7 @@ export function DataAssetDetailPanel({
             );
           };
 
-          /* ─── BI/Reporting node path ─────────────────────────── */
-          if (isBiNode) {
-            return (
-              <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
-                    <Sparkles className="w-3 h-3" />
-                    Actions
-                  </span>
-                </div>
-
-                {onCreateSingleMonitor && (
-                  <button
-                    onClick={() => onCreateSingleMonitor({
-                      nodeId: node.id.replace(/^lineage-/, ''),
-                      fqn: node.fullName || node.name,
-                      name: node.tableName || node.name,
-                      platform: node.platforms?.[0],
-                    })}
-                    className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
-                  >
-                    <Plus className="w-3 h-3" />
-                    Create Monitor
-                  </button>
-                )}
-              </div>
-            );
-          }
-
-          /* ─── Non-BI node path ─────────────────────────────── */
-          return (
-            <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide flex items-center gap-1.5">
-                  <Sparkles className="w-3 h-3" />
-                  Actions
-                </span>
-              </div>
-
-              {onCreateSingleMonitor && (
-                <button
-                  onClick={() => onCreateSingleMonitor({
-                    nodeId: node.id.replace(/^lineage-/, ''),
-                    fqn: node.fullName || node.name,
-                    name: node.tableName || node.name,
-                    platform: node.platforms?.[0],
-                  })}
-                  className="w-full flex items-center justify-center gap-1 py-1.5 rounded bg-[var(--overlay-bg)] border border-[var(--subtle-border)] hover:bg-[var(--hover-bg)] transition-all text-[10px] text-[var(--muted)] font-medium"
-                >
-                  <Plus className="w-3 h-3" />
-                  Create Monitor
-                </button>
-              )}
-            </div>
-          );
+          return null;
         })()}
 
         {/* Fallback warning */}
