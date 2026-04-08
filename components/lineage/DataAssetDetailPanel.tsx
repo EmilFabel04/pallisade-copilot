@@ -609,63 +609,6 @@ export function DataAssetDetailPanel({
           </div>
         </div>
 
-        {/* Issues Section */}
-        {hasIssues && (
-          <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Issues</span>
-              <span className="text-[12px] text-[var(--text)] font-medium">{node.issues!.open} open</span>
-            </div>
-            <div className="flex items-center gap-2 mb-3">
-              {node.issues!.critical > 0 && (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-red-500/20">
-                  <span className="w-2 h-2 rounded-full bg-red-500" />
-                  <span className="text-[11px] text-red-300 font-medium">{node.issues!.critical} Critical</span>
-                </div>
-              )}
-              {node.issues!.high > 0 && (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-orange-500/20">
-                  <span className="w-2 h-2 rounded-full bg-orange-500" />
-                  <span className="text-[11px] text-orange-300 font-medium">{node.issues!.high} High</span>
-                </div>
-              )}
-              {node.issues!.medium > 0 && (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-yellow-500/20">
-                  <span className="w-2 h-2 rounded-full bg-yellow-500" />
-                  <span className="text-[11px] text-yellow-300 font-medium">{node.issues!.medium} Med</span>
-                </div>
-              )}
-              {node.issues!.low > 0 && (
-                <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-[var(--overlay-medium)]">
-                  <span className="w-2 h-2 rounded-full bg-[var(--muted)]" />
-                  <span className="text-[11px] text-[var(--text-tertiary)] font-medium">{node.issues!.low} Low</span>
-                </div>
-              )}
-            </div>
-            {Object.keys(node.issues!.byType).length > 0 && (
-              <div className="pt-2 border-t border-[var(--subtle-border)]">
-                <div className="flex flex-wrap gap-1.5">
-                  {Object.entries(node.issues!.byType).map(([type, count]) => (
-                    <span key={type} className="px-2 py-0.5 text-[10px] bg-[var(--subtle-bg)] text-[var(--text-tertiary)] rounded capitalize">
-                      {type}: {count}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* No issues — only show if there's also no upstream failure */}
-        {!hasIssues && !node.hasUpstreamFailure && (
-          <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-            <div className="flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-emerald-400" />
-              <span className="text-[12px] text-emerald-400 font-medium">No open issues</span>
-            </div>
-          </div>
-        )}
-
         {/* Upstream failure banner */}
         {node.hasUpstreamFailure && (
           <div className="px-2 py-1.5 rounded bg-red-500/10 border border-red-500/20 flex items-center gap-2">

@@ -31,16 +31,6 @@ export default function SourceSummaryBar({ summary }: Props) {
       dot: 'bg-emerald-500',
     },
     {
-      label: 'Issues',
-      value: summary.degraded + summary.disconnected,
-      sub: [
-        summary.degraded > 0 ? `${summary.degraded} degraded` : null,
-        summary.disconnected > 0 ? `${summary.disconnected} disconnected` : null,
-        summary.staleExtractions > 0 ? `${summary.staleExtractions} stale` : null,
-      ].filter(Boolean).join(', ') || null,
-      dot: summary.disconnected > 0 ? 'bg-red-500' : summary.degraded > 0 ? 'bg-amber-500' : 'bg-zinc-500',
-    },
-    {
       label: 'Next Expiry',
       value: summary.nextExpiry ? formatRelativeTime(summary.nextExpiry) : 'None',
       sub: summary.defaultWarehouse ? `Default: ${summary.defaultWarehouse}` : null,
