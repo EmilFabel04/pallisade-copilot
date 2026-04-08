@@ -366,18 +366,30 @@ export default function MonitorsPage() {
 
   if (selectedWatch) {
     return (
-      <WatchDetailPanel
-        watch={selectedWatch}
-        detailMonitors={watchDetailMonitors}
-        detailLoading={watchDetailLoading}
-        onBack={() => { setSelectedWatch(null); setWatchDetailMonitors([]); }}
-        running={runningWatchIds.has(selectedWatch.id)}
-        onRunAll={() => handleRunWatch(selectedWatch.id)}
-        onDelete={() => handleDeleteWatch(selectedWatch.id)}
-        onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
-        onRemoveMonitor={handleRemoveMonitorFromWatch}
-        onSettings={() => setSettingsWatchId(selectedWatch.id)}
-      />
+      <>
+        <WatchDetailPanel
+          watch={selectedWatch}
+          detailMonitors={watchDetailMonitors}
+          detailLoading={watchDetailLoading}
+          onBack={() => { setSelectedWatch(null); setWatchDetailMonitors([]); }}
+          running={runningWatchIds.has(selectedWatch.id)}
+          onRunAll={() => handleRunWatch(selectedWatch.id)}
+          onDelete={() => handleDeleteWatch(selectedWatch.id)}
+          onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
+          onRemoveMonitor={handleRemoveMonitorFromWatch}
+          onSettings={() => setSettingsWatchId(selectedWatch.id)}
+        />
+        <MonitorGroupSettingsModal
+          watchId={settingsWatchId || ''}
+          open={!!settingsWatchId}
+          onClose={() => setSettingsWatchId(null)}
+          onSaved={() => {
+            setSettingsWatchId(null);
+            fetchWatches();
+          }}
+          integrations={integrations}
+        />
+      </>
     );
   }
 

@@ -1,10 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { Settings, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { WatchSummary } from '@/types/health-watch';
-import { WatchEditModal } from './WatchEditModal';
 import {
   WATCH_TYPE_LABELS,
   HEALTH_STATUS_COLORS,
@@ -52,7 +50,6 @@ function timeAgo(dateStr?: string | null): string {
 }
 
 export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount = 0, running = false, onClick, onToggleEnabled, onRunAll, onDelete, onSettings }: WatchCardProps) {
-  const [showEditModal, setShowEditModal] = useState(false);
 
   const totalMonitors = watch.monitorCount;
   const hasRun = watch.passCount > 0 || watch.warnCount > 0 || watch.failCount > 0;
@@ -174,13 +171,6 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
               </svg>
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); setShowEditModal(true); }}
-              className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] opacity-0 group-hover:opacity-100 transition-all"
-              title="Edit watch settings"
-            >
-              <Settings size={14} />
-            </button>
-            <button
               onClick={() => onToggleEnabled(!watch.enabled)}
               className={cn(
                 'relative w-8 h-[18px] rounded-full transition-colors',
@@ -252,27 +242,6 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
         )}
       </div>
 
-      {showEditModal && (
-        <WatchEditModal
-          watch={{
-            id: watch.id,
-            name: watch.name,
-            schedule: watch.schedule,
-            timezone: watch.timezone,
-            alertChannels: watch.alertChannels || [],
-            alertOnStatus: watch.alertOnStatus || [],
-            enabled: watch.enabled,
-          }}
-          onSave={async (data: Record<string, any>) => {
-            await fetch(`/api/schedule/watches/${watch.id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data),
-            });
-          }}
-          onClose={() => setShowEditModal(false)}
-        />
-      )}
     </div>
   );
 }
