@@ -856,6 +856,69 @@ export function DataAssetDetailPanel({
           </div>
         )}
 
+        {/* ─── Monitors ────────────────────────────── */}
+        <Section title="Monitors" count={assetMonitors.length} defaultOpen>
+          {assetMonitorsLoading ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-4 h-4 animate-spin text-[var(--muted)]" />
+            </div>
+          ) : (
+            <div className="space-y-2 mt-2">
+              {assetMonitors.length > 0 ? (
+                <div className="space-y-1">
+                  {assetMonitors.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--overlay-light)]"
+                    >
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          m.lastStatus === 'PASS'
+                            ? 'bg-emerald-400'
+                            : m.lastStatus === 'WARN'
+                              ? 'bg-amber-400'
+                              : m.lastStatus === 'FAIL'
+                                ? 'bg-red-400'
+                                : 'bg-[var(--overlay-strong)]'
+                        }`}
+                      />
+                      <span className="text-xs text-[var(--text)] flex-1">{m.name}</span>
+                      <span className={`text-[10px] ${
+                        m.lastStatus === 'PASS'
+                          ? 'text-emerald-400'
+                          : m.lastStatus === 'WARN'
+                            ? 'text-amber-400'
+                            : m.lastStatus === 'FAIL'
+                              ? 'text-red-400'
+                              : 'text-[var(--muted)]'
+                      }`}>
+                        {m.lastStatus || 'Pending'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--muted)]">No monitors configured</p>
+              )}
+
+              {onCreateAssetMonitor && (
+                <button
+                  onClick={() => {
+                    const fqn = node.fullName || node.name;
+                    const engineId = node.id.replace(/^lineage-/, '');
+                    const name = node.name.split('.').pop() || node.name;
+                    onCreateAssetMonitor(fqn, engineId, name);
+                  }}
+                  className="flex items-center gap-1 px-2 py-1.5 text-xs text-blue-400 hover:text-blue-300 rounded-md hover:bg-blue-500/10 w-full"
+                >
+                  <Plus className="w-3 h-3" />
+                  Create Monitor
+                </button>
+              )}
+            </div>
+          )}
+        </Section>
+
         {/* ─── Recommended Monitors ────────────────────────── */}
         {onCreateSingleMonitor && (() => {
           const isBiNode = ['dashboard', 'report', 'workbook', 'question', 'dataset'].includes(node.category);
@@ -1358,69 +1421,6 @@ export function DataAssetDetailPanel({
             </div>
           )}
         </div>
-
-        {/* ─── Monitors ────────────────────────────── */}
-        <Section title="Monitors" count={assetMonitors.length} defaultOpen>
-          {assetMonitorsLoading ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="w-4 h-4 animate-spin text-[var(--muted)]" />
-            </div>
-          ) : (
-            <div className="space-y-2 mt-2">
-              {assetMonitors.length > 0 ? (
-                <div className="space-y-1">
-                  {assetMonitors.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--overlay-light)]"
-                    >
-                      <span
-                        className={`w-2 h-2 rounded-full ${
-                          m.lastStatus === 'PASS'
-                            ? 'bg-emerald-400'
-                            : m.lastStatus === 'WARN'
-                              ? 'bg-amber-400'
-                              : m.lastStatus === 'FAIL'
-                                ? 'bg-red-400'
-                                : 'bg-[var(--overlay-strong)]'
-                        }`}
-                      />
-                      <span className="text-xs text-[var(--text)] flex-1">{m.name}</span>
-                      <span className={`text-[10px] ${
-                        m.lastStatus === 'PASS'
-                          ? 'text-emerald-400'
-                          : m.lastStatus === 'WARN'
-                            ? 'text-amber-400'
-                            : m.lastStatus === 'FAIL'
-                              ? 'text-red-400'
-                              : 'text-[var(--muted)]'
-                      }`}>
-                        {m.lastStatus || 'Pending'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-[var(--muted)]">No monitors configured</p>
-              )}
-
-              {onCreateAssetMonitor && (
-                <button
-                  onClick={() => {
-                    const fqn = node.fullName || node.name;
-                    const engineId = node.id.replace(/^lineage-/, '');
-                    const name = node.name.split('.').pop() || node.name;
-                    onCreateAssetMonitor(fqn, engineId, name);
-                  }}
-                  className="flex items-center gap-1 px-2 py-1.5 text-xs text-blue-400 hover:text-blue-300 rounded-md hover:bg-blue-500/10 w-full"
-                >
-                  <Plus className="w-3 h-3" />
-                  Create Monitor
-                </button>
-              )}
-            </div>
-          )}
-        </Section>
 
         {/* ─── Data SLA ────────────────────────────── */}
         <div className="border-t border-[var(--subtle-border)] pt-3">
