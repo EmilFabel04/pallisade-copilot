@@ -277,13 +277,52 @@ class FailedSyncsMonitor:
 
 
 class ConnectorSchemaDriftMonitor:
-    """Monitors Fivetran connector for schema changes."""
+    """Monitors Fivetran/Airbyte connector schemas for drift over time.
+
+    On the first run, captures a baseline snapshot of tables and columns.
+    On subsequent runs, compares the current schema against the baseline
+    and reports added/removed tables and columns.
+
+    Config keys:
+        connector_id : str (REQUIRED)
+            Fivetran/Airbyte connector ID to monitor.
+        baseline_schema : dict | None
+            Previously captured snapshot in the form
+            ``{"tables": {table_name: [column, ...]}}``.  Injected by
+            the scheduler from the most recent run's persisted details.
+            When absent, this run captures the baseline and returns PASS.
+        fail_on_removal : bool
+            Treat removed tables or columns as FAIL (default: True).
+            Additions alone trigger WARN.
+    """
 
     monitor_type = "connector_schema_drift"
 
     def __init__(self, config: Dict[str, Any] | None = None):
         self.config = config or {}
         self.connector_id: str = str(self.config.get("connector_id", ""))
+        self.baseline_schema: Optional[Dict[str, Any]] = self.config.get("baseline_schema")
+        self.fail_on_removal: bool = bool(self.config.get("fail_on_removal", True))
+
+    @staticmethod
+    def _snapshot_from_schema_info(schema_info: Dict[str, Any]) -> Dict[str, List[str]]:
+        """Normalize a connector schema response into {table: [columns]}."""
+        tables_raw = schema_info.get("tables") or {}
+        snapshot: Dict[str, List[str]] = {}
+        for table_name, table_def in tables_raw.items():
+            cols: List[str] = []
+            if isinstance(table_def, dict):
+                columns = table_def.get("columns") or {}
+                if isinstance(columns, dict):
+                    cols = sorted(columns.keys())
+                elif isinstance(columns, list):
+                    cols = sorted(
+                        str(c.get("name") if isinstance(c, dict) else c)
+                        for c in columns
+                        if c
+                    )
+            snapshot[str(table_name)] = cols
+        return snapshot
 
     def execute(self, integration: Any) -> MonitorResult:
         target = f"fivetran:{self.connector_id}"
@@ -306,21 +345,111 @@ class ConnectorSchemaDriftMonitor:
                 message=f"Failed to fetch connector schema: {e}",
             )
 
-        tables = schema_info.get("tables", {})
-        total_tables = len(tables)
+        current_snapshot = self._snapshot_from_schema_info(schema_info)
+        current_tables = set(current_snapshot.keys())
 
-        details = {
+        # First run — capture baseline. The scheduler persists details
+        # so subsequent runs can load baseline_schema via config injection.
+        if not self.baseline_schema or not isinstance(self.baseline_schema, dict):
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.PASS,
+                value=float(len(current_snapshot)),
+                message=(
+                    f"Baseline captured: {len(current_snapshot)} table(s). "
+                    f"Future runs will detect drift against this snapshot."
+                ),
+                details={
+                    "connector_id": self.connector_id,
+                    "baseline_captured": True,
+                    "total_tables": len(current_snapshot),
+                    "schema_snapshot": current_snapshot,
+                },
+            )
+
+        baseline_tables_raw = self.baseline_schema.get("tables") or {}
+        baseline_snapshot: Dict[str, List[str]] = {
+            str(k): list(v) if isinstance(v, list) else []
+            for k, v in baseline_tables_raw.items()
+        }
+        baseline_tables = set(baseline_snapshot.keys())
+
+        added_tables = sorted(current_tables - baseline_tables)
+        removed_tables = sorted(baseline_tables - current_tables)
+
+        added_columns: Dict[str, List[str]] = {}
+        removed_columns: Dict[str, List[str]] = {}
+        for tbl in current_tables & baseline_tables:
+            before = set(baseline_snapshot.get(tbl, []))
+            after = set(current_snapshot.get(tbl, []))
+            added = sorted(after - before)
+            removed = sorted(before - after)
+            if added:
+                added_columns[tbl] = added
+            if removed:
+                removed_columns[tbl] = removed
+
+        total_changes = (
+            len(added_tables)
+            + len(removed_tables)
+            + sum(len(v) for v in added_columns.values())
+            + sum(len(v) for v in removed_columns.values())
+        )
+
+        details: Dict[str, Any] = {
             "connector_id": self.connector_id,
-            "total_tables": total_tables,
+            "total_tables": len(current_snapshot),
+            "baseline_table_count": len(baseline_snapshot),
+            "added_tables": added_tables,
+            "removed_tables": removed_tables,
+            "added_columns": added_columns,
+            "removed_columns": removed_columns,
+            "total_changes": total_changes,
+            # Always emit current snapshot so the scheduler can persist it
+            # as the new baseline for the next run.
+            "schema_snapshot": current_snapshot,
         }
 
-        # For now, report schema as observation (first run = baseline).
-        # A future version can diff against stored baseline.
+        if total_changes == 0:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.PASS,
+                value=0.0,
+                message=(
+                    f"No schema drift detected across {len(current_snapshot)} table(s)."
+                ),
+                details=details,
+            )
+
+        has_removals = bool(removed_tables or removed_columns)
+        status = (
+            MonitorStatus.FAIL
+            if has_removals and self.fail_on_removal
+            else MonitorStatus.WARN
+        )
+
+        summary_parts: List[str] = []
+        if added_tables:
+            summary_parts.append(f"{len(added_tables)} table(s) added")
+        if removed_tables:
+            summary_parts.append(f"{len(removed_tables)} table(s) removed")
+        if added_columns:
+            col_count = sum(len(v) for v in added_columns.values())
+            summary_parts.append(f"{col_count} column(s) added in {len(added_columns)} table(s)")
+        if removed_columns:
+            col_count = sum(len(v) for v in removed_columns.values())
+            summary_parts.append(f"{col_count} column(s) removed from {len(removed_columns)} table(s)")
+
+        message = "Schema drift detected: " + ", ".join(summary_parts) + "."
+
         return MonitorResult(
             monitor_type=self.monitor_type,
             target_fqn=target,
-            status=MonitorStatus.PASS,
-            message=f"Connector schema has {total_tables} tables. No drift detected.",
+            status=status,
+            value=float(total_changes),
+            message=message,
             details=details,
         )
 

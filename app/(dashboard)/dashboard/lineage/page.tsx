@@ -1706,7 +1706,7 @@ function LineagePageInner() {
                 <div className="text-[11px] text-[var(--muted)]">Data Flows</div>
               </div>
             </>
-          ) : (
+          ) : (filteredStats.tableNodes + filteredStats.viewNodes + filteredStats.modelNodes) === 0 ? null : (
             <>
               <div className="text-center">
                 <div className="text-xl font-semibold text-[var(--text)]">{filteredStats.tableNodes}</div>
@@ -1760,7 +1760,12 @@ function LineagePageInner() {
                 <p className="text-sm text-[var(--muted)]">Loading pipeline overview...</p>
               </div>
             </div>
-          ) : nodes.length === 0 ? (
+          ) : nodes.length === 0 || (
+              activeTab === 'data' &&
+              filteredStats.tableNodes === 0 &&
+              filteredStats.viewNodes === 0 &&
+              filteredStats.modelNodes === 0
+            ) ? (
             <div className="flex flex-col items-center justify-center h-full">
               <svg
                 className="w-16 h-16 text-[var(--text-faint)] mb-4"
@@ -1782,7 +1787,9 @@ function LineagePageInner() {
                     Extract lineage from the Data Lineage tab first to generate the pipeline overview
                   </p>
                 </>
-              ) : lineageData && lineageData.nodes.length > 0 ? (
+              ) : lineageData && lineageData.nodes.some(
+                (n: any) => n.category === 'table' || n.category === 'view' || n.category === 'model' || n.category === 'source'
+              ) ? (
                 <>
                   <p className="text-[var(--muted)] text-[15px] mb-2">No nodes match current filters</p>
                   <p className="text-[var(--text-faint)] text-[13px]">

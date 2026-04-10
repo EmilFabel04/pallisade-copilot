@@ -347,6 +347,19 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
             <p className="text-[12px] text-[var(--muted)] italic">Monitors configured but no results yet</p>
           )}
         </Section>
+      ) : (monitors?.length ?? 0) === 0 ? (
+        <Section title="Health Summary" defaultOpen>
+          <div className="flex items-center gap-2">
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: '#6B7280' }}
+            />
+            <span className="text-[13px] font-medium text-[var(--muted)]">Unknown</span>
+          </div>
+          <p className="text-[11px] text-[var(--text-faint)] mt-1">
+            No monitors configured for this tool — health cannot be determined.
+          </p>
+        </Section>
       ) : (
         <Section title="Health Summary" defaultOpen>
           <HealthSummaryDisplay summary={summary.healthSummary} />

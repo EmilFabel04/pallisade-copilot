@@ -666,21 +666,6 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
     ],
   },
 
-  // ==========================================================================
-  // CONTRACT CHECK — Validates data asset against its data contract
-  // ==========================================================================
-  {
-    key: 'CONTRACT_CHECK',
-    label: 'Contract Check',
-    description: 'Validates a data asset against its data contract, checking per-field compliance',
-    category: 'warehouse',
-    required_integrations: [],
-    target_selector_type: 'none',
-    executor_type: 'tool_api',
-    supports_baselines: false,
-    auto_configurable: false,
-    config_schema: [],
-  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -801,7 +786,6 @@ export const ASSET_MONITOR_TYPES = [
   'REFERENTIAL',
   'DATA_TYPE_VALIDATION',
   'DATE_CONSISTENCY',
-  'CONTRACT_CHECK',
 ] as const;
 
 export const DOMAIN_MONITOR_MAP: Record<string, Set<string>> = {

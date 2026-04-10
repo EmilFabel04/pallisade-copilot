@@ -428,7 +428,7 @@ export async function DELETE(request: NextRequest) {
       const deleted = await prisma.policyAssignment.deleteMany({
         where: {
           organizationId,
-          assignmentType: 'direct',
+          assignmentType: { in: ['direct', 'auto_discovered'] },
           nodeFqn: { in: nodeFqns },
         },
       });

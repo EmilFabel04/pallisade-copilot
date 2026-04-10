@@ -124,21 +124,22 @@ export async function GET(request: NextRequest) {
     ];
 
     const [monitors, latestScans] = await Promise.all([
-      allIntegrationIds.length > 0
-        ? prisma.monitor.findMany({
-            where: {
-              organizationId: user.organizationId,
-              integrationId: { in: allIntegrationIds },
-              enabled: true,
-              lastRunAt: { not: null },
-            },
-            select: {
-              integrationId: true,
-              lastRunAt: true,
-              lastStatus: true,
-            },
-          })
-        : Promise.resolve([]),
+      // Fetch ALL enabled monitors for this org (not just those with integrationId)
+      // so we can match by targetFqn pattern too
+      prisma.monitor.findMany({
+        where: {
+          organizationId: user.organizationId,
+          enabled: true,
+          lastRunAt: { not: null },
+        },
+        select: {
+          integrationId: true,
+          monitorType: true,
+          targetFqn: true,
+          lastRunAt: true,
+          lastStatus: true,
+        },
+      }),
       // Latest completed scan per stack
       (() => {
         const stackIds = [...new Set(pipelineNodes.map(n => n.stackId))];
@@ -153,31 +154,62 @@ export async function GET(request: NextRequest) {
       })(),
     ]);
 
-    // Build monitor health lookup: integrationId → { health, latestRunAt }
-    const monitorMap = new Map<string, { health: number; latestRunAt: string }>();
+    // Build monitor health lookup: integrationId → { health, latestRunAt, counts }
+    // Also build a secondary lookup by monitorType layer for monitors without integrationId
+    type MonitorAgg = { health: number; latestRunAt: string; total: number; passing: number; failing: number; warning: number };
+    const monitorMap = new Map<string, MonitorAgg>();
+
+    // Group monitors by integrationId first
     const monitorGrouped = new Map<string, Array<{ lastStatus: string | null; lastRunAt: Date }>>();
+    // Monitors without integrationId — group by monitorType for layer-based matching
+    const MONITOR_TYPE_TO_LAYER: Record<string, string> = {
+      SERVER_HEALTH: 'INFRASTRUCTURE', CERTIFICATE: 'INFRASTRUCTURE', LOG_ANALYSIS: 'INFRASTRUCTURE',
+      FAILED_SYNCS: 'INGESTION', SYNC_LAG: 'INGESTION', CONNECTOR_SCHEMA_DRIFT: 'INGESTION',
+      DAG_LAST_RUN: 'ORCHESTRATION', DAG_SCHEDULE_LAG: 'ORCHESTRATION', TASK_FAILURE_RATE: 'ORCHESTRATION',
+      DBT_TEST_FAILURES: 'TRANSFORMATION', DBT_MODEL_FRESHNESS: 'TRANSFORMATION', DBT_SOURCE_FRESHNESS: 'TRANSFORMATION',
+      FRESHNESS: 'WAREHOUSE', VOLUME: 'WAREHOUSE', SCHEMA_CHANGE: 'WAREHOUSE',
+      NULL_CHECK: 'WAREHOUSE', REFERENTIAL: 'WAREHOUSE', CUSTOM_SQL: 'WAREHOUSE',
+    };
+    const monitorsByLayer = new Map<string, Array<{ lastStatus: string | null; lastRunAt: Date }>>();
+
     for (const m of monitors) {
-      if (!m.integrationId) continue;
-      if (!monitorGrouped.has(m.integrationId)) monitorGrouped.set(m.integrationId, []);
-      monitorGrouped.get(m.integrationId)!.push({ lastStatus: m.lastStatus, lastRunAt: m.lastRunAt! });
+      if (m.integrationId) {
+        if (!monitorGrouped.has(m.integrationId)) monitorGrouped.set(m.integrationId, []);
+        monitorGrouped.get(m.integrationId)!.push({ lastStatus: m.lastStatus, lastRunAt: m.lastRunAt! });
+      } else if (m.monitorType) {
+        // Match unlinked monitors to layers by monitorType
+        const layer = MONITOR_TYPE_TO_LAYER[m.monitorType] || '';
+        if (layer) {
+          if (!monitorsByLayer.has(layer)) monitorsByLayer.set(layer, []);
+          monitorsByLayer.get(layer)!.push({ lastStatus: m.lastStatus, lastRunAt: m.lastRunAt! });
+        }
+      }
     }
-    for (const [intId, mons] of monitorGrouped) {
-      let score = 0;
-      let latestRun = new Date(0);
+
+    function aggregateMonitors(mons: Array<{ lastStatus: string | null; lastRunAt: Date }>): MonitorAgg {
+      let score = 0, latestRun = new Date(0);
+      let passing = 0, failing = 0, warning = 0;
       for (const m of mons) {
         switch (m.lastStatus) {
-          case 'PASS': score += 100; break;
-          case 'WARN': score += 60; break;
-          case 'FAIL': score += 20; break;
-          case 'ERROR': score += 0; break;
+          case 'PASS': score += 100; passing++; break;
+          case 'WARN': score += 60; warning++; break;
+          case 'FAIL': score += 20; failing++; break;
+          case 'ERROR': score += 0; failing++; break;
           default: score += 50;
         }
         if (m.lastRunAt > latestRun) latestRun = m.lastRunAt;
       }
-      monitorMap.set(intId, {
-        health: Math.round(score / mons.length),
-        latestRunAt: latestRun.toISOString(),
-      });
+      return { health: Math.round(score / mons.length), latestRunAt: latestRun.toISOString(), total: mons.length, passing, failing, warning };
+    }
+
+    for (const [intId, mons] of monitorGrouped) {
+      monitorMap.set(intId, aggregateMonitors(mons));
+    }
+
+    // Build layer-based monitor aggregation map
+    const layerMonitorMap = new Map<string, MonitorAgg>();
+    for (const [layer, mons] of monitorsByLayer) {
+      layerMonitorMap.set(layer, aggregateMonitors(mons));
     }
 
     // Build scan lookup: stackId → { completedAt, healthScore }
@@ -191,14 +223,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Filter out non-data-source nodes (infrastructure, version control are not data sources)
-    const EXCLUDED_LAYERS = new Set(['INFRASTRUCTURE', 'VERSION_CONTROL']);
-    const dataNodes = pipelineNodes.filter(node => !EXCLUDED_LAYERS.has(node.layer));
+    // Include all pipeline nodes as sources
+    const dataNodes = pipelineNodes;
 
     // Map pipeline nodes to integration-like format with enriched health/extraction
     const pipelineAsIntegrations = dataNodes.map(node => {
       const intId = node.integrationId;
-      const monitorData = intId ? monitorMap.get(intId) : null;
+      // Try integrationId-based monitors first, then fall back to layer-based
+      const monitorData = (intId ? monitorMap.get(intId) : null) || layerMonitorMap.get(node.layer) || null;
       const scanData = scanMap.get(node.stackId);
 
       // Health fallback chain: node scan → monitors → stack scan → findings-derived
@@ -244,6 +276,11 @@ export async function GET(request: NextRequest) {
         sourceContract: integ?.sourceContract || null,
         createdAt: node.createdAt,
         updatedAt: node.updatedAt,
+        // Monitor aggregates
+        monitorCount: monitorData?.total ?? 0,
+        monitorPassing: monitorData?.passing ?? 0,
+        monitorFailing: monitorData?.failing ?? 0,
+        monitorWarning: monitorData?.warning ?? 0,
         // Extra fields to identify source
         source: 'pipeline' as const,
         layer: node.layer,
@@ -258,17 +295,37 @@ export async function GET(request: NextRequest) {
     // Deduplicate: if a PipelineNode exists for a type, skip the legacy Integration
     // to prevent duplicate connector cards and duplicate auto-discovery records.
     const pipelineTypes = new Set(pipelineAsIntegrations.map(p => p.type));
+    // Infer layer from legacy integration type for monitor matching
+    const LEGACY_TYPE_TO_LAYER: Record<string, string> = {
+      BIGQUERY: 'WAREHOUSE', SNOWFLAKE: 'WAREHOUSE', POSTGRES: 'WAREHOUSE', REDSHIFT: 'WAREHOUSE',
+      DBT_CLOUD: 'TRANSFORMATION', DBT_CORE: 'TRANSFORMATION',
+      FIVETRAN: 'INGESTION', AIRBYTE: 'INGESTION', STITCH: 'INGESTION',
+      LOOKER: 'REPORTING', TABLEAU: 'REPORTING', POWERBI: 'REPORTING', METABASE: 'REPORTING',
+      AIRFLOW: 'ORCHESTRATION', DAGSTER: 'ORCHESTRATION', PREFECT: 'ORCHESTRATION',
+      GITHUB: 'VERSION_CONTROL', GITLAB: 'VERSION_CONTROL',
+      LINUX_SERVER: 'INFRASTRUCTURE',
+      SLACK: 'NOTIFICATIONS', PAGERDUTY: 'NOTIFICATIONS', JIRA: 'NOTIFICATIONS',
+    };
+
     const dedupedLegacy = legacyIntegrations
       .filter(i => !pipelineTypes.has(i.type))
       .map(i => {
-        // Enrich legacy integrations with monitor health if their own healthScore is null
+        // Enrich legacy integrations with monitor health
         const monitorData = monitorMap.get(i.id);
-        const enrichedHealthScore = i.healthScore ?? monitorData?.health ?? null;
-        const enrichedLastTestAt = i.lastTestAt ?? (monitorData ? new Date(monitorData.latestRunAt) : null);
+        const inferredLayer = LEGACY_TYPE_TO_LAYER[i.type] || 'WAREHOUSE';
+        const layerMonitorData = !monitorData ? layerMonitorMap.get(inferredLayer) : null;
+        const effectiveMonitorData = monitorData || layerMonitorData || null;
+        const enrichedHealthScore = i.healthScore ?? effectiveMonitorData?.health ?? null;
+        const enrichedLastTestAt = i.lastTestAt ?? (effectiveMonitorData ? new Date(effectiveMonitorData.latestRunAt) : null);
         return {
           ...i,
           healthScore: enrichedHealthScore,
           lastTestAt: enrichedLastTestAt,
+          monitorCount: effectiveMonitorData?.total ?? 0,
+          monitorPassing: effectiveMonitorData?.passing ?? 0,
+          monitorFailing: effectiveMonitorData?.failing ?? 0,
+          monitorWarning: effectiveMonitorData?.warning ?? 0,
+          layer: inferredLayer,
           source: 'legacy' as const,
           managedByPipeline: (i.pipelineNodes?.length || 0) > 0,
         };

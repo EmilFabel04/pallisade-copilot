@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { MoreVertical, Wifi, KeyRound, RotateCw, Star, Eye, Unplug, FileText } from 'lucide-react';
+import { MoreVertical, Wifi, Eye, Unplug } from 'lucide-react';
 import { ControlPlaneSource } from './types';
 
 interface Props {
@@ -26,11 +26,6 @@ export default function SourceActionsMenu({ source, onTestConnection, onViewDeta
 
   const items = [
     { icon: Wifi, label: 'Test Connection', action: () => onTestConnection(source) },
-    { icon: KeyRound, label: 'Re-authenticate', action: () => window.open(`/dashboard/pipeline?openConfig=${source.toolType}`, '_self') },
-    { icon: RotateCw, label: 'Rotate Key', action: () => window.open(`/dashboard/pipeline?openConfig=${source.toolType}`, '_self') },
-    ...(source.layer === 'WAREHOUSE'
-      ? [{ icon: Star, label: 'Set as Default', action: () => {} }]
-      : []),
     { icon: Eye, label: 'View Details', action: () => onViewDetails(source) },
     { icon: Unplug, label: 'Disconnect', action: () => onDisconnect(source), danger: true },
   ];

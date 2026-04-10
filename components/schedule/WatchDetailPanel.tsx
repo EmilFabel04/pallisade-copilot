@@ -12,6 +12,7 @@ import {
   healthStatusFromScore,
   type HealthStatus,
   type FailureCategory,
+  type FailureGroup,
   type HealthReport,
 } from '@/types/health-watch';
 import { RUN_STATUS_COLORS } from '@/types/schedule';
@@ -31,6 +32,7 @@ interface WatchDetailPanelProps {
   onToggleEnabled: (enabled: boolean) => void;
   onRemoveMonitor?: (monitorId: string) => void;
   onSettings?: () => void;
+  onMonitorConfigSaved?: (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => void;
 }
 
 function cronToHuman(cron: string): string {
@@ -56,6 +58,126 @@ function timeAgo(dateStr?: string | null): string {
   return `${days}d ago`;
 }
 
+// Mirror of scanner/monitors/health.py and the run-route mapping. Kept local
+// because this is a UI-only fallback — authoritative categorization happens
+// server-side when Run All writes healthDetails.
+const MONITOR_TYPE_CATEGORY: Record<string, FailureCategory> = {
+  FRESHNESS: 'stale_data',
+  DBT_MODEL_FRESHNESS: 'stale_data',
+  DBT_SOURCE_FRESHNESS: 'stale_data',
+  BI_FRESHNESS_PROXY: 'stale_data',
+  SCHEMA_CHANGE: 'schema_break',
+  CONNECTOR_SCHEMA_DRIFT: 'schema_break',
+  SYNC_LAG: 'ingestion_lag',
+  FAILED_SYNCS: 'ingestion_lag',
+  DAG_LAST_RUN: 'orchestration_failure',
+  DAG_SCHEDULE_LAG: 'orchestration_failure',
+  TASK_FAILURE_RATE: 'orchestration_failure',
+  VOLUME: 'quality_anomaly',
+  NULL_CHECK: 'quality_anomaly',
+  NULL_RATE: 'quality_anomaly',
+  UNIQUENESS_CHECK: 'quality_anomaly',
+  RANGE_VALIDATION: 'quality_anomaly',
+  ACCEPTED_VALUES: 'quality_anomaly',
+  DATE_CONSISTENCY: 'quality_anomaly',
+  DATA_TYPE_VALIDATION: 'quality_anomaly',
+  DISTRIBUTION: 'quality_anomaly',
+  ANOMALY: 'quality_anomaly',
+  REFERENTIAL: 'quality_anomaly',
+  CUSTOM_SQL: 'quality_anomaly',
+  BI_UPSTREAM_BREAK_RISK: 'quality_anomaly',
+  BI_CONTENT_HEALTH: 'quality_anomaly',
+  BI_REFRESH_FAILURE: 'quality_anomaly',
+  DBT_TEST_FAILURES: 'transform_failure',
+};
+
+function aggregateStatus(mons: Array<{ lastStatus?: string }>): string {
+  if (mons.length === 0) return 'none';
+  const statuses = new Set(mons.map((m) => m.lastStatus));
+  const hasFail = statuses.has('FAIL') || statuses.has('ERROR');
+  const hasPass = statuses.has('PASS');
+  if (hasFail && hasPass) return 'mixed';
+  if (hasFail) return 'fail';
+  if (statuses.has('WARN')) return hasPass ? 'mixed' : 'warn';
+  if (hasPass) return 'pass';
+  return 'none';
+}
+
+function buildFallbackHealthReport(
+  watch: WatchSummary,
+  detailMonitors: any[],
+): HealthReport {
+  const total = watch.monitorCount || detailMonitors.length || 0;
+  const pass = watch.passCount ?? 0;
+  const warn = watch.warnCount ?? 0;
+
+  const score = watch.healthScore != null
+    ? watch.healthScore
+    : total > 0
+      ? Math.round(((pass + 0.5 * warn) / total) * 1000) / 10
+      : 100;
+
+  const depthOf = (m: any): number =>
+    m.config?._watchDepth ?? (m.targetFqn === watch.anchorFqn ? 0 : 1);
+
+  const direct = detailMonitors.filter((m) => depthOf(m) === 0);
+  const upstream = detailMonitors.filter((m) => depthOf(m) > 0);
+
+  const failing = detailMonitors.filter(
+    (m) => m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR' || m.lastStatus === 'WARN',
+  );
+
+  const buckets = new Map<FailureCategory, any[]>();
+  for (const m of failing) {
+    const cat = (MONITOR_TYPE_CATEGORY[m.monitorType || ''] || 'quality_anomaly') as FailureCategory;
+    const arr = buckets.get(cat) || [];
+    arr.push(m);
+    buckets.set(cat, arr);
+  }
+
+  const failureGroups: FailureGroup[] = Array.from(buckets.entries())
+    .map(([category, mons]) => {
+      const hasCritical = mons.some((m) => m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR');
+      const parts = mons.slice(0, 3).map((m) => `${m.name}: ${m.lastStatus}`);
+      if (mons.length > 3) parts.push(`+${mons.length - 3} more`);
+      return {
+        category,
+        severity: hasCritical ? ('critical' as const) : ('warning' as const),
+        summary: parts.join(', '),
+        rootCauseHint: mons[0]?.targetFqn || 'unknown',
+        signalCount: mons.length,
+      };
+    })
+    .sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === 'critical' ? -1 : 1;
+      return b.signalCount - a.signalCount;
+    });
+
+  let summary: string;
+  if (failureGroups.length === 0) {
+    summary = total === 0
+      ? 'No monitors yet'
+      : `${pass} of ${total} monitor${total !== 1 ? 's' : ''} passing`;
+  } else {
+    const topLabel = FAILURE_CATEGORY_LABELS[failureGroups[0].category].toLowerCase();
+    const totalSignals = failureGroups.reduce((s, g) => s + g.signalCount, 0);
+    summary = totalSignals === 1
+      ? `1 ${topLabel} signal`
+      : `${totalSignals} signals across ${topLabel}${failureGroups.length > 1 ? ' and more' : ''}`;
+  }
+
+  return {
+    healthScore: score,
+    healthStatus: healthStatusFromScore(score),
+    summary,
+    directStatus: aggregateStatus(direct),
+    upstreamStatus: aggregateStatus(upstream),
+    coveragePct: watch.coveragePct ?? 1,
+    failureGroups,
+    computedAt: watch.lastHealthAt || watch.lastRunAt || new Date().toISOString(),
+  };
+}
+
 export function WatchDetailPanel({
   watch,
   detailMonitors,
@@ -67,13 +189,12 @@ export function WatchDetailPanel({
   onToggleEnabled,
   onRemoveMonitor,
   onSettings,
+  onMonitorConfigSaved,
 }: WatchDetailPanelProps) {
-  const healthStatus: HealthStatus | null = watch.healthScore != null
-    ? healthStatusFromScore(watch.healthScore)
-    : null;
-
-  const healthReport = watch.healthDetails as HealthReport | undefined;
-  const failureGroups = healthReport?.failureGroups || [];
+  const storedReport = watch.healthDetails as HealthReport | undefined;
+  const healthReport: HealthReport = storedReport || buildFallbackHealthReport(watch, detailMonitors);
+  const healthStatus: HealthStatus = healthReport.healthStatus;
+  const failureGroups = healthReport.failureGroups || [];
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;
   const [expandedMonitorId, setExpandedMonitorId] = useState<string | null>(null);
   const [editingMonitorId, setEditingMonitorId] = useState<string | null>(null);
@@ -167,12 +288,7 @@ export function WatchDetailPanel({
             />
           </button>
           <Button variant="ghost" size="sm" onClick={onRunAll} disabled={running}>
-            {running ? (
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 border-2 border-[var(--accent)]/30 border-t-[var(--accent)] rounded-full animate-spin" />
-                Running...
-              </span>
-            ) : 'Run All'}
+            {running ? 'Running...' : 'Run All'}
           </Button>
           <Button
             variant="ghost"
@@ -189,86 +305,60 @@ export function WatchDetailPanel({
       <div className="flex-1 overflow-y-auto">
 
       {/* Health summary card */}
-      {healthReport && (
-        <div className="px-6 py-4 border-b border-[var(--border-faint)]">
-          <div className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)]">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-3">
-                <div className="text-[28px] font-bold text-[var(--text)] tabular-nums">
-                  {Math.round(healthReport.healthScore)}
-                </div>
-                <div>
-                  <p className="text-[13px] font-medium text-[var(--text)]">Health Score</p>
-                  <p className="text-[11px] text-[var(--muted)]">
-                    {healthReport.summary}
-                  </p>
-                </div>
-              </div>
-              {healthReport.computedAt && (
-                <span className="text-[10px] text-[var(--text-faint)]">
-                  {timeAgo(healthReport.computedAt)}
-                </span>
-              )}
-            </div>
-
-            {/* Score bar */}
-            <div className="h-2 rounded-full bg-[var(--overlay-bg)] overflow-hidden mb-3">
-              <div
-                className={cn(
-                  'h-full rounded-full transition-all',
-                  healthReport.healthScore >= 90 ? 'bg-emerald-500' :
-                  healthReport.healthScore >= 70 ? 'bg-amber-500' :
-                  healthReport.healthScore >= 40 ? 'bg-orange-500' :
-                  'bg-red-500'
-                )}
-                style={{ width: `${Math.min(healthReport.healthScore, 100)}%` }}
-              />
-            </div>
-
-            {/* Status chips */}
-            <div className="flex items-center gap-4 text-[11px]">
-              <div>
-                <span className="text-[var(--text-faint)]">Direct: </span>
-                <span className="text-[var(--text-secondary)] capitalize">{healthReport.directStatus}</span>
+      <div className="px-6 py-4 border-b border-[var(--border-faint)]">
+        <div className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)]">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <div className="text-[28px] font-bold text-[var(--text)] tabular-nums">
+                {Math.round(healthReport.healthScore)}
               </div>
               <div>
-                <span className="text-[var(--text-faint)]">Upstream: </span>
-                <span className="text-[var(--text-secondary)] capitalize">{healthReport.upstreamStatus}</span>
+                <p className="text-[13px] font-medium text-[var(--text)]">Health Score</p>
+                <p className="text-[11px] text-[var(--muted)]">
+                  {healthReport.summary}
+                </p>
               </div>
-              {coveragePct != null && (
-                <div>
-                  <span className="text-[var(--text-faint)]">Coverage: </span>
-                  <span className="text-[var(--text-secondary)]">{coveragePct}%</span>
-                </div>
-              )}
             </div>
+            {healthReport.computedAt && (
+              <span className="text-[10px] text-[var(--text-faint)]">
+                {timeAgo(healthReport.computedAt)}
+              </span>
+            )}
           </div>
-        </div>
-      )}
 
-      {/* Config summary (when no health report yet) */}
-      {!healthReport && (
-        <div className="px-6 py-4 border-b border-[var(--border-faint)]">
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {/* Score bar */}
+          <div className="h-2 rounded-full bg-[var(--overlay-bg)] overflow-hidden mb-3">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                healthReport.healthScore >= 90 ? 'bg-emerald-500' :
+                healthReport.healthScore >= 70 ? 'bg-amber-500' :
+                healthReport.healthScore >= 40 ? 'bg-orange-500' :
+                'bg-red-500'
+              )}
+              style={{ width: `${Math.min(healthReport.healthScore, 100)}%` }}
+            />
+          </div>
+
+          {/* Status chips */}
+          <div className="flex items-center gap-4 text-[11px]">
             <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Schedule</p>
-              <p className="text-[13px] text-[var(--text-secondary)]">{cronToHuman(watch.schedule || '')}</p>
+              <span className="text-[var(--text-faint)]">Direct: </span>
+              <span className="text-[var(--text-secondary)] capitalize">{healthReport.directStatus}</span>
             </div>
             <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Monitors</p>
-              <p className="text-[13px] text-[var(--text-secondary)]">
-                {watch.passCount}/{watch.monitorCount} passing
-              </p>
+              <span className="text-[var(--text-faint)]">Upstream: </span>
+              <span className="text-[var(--text-secondary)] capitalize">{healthReport.upstreamStatus}</span>
             </div>
-            <div>
-              <p className="text-[11px] text-[var(--text-faint)] uppercase tracking-wider mb-1">Status</p>
-              <p className="text-[13px] text-[var(--text-secondary)]">
-                {watch.enabled ? 'Enabled' : 'Disabled'}
-              </p>
-            </div>
+            {coveragePct != null && (
+              <div>
+                <span className="text-[var(--text-faint)]">Coverage: </span>
+                <span className="text-[var(--text-secondary)]">{coveragePct}%</span>
+              </div>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Anchor info */}
       {watch.anchorFqn && (
@@ -450,11 +540,13 @@ export function WatchDetailPanel({
                                   }}
                                   resolvedPolicy={mon.resolvedPolicy || null}
                                   onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
-                                    await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
+                                    const res = await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
                                       method: 'PUT',
                                       headers: { 'Content-Type': 'application/json' },
                                       body: JSON.stringify({ config, policyOverrides }),
                                     });
+                                    if (!res.ok) throw new Error('Failed to save');
+                                    onMonitorConfigSaved?.(monitorId, config, policyOverrides);
                                     setEditingMonitorId(null);
                                   }}
                                 />

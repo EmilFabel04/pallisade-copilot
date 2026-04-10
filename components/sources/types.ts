@@ -70,6 +70,12 @@ export interface ControlPlaneSource {
   criticalCount: number;
   highCount: number;
 
+  // Monitor aggregates
+  monitorCount?: number;
+  monitorPassing?: number;
+  monitorFailing?: number;
+  monitorWarning?: number;
+
   // SLA
   contract: SourceSLAData | null;
   effectiveContract: EffectiveSLA | null;
@@ -81,10 +87,18 @@ export interface ControlPlaneSource {
   createdAt: string;
   updatedAt: string;
 
+  // Quick links — user-defined URLs for fast navigation to external tools
+  quickLinks?: QuickLink[];
+
   // Driver metadata (populated from DriverRegistry)
   graphDomain?: 'DATA_PLANE' | 'CONTROL_PLANE' | 'NONE';
   eventsEmitted?: string[];
   recommendedMonitors?: string[];
+}
+
+export interface QuickLink {
+  label: string;
+  url: string;
 }
 
 export type SourceStatus = 'healthy' | 'degraded' | 'disconnected' | 'expiring_soon' | 'pending';

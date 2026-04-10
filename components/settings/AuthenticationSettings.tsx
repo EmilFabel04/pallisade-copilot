@@ -1,19 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
 import { cachedFetch } from '@/lib/fetch-cache';
-import { Shield, Globe, Users, AlertTriangle, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-
-interface OidcConfig {
-  id: string;
-  issuerUrl: string;
-  clientId: string;
-  clientSecret: string;
-  scopes: string;
-  displayName: string;
-  enabled: boolean;
-}
+import { Shield, Users, AlertTriangle, Loader2 } from 'lucide-react';
 
 interface MemberAuthInfo {
   id: string;
@@ -25,25 +14,13 @@ interface MemberAuthInfo {
 }
 
 export default function AuthenticationSettings() {
-  const { data: session } = useSession();
   const [authPolicy, setAuthPolicy] = useState<'FLEXIBLE' | 'SSO_ONLY'>('FLEXIBLE');
   const [graceUntil, setGraceUntil] = useState<string | null>(null);
-  const [oidcConfig, setOidcConfig] = useState<OidcConfig | null>(null);
   const [members, setMembers] = useState<MemberAuthInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; error?: string } | null>(null);
   const [isOwner, setIsOwner] = useState(false);
-
-  // Form state for OIDC config
-  const [oidcForm, setOidcForm] = useState({
-    issuerUrl: '',
-    clientId: '',
-    clientSecret: '',
-    scopes: 'openid email profile',
-    displayName: 'SSO',
-    enabled: true,
-  });
+  const [policyError, setPolicyError] = useState('');
 
   useEffect(() => {
     fetchData();
@@ -52,11 +29,7 @@ export default function AuthenticationSettings() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [orgRes, oidcRes] = await Promise.all([
-        cachedFetch('/api/organization'),
-        cachedFetch('/api/organization/oidc'),
-      ]);
-
+      const orgRes = await cachedFetch('/api/organization');
       if (orgRes.ok) {
         const orgData = await orgRes.json();
         setAuthPolicy(orgData.authPolicy || 'FLEXIBLE');
@@ -64,22 +37,6 @@ export default function AuthenticationSettings() {
         setIsOwner(orgData.userRole === 'OWNER');
       }
 
-      if (oidcRes.ok) {
-        const oidcData = await oidcRes.json();
-        if (oidcData.config) {
-          setOidcConfig(oidcData.config);
-          setOidcForm({
-            issuerUrl: oidcData.config.issuerUrl,
-            clientId: oidcData.config.clientId,
-            clientSecret: '',
-            scopes: oidcData.config.scopes,
-            displayName: oidcData.config.displayName,
-            enabled: oidcData.config.enabled,
-          });
-        }
-      }
-
-      // Fetch member auth status
       const membersRes = await cachedFetch('/api/team/members/auth-status');
       if (membersRes.ok) {
         const membersData = await membersRes.json();
@@ -92,25 +49,13 @@ export default function AuthenticationSettings() {
     }
   };
 
-  const [policyError, setPolicyError] = useState('');
-
   const handleSavePolicy = async (newPolicy: 'FLEXIBLE' | 'SSO_ONLY') => {
     setPolicyError('');
 
-    // Safety checks before enabling SSO_ONLY
     if (newPolicy === 'SSO_ONLY') {
-      // Check 1: At least one OAuth provider or OIDC must be configured
-      const hasOAuth = oidcConfig?.enabled; // Platform providers checked server-side
-      // Check 2: Owner must have a linked OAuth account (checked server-side)
-      // Check 3: Warn about members without OAuth
-      if (!hasOAuth && !oidcConfig) {
-        setPolicyError('Configure at least one OAuth provider or OIDC before enabling SSO.');
-        return;
-      }
-
       const confirmed = window.confirm(
         'Enabling SSO-only will prevent members from using password login. ' +
-        'Members without a linked OAuth account may be locked out. Continue?'
+        'Members without a linked Google, GitHub, or Microsoft account may be locked out. Continue?'
       );
       if (!confirmed) return;
     }
@@ -133,38 +78,6 @@ export default function AuthenticationSettings() {
     }
   };
 
-  const handleSaveOidc = async () => {
-    setSaving(true);
-    try {
-      const res = await fetch('/api/organization/oidc', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(oidcForm),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setOidcConfig(data.config);
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleTestConnection = async () => {
-    setTestResult(null);
-    try {
-      const res = await fetch('/api/organization/oidc/test', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issuerUrl: oidcForm.issuerUrl }),
-      });
-      const data = await res.json();
-      setTestResult(data);
-    } catch {
-      setTestResult({ success: false, error: 'Failed to test connection' });
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -182,7 +95,8 @@ export default function AuthenticationSettings() {
           <h3 className="text-lg font-medium">Authentication Policy</h3>
         </div>
         <p className="text-sm text-[var(--muted)]">
-          Control how members of your organization can sign in.
+          Control how members of your organization can sign in. Supported sign-in methods:
+          email &amp; password, Google, GitHub, and Microsoft.
         </p>
 
         <div className="flex gap-3">
@@ -227,115 +141,6 @@ export default function AuthenticationSettings() {
           <div className="p-3 rounded-lg bg-red-950/40 border border-red-900/40 text-red-400 text-sm">
             {policyError}
           </div>
-        )}
-      </div>
-
-      {/* OIDC Config Section */}
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Globe size={18} className="text-[var(--accent)]" />
-          <h3 className="text-lg font-medium">OIDC Provider</h3>
-        </div>
-        <p className="text-sm text-[var(--muted)]">
-          Configure a custom OIDC identity provider for your organization (e.g., Okta, Auth0).
-        </p>
-
-        {isOwner ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Issuer URL</label>
-                <input
-                  type="url"
-                  value={oidcForm.issuerUrl}
-                  onChange={(e) => setOidcForm({ ...oidcForm, issuerUrl: e.target.value })}
-                  placeholder="https://your-org.okta.com"
-                  className="auth-input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Display Name</label>
-                <input
-                  type="text"
-                  value={oidcForm.displayName}
-                  onChange={(e) => setOidcForm({ ...oidcForm, displayName: e.target.value })}
-                  placeholder="SSO"
-                  className="auth-input w-full"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Client ID</label>
-                <input
-                  type="text"
-                  value={oidcForm.clientId}
-                  onChange={(e) => setOidcForm({ ...oidcForm, clientId: e.target.value })}
-                  className="auth-input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Client Secret</label>
-                <input
-                  type="password"
-                  value={oidcForm.clientSecret}
-                  onChange={(e) => setOidcForm({ ...oidcForm, clientSecret: e.target.value })}
-                  placeholder={oidcConfig ? '••••••••' : ''}
-                  className="auth-input w-full"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Scopes</label>
-              <input
-                type="text"
-                value={oidcForm.scopes}
-                onChange={(e) => setOidcForm({ ...oidcForm, scopes: e.target.value })}
-                className="auth-input w-full"
-              />
-            </div>
-
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={oidcForm.enabled}
-                  onChange={(e) => setOidcForm({ ...oidcForm, enabled: e.target.checked })}
-                />
-                <span className="text-sm">Enabled</span>
-              </label>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                onClick={handleTestConnection}
-                disabled={!oidcForm.issuerUrl}
-                className="btn btn-secondary"
-              >
-                Test Connection
-              </button>
-              <button
-                onClick={handleSaveOidc}
-                disabled={saving || !oidcForm.issuerUrl || !oidcForm.clientId || !oidcForm.clientSecret}
-                className="btn btn-elevated"
-              >
-                {saving ? 'Saving...' : 'Save OIDC Config'}
-              </button>
-            </div>
-
-            {testResult && (
-              <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${
-                testResult.success
-                  ? 'bg-green-950/40 border border-green-900/40 text-green-400'
-                  : 'bg-red-950/40 border border-red-900/40 text-red-400'
-              }`}>
-                {testResult.success ? <CheckCircle size={16} /> : <XCircle size={16} />}
-                {testResult.success ? 'Connection successful' : testResult.error}
-              </div>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-[var(--muted)]">Only organization owners can configure OIDC.</p>
         )}
       </div>
 

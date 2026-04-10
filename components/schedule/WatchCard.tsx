@@ -72,23 +72,44 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
       onClick={onClick}
     >
       {/* Status bar at top */}
+      <style>{`@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
       {running ? (
-        <div className="h-1.5 bg-[var(--accent)]/20 overflow-hidden">
-          <div className="h-full w-1/3 bg-[var(--accent)] animate-[shimmer_1.5s_ease-in-out_infinite]" style={{ animation: 'shimmer 1.5s ease-in-out infinite' }} />
-          <style>{`@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
+        <div className="h-1.5 relative overflow-hidden">
+          {/* Show live results underneath if available */}
+          {hasRun && totalMonitors > 0 ? (
+            <div className="flex h-full absolute inset-0">
+              {watch.passCount > 0 && (
+                <div className="bg-emerald-500 h-full transition-all duration-500" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
+              )}
+              {watch.warnCount > 0 && (
+                <div className="bg-amber-500 h-full transition-all duration-500" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
+              )}
+              {watch.failCount > 0 && (
+                <div className="bg-red-500 h-full transition-all duration-500" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
+              )}
+              {(watch.passCount + watch.warnCount + watch.failCount) < totalMonitors && (
+                <div className="bg-[var(--overlay-bg)] h-full flex-1" />
+              )}
+            </div>
+          ) : (
+            <div className="absolute inset-0 bg-[var(--accent)]/20" />
+          )}
+          {/* Shimmer sweep overlay */}
+          <div className="absolute inset-0">
+            <div className="h-full w-1/3 bg-white/25" style={{ animation: 'shimmer 1.5s ease-in-out infinite' }} />
+          </div>
         </div>
       ) : hasRun && totalMonitors > 0 ? (
         <div className="flex h-1.5">
           {watch.passCount > 0 && (
-            <div className="bg-emerald-500 h-full" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
+            <div className="bg-emerald-500 h-full transition-all duration-500" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
           )}
           {watch.warnCount > 0 && (
-            <div className="bg-amber-500 h-full" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
+            <div className="bg-amber-500 h-full transition-all duration-500" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
           )}
           {watch.failCount > 0 && (
-            <div className="bg-red-500 h-full" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
+            <div className="bg-red-500 h-full transition-all duration-500" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
           )}
-          {/* Remaining = not yet run within group */}
           {(watch.passCount + watch.warnCount + watch.failCount) < totalMonitors && (
             <div className="bg-[var(--overlay-bg)] h-full flex-1" />
           )}
@@ -103,17 +124,12 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="text-[14px] font-medium text-[var(--text)] truncate">{watch.name}</h3>
-              {running && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--accent)]/15 text-[var(--accent)] animate-pulse">
-                  Running...
-                </span>
-              )}
-              {!running && needsConfigCount > 0 && (
+              {needsConfigCount > 0 && !running && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400">
                   {needsConfigCount} needs config
                 </span>
               )}
-              {!running && noRunYet && needsConfigCount === 0 && (
+              {noRunYet && !running && needsConfigCount === 0 && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
                   NEW
                 </span>
@@ -162,7 +178,13 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
             )}
             <button
               onClick={onRunAll}
-              className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)] transition-colors opacity-0 group-hover:opacity-100"
+              disabled={running}
+              className={cn(
+                "p-1.5 rounded-lg transition-colors",
+                running
+                  ? "text-[var(--accent)] animate-pulse cursor-not-allowed"
+                  : "text-[var(--text-faint)] hover:text-[var(--text)] hover:bg-[var(--hover-bg)]"
+              )}
               title="Run all monitors"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

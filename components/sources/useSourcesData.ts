@@ -123,12 +123,33 @@ function buildScopeSummary(toolType: string, config: Record<string, any> | null,
   }
 }
 
-// Map a raw API layer string to PipelineLayer
-function mapLayer(raw: string | undefined): PipelineLayer {
-  if (!raw) return 'WAREHOUSE';
-  const upper = raw.toUpperCase();
-  const valid: PipelineLayer[] = ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE', 'VERSION_CONTROL', 'ORCHESTRATION', 'INFRASTRUCTURE'];
-  return valid.includes(upper as PipelineLayer) ? (upper as PipelineLayer) : 'WAREHOUSE';
+// Infer layer from tool type when not explicitly set
+const TOOL_TYPE_TO_LAYER: Record<string, PipelineLayer> = {
+  bigquery: 'WAREHOUSE', snowflake: 'WAREHOUSE', postgres: 'WAREHOUSE', redshift: 'WAREHOUSE',
+  mysql: 'WAREHOUSE', sqlserver: 'WAREHOUSE', databricks: 'WAREHOUSE', azure_sql: 'WAREHOUSE',
+  azure_synapse: 'WAREHOUSE',
+  dbt_cloud: 'TRANSFORMATION', dbt_core: 'TRANSFORMATION',
+  fivetran: 'INGESTION', airbyte: 'INGESTION', stitch: 'INGESTION',
+  looker: 'REPORTING', tableau: 'REPORTING', powerbi: 'REPORTING', metabase: 'REPORTING',
+  airflow: 'ORCHESTRATION', dagster: 'ORCHESTRATION', prefect: 'ORCHESTRATION', n8n: 'ORCHESTRATION',
+  github: 'VERSION_CONTROL', gitlab: 'VERSION_CONTROL', bitbucket: 'VERSION_CONTROL',
+  linux_server: 'INFRASTRUCTURE', docker: 'INFRASTRUCTURE', kubernetes: 'INFRASTRUCTURE',
+  slack: 'NOTIFICATIONS', pagerduty: 'NOTIFICATIONS', jira: 'NOTIFICATIONS',
+};
+
+// Map a raw API layer string to PipelineLayer, falling back to tool type inference
+function mapLayer(raw: string | undefined, toolType?: string): PipelineLayer {
+  if (raw) {
+    const upper = raw.toUpperCase();
+    const valid: PipelineLayer[] = ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE', 'VERSION_CONTROL', 'ORCHESTRATION', 'INFRASTRUCTURE', 'NOTIFICATIONS'];
+    if (valid.includes(upper as PipelineLayer)) return upper as PipelineLayer;
+  }
+  // Infer from tool type
+  if (toolType) {
+    const inferred = TOOL_TYPE_TO_LAYER[toolType.toLowerCase()];
+    if (inferred) return inferred;
+  }
+  return 'WAREHOUSE';
 }
 
 // Normalize SLA data from API
@@ -148,9 +169,10 @@ function normalizeContract(raw: any): SourceSLAData | null {
 // Normalize raw API integration into ControlPlaneSource
 function normalize(raw: any, allToolTypes: string[]): ControlPlaneSource {
   const toolType = (raw.toolType || raw.type || '').toLowerCase();
-  const layer = mapLayer(raw.layer);
+  const layer = mapLayer(raw.layer, toolType);
   const contract = normalizeContract(raw.sourceContract);
-  const lastExtractedAt = raw.lastExtractedAt || null;
+  // Prefer lineage extraction timestamp — that's what matters to users
+  const lastExtractedAt = raw.lastLineageExtractedAt || raw.lastExtractedAt || null;
   const extractionStatus = deriveExtractionStatus(
     lastExtractedAt,
     contract?.expectedExtractionFrequencyMinutes ?? null,
@@ -181,11 +203,16 @@ function normalize(raw: any, allToolTypes: string[]): ControlPlaneSource {
     findingsCount: raw.findingsCount || 0,
     criticalCount: raw.criticalCount || 0,
     highCount: raw.highCount || 0,
+    monitorCount: raw.monitorCount ?? 0,
+    monitorPassing: raw.monitorPassing ?? 0,
+    monitorFailing: raw.monitorFailing ?? 0,
+    monitorWarning: raw.monitorWarning ?? 0,
     contract,
     effectiveContract: raw.effectiveContract || null,
     inheritanceState: raw.inheritanceState || null,
     config: raw.config || null,
     stackId: raw.stackId || null,
+    quickLinks: raw.quickLinks || raw.config?.quickLinks || [],
     graphDomain: getGraphDomain(toolType),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,

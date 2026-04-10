@@ -1,9 +1,8 @@
 'use client';
 
-import { Clock } from 'lucide-react';
+import { Clock, Activity } from 'lucide-react';
 import { LAYER_COLORS, LAYER_LABELS, getToolById } from '@/components/pipeline/types';
-import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG, SLA_CONFIG } from './types';
-import { INHERITANCE_CONFIG } from '@/components/contracts/types';
+import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG } from './types';
 import { CAPABILITY_CONFIG } from './capabilities';
 import SourceActionsMenu from './SourceActionsMenu';
 import { ToolIcon } from '@/components/icons/ToolIcon';
@@ -28,14 +27,20 @@ interface Props {
   onEditSLA?: (source: ControlPlaneSource) => void;
 }
 
-export default function SourceCard({ source, onClick, onTestConnection, onDisconnect, onEditSLA }: Props) {
+export default function SourceCard({ source, onClick, onTestConnection, onDisconnect }: Props) {
   const tool = getToolById(source.toolType);
   const displayName = tool?.name || source.name;
   const statusCfg = STATUS_CONFIG[source.status];
   const extractCfg = EXTRACTION_STATUS_CONFIG[source.extractionStatus];
   const layerColor = LAYER_COLORS[source.layer] || '#6B7280';
   const layerLabel = LAYER_LABELS[source.layer] || source.layer;
-  const slaCfg = source.contract?.slaTier ? SLA_CONFIG[source.contract.slaTier] : null;
+
+  // Monitor-based health display — only for layers that support monitors
+  const MONITORABLE_LAYERS = new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION']);
+  const supportsMonitors = MONITORABLE_LAYERS.has(source.layer);
+  const monitorCount = source.monitorCount ?? 0;
+  const monitorPassing = source.monitorPassing ?? 0;
+  const monitorFailing = source.monitorFailing ?? 0;
 
   return (
     <div
@@ -69,26 +74,27 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
         {statusCfg.label}
       </div>
 
+      {/* Monitor health indicator — only for monitorable layers */}
+      {supportsMonitors && (
+        <div className="hidden sm:flex items-center gap-1.5 shrink-0">
+          <Activity className="w-3 h-3 text-[var(--text-faint)]" />
+          {monitorCount > 0 ? (
+            <span className={`text-xs font-medium ${
+              monitorFailing > 0 ? 'text-red-400' :
+              monitorPassing === monitorCount ? 'text-emerald-400' : 'text-amber-400'
+            }`}>
+              {monitorPassing}/{monitorCount}
+            </span>
+          ) : (
+            <span className="text-xs text-[var(--text-faint)] italic">No monitors</span>
+          )}
+        </div>
+      )}
+
       {/* Extraction status badge */}
       <div className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${extractCfg.bg} ${extractCfg.color}`}>
         {extractCfg.label}
       </div>
-
-      {/* SLA tier */}
-      {slaCfg && (
-        <div className={`hidden md:flex shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${slaCfg.bg} ${slaCfg.color}`}>
-          {source.contract!.slaTier}
-        </div>
-      )}
-
-      {/* Contract inheritance badge — only show when source has its own SLA */}
-      {source.inheritanceState && source.contract?.slaTier && (
-        <div className={`hidden md:flex shrink-0 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-          INHERITANCE_CONFIG[source.inheritanceState].bg
-        } ${INHERITANCE_CONFIG[source.inheritanceState].color}`}>
-          {INHERITANCE_CONFIG[source.inheritanceState].label}
-        </div>
-      )}
 
       {/* Last extracted */}
       <div className="hidden md:flex items-center gap-1 text-xs text-[var(--text-faint)] shrink-0 w-20">

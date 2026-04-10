@@ -41,6 +41,20 @@ class NodeDiscoveryResponse(BaseModel):
     skipped_reason: Optional[str] = None
 
 
+class DirectDiscoveryRequest(BaseModel):
+    """Request body for direct SLA discovery (no lineage graph needed)."""
+    platform: str = Field(..., description="Warehouse platform: bigquery, snowflake, postgres, redshift")
+    tableFqn: str = Field(..., description="Fully qualified table name (e.g. project.dataset.table)")
+    credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+
+
+class BulkDirectDiscoveryRequest(BaseModel):
+    """Request body for bulk direct SLA discovery (no lineage graph needed)."""
+    platform: str = Field(..., description="Warehouse platform")
+    tableFqns: list[str] = Field(..., description="Table FQNs to discover", max_length=50)
+    credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+
+
 class BulkDiscoveryRequest(BaseModel):
     """Request body for bulk SLA discovery."""
     nodeIds: list[str] = Field(..., description="Engine stable_ids of the nodes", max_length=50)
@@ -341,3 +355,135 @@ async def discover_bulk_sla(request: BulkDiscoveryRequest):
     discovered_results = list(await asyncio.gather(*tasks))
 
     return BulkDiscoveryResponse(results=[*skipped_results, *discovered_results])
+
+
+# ---------------------------------------------------------------------------
+# Direct discovery — no lineage graph required
+# ---------------------------------------------------------------------------
+
+@router.post("/discovery/direct", response_model=NodeDiscoveryResponse)
+async def discover_direct_sla(request: DirectDiscoveryRequest):
+    """
+    Run SLA discovery directly from a table FQN and warehouse credentials.
+
+    Does NOT require a lineage graph — the caller provides the platform,
+    table FQN, and connection credentials directly.
+    """
+    try:
+        from lineage.sla_discovery import discover_sla_direct
+    except ImportError:
+        from scanner.lineage.sla_discovery import discover_sla_direct
+
+    platform = request.platform.lower()
+    if platform not in _WAREHOUSE_PLATFORMS:
+        return NodeDiscoveryResponse(
+            node_fqn=request.tableFqn,
+            unsupported=True,
+            skipped_reason=f"Platform '{platform}' is not supported for discovery",
+        )
+
+    adapter = _create_warehouse_adapter(platform, request.credentials)
+    if not adapter:
+        return NodeDiscoveryResponse(
+            node_fqn=request.tableFqn,
+            unsupported=True,
+            skipped_reason=f"Could not create adapter for platform '{platform}'",
+        )
+
+    try:
+        adapter.connect()
+    except Exception as e:
+        logger.warning("[SLA Discovery] Direct: failed to connect %s: %s", platform, e)
+        raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
+
+    try:
+        result = await discover_sla_direct(request.tableFqn, adapter)
+    except Exception as e:
+        logger.error("[SLA Discovery] Direct discovery failed for %s: %s", request.tableFqn, e)
+        raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
+    finally:
+        try:
+            adapter.disconnect()
+        except Exception:
+            pass
+
+    return NodeDiscoveryResponse(
+        node_fqn=result.node_fqn,
+        warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
+        freshness=result.freshness,
+        volume=result.volume,
+        quality=result.quality,
+        schema_profile=result.schema,
+        uniqueness=result.uniqueness,
+        unsupported=result.unsupported,
+        skipped_reason=result.skipped_reason,
+    )
+
+
+@router.post("/discovery/direct-bulk", response_model=BulkDiscoveryResponse)
+async def discover_direct_bulk_sla(request: BulkDirectDiscoveryRequest):
+    """
+    Run SLA discovery for multiple tables directly from credentials.
+
+    Does NOT require a lineage graph — the caller provides the platform,
+    table FQNs, and connection credentials directly.
+    """
+    try:
+        from lineage.sla_discovery import discover_sla_direct
+    except ImportError:
+        from scanner.lineage.sla_discovery import discover_sla_direct
+
+    platform = request.platform.lower()
+    if platform not in _WAREHOUSE_PLATFORMS:
+        return BulkDiscoveryResponse(results=[
+            NodeDiscoveryResponse(
+                node_fqn=fqn, unsupported=True,
+                skipped_reason=f"Platform '{platform}' is not supported",
+            ) for fqn in request.tableFqns
+        ])
+
+    MAX_CONCURRENT = 5
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+    async def _discover_one(table_fqn: str) -> NodeDiscoveryResponse:
+        async with semaphore:
+            adapter = _create_warehouse_adapter(platform, request.credentials)
+            if not adapter:
+                return NodeDiscoveryResponse(
+                    node_fqn=table_fqn, unsupported=True,
+                    skipped_reason=f"Could not create adapter for '{platform}'",
+                )
+            try:
+                adapter.connect()
+            except Exception:
+                return NodeDiscoveryResponse(
+                    node_fqn=table_fqn, unsupported=True,
+                    skipped_reason=f"Failed to connect to {platform}",
+                )
+            try:
+                result = await discover_sla_direct(table_fqn, adapter)
+                return NodeDiscoveryResponse(
+                    node_fqn=result.node_fqn,
+                    warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
+                    freshness=result.freshness,
+                    volume=result.volume,
+                    quality=result.quality,
+                    schema_profile=result.schema,
+                    uniqueness=result.uniqueness,
+                    unsupported=result.unsupported,
+                    skipped_reason=result.skipped_reason,
+                )
+            except Exception as e:
+                logger.error("[SLA Discovery] Direct bulk: %s failed: %s", table_fqn, e)
+                return NodeDiscoveryResponse(
+                    node_fqn=table_fqn, unsupported=True,
+                    skipped_reason=f"Discovery failed: {e}",
+                )
+            finally:
+                try:
+                    adapter.disconnect()
+                except Exception:
+                    pass
+
+    results = list(await asyncio.gather(*[_discover_one(fqn) for fqn in request.tableFqns]))
+    return BulkDiscoveryResponse(results=results)

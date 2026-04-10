@@ -52,29 +52,91 @@ def _decrypt(encrypted_hex: str) -> str:
     return plaintext.decode("utf-8")
 
 
+def _resilient_query_func(adapter, connect_error_msg: str):
+    """Wrap adapter.execute_query so transient disconnects auto-reconnect once.
+
+    Production robustness: idle-timeouts, network blips, and gRPC channel
+    deaths can leave an adapter's `_connection` stale between queries. On
+    ConnectionError (or a driver-level "closed connection" message), this
+    wrapper reconnects and retries the query exactly once before giving up.
+    """
+    _TRANSIENT_HINTS = (
+        "not connected to database",
+        "connection closed",
+        "connection already closed",
+        "server closed the connection",
+        "ssl connection has been closed",
+        "broken pipe",
+        "eof detected",
+    )
+
+    def _is_transient(exc: Exception) -> bool:
+        if isinstance(exc, ConnectionError):
+            return True
+        msg = str(exc).lower()
+        return any(hint in msg for hint in _TRANSIENT_HINTS)
+
+    def query(sql: str, params=None):
+        try:
+            return adapter.execute_query(sql, params) if params else adapter.execute_query(sql)
+        except Exception as exc:
+            if not _is_transient(exc):
+                raise
+            logger.warning(
+                "[Executor] Transient warehouse disconnect, reconnecting once",
+                adapter=type(adapter).__name__,
+                error=str(exc)[:200],
+            )
+            if not adapter.connect():
+                raise ConnectionError(
+                    f"Reconnect failed after transient error: {connect_error_msg}"
+                ) from exc
+            return adapter.execute_query(sql, params) if params else adapter.execute_query(sql)
+
+    return query
+
+
 def _get_query_func(integration_config: Dict[str, Any], dialect: str):
     """Build a warehouse query function from integration config.
 
-    Creates the adapter, calls connect(), and returns the bound execute_query method.
+    Creates the adapter, calls connect(), and returns a resilient wrapper
+    around execute_query that reconnects once on transient disconnects.
+    Raises ConnectionError if the adapter cannot make the initial connection.
     """
     if dialect == "bigquery":
         from scanner.adapters.bigquery import BigQueryAdapter
 
         adapter = BigQueryAdapter(integration_config)
-        adapter.connect()
-        return adapter.execute_query, "bigquery"
+        connect_err = (
+            f"BigQuery project "
+            f"{integration_config.get('project') or integration_config.get('project_id', '?')}. "
+            f"Check credentials and project ID."
+        )
+        if not adapter.connect():
+            raise ConnectionError(f"Failed to connect to {connect_err}")
+        return _resilient_query_func(adapter, connect_err), "bigquery"
     elif dialect == "snowflake":
         from scanner.adapters.snowflake import SnowflakeAdapter
 
         adapter = SnowflakeAdapter(integration_config)
-        adapter.connect()
-        return adapter.execute_query, "snowflake"
+        connect_err = (
+            f"Snowflake {integration_config.get('account', '?')}. "
+            f"Check credentials and account."
+        )
+        if not adapter.connect():
+            raise ConnectionError(f"Failed to connect to {connect_err}")
+        return _resilient_query_func(adapter, connect_err), "snowflake"
     elif dialect in ("postgres", "postgresql", "redshift"):
         from scanner.adapters.postgres import PostgresAdapter
 
         adapter = PostgresAdapter(integration_config)
-        adapter.connect()
-        return adapter.execute_query, "postgres"
+        connect_err = (
+            f"{dialect} {integration_config.get('host', '?')}:{integration_config.get('port', '?')}. "
+            f"Check credentials and host."
+        )
+        if not adapter.connect():
+            raise ConnectionError(f"Failed to connect to {connect_err}")
+        return _resilient_query_func(adapter, connect_err), "postgres"
     else:
         raise ValueError(f"Unsupported dialect: {dialect}")
 
@@ -443,8 +505,12 @@ class TaskExecutor:
             }
 
         # Get warehouse query function — use pre-fetched config or look up by ID/org
+        # Also try config.nodeId (mirrors tasks/[taskId]/run/route.ts step 2)
+        task_config = task.get("config") or {}
+        config_node_id = task_config.get("nodeId") if isinstance(task_config, dict) else None
         integration_config = task.get("integrationConfig") or await self._get_integration_config(
             task.get("integrationId"), task.get("organizationId"),
+            node_id=config_node_id,
         )
 
         if not integration_config:
@@ -500,13 +566,26 @@ class TaskExecutor:
                 }
 
         try:
+            # Log resolved config keys for debugging connection issues
+            safe_keys = [k for k in integration_config.keys() if k not in ("credentials", "credentials_json", "password", "private_key")]
+            logger.info(
+                "[Executor] Connecting to warehouse",
+                dialect=dialect,
+                config_keys=safe_keys,
+                has_credentials="credentials" in integration_config or "credentials_json" in integration_config,
+                has_password="password" in integration_config,
+                project=integration_config.get("project") or integration_config.get("project_id"),
+                host=integration_config.get("host"),
+            )
             query_func, sql_dialect = _get_query_func(integration_config, dialect)
+            logger.info("[Executor] Connected, running auto-configure", monitor_type=resolved_type)
             executor = MonitorExecutor(query_func=query_func, dialect=sql_dialect)
 
             # Auto-configure: fill in missing config from warehouse data
             config = executor.auto_configure(
                 resolved_type, database, schema, table, config
             )
+            logger.info("[Executor] Auto-configure done, executing monitor", monitor_type=resolved_type)
 
             # Re-create monitor with auto-configured config
             monitor = monitor_cls(config=config) if config else monitor_cls()
@@ -886,10 +965,13 @@ class TaskExecutor:
             }
 
         # Resolve integration config (pre-fetched from Next.js or looked up)
+        tool_config = task.get("config") or {}
+        tool_node_id = (tool_config.get("toolNodeId") or tool_config.get("nodeId")) if isinstance(tool_config, dict) else None
         integration_config = task.get("integrationConfig") or await self._get_tool_config(
             task.get("integrationId"),
             task.get("organizationId"),
             monitor_type,
+            node_id=tool_node_id,
         )
 
         if not integration_config:
@@ -965,6 +1047,33 @@ class TaskExecutor:
                                     break
                 except Exception as e:
                     logger.warning(f"[Executor] Failed to resolve Fivetran connector_id: {e}")
+
+        # Inject baseline_schema for connector_schema_drift from the latest
+        # persisted snapshot so the monitor can diff against it.
+        if monitor_type == "connector_schema_drift" and not config.get("baseline_schema"):
+            try:
+                from scanner.monitors.baseline_store import BaselineStore
+                from scanner.scheduler.service import _get_connection
+
+                store_conn = _get_connection()
+                try:
+                    store = BaselineStore(store_conn)
+                    latest = store.get_latest_details(
+                        task.get("id", ""), "connector_schema"
+                    )
+                    if latest and isinstance(latest.get("schema_snapshot"), dict):
+                        config = {
+                            **config,
+                            "baseline_schema": {"tables": latest["schema_snapshot"]},
+                        }
+                        logger.info(
+                            "[Executor] Injected baseline schema for connector_schema_drift",
+                            table_count=len(latest["schema_snapshot"]),
+                        )
+                finally:
+                    store_conn.close()
+            except Exception as e:
+                logger.debug(f"[Executor] Could not load connector baseline schema: {e}")
 
         monitor = monitor_cls(config)
         try:
@@ -1146,13 +1255,16 @@ class TaskExecutor:
         integration_id: Optional[str],
         organization_id: Optional[str],
         monitor_type: str,
+        node_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetch tool integration config from PipelineNode.
 
-        Same pattern as _get_server_config, but dynamically filters by
-        the toolType(s) required for the given monitor_type.
+        Resolution order (mirrors tasks/[taskId]/run/route.ts):
+        1. integration_id → PipelineNode with that FK
+        2. node_id (from config.toolNodeId/nodeId) → specific PipelineNode by ID
+        3. organization_id → auto-discover first matching tool node
         """
-        if not integration_id and not organization_id:
+        if not integration_id and not node_id and not organization_id:
             return None
 
         required_types = self._TOOL_MONITOR_NODE_TYPES.get(monitor_type)
@@ -1165,8 +1277,9 @@ class TaskExecutor:
             conn = _get_connection()
             try:
                 with conn.cursor() as cur:
-                    # Query Integration.credentials (where the real config lives)
-                    # and fall back to PipelineNode.config for legacy nodes
+                    row = None
+
+                    # 1. Try integration_id
                     if integration_id:
                         cur.execute(
                             """
@@ -1181,7 +1294,27 @@ class TaskExecutor:
                             """,
                             (integration_id, required_types),
                         )
-                    else:
+                        row = cur.fetchone()
+
+                    # 2. Try node_id (config.toolNodeId)
+                    if not row and node_id:
+                        cur.execute(
+                            """
+                            SELECT pn.id, pn.name, pn."toolType",
+                                   i.credentials AS int_creds, pn.config
+                            FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE pn.id = %s
+                              AND pn."toolType" = ANY(%s)
+                              AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                            LIMIT 1
+                            """,
+                            (node_id, required_types),
+                        )
+                        row = cur.fetchone()
+
+                    # 3. Auto-discover
+                    if not row and organization_id:
                         cur.execute(
                             """
                             SELECT pn.id, pn.name, pn."toolType",
@@ -1197,15 +1330,15 @@ class TaskExecutor:
                             """,
                             (organization_id, required_types),
                         )
+                        row = cur.fetchone()
 
-                    row = cur.fetchone()
                     if not row:
                         logger.warning(
                             f"[Executor] No {required_types} pipeline node found for {monitor_type}"
                         )
                         return None
 
-                    node_id, node_name, tool_type, int_creds, raw_config = row
+                    found_node_id, node_name, tool_type, int_creds, raw_config = row
 
                     # Prefer Integration credentials (where pipeline save stores them),
                     # fall back to PipelineNode.config for legacy/unsaved nodes
@@ -1234,7 +1367,7 @@ class TaskExecutor:
                         monitor=monitor_type,
                     )
                     return {
-                        "id": node_id,
+                        "id": found_node_id,
                         "name": node_name,
                         "type": tool_type,
                         **credentials,
@@ -1371,8 +1504,11 @@ class TaskExecutor:
             )
 
             # Get integration config for warehouse access
+            prompt_config = task.get("config") or {}
+            prompt_node_id = prompt_config.get("nodeId") if isinstance(prompt_config, dict) else None
             integration_config = task.get("integrationConfig") or await self._get_integration_config(
-                task.get("integrationId"), task.get("organizationId")
+                task.get("integrationId"), task.get("organizationId"),
+                node_id=prompt_node_id,
             )
 
             # Set up warehouse query function if integration is available
@@ -1532,15 +1668,20 @@ class TaskExecutor:
             }
 
     async def _get_integration_config(
-        self, integration_id: Optional[str], organization_id: Optional[str] = None
+        self, integration_id: Optional[str], organization_id: Optional[str] = None,
+        node_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetch warehouse connection config.
 
-        Uses PipelineNode (where credentials live) rather than Integration.
-        If organization_id is provided, auto-discovers the first connected
-        warehouse node in the org's pipeline stack.
+        Resolution order (mirrors tasks/[taskId]/run/route.ts):
+        1. integration_id → PipelineNode with that FK
+        2. node_id (from config.nodeId) → specific PipelineNode by ID
+        3. organization_id → auto-discover first connected warehouse node
+
+        Prefers Integration.credentials (where pipeline save stores them),
+        falling back to PipelineNode.config (legacy nodes).
         """
-        if not integration_id and not organization_id:
+        if not integration_id and not node_id and not organization_id:
             return None
 
         try:
@@ -1549,26 +1690,56 @@ class TaskExecutor:
             conn = _get_connection()
             try:
                 with conn.cursor() as cur:
+                    row = None
+
+                    # 1. Try integration_id (FK to Integration → find its PipelineNode)
                     if integration_id:
-                        # Look up specific pipeline node by integration ID
                         cur.execute(
                             """
-                            SELECT pn.id, pn.name, pn."toolType", pn.config
+                            SELECT pn.id, pn.name, pn."toolType", pn.config,
+                                   i.credentials AS int_credentials
                             FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
                             WHERE pn."integrationId" = %s
                               AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
                             LIMIT 1
                             """,
                             (integration_id,),
                         )
-                    else:
-                        # Auto-discover: find first connected warehouse node in the org
+                        row = cur.fetchone()
+                        if row:
+                            logger.info("[Executor] Resolved warehouse from integrationId")
+
+                    # 2. Try node_id (config.nodeId — PipelineNode ID)
+                    if not row and node_id:
                         tool_types = list(_WAREHOUSE_TOOL_TYPES)
                         cur.execute(
                             """
-                            SELECT pn.id, pn.name, pn."toolType", pn.config
+                            SELECT pn.id, pn.name, pn."toolType", pn.config,
+                                   i.credentials AS int_credentials
+                            FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE pn.id = %s
+                              AND pn."toolType" = ANY(%s)
+                              AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                            LIMIT 1
+                            """,
+                            (node_id, tool_types),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            logger.info("[Executor] Resolved warehouse from config.nodeId")
+
+                    # 3. Auto-discover: find first connected warehouse node in the org
+                    if not row and organization_id:
+                        tool_types = list(_WAREHOUSE_TOOL_TYPES)
+                        cur.execute(
+                            """
+                            SELECT pn.id, pn.name, pn."toolType", pn.config,
+                                   i.credentials AS int_credentials
                             FROM "PipelineNode" pn
                             JOIN "PipelineStack" ps ON pn."stackId" = ps.id
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
                             WHERE ps."organizationId" = %s
                               AND pn."toolType" = ANY(%s)
                               AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
@@ -1577,31 +1748,34 @@ class TaskExecutor:
                             """,
                             (organization_id, tool_types),
                         )
+                        row = cur.fetchone()
 
-                    row = cur.fetchone()
                     if not row:
                         logger.warning("[Executor] No warehouse pipeline node found")
                         return None
 
-                    node_id, node_name, tool_type, raw_config = row
-                    config = raw_config or {}
-                    if isinstance(config, str):
-                        config = json.loads(config)
+                    found_node_id, node_name, tool_type, raw_config, int_credentials = row
+
+                    # Prefer Integration.credentials over PipelineNode.config
+                    # (mirrors pickConfig in run/route.ts)
+                    config_source = int_credentials or raw_config or {}
+                    if isinstance(config_source, str):
+                        config_source = json.loads(config_source)
 
                     # Decrypt credentials (same as lib/crypto.ts)
                     credentials: Dict[str, Any] = {}
-                    if isinstance(config, dict) and "encrypted" in config:
+                    if isinstance(config_source, dict) and "encrypted" in config_source:
                         try:
-                            decrypted = _decrypt(config["encrypted"])
+                            decrypted = _decrypt(config_source["encrypted"])
                             credentials = json.loads(decrypted)
                         except Exception as e:
                             logger.warning(f"[Executor] Failed to decrypt config for {node_name}: {e}")
                             return None
-                    elif isinstance(config, dict):
-                        credentials = {k: v for k, v in config.items() if k != "_cached"}
+                    elif isinstance(config_source, dict):
+                        credentials = {k: v for k, v in config_source.items() if k != "_cached"}
 
-                    result = {
-                        "id": node_id,
+                    cfg_result = {
+                        "id": found_node_id,
                         "name": node_name,
                         "type": tool_type,
                         **credentials,
@@ -1610,15 +1784,16 @@ class TaskExecutor:
                     # Field mapping: username → user (same as copilot/chat/route.ts)
                     upper_type = tool_type.upper() if tool_type else ""
                     if upper_type in ("SNOWFLAKE", "POSTGRES", "REDSHIFT"):
-                        if "username" in result and "user" not in result:
-                            result["user"] = result.pop("username")
+                        if "username" in cfg_result and "user" not in cfg_result:
+                            cfg_result["user"] = cfg_result.pop("username")
 
                     logger.info(
                         "[Executor] Resolved warehouse config",
                         node=node_name,
                         type=tool_type,
+                        source="integration_credentials" if int_credentials else "pipeline_node_config",
                     )
-                    return result
+                    return cfg_result
             finally:
                 conn.close()
         except Exception as e:

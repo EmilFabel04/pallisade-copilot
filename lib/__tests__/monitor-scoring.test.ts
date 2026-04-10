@@ -142,7 +142,7 @@ describe('computeMonitorCoverage', () => {
         'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK',
         'UNIQUENESS_CHECK', 'REFERENTIAL', 'RANGE_VALIDATION',
         'ACCEPTED_VALUES', 'DATE_CONSISTENCY', 'DATA_TYPE_VALIDATION',
-        'OUTLIER_DETECTION', 'CONTRACT_CHECK',
+        'OUTLIER_DETECTION', 'CUSTOM_SQL',
       ],
       'warehouse',
     );
@@ -156,7 +156,7 @@ describe('computeMonitorCoverage', () => {
       [
         'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK',
         'UNIQUENESS_CHECK', 'REFERENTIAL', 'RANGE_VALIDATION',
-        'ACCEPTED_VALUES', 'OUTLIER_DETECTION', 'CONTRACT_CHECK',
+        'ACCEPTED_VALUES', 'OUTLIER_DETECTION', 'CUSTOM_SQL',
       ],
       'warehouse',
     );
@@ -164,7 +164,7 @@ describe('computeMonitorCoverage', () => {
     expect(result.coverageStatus).toBe('good');
   });
 
-  it('warehouse 3/11 → coverageStatus partial', () => {
+  it('warehouse 3/12 → coverageStatus partial', () => {
     const result = computeMonitorCoverage(
       ['FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE'],
       'warehouse',
@@ -173,7 +173,7 @@ describe('computeMonitorCoverage', () => {
     expect(result.coverageStatus).toBe('partial');
   });
 
-  it('warehouse 0/11 → coverageStatus none', () => {
+  it('warehouse 0/12 → coverageStatus none', () => {
     const result = computeMonitorCoverage([], 'warehouse');
     expect(result.coveragePct).toBe(0);
     expect(result.coverageStatus).toBe('none');
@@ -188,21 +188,21 @@ describe('computeMonitorCoverage', () => {
     expect(result.configured).toBeGreaterThanOrEqual(5);
   });
 
-  it('BI 5/5 → coverageStatus good', () => {
+  it('BI 4/4 → coverageStatus good', () => {
     const result = computeMonitorCoverage(
-      ['BI_FRESHNESS_PROXY', 'BI_CONTENT_HEALTH', 'BI_UPSTREAM_BREAK_RISK', 'BI_REFRESH_FAILURE', 'CONTRACT_CHECK'],
+      ['BI_FRESHNESS_PROXY', 'BI_CONTENT_HEALTH', 'BI_UPSTREAM_BREAK_RISK', 'BI_REFRESH_FAILURE'],
       'bi',
     );
     expect(result.coveragePct).toBe(100);
     expect(result.coverageStatus).toBe('good');
   });
 
-  it('BI 2/5 → coverageStatus partial (40% < 100%)', () => {
+  it('BI 2/4 → coverageStatus partial (50% < 100%)', () => {
     const result = computeMonitorCoverage(
       ['BI_FRESHNESS_PROXY', 'BI_CONTENT_HEALTH'],
       'bi',
     );
-    expect(result.coveragePct).toBe(40);
+    expect(result.coveragePct).toBe(50);
     expect(result.coverageStatus).toBe('partial');
   });
 
@@ -224,9 +224,9 @@ describe('computeMonitorCoverage', () => {
     expect(result.coverageStatus).toBe('good');
   });
 
-  it('non-applicable types are ignored (CUSTOM_SQL in warehouse)', () => {
+  it('non-applicable types are ignored (DAG_LAST_RUN in warehouse)', () => {
     const result = computeMonitorCoverage(
-      ['FRESHNESS', 'CUSTOM_SQL'],
+      ['FRESHNESS', 'DAG_LAST_RUN'],
       'warehouse',
     );
     expect(result.configured).toBe(1); // only FRESHNESS counts
@@ -314,7 +314,7 @@ describe('computeMonitorScoring', () => {
         { monitorType: 'RANGE_VALIDATION', lastStatus: 'PASS' },
         { monitorType: 'ACCEPTED_VALUES', lastStatus: 'PASS' },
         { monitorType: 'OUTLIER_DETECTION', lastStatus: 'WARN' },
-        { monitorType: 'CONTRACT_CHECK', lastStatus: 'PASS' },
+        { monitorType: 'CUSTOM_SQL', lastStatus: 'PASS' },
       ],
       'warehouse',
     );
@@ -345,10 +345,10 @@ describe('computeMonitorScoring', () => {
     );
     expect(result.healthScore).toBe(75);
     expect(result.healthStatus).toBe('degraded');
-    expect(result.coveragePct).toBe(40); // 2/5
+    expect(result.coveragePct).toBe(50); // 2/4
     expect(result.coverageStatus).toBe('partial');
     expect(result.configured).toBe(2);
-    expect(result.available).toBe(5); // now includes CONTRACT_CHECK
+    expect(result.available).toBe(4);
   });
 
   it('data asset detail and tool overview use the same scoring', () => {
@@ -382,8 +382,8 @@ describe('computeMonitorScoring', () => {
 // ---------------------------------------------------------------------------
 
 describe('getApplicableMonitorTypes', () => {
-  it('returns 11 types for warehouse', () => {
-    expect(getApplicableMonitorTypes('warehouse')).toHaveLength(11);
+  it('returns 12 types for warehouse', () => {
+    expect(getApplicableMonitorTypes('warehouse')).toHaveLength(12);
   });
 
   it('returns 4 types for bi', () => {
@@ -397,39 +397,10 @@ describe('getApplicableMonitorTypes', () => {
   it('returns empty array for unknown category', () => {
     expect(getApplicableMonitorTypes('unknown' as AssetCategory)).toEqual([]);
   });
-});
 
-// ---------------------------------------------------------------------------
-// CONTRACT_CHECK in APPLICABLE_MONITORS
-// ---------------------------------------------------------------------------
-
-describe('CONTRACT_CHECK in APPLICABLE_MONITORS', () => {
-  it('getApplicableMonitorTypes includes CONTRACT_CHECK when hasContract is true', () => {
-    const types = getApplicableMonitorTypes('warehouse', { hasContract: true });
-    expect(types).toContain('CONTRACT_CHECK');
-  });
-
-  it('getApplicableMonitorTypes excludes CONTRACT_CHECK when hasContract is false', () => {
-    const types = getApplicableMonitorTypes('warehouse', { hasContract: false });
-    expect(types).not.toContain('CONTRACT_CHECK');
-  });
-
-  it('getApplicableMonitorTypes excludes CONTRACT_CHECK by default', () => {
-    const types = getApplicableMonitorTypes('warehouse');
-    expect(types).not.toContain('CONTRACT_CHECK');
-  });
-
-  it('CONTRACT_CHECK is available for all data asset categories', () => {
-    for (const cat of ['warehouse', 'bi', 'dbt_transform'] as const) {
-      const types = getApplicableMonitorTypes(cat, { hasContract: true });
-      expect(types).toContain('CONTRACT_CHECK');
-    }
-  });
-
-  it('CONTRACT_CHECK is NOT available for tool-only categories', () => {
-    for (const cat of ['ingestion', 'orchestration', 'infra'] as const) {
-      const types = getApplicableMonitorTypes(cat, { hasContract: true });
-      expect(types).not.toContain('CONTRACT_CHECK');
+  it('does not include CONTRACT_CHECK in any category', () => {
+    for (const cat of ['warehouse', 'bi', 'ingestion', 'orchestration', 'dbt_transform', 'infra'] as const) {
+      expect(getApplicableMonitorTypes(cat)).not.toContain('CONTRACT_CHECK');
     }
   });
 });

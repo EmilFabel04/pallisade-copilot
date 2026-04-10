@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
@@ -83,8 +83,14 @@ export default function MonitorsPage() {
 
   // Detail view
   const [selectedWatch, setSelectedWatch] = useState<WatchSummary | null>(null);
+  const selectedWatchRef = useRef<WatchSummary | null>(null);
   const [watchDetailMonitors, setWatchDetailMonitors] = useState<any[]>([]);
   const [watchDetailLoading, setWatchDetailLoading] = useState(false);
+
+  // Keep ref in sync with state to prevent stale closures in async callbacks
+  useEffect(() => {
+    selectedWatchRef.current = selectedWatch;
+  }, [selectedWatch]);
 
   // Integrations for modal
   const [integrations, setIntegrations] = useState<Array<{ id: string; name: string; type: string }>>([]);
@@ -135,16 +141,21 @@ export default function MonitorsPage() {
       ]);
       if (watchRes.ok) { const d = await watchRes.json(); setWatches(d.watches || []); }
       if (planRes.ok) { const d = await planRes.json(); setPlans(d.plans || []); }
-      // Also refresh detail panel if open
-      if (selectedWatch) {
-        const detailRes = await fetch(`/api/schedule/watches/${selectedWatch.id}`);
+      // Also refresh detail panel if open — use ref to avoid stale closure
+      const currentWatch = selectedWatchRef.current;
+      if (currentWatch) {
+        const detailRes = await fetch(`/api/schedule/watches/${currentWatch.id}`);
         if (detailRes.ok) {
           const d = await detailRes.json();
-          if (d.watch) { setSelectedWatch(d.watch); setWatchDetailMonitors(d.watch.monitors || []); }
+          // Re-check ref: user may have navigated away while fetch was in-flight
+          if (d.watch && selectedWatchRef.current?.id === currentWatch.id) {
+            setSelectedWatch(d.watch);
+            setWatchDetailMonitors(d.watch.monitors || []);
+          }
         }
       }
     } catch {}
-  }, [selectedPipeline?.id, selectedWatch?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedPipeline?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setSelectedWatch(null);
@@ -269,18 +280,18 @@ export default function MonitorsPage() {
     } catch (err) { console.error('[Monitors] Failed to toggle watch:', err); }
   };
 
-  const handleRunWatch = async (watchId: string) => {
+  const handleRunWatch = (watchId: string) => {
     setRunningWatchIds((prev) => new Set(prev).add(watchId));
-    try {
-      await fetch(`/api/schedule/watches/${watchId}/run`, { method: 'POST' });
-      invalidateCache('/api/schedule');
-      await fetchWatches();
-      if (selectedWatch?.id === watchId) {
-        const res = await fetch(`/api/schedule/watches/${watchId}`);
-        if (res.ok) { const data = await res.json(); if (data.watch) { setSelectedWatch(data.watch); setWatchDetailMonitors(data.watch.monitors || []); } }
-      }
-    } catch (err) { console.error('[Monitors] Failed to run watch:', err); }
-    finally { setRunningWatchIds((prev) => { const next = new Set(prev); next.delete(watchId); return next; }); }
+    // Fire and forget — polling handles real-time updates while running
+    fetch(`/api/schedule/watches/${watchId}/run`, { method: 'POST' })
+      .then(async () => {
+        invalidateCache('/api/schedule');
+        await refreshLive();
+      })
+      .catch((err) => console.error('[Monitors] Failed to run watch:', err))
+      .finally(() => {
+        setRunningWatchIds((prev) => { const next = new Set(prev); next.delete(watchId); return next; });
+      });
   };
 
   const handleDeleteWatch = async (watchId: string) => {
@@ -378,6 +389,11 @@ export default function MonitorsPage() {
           onToggleEnabled={(enabled) => handleToggleWatchEnabled(selectedWatch.id, enabled)}
           onRemoveMonitor={handleRemoveMonitorFromWatch}
           onSettings={() => setSettingsWatchId(selectedWatch.id)}
+          onMonitorConfigSaved={(monitorId, config, policyOverrides) => {
+            setWatchDetailMonitors((prev) =>
+              prev.map((m: any) => m.id === monitorId ? { ...m, config, policyOverrides } : m)
+            );
+          }}
         />
         <MonitorGroupSettingsModal
           watchId={settingsWatchId || ''}
@@ -413,7 +429,7 @@ export default function MonitorsPage() {
 
   const handleRunTask = async (taskId: string) => {
     try {
-      await fetch(`/api/monitors/${taskId}/run`, { method: 'POST' });
+      await fetch(`/api/schedule/tasks/${taskId}/run`, { method: 'POST' });
       invalidateCache('/api/schedule');
       fetchTasks();
     } catch (err) { console.error('[Monitors] Failed to run task:', err); }

@@ -100,14 +100,15 @@ export default function PipelineSettingsPage() {
       try {
         const res = await fetch(`/api/pipeline/${selectedPipelineId}`);
         if (!res.ok) {
-          throw new Error('Failed to fetch pipeline details');
+          setPipeline(null);
+          return;
         }
 
         const data = await res.json();
         setPipeline(data.pipeline);
         setUserRole(data.userRole);
         setIsOrgAdmin(data.isOrgAdmin);
-        
+
         // Set form values
         setName(data.pipeline.name);
         setDescription(data.pipeline.description || '');
@@ -123,9 +124,8 @@ export default function PipelineSettingsPage() {
             setAvailableUsers(accessData.availableUsers || []);
           }
         }
-      } catch (err) {
-        setError('Failed to load pipeline settings');
-        console.error(err);
+      } catch {
+        setPipeline(null);
       } finally {
         setLoading(false);
       }
@@ -382,8 +382,35 @@ export default function PipelineSettingsPage() {
     return (
       <div className="max-w-4xl mx-auto py-8">
         <div className="text-center py-12">
-          <p className="text-[var(--muted)]">No pipeline selected</p>
-          <p className="text-sm text-[var(--text-faint)] mt-2">Select a pipeline from the dropdown to view settings</p>
+          <p className="text-[var(--muted)]">Connect an integration first</p>
+          <p className="text-sm text-[var(--text-faint)] mt-2">
+            Add at least one pipeline tool before configuring settings.
+          </p>
+          <button
+            onClick={() => router.push('/dashboard/integrations')}
+            className="mt-4 px-4 py-2 rounded border border-[var(--border)] text-sm text-[var(--text)] hover:bg-[var(--surface-2)]"
+          >
+            Go to Integrations
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (pipeline.nodeCount === 0) {
+    return (
+      <div className="max-w-4xl mx-auto py-8">
+        <div className="text-center py-12">
+          <p className="text-[var(--muted)]">Connect an integration first</p>
+          <p className="text-sm text-[var(--text-faint)] mt-2">
+            You need to integrate at least one pipeline tool before you can change settings.
+          </p>
+          <button
+            onClick={() => router.push('/dashboard/integrations')}
+            className="mt-4 px-4 py-2 rounded border border-[var(--border)] text-sm text-[var(--text)] hover:bg-[var(--surface-2)]"
+          >
+            Go to Integrations
+          </button>
         </div>
       </div>
     );

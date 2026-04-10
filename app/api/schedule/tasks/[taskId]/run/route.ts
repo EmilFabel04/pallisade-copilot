@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
+import { computeNextRun } from '@/lib/cron';
 import { notifyEvents } from '@/lib/notifications';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
@@ -441,6 +442,11 @@ export async function POST(
       lastRunAt: completedAt,
       lastStatus: status,
     };
+
+    // Advance nextRunAt so the scheduler doesn't re-trigger this monitor
+    if (task.schedule) {
+      updateData.nextRunAt = computeNextRun(task.schedule, task.timezone || 'UTC');
+    }
 
     // Save baseline from result details (used on subsequent runs)
     const details = result.details || {};

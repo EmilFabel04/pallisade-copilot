@@ -6,7 +6,7 @@ import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta, type Child
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
 import { ColumnPicker } from './ColumnPicker';
-import { getMonitorDefinition, DOMAIN_MONITOR_MAP, DOMAIN_COLORS, TOOL_HEALTH_DEFAULTS } from '@/types/monitor-catalog';
+import { getMonitorDefinition, DOMAIN_MONITOR_MAP, DOMAIN_COLORS, TOOL_HEALTH_DEFAULTS, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
 import type { MonitoringPlanPreview } from '@/types/health-watch';
 
 // ---------------------------------------------------------------------------
@@ -109,12 +109,10 @@ function hasIncompleteToolConfig(
   configs: Record<string, Record<string, any>>,
   nodesWithMonitors: Array<{ meta: { subNodeIds?: string[] }; monitors: Array<{ targetNodeId: string; key: string }> }>,
 ): boolean {
-  for (const { meta, monitors } of nodesWithMonitors) {
-    if (!meta.subNodeIds?.length) continue;
+  for (const { monitors } of nodesWithMonitors) {
     for (const mon of monitors) {
       const checkKey = `${mon.targetNodeId}::${mon.key}`;
       if (!checks[checkKey]) continue;
-      if (!TOOL_ONLY_MONITOR_KEYS.has(mon.key)) continue;
 
       const def = getMonitorDefinition(mon.key);
       if (!def) continue;
@@ -177,11 +175,11 @@ function MonitorCard({
   const label = def?.label || mon.key;
   const description = def?.description || mon.reason;
 
-  // Required config fields for tool monitors
-  const requiredFields = isToolNode && def
-    ? def.config_schema.filter((f) => f.required)
-    : [];
-  const showConfig = checked && requiredFields.length > 0;
+  // Required config fields — applies to both tool and data monitors that
+  // expose a config_schema with required fields.
+  const requiredFields = def ? def.config_schema.filter((f) => f.required) : [];
+  const hasRequiredConfig = requiredFields.length > 0;
+  const showConfig = checked && hasRequiredConfig;
 
   // Check if all required fields are filled (arrays must have at least one item)
   const isConfigComplete = requiredFields.length === 0 || requiredFields.every(
@@ -194,14 +192,14 @@ function MonitorCard({
 
   return (
     <div className={cn(
-      'rounded-lg border transition-all overflow-hidden',
+      'rounded-lg border transition-all overflow-hidden h-full flex flex-col',
       checked
         ? (MONITOR_COLORS[mon.key] || 'bg-[var(--accent)]/15 text-[var(--accent)] border-[var(--accent)]/30')
         : 'border-[var(--border)] text-[var(--text)] hover:border-[var(--muted)]/50',
     )}>
       <button
         onClick={onToggle}
-        className="flex items-start gap-3 p-3 text-left transition-all w-full"
+        className="flex items-start gap-3 p-3 text-left transition-all w-full flex-1"
       >
         {/* Checkbox */}
         <div
@@ -220,9 +218,14 @@ function MonitorCard({
         </div>
         {/* Content */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[12px] font-medium">{label}</span>
-            {checked && isToolNode && requiredFields.length > 0 && (
+            {!checked && hasRequiredConfig && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/10 text-amber-400/80 border border-amber-500/20">
+                Config required
+              </span>
+            )}
+            {checked && hasRequiredConfig && (
               <span className={cn(
                 'px-1.5 py-0.5 rounded text-[9px] font-medium',
                 isConfigComplete
@@ -689,9 +692,26 @@ export function MultiMonitorModal({
           ? allMons.filter((m) => domainMonitors.has(m.key))
           : allMons.filter((m) => TOOL_ONLY_MONITOR_KEYS.has(m.key));
       } else {
-        // Data node — only data monitors (exclude all tool monitors)
+        // Data node — show the full asset monitor catalog (recommended + all).
+        // Preview may only surface a few recommendations; we still want the user
+        // to be able to pick any data-quality monitor for the asset.
         const raw = nodeMonitorMap.get(nm.id) || [];
-        monitors = raw.filter((m) => !TOOL_ONLY_MONITOR_KEYS.has(m.key));
+        const filtered = raw.filter((m) => !TOOL_ONLY_MONITOR_KEYS.has(m.key));
+        const seenKeys = new Set(filtered.map((m) => m.key));
+        const extras: MonitorOption[] = [];
+        for (const key of ASSET_MONITOR_TYPES) {
+          if (seenKeys.has(key)) continue;
+          extras.push({
+            key,
+            targetFqn: nm.fqn || '',
+            targetNodeId: nm.id,
+            family: 'custom',
+            reason: '',
+            groupIdx: -1,
+            monIdx: -1,
+          });
+        }
+        monitors = [...filtered, ...extras];
       }
 
       nodes.push({ meta: nm, monitors });
@@ -981,6 +1001,42 @@ export function MultiMonitorModal({
           }))
           .filter((g) => g.recommendations.length > 0);
 
+        // Add custom asset monitors (keys the user picked that weren't in preview).
+        // These come from the ASSET_MONITOR_TYPES union added in selectedNodesWithMonitors
+        // and are marked with family === 'custom' and groupIdx === -1.
+        const customAssetMonitors = selectedNodesWithMonitors.flatMap(({ meta, monitors }) =>
+          monitors
+            .filter((m) => m.family === 'custom' && m.groupIdx === -1 && monitorChecks[`${m.targetNodeId}::${m.key}`])
+            .map((m) => ({
+              monitor_key: m.key,
+              target_fqn: m.targetFqn || meta.fqn || '',
+              target_node_id: m.targetNodeId,
+              source: 'custom',
+              reason: 'User-selected data quality monitor',
+              priority: 1,
+              config_hints: monitorConfigs[`${m.targetNodeId}::${m.key}`] || {},
+              integration_type: '',
+              already_monitored: false,
+            })),
+        );
+        if (customAssetMonitors.length > 0) {
+          filteredGroups.push({
+            group_index: filteredGroups.length,
+            family: 'custom_asset',
+            watch_type: 'custom_watch',
+            anchor_id: '',
+            anchor_name: 'Custom Asset Monitors',
+            anchor_fqn: '',
+            anchor_node_type: '',
+            anchor_platform: '',
+            node_count: new Set(customAssetMonitors.map((m) => m.target_node_id)).size,
+            monitor_count: customAssetMonitors.length,
+            coverage_pct: 100,
+            shared_node_ids: [],
+            recommendations: customAssetMonitors,
+          } as any);
+        }
+
         // Add manual monitors as an extra group if any
         if (manualMonitors.length > 0) {
           filteredGroups.push({
@@ -1062,6 +1118,7 @@ export function MultiMonitorModal({
     alertOnStatus,
     aiPrompt,
     aiIntegrationId,
+    selectedNodesWithMonitors,
     onComplete,
     onClose,
   ]);
@@ -1326,13 +1383,13 @@ export function MultiMonitorModal({
                               {!isCollapsed && (
                                 <div className="px-4 pb-4">
                                   {monitors.length > 0 ? (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 ml-7">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 ml-7 auto-rows-fr">
                                       {monitors.map((mon) => {
                                         const checkKey = `${mon.targetNodeId}::${mon.key}`;
                                         const checked = monitorChecks[checkKey] ?? false;
                                         const isOutlier = mon.key === 'OUTLIER_DETECTION' || mon.key === 'ANOMALY';
                                         return (
-                                          <div key={checkKey}>
+                                          <div key={checkKey} className="h-full flex flex-col">
                                             <MonitorCard
                                               mon={mon}
                                               checked={checked}

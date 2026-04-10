@@ -56,8 +56,8 @@ class TestCadenceAwareFreshness:
         assert result.details["cadence_aware"] is True
         assert "exceeding" in result.message.lower()
 
-    def test_significantly_exceeding_cadence_fails(self):
-        """Significantly exceeding p95 * multiplier should FAIL."""
+    def test_exceeding_cadence_within_sla_warns(self):
+        """Exceeding cadence significantly but within static SLA should WARN."""
         gaps = self._gaps_every_6h()
         monitor = FreshnessMonitor(config={
             "timestamp_column": "created_at",
@@ -67,7 +67,28 @@ class TestCadenceAwareFreshness:
             "cadence_multiplier": 2.0,
         })
 
-        # 30h >> p95 * 2 (~13h)
+        # 30h >> cadence expected_max (~12h) but within 48h static SLA → WARN
+        result = monitor.evaluate(
+            [{"hours_since_update": 30.0, "last_value": "2025-01-01", "total_rows": 100}],
+            "db.schema.table",
+        )
+
+        assert result.status == MonitorStatus.WARN
+        assert result.details["cadence_aware"] is True
+        assert "exceeding" in result.message.lower()
+
+    def test_exceeding_static_sla_always_fails(self):
+        """Exceeding the static SLA should always FAIL, even with cadence."""
+        gaps = self._gaps_every_6h()
+        monitor = FreshnessMonitor(config={
+            "timestamp_column": "created_at",
+            "max_hours": 24,
+            "cadence_aware": True,
+            "cadence_gaps": gaps,
+            "cadence_multiplier": 2.0,
+        })
+
+        # 30h > 24h static SLA → FAIL regardless of cadence
         result = monitor.evaluate(
             [{"hours_since_update": 30.0, "last_value": "2025-01-01", "total_rows": 100}],
             "db.schema.table",
@@ -75,7 +96,7 @@ class TestCadenceAwareFreshness:
 
         assert result.status == MonitorStatus.FAIL
         assert result.details["cadence_aware"] is True
-        assert "significantly" in result.message.lower()
+        assert "SLA" in result.message
 
     def test_cadence_disabled_uses_static_threshold(self):
         """Without cadence_aware, should use static max_hours."""

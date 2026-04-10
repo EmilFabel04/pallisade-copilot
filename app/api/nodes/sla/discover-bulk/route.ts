@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
+import prisma from '@/lib/db';
+import { decrypt } from '@/lib/crypto';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -12,10 +14,66 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { nodeIds, stackId } = body;
+    const { nodeIds, stackId, nodes } = body;
 
+    // New direct path: caller sends node metadata with platform + FQN
+    if (nodes && Array.isArray(nodes) && nodes.length > 0 && stackId) {
+      if (nodes.length > 50) {
+        return NextResponse.json({ error: 'Max 50 nodes per request' }, { status: 400 });
+      }
+
+      // Group by platform so we resolve credentials once per platform
+      const byPlatform: Record<string, string[]> = {};
+      for (const n of nodes) {
+        if (n.platform && n.tableFqn) {
+          const p = n.platform.toLowerCase();
+          if (!byPlatform[p]) byPlatform[p] = [];
+          byPlatform[p].push(n.tableFqn);
+        }
+      }
+
+      // Resolve credentials and call direct-bulk for each platform
+      const allResults: any[] = [];
+      for (const [platform, tableFqns] of Object.entries(byPlatform)) {
+        const credentials = await resolveWarehouseCredentials(session.user.email!, stackId, platform);
+        if (!credentials) {
+          allResults.push(
+            ...tableFqns.map((fqn) => ({
+              node_fqn: fqn,
+              unsupported: true,
+              skipped_reason: `No ${platform} credentials found for this pipeline`,
+            }))
+          );
+          continue;
+        }
+
+        const res = await fetch(`${SCANNER_API_URL}/api/v1/discovery/direct-bulk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ platform, tableFqns, credentials }),
+          signal: AbortSignal.timeout(300000),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          allResults.push(...(data.results || []));
+        } else {
+          allResults.push(
+            ...tableFqns.map((fqn) => ({
+              node_fqn: fqn,
+              unsupported: true,
+              skipped_reason: 'Discovery request failed',
+            }))
+          );
+        }
+      }
+
+      return NextResponse.json({ results: allResults });
+    }
+
+    // Legacy path: graph-based discovery
     if (!nodeIds || !Array.isArray(nodeIds) || nodeIds.length === 0) {
-      return NextResponse.json({ error: 'nodeIds required' }, { status: 400 });
+      return NextResponse.json({ error: 'nodeIds or nodes required' }, { status: 400 });
     }
 
     if (nodeIds.length > 50) {
@@ -46,4 +104,57 @@ export async function POST(request: NextRequest) {
     console.error('[Discovery] Bulk error:', error);
     return NextResponse.json({ error: error.message || 'Failed' }, { status: 500 });
   }
+}
+
+/**
+ * Resolve warehouse credentials from the Integration table.
+ */
+async function resolveWarehouseCredentials(
+  userEmail: string,
+  stackId: string,
+  platform: string
+): Promise<Record<string, any> | null> {
+  const user = await prisma.user.findUnique({
+    where: { email: userEmail },
+    select: { organizationId: true },
+  });
+  if (!user?.organizationId) return null;
+
+  const pipelineNode = await prisma.pipelineNode.findFirst({
+    where: {
+      stackId,
+      toolType: platform.toLowerCase(),
+      stack: { organizationId: user.organizationId },
+    },
+    include: { integration: true },
+  });
+
+  if (!pipelineNode) return null;
+
+  if ((pipelineNode as any).integrationId && (pipelineNode as any).integration?.credentials) {
+    try {
+      const intCreds = (pipelineNode as any).integration.credentials as any;
+      if (intCreds.encrypted) {
+        return JSON.parse(decrypt(intCreds.encrypted));
+      }
+      return intCreds;
+    } catch (e) {
+      console.error('[Discovery] Integration credentials parsing failed:', e);
+    }
+  }
+
+  if (pipelineNode.config) {
+    try {
+      const configJson = pipelineNode.config as { encrypted?: string; _cached?: any; [key: string]: any };
+      if (configJson.encrypted) {
+        return JSON.parse(decrypt(configJson.encrypted));
+      }
+      const { _cached, ...creds } = configJson;
+      return creds;
+    } catch (e) {
+      console.error('[Discovery] Config credentials parsing failed:', e);
+    }
+  }
+
+  return null;
 }

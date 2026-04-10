@@ -439,7 +439,11 @@ export function DataAssetDetailPanel({
       const res = await fetch(`/api/nodes/${engineId}/sla/discover`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stackId }),
+        body: JSON.stringify({
+          stackId,
+          platform: node.platforms?.[0] || undefined,
+          tableFqn: node.fullName || undefined,
+        }),
       });
       if (res.ok) {
         const data = await res.json();

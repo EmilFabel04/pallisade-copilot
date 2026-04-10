@@ -153,7 +153,7 @@ class SchedulerService:
                            m."alertConfig", m."alertOnStatus", m.timezone,
                            m."integrationId", m."organizationId",
                            m."baselineMean", m."baselineStddev", m."baselineCount",
-                           m."monitorGroupId",
+                           m."monitorGroupId", m."lastRunAt",
                            mg.name AS "groupName",
                            mg."monitoringPlanId",
                            mp.name AS "planName"
@@ -165,11 +165,28 @@ class SchedulerService:
                       AND m."nextRunAt" <= %s
                     ORDER BY m."nextRunAt" ASC
                     LIMIT 50
+                    FOR UPDATE OF m SKIP LOCKED
                     """,
                     (now,),
                 )
                 rows = cur.fetchall()
                 col_names = [desc[0] for desc in cur.description]
+
+                # Immediately advance nextRunAt for all claimed tasks so no other
+                # scheduler instance (or the next tick) can re-pick them.
+                if rows:
+                    task_ids = [row[0] for row in rows]  # id is first column
+                    task_dicts = [dict(zip(col_names, r)) for r in rows]
+                    for td in task_dicts:
+                        next_run = _compute_next_run(
+                            td.get("schedule", "0 * * * *"),
+                            td.get("timezone", "UTC"),
+                        )
+                        cur.execute(
+                            """UPDATE "Monitor" SET "nextRunAt" = %s WHERE id = %s""",
+                            (next_run, td["id"]),
+                        )
+                    conn.commit()
 
             if not rows:
                 return
@@ -181,6 +198,21 @@ class SchedulerService:
 
             for row in rows:
                 task = dict(zip(col_names, row))
+
+                # Dedup: skip if this monitor was already run in the last 2 minutes
+                # (e.g. by a watch-level run or manual trigger that completed first)
+                last_run = task.get("lastRunAt")
+                if last_run:
+                    # Ensure timezone-aware comparison (psycopg2 may return naive datetimes)
+                    if last_run.tzinfo is None:
+                        last_run = last_run.replace(tzinfo=timezone.utc)
+                    if (now - last_run).total_seconds() < 120:
+                        logger.info(
+                            f"[Scheduler] Skipping recently-run task: {task.get('name')}",
+                            last_run_seconds_ago=int((now - last_run).total_seconds()),
+                        )
+                        continue
+
                 result = await self._execute_task(task, conn)
                 # Buffer results for monitors that belong to a group/plan
                 group_id = task.get("monitorGroupId")
@@ -233,6 +265,34 @@ class SchedulerService:
                 stddev=task.get("baselineStddev"),
                 count=task.get("baselineCount"),
             )
+
+        # Pre-resolve integration config so the executor doesn't have to.
+        # This mirrors what tasks/[taskId]/run/route.ts does: resolve config
+        # BEFORE calling the executor, then pass it as integrationConfig.
+        if not task.get("integrationConfig"):
+            executor = TaskExecutor()
+            task_config = task.get("config") or {}
+            if isinstance(task_config, str):
+                task_config = json.loads(task_config)
+            node_id = task_config.get("nodeId") if isinstance(task_config, dict) else None
+            tool_node_id = task_config.get("toolNodeId") if isinstance(task_config, dict) else None
+
+            try:
+                resolved = await executor._get_integration_config(
+                    task.get("integrationId"),
+                    task.get("organizationId"),
+                    node_id=node_id,
+                )
+                if resolved:
+                    task["integrationConfig"] = resolved
+                    logger.info(
+                        "[Scheduler] Pre-resolved integration config",
+                        task=task_name,
+                        node=resolved.get("name"),
+                        type=resolved.get("type"),
+                    )
+            except Exception as e:
+                logger.warning(f"[Scheduler] Failed to pre-resolve integration config: {e}")
 
         start_time = datetime.now(timezone.utc)
         executor = TaskExecutor()
@@ -608,6 +668,23 @@ class SchedulerService:
                     metrics.append({"metric_name": "orphan_pct", "value": float(orphan_pct), "details": base_details})
             else:
                 metrics.append({"metric_name": "value", "value": float(primary_value), "details": base_details})
+
+        # Persist the current connector schema snapshot so the next run can
+        # diff against it. This runs regardless of primary_value because
+        # we want to record the snapshot even when there are zero changes.
+        if monitor_type == "connector_schema_drift":
+            snapshot = details.get("schema_snapshot")
+            if isinstance(snapshot, dict):
+                snapshot_details = {
+                    **base_details,
+                    "schema_snapshot": snapshot,
+                    "total_tables": len(snapshot),
+                }
+                metrics.append({
+                    "metric_name": "connector_schema",
+                    "value": float(len(snapshot)),
+                    "details": snapshot_details,
+                })
 
         return metrics
 

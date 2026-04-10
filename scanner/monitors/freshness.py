@@ -493,7 +493,7 @@ class FreshnessMonitor(BaseMonitor):
 
         # Cadence-aware check (before static thresholds)
         if self.cadence_aware and self.cadence_gaps and len(self.cadence_gaps) >= self.cadence_min_samples:
-            cadence_result = self._evaluate_cadence(hours, target_fqn, resolved_mode, row)
+            cadence_result = self._evaluate_cadence(hours, target_fqn, resolved_mode, row, max_h, warn_h)
             if cadence_result is not None:
                 return cadence_result
 
@@ -545,8 +545,14 @@ class FreshnessMonitor(BaseMonitor):
         target_fqn: str,
         resolved_mode: str,
         row: Dict[str, Any],
+        max_h: float,
+        warn_h: float,
     ) -> Optional[MonitorResult]:
         """Evaluate freshness against learned cadence pattern.
+
+        The static threshold (max_h) acts as a hard ceiling — exceeding it is
+        always a FAIL regardless of what cadence says.  Cadence provides early
+        warnings when the pattern deviates but the SLA hasn't been breached yet.
 
         Returns a MonitorResult if cadence is violated, None to fall through
         to static threshold checks.
@@ -562,7 +568,52 @@ class FreshnessMonitor(BaseMonitor):
             "business_event": "Business-event data",
         }.get(resolved_mode, "Data")
 
-        # Within learned cadence — pass (don't fall through to static thresholds)
+        cadence_details = {
+            "timestamp_column": self.timestamp_column,
+            "freshness_mode": resolved_mode,
+            "hours_since_update": round(hours, 2),
+            "cadence_aware": True,
+            "learned_median_gap_hours": round(median_gap, 2),
+            "learned_p95_gap_hours": round(p95_gap, 2),
+            "cadence_multiplier": self.cadence_multiplier,
+            "expected_max_hours": round(expected_max, 2),
+            "static_max_hours": max_h,
+            "cadence_samples": len(gaps),
+            "last_value": str(row.get("last_value", "")),
+            "total_rows": row.get("total_rows"),
+            "confidence_info": build_confidence_info(
+                confidence_pct=baseline_confidence(len(gaps)),
+                baseline_count=len(gaps),
+                evaluation_mode="cadence",
+            ),
+        }
+
+        # Static SLA ceiling — always FAIL if breached, regardless of cadence
+        if hours > max_h:
+            message = (
+                f"{mode_label} is {hours:.1f}h old, exceeding the "
+                f"{max_h}h freshness SLA "
+                f"(learned cadence: ~{median_gap:.1f}h)."
+            )
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target_fqn,
+                status=MonitorStatus.FAIL,
+                value=hours,
+                threshold=max_h,
+                expected_range={"min": 0, "max": max_h},
+                message=message,
+                details={
+                    **cadence_details,
+                    "explanation": (
+                        f"Static SLA breach: {hours:.1f}h exceeds the "
+                        f"{max_h}h threshold. Learned cadence "
+                        f"(~{median_gap:.1f}h) does not override the SLA."
+                    ),
+                },
+            )
+
+        # Within learned cadence and within SLA — PASS
         if hours <= expected_max:
             return MonitorResult(
                 monitor_type=self.monitor_type,
@@ -577,17 +628,7 @@ class FreshnessMonitor(BaseMonitor):
                     f"(max: {expected_max:.1f}h)."
                 ),
                 details={
-                    "timestamp_column": self.timestamp_column,
-                    "freshness_mode": resolved_mode,
-                    "hours_since_update": round(hours, 2),
-                    "cadence_aware": True,
-                    "learned_median_gap_hours": round(median_gap, 2),
-                    "learned_p95_gap_hours": round(p95_gap, 2),
-                    "cadence_multiplier": self.cadence_multiplier,
-                    "expected_max_hours": round(expected_max, 2),
-                    "cadence_samples": len(gaps),
-                    "last_value": str(row.get("last_value", "")),
-                    "total_rows": row.get("total_rows"),
+                    **cadence_details,
                     "explanation": (
                         f"Cadence-aware: expected update every "
                         f"~{median_gap:.1f}h (based on {len(gaps)} measurements). "
@@ -595,62 +636,33 @@ class FreshnessMonitor(BaseMonitor):
                         f"{self.cadence_multiplier}x the median "
                         f"({expected_max:.1f}h)."
                     ),
-                    "confidence_info": build_confidence_info(
-                        confidence_pct=baseline_confidence(len(gaps)),
-                        baseline_count=len(gaps),
-                        evaluation_mode="cadence",
-                    ),
                 },
             )
 
-        # Beyond p95 * multiplier = FAIL, beyond median * multiplier = WARN
-        if hours > p95_gap * self.cadence_multiplier:
-            status = MonitorStatus.FAIL
-            message = (
-                f"{mode_label} is {hours:.1f}h old, significantly exceeding "
-                f"the learned cadence of ~{median_gap:.1f}h "
-                f"(expected max: {expected_max:.1f}h, p95 gap: {p95_gap:.1f}h)."
-            )
-        else:
-            status = MonitorStatus.WARN
-            message = (
-                f"{mode_label} is {hours:.1f}h old, exceeding the learned "
-                f"cadence of ~{median_gap:.1f}h "
-                f"(expected max: {expected_max:.1f}h)."
-            )
-
+        # Exceeds cadence but still within static SLA — WARN
+        message = (
+            f"{mode_label} is {hours:.1f}h old, exceeding the learned "
+            f"cadence of ~{median_gap:.1f}h "
+            f"(expected max: {expected_max:.1f}h) "
+            f"but within the {max_h}h SLA."
+        )
         return MonitorResult(
             monitor_type=self.monitor_type,
             target_fqn=target_fqn,
-            status=status,
+            status=MonitorStatus.WARN,
             value=hours,
             threshold=expected_max,
             expected_range={"min": 0, "max": round(expected_max, 1)},
             message=message,
             details={
-                "timestamp_column": self.timestamp_column,
-                "freshness_mode": resolved_mode,
-                "hours_since_update": round(hours, 2),
-                "cadence_aware": True,
-                "learned_median_gap_hours": round(median_gap, 2),
-                "learned_p95_gap_hours": round(p95_gap, 2),
-                "cadence_multiplier": self.cadence_multiplier,
-                "expected_max_hours": round(expected_max, 2),
-                "cadence_samples": len(gaps),
-                "max_hours": self.max_hours,
-                "last_value": str(row.get("last_value", "")),
-                "total_rows": row.get("total_rows"),
+                **cadence_details,
                 "explanation": (
                     f"Cadence-aware: expected update every "
                     f"~{median_gap:.1f}h (based on {len(gaps)} measurements). "
                     f"Current gap of {hours:.1f}h exceeds "
                     f"{self.cadence_multiplier}x the median "
-                    f"({expected_max:.1f}h)."
-                ),
-                "confidence_info": build_confidence_info(
-                    confidence_pct=baseline_confidence(len(gaps)),
-                    baseline_count=len(gaps),
-                    evaluation_mode="cadence",
+                    f"({expected_max:.1f}h) but is within the "
+                    f"{max_h}h static SLA."
                 ),
             },
         )

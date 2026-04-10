@@ -328,46 +328,38 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
           );
         })()}
 
-        {/* Health bar */}
-        {total > 0 && (
-          <div>
-            <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
-              <span>Health</span>
-              <span>{healthPct}%</span>
-            </div>
-            <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden flex">
-              {health!.healthy > 0 && (
-                <div className="h-full bg-emerald-400" style={{ width: `${(health!.healthy / total) * 100}%` }} />
-              )}
-              {health!.degraded > 0 && (
-                <div className="h-full bg-amber-400" style={{ width: `${(health!.degraded / total) * 100}%` }} />
-              )}
-              {health!.failing > 0 && (
-                <div className="h-full bg-red-400" style={{ width: `${(health!.failing / total) * 100}%` }} />
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Monitor summary bar */}
-        {data.monitorSummary && data.monitorSummary.total > 0 && (() => {
+        {/* Health bar — derived from monitors when available, unknown otherwise */}
+        {(() => {
           const ms = data.monitorSummary;
-          const monTotal = ms.total;
-          return (
-            <div className="mt-2">
-              <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
-                <span>Monitors</span>
-                <div className="flex items-center gap-1">
-                  {ms.failing + ms.error > 0 && (
-                    <span className="text-red-400 font-medium">{ms.failing + ms.error} fail</span>
-                  )}
-                  {ms.warning > 0 && (
-                    <span className="text-amber-400 font-medium">{ms.warning} warn</span>
-                  )}
-                  {ms.failing + ms.error === 0 && ms.warning === 0 && (
-                    <span className="text-emerald-400 font-medium">{ms.passing}/{monTotal}</span>
-                  )}
+          const hasMonitors = ms && ms.total > 0;
+
+          if (!hasMonitors) {
+            return (
+              <div>
+                <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
+                  <span>Health</span>
+                  <span className="text-[var(--muted)] italic">Unknown</span>
                 </div>
+                <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
+                  <div className="h-full bg-gray-500 rounded-full" style={{ width: '100%', opacity: 0.3 }} />
+                </div>
+                <div className="text-[9px] text-[var(--muted)] mt-0.5 italic">No monitors configured</div>
+              </div>
+            );
+          }
+
+          const monTotal = ms.total;
+          const monPassed = ms.passing;
+          const monHealthPct = Math.round((monPassed / monTotal) * 100);
+
+          return (
+            <div>
+              <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
+                <span>Health</span>
+                <span className={
+                  monHealthPct >= 80 ? 'text-emerald-400 font-medium' :
+                  monHealthPct >= 60 ? 'text-amber-400 font-medium' : 'text-red-400 font-medium'
+                }>{monHealthPct}%</span>
               </div>
               <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden flex">
                 {ms.passing > 0 && (
@@ -379,6 +371,11 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
                 {(ms.failing + ms.error) > 0 && (
                   <div className="h-full bg-red-400" style={{ width: `${((ms.failing + ms.error) / monTotal) * 100}%` }} />
                 )}
+              </div>
+              <div className="text-[9px] text-[var(--muted)] mt-0.5">
+                {ms.passing}/{monTotal} passing
+                {ms.failing + ms.error > 0 && <span className="text-red-400 ml-1">{ms.failing + ms.error} failing</span>}
+                {ms.warning > 0 && <span className="text-amber-400 ml-1">{ms.warning} warning</span>}
               </div>
             </div>
           );
@@ -440,29 +437,52 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         </div>
       </div>
 
-      {/* Health score bar */}
-      {data.healthScore !== undefined && (
-        <div className="mt-2">
-          <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
-            <span>Health</span>
-            <span>{Math.round(data.healthScore)}%</span>
+      {/* Health score bar — derived from monitors when available, unknown otherwise */}
+      {(() => {
+        const ms = data.monitorSummary;
+        const hasMonitors = ms && ms.total > 0;
+
+        if (!hasMonitors) {
+          return (
+            <div className="mt-2">
+              <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
+                <span>Health</span>
+                <span className="italic">Unknown</span>
+              </div>
+              <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
+                <div className="h-full bg-gray-500 rounded-full" style={{ width: '100%', opacity: 0.3 }} />
+              </div>
+            </div>
+          );
+        }
+
+        const monTotal = ms.total;
+        const monPassed = ms.passing;
+        const monHealthPct = Math.round((monPassed / monTotal) * 100);
+
+        return (
+          <div className="mt-2">
+            <div className="flex items-center justify-between text-[10px] text-[var(--muted)] mb-1">
+              <span>Health</span>
+              <span className={
+                monHealthPct >= 80 ? 'text-emerald-400 font-medium' :
+                monHealthPct >= 60 ? 'text-amber-400 font-medium' : 'text-red-400 font-medium'
+              }>{monHealthPct}%</span>
+            </div>
+            <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden flex">
+              {ms.passing > 0 && (
+                <div className="h-full bg-emerald-400" style={{ width: `${(ms.passing / monTotal) * 100}%` }} />
+              )}
+              {ms.warning > 0 && (
+                <div className="h-full bg-amber-400" style={{ width: `${(ms.warning / monTotal) * 100}%` }} />
+              )}
+              {(ms.failing + ms.error) > 0 && (
+                <div className="h-full bg-red-400" style={{ width: `${((ms.failing + ms.error) / monTotal) * 100}%` }} />
+              )}
+            </div>
           </div>
-          <div className="h-1.5 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
-            <div
-              className="h-full rounded-full transition-all"
-              style={{
-                width: `${data.healthScore}%`,
-                backgroundColor:
-                  data.healthScore >= 80
-                    ? '#10B981'
-                    : data.healthScore >= 60
-                    ? '#F59E0B'
-                    : '#EF4444',
-              }}
-            />
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Findings badges */}
       {(data.findingsCount ?? 0) > 0 && (

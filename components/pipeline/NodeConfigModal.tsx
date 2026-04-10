@@ -11,6 +11,43 @@ import { createPortal } from 'react-dom';
 import { PipelineNode, getToolById, LAYER_COLORS, ConfigField } from './types';
 import { Loader2 } from 'lucide-react';
 
+const TOOL_LOGO_MAP: Record<string, string> = {
+  bigquery: '/icon_logos/google-bigquery-logo-1.svg',
+  snowflake: '/icon_logos/snowflake-data-cloud-icon.svg',
+  redshift: '/icon_logos/aws-redshift-logo.svg',
+  postgres: '/icon_logos/postgresql.svg',
+  sqlserver: '/icon_logos/azure-sql-server.svg',
+  azure_sql: '/icon_logos/azure-sql-server.svg',
+  azure_synapse: '/icon_logos/Microsoft_Azure-OXJddnt9u_brandlogos.net.svg',
+  databricks: '/icon_logos/azure-databricks.svg',
+  fivetran: '/icon_logos/fivetran_logo_icon_170149.svg',
+  airbyte: '/icon_logos/Airbyte_idZV_I3WYE_0.svg',
+  dbt_cloud: '/icon_logos/dbt-seeklogo.svg',
+  dbt_core: '/icon_logos/dbt-seeklogo.svg',
+  airflow: '/icon_logos/apache-airflow.svg',
+  dagster: '/icon_logos/dagster-primary-mark.svg',
+  prefect: '/icon_logos/prefect-1.svg',
+  looker: '/icon_logos/google-looker-seeklogo.svg',
+  tableau: '/icon_logos/tableau-icon-svgrepo-com.svg',
+  metabase: '/icon_logos/metabase.svg',
+  powerbi: '/icon_logos/powerbi.svg',
+  amazon_s3: '/icon_logos/amazon-web-services-light.svg',
+  gcs: '/icon_logos/google-cloud-platform.svg',
+  adls: '/icon_logos/Microsoft_Azure-OXJddnt9u_brandlogos.net.svg',
+  github: '/icon_logos/github-light.svg',
+  github_issues: '/icon_logos/github-light.svg',
+  gitlab: '/icon_logos/gitlab.svg',
+  bitbucket: '/icon_logos/bitbucket.svg',
+  slack: '/icon_logos/slack.svg',
+  pagerduty: '/icon_logos/pagerduty.svg',
+  opsgenie: '/icon_logos/atlassian-opsgenie.svg',
+  teams: '/icon_logos/microsoft-teams.svg',
+  jira: '/icon_logos/jira.svg',
+  linear: '/icon_logos/linear-dark.svg',
+  asana: '/icon_logos/asana.svg',
+  linux_server: '/icon_logos/linux.svg',
+};
+
 interface NodeConfigModalProps {
   node: PipelineNode;
   stackId?: string; // Needed for API calls to fetch dynamic options
@@ -452,20 +489,27 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div 
-                className="w-12 h-12 rounded-xl flex items-center justify-center"
-                style={{ backgroundColor: layerColor + '20' }}
+              <div
+                className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 bg-white"
               >
-                <svg 
-                  className="w-6 h-6" 
-                  viewBox="0 0 24 24" 
-                  fill="none" 
-                  stroke={layerColor}
-                  strokeWidth="2"
-                >
-                  <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                  <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
+                {TOOL_LOGO_MAP[node.toolType] ? (
+                  <img
+                    src={TOOL_LOGO_MAP[node.toolType]}
+                    alt={`${node.toolType} logo`}
+                    className="w-7 h-7 object-contain"
+                  />
+                ) : (
+                  <svg
+                    className="w-6 h-6"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={layerColor}
+                    strokeWidth="2"
+                  >
+                    <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                    <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  </svg>
+                )}
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-[var(--text)]">

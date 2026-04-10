@@ -15,32 +15,6 @@ function LoginForm() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [formError, setFormError] = useState('');
-  const [showSsoInput, setShowSsoInput] = useState(false);
-  const [ssoEmail, setSsoEmail] = useState('');
-  const [ssoLoading, setSsoLoading] = useState(false);
-  const [ssoError, setSsoError] = useState('');
-
-  const handleSsoLookup = async () => {
-    setSsoLoading(true);
-    setSsoError('');
-    try {
-      const res = await fetch('/api/auth/sso/lookup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: ssoEmail }),
-      });
-      const data = await res.json();
-      if (data.hasOidc) {
-        window.location.href = '/api/auth/oidc/authorize';
-      } else {
-        setSsoError('No SSO provider configured for this email domain.');
-      }
-    } catch {
-      setSsoError('Failed to look up SSO provider.');
-    } finally {
-      setSsoLoading(false);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -197,37 +171,6 @@ function LoginForm() {
             </button>
           </div>
 
-          <div className="mt-4">
-            {!showSsoInput ? (
-              <button
-                onClick={() => setShowSsoInput(true)}
-                className="btn btn-secondary w-full justify-center"
-              >
-                Sign in with SSO
-              </button>
-            ) : (
-              <div className="space-y-3">
-                <input
-                  type="email"
-                  value={ssoEmail}
-                  onChange={(e) => setSsoEmail(e.target.value)}
-                  placeholder="you@company.com"
-                  className="auth-input"
-                  onKeyDown={(e) => e.key === 'Enter' && ssoEmail && handleSsoLookup()}
-                />
-                {ssoError && (
-                  <p className="text-red-400 text-sm">{ssoError}</p>
-                )}
-                <button
-                  onClick={handleSsoLookup}
-                  disabled={ssoLoading || !ssoEmail}
-                  className="btn btn-elevated w-full justify-center"
-                >
-                  {ssoLoading ? 'Looking up...' : 'Continue with SSO'}
-                </button>
-              </div>
-            )}
-          </div>
         </div>
 
         <p className="mt-8 text-center text-sm text-[var(--muted)]">

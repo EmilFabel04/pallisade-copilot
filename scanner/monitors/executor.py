@@ -27,6 +27,7 @@ from .uniqueness_check import UniquenessCheckMonitor
 from .range_validation import RangeValidationMonitor
 from .accepted_values import AcceptedValuesMonitor
 from .date_consistency import DateConsistencyMonitor
+from .custom_sql import CustomSqlMonitor
 from .explainer import enrich_result
 from .infrastructure import INFRA_MONITOR_TYPES, INFRA_MONITOR_REGISTRY
 from .bi import BI_MONITOR_TYPES, BI_MONITOR_REGISTRY
@@ -48,6 +49,7 @@ MONITOR_REGISTRY: Dict[str, type] = {
     "range_validation": RangeValidationMonitor,
     "accepted_values": AcceptedValuesMonitor,
     "date_consistency": DateConsistencyMonitor,
+    "custom_sql": CustomSqlMonitor,
     # data_type_validation uses SchemaMonitor with mode="type_validation"
     "data_type_validation": SchemaMonitor,
 }
@@ -215,6 +217,12 @@ class MonitorExecutor:
                 config = self._auto_config_freshness(
                     database, schema, table, config
                 )
+            elif resolved_type == "null_check":
+                raw_cols = config.get("columns", config.get("column", "*"))
+                if raw_cols == "*" or raw_cols == ["*"]:
+                    config = self._auto_resolve_null_columns(
+                        database, schema, table, config
+                    )
             elif resolved_type == "volume":
                 # Always discover timestamp column so daily bucketing works,
                 # even when user has set min_rows/max_rows thresholds.
@@ -449,6 +457,43 @@ class MonitorExecutor:
             has_min_max=stddev == 0,
             detected_mode=config.get("_detected_volume_mode"),
         )
+        return config
+
+    def _auto_resolve_null_columns(
+        self,
+        database: str,
+        schema: str,
+        table: str,
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Resolve wildcard '*' columns for null_check by querying INFORMATION_SCHEMA."""
+        if self.dialect == "bigquery":
+            fqn = f"`{database}.{schema}.INFORMATION_SCHEMA.COLUMNS`"
+            sql = (
+                f"SELECT column_name FROM {fqn} "
+                f"WHERE table_name = '{table}' "
+                f"ORDER BY ordinal_position"
+            )
+        else:
+            # Postgres / Redshift / Snowflake all support information_schema.columns
+            sql = (
+                f"SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = '{schema}' AND table_name = '{table}' "
+                f"ORDER BY ordinal_position"
+            )
+
+        rows = self.query_func(sql)
+        if rows:
+            columns = [r["column_name"] for r in rows if r.get("column_name")]
+            if columns:
+                config["columns"] = columns
+                config["_auto_configured"] = True
+                logger.info(
+                    "[AutoConfig] Null check columns resolved",
+                    table=f"{database}.{schema}.{table}",
+                    column_count=len(columns),
+                )
+
         return config
 
     def run_all(

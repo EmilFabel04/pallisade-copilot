@@ -229,6 +229,39 @@ class BaselineStore:
             row = cur.fetchone()
             return row[0] if row else None
 
+    def get_latest_details(
+        self,
+        monitor_id: str,
+        metric_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Get the ``details`` JSON of the most recent observation.
+
+        Used by monitors that persist non-numeric state (e.g. schema
+        snapshots for connector_schema_drift) in the details column.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT details
+                FROM "MonitorBaseline"
+                WHERE "monitorId" = %s
+                  AND "metricName" = %s
+                ORDER BY "measuredAt" DESC
+                LIMIT 1
+                """,
+                (monitor_id, metric_name),
+            )
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return None
+            raw = row[0]
+            if isinstance(raw, dict):
+                return raw
+            try:
+                return json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+
     # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------

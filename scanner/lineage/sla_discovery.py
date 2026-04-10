@@ -280,44 +280,275 @@ def _get_table_metadata(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]
 # Direct-query compute functions
 # ---------------------------------------------------------------------------
 
-def _compute_freshness(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Compute freshness threshold from table metadata.
+def _get_update_history(adapter: Any, table_fqn: str, limit: int = 30) -> Optional[List[float]]:
+    """Query historical update timestamps and return intervals in hours.
 
-    Uses pre-fetched metadata (from _get_table_metadata) to avoid
-    expensive table scans.
+    Uses warehouse-specific system tables to find past mutation events,
+    then computes the hour-gaps between consecutive updates.
+
+    Returns a list of interval-in-hours values (most recent first),
+    or None if history is unavailable.
+    """
+    dialect = getattr(adapter, "dialect", "").lower()
+    db, schema, tbl = _parse_fqn(adapter, table_fqn)
+
+    timestamps_query: Optional[str] = None
+
+    if dialect == "bigquery":
+        # INFORMATION_SCHEMA.JOBS logs every mutation with creation_time.
+        # Requires region prefix — try region-us, fall back to regionless.
+        for region_prefix in (f"`region-us`.", f"`region-eu`.", ""):
+            timestamps_query = f"""
+                SELECT creation_time AS ts
+                FROM {region_prefix}INFORMATION_SCHEMA.JOBS
+                WHERE destination_table.table_id = '{tbl}'
+                  AND destination_table.dataset_id = '{schema}'
+                  AND statement_type IN ('INSERT', 'MERGE', 'CREATE_TABLE_AS_SELECT', 'COPY')
+                  AND state = 'DONE'
+                ORDER BY creation_time DESC
+                LIMIT {limit}
+            """
+            try:
+                rows = adapter.execute_query(timestamps_query)
+                if rows and len(rows) >= 2:
+                    return _timestamps_to_intervals(rows, "ts")
+            except Exception:
+                continue
+        return None
+
+    elif dialect == "snowflake":
+        timestamps_query = f"""
+            SELECT END_TIME AS ts
+            FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+            WHERE QUERY_TYPE IN ('INSERT', 'MERGE', 'COPY', 'CREATE_TABLE_AS_SELECT')
+              AND DATABASE_NAME = '{db.upper()}'
+              AND SCHEMA_NAME = '{schema.upper()}'
+              AND QUERY_TEXT ILIKE '%{tbl}%'
+              AND EXECUTION_STATUS = 'SUCCESS'
+            ORDER BY END_TIME DESC
+            LIMIT {limit}
+        """
+
+    elif dialect == "redshift":
+        timestamps_query = f"""
+            SELECT DISTINCT i.starttime AS ts
+            FROM STL_INSERT i
+            JOIN SVV_TABLE_INFO t ON i.tbl = t.table_id
+            WHERE t."schema" = '{schema or "public"}'
+              AND t."table" = '{tbl}'
+            ORDER BY i.starttime DESC
+            LIMIT {limit}
+        """
+
+    elif dialect == "postgres":
+        # Postgres has no mutation history. Try to find a timestamp column
+        # in the actual table and bucket by it to infer update cadence.
+        return _infer_intervals_from_timestamp_column(adapter, table_fqn, limit)
+
+    if not timestamps_query:
+        return None
+
+    try:
+        rows = adapter.execute_query(timestamps_query)
+        if rows and len(rows) >= 2:
+            return _timestamps_to_intervals(rows, "ts")
+    except Exception as e:
+        logger.debug("[SLA Discovery] %s: update history query failed: %s", table_fqn, e)
+
+    # Fallback for all dialects: try timestamp column scan
+    return _infer_intervals_from_timestamp_column(adapter, table_fqn, limit)
+
+
+def _timestamps_to_intervals(rows: List[Dict], key: str) -> Optional[List[float]]:
+    """Convert a list of timestamp rows into intervals in hours."""
+    from datetime import datetime, timezone
+
+    timestamps = []
+    for r in rows:
+        ts = r.get(key) or r.get(key.upper())
+        if ts is None:
+            continue
+        if isinstance(ts, str):
+            # Parse ISO format
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S%z",
+                        "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+                try:
+                    ts = datetime.strptime(ts, fmt)
+                    break
+                except ValueError:
+                    continue
+            else:
+                continue
+        if hasattr(ts, 'timestamp'):
+            timestamps.append(ts)
+
+    if len(timestamps) < 2:
+        return None
+
+    # Sort descending (most recent first)
+    timestamps.sort(reverse=True)
+
+    intervals = []
+    for i in range(len(timestamps) - 1):
+        diff_hours = abs((timestamps[i] - timestamps[i + 1]).total_seconds()) / 3600
+        if diff_hours > 0:
+            intervals.append(round(diff_hours, 2))
+
+    return intervals if intervals else None
+
+
+def _infer_intervals_from_timestamp_column(adapter: Any, table_fqn: str, limit: int = 30) -> Optional[List[float]]:
+    """Fallback: find a timestamp column in the table and bucket updates by it."""
+    try:
+        columns = adapter.get_columns(table_fqn)
+    except Exception:
+        return None
+
+    if not columns:
+        return None
+
+    # Find a timestamp-type column (prefer updated_at, modified_at, created_at patterns)
+    ts_candidates = []
+    for c in columns:
+        dtype = getattr(c, "data_type", "").lower()
+        if any(t in dtype for t in ("timestamp", "datetime", "date")):
+            ts_candidates.append(c.name)
+
+    if not ts_candidates:
+        return None
+
+    # Prefer columns with update/modified/created in the name
+    preferred = [c for c in ts_candidates if any(k in c.lower() for k in ("updated", "modified", "loaded", "ingested"))]
+    if not preferred:
+        preferred = [c for c in ts_candidates if "created" in c.lower()]
+    if not preferred:
+        preferred = ts_candidates
+
+    ts_col = preferred[0]
+
+    dialect = getattr(adapter, "dialect", "").lower()
+    db, schema, tbl = _parse_fqn(adapter, table_fqn)
+
+    if dialect == "bigquery":
+        q = lambda c: f"`{c}`"
+        quoted_table = f"`{db}`.`{schema}`.`{tbl}`"
+        trunc_expr = f"TIMESTAMP_TRUNC(MAX({q(ts_col)}), HOUR)"
+    elif dialect == "snowflake":
+        q = lambda c: f'"{c}"'
+        quoted_table = f'{db}.{schema}."{tbl}"'
+        trunc_expr = f"DATE_TRUNC('HOUR', MAX({q(ts_col)}))"
+    else:
+        q = lambda c: f'"{c}"'
+        quoted_table = f'"{schema}"."{tbl}"' if schema else f'"{tbl}"'
+        trunc_expr = f"DATE_TRUNC('hour', MAX({q(ts_col)}))"
+
+    # Group by date to get one data-point per day — avoids scanning every row
+    if dialect == "bigquery":
+        date_expr = f"DATE({q(ts_col)})"
+    else:
+        date_expr = f"CAST({q(ts_col)} AS DATE)"
+
+    query = f"""
+        SELECT {trunc_expr} AS ts
+        FROM {quoted_table}
+        GROUP BY {date_expr}
+        ORDER BY ts DESC
+        LIMIT {limit}
+    """
+
+    try:
+        rows = adapter.execute_query(query)
+        if rows and len(rows) >= 2:
+            return _timestamps_to_intervals(rows, "ts")
+    except Exception as e:
+        logger.debug("[SLA Discovery] %s: timestamp column scan failed: %s", table_fqn, e)
+
+    return None
+
+
+def _compute_freshness(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Compute freshness threshold purely from the data.
+
+    Queries historical update timestamps from warehouse system tables
+    (or timestamp columns in the data itself) to compute the real
+    average update interval.  Thresholds are derived from that interval:
+      warning = avg interval + 1 stddev (or 1.5x if < 3 data points)
+      max     = avg interval + 2 stddev (or 2x if < 3 data points)
     """
     info = metadata
     if not info:
         return None
 
     hours_since = info.get("hours_since_update")
+    last_updated = info.get("last_updated")
+
+    # Try to get real update history from the warehouse
+    intervals = _get_update_history(adapter, table_fqn)
+
+    if intervals and len(intervals) >= 2:
+        avg_interval = sum(intervals) / len(intervals)
+        n = len(intervals)
+
+        if n >= 3:
+            variance = sum((x - avg_interval) ** 2 for x in intervals) / (n - 1)
+            stddev = math.sqrt(variance)
+        else:
+            # Not enough data for stddev — use 50% of avg as proxy
+            stddev = avg_interval * 0.5
+
+        warning_hours = avg_interval + stddev
+        max_hours = avg_interval + 2 * stddev
+
+        # Round to nearest sensible interval
+        if avg_interval < 2:
+            warning_hours = round(warning_hours, 1)
+            max_hours = round(max_hours, 1)
+        elif avg_interval < 12:
+            warning_hours = math.ceil(warning_hours)
+            max_hours = math.ceil(max_hours)
+        elif avg_interval < 48:
+            warning_hours = math.ceil(warning_hours / 6) * 6
+            max_hours = math.ceil(max_hours / 6) * 6
+        else:
+            warning_hours = math.ceil(warning_hours / 12) * 12
+            max_hours = math.ceil(max_hours / 12) * 12
+
+        if max_hours <= warning_hours:
+            max_hours = warning_hours + max(1, round(avg_interval * 0.25))
+
+        return {
+            "enabled": True,
+            "maxHours": max_hours,
+            "warningHours": warning_hours,
+            "lastModified": last_updated,
+            "observedAgeHours": round(float(hours_since), 1) if hours_since is not None else None,
+            "avgIntervalHours": round(avg_interval, 1),
+            "dataPoints": n,
+        }
+
+    # Fallback: only a single snapshot available — use hours_since as
+    # the best available estimate of the interval
     if hours_since is None:
         return None
 
     hours_since = float(hours_since)
 
-    # Derive thresholds from current staleness:
-    #   warning = round up current age to nearest sensible interval
-    #   max     = 2x warning (buffer for variance)
-    if hours_since < 1:
-        warning_hours = 1
-        max_hours = 2
-    elif hours_since < 6:
-        warning_hours = math.ceil(hours_since)
-        max_hours = warning_hours * 2
-    elif hours_since < 24:
-        # Round to nearest 6h
-        warning_hours = math.ceil(hours_since / 6) * 6
-        max_hours = warning_hours + 6
-    else:
-        # Round to nearest 12h
-        warning_hours = math.ceil(hours_since / 12) * 12
-        max_hours = warning_hours + 12
+    # With only one data point, warning=1.5x and max=2x is the best we can do
+    warning_hours = round(hours_since * 1.5, 1)
+    max_hours = round(hours_since * 2, 1)
+
+    if max_hours <= warning_hours:
+        max_hours = warning_hours + max(1, round(hours_since * 0.25, 1))
 
     return {
         "enabled": True,
         "maxHours": max_hours,
         "warningHours": warning_hours,
+        "lastModified": last_updated,
+        "observedAgeHours": round(hours_since, 1),
+        "avgIntervalHours": round(hours_since, 1),
+        "dataPoints": 1,
     }
 
 
@@ -668,6 +899,50 @@ async def discover_sla_profile(
 
     return DiscoveryResult(
         node_fqn=node.fqn,
+        warehouse_ancestor_fqn=table_fqn,
+        freshness=freshness,
+        volume=volume,
+        quality=quality,
+        schema=schema,
+        uniqueness=uniqueness,
+    )
+
+
+async def discover_sla_direct(
+    table_fqn: str,
+    adapter: Any,
+) -> DiscoveryResult:
+    """Discover SLA profile directly from a table FQN — no lineage graph needed.
+
+    Use this when the caller already knows the warehouse table FQN and has
+    a connected adapter.  Skips the graph ancestor walk entirely.
+    """
+    logger.info("[SLA Discovery] Direct profiling %s", table_fqn)
+
+    metadata = _get_table_metadata(adapter, table_fqn)
+    logger.info("[SLA Discovery] %s: metadata=%s", table_fqn, metadata)
+
+    freshness = _compute_freshness(adapter, table_fqn, metadata=metadata)
+    volume = _compute_volume(adapter, table_fqn, metadata=metadata)
+    schema = _compute_schema(adapter, table_fqn)
+    quality = _compute_quality(adapter, table_fqn)
+    uniqueness = _compute_uniqueness(adapter, table_fqn)
+
+    dimensions = [freshness, volume, quality, schema, uniqueness]
+    discovered = sum(1 for x in dimensions if x is not None and x.get("enabled", True))
+    logger.info(
+        "[SLA Discovery] %s: %d/5 dimensions discovered (freshness=%s volume=%s quality=%s schema=%s uniqueness=%s)",
+        table_fqn,
+        discovered,
+        "yes" if freshness else "no",
+        "yes" if volume else "no",
+        "yes" if quality else "no",
+        "yes" if schema else "no",
+        "yes" if uniqueness and uniqueness.get("enabled") else "no",
+    )
+
+    return DiscoveryResult(
+        node_fqn=table_fqn,
         warehouse_ancestor_fqn=table_fqn,
         freshness=freshness,
         volume=volume,

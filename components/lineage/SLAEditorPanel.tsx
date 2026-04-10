@@ -174,10 +174,12 @@ export function SLAEditorPanel({
     schema_profile?: any;
     uniqueness?: any;
   }>>([]);
+  const [bulkPage, setBulkPage] = useState(0);
 
   useEffect(() => {
     setBulkDiscoveryState('idle');
     setBulkResults([]);
+    setBulkPage(0);
   }, [selectedNodeIds]);
 
   // Flat values state — initialized from discoveryDefaults when provided
@@ -313,12 +315,17 @@ export function SLAEditorPanel({
   const handleBulkDiscover = useCallback(async () => {
     setBulkDiscoveryState('loading');
     try {
-      // Only send warehouse tables/views/models — other node types can't be discovered
-      const engineIds = discoverableNodes.map((n) => n.id.replace(/^lineage-/, ''));
+      // Send node metadata so discovery works without a fresh lineage graph
+      const nodes = discoverableNodes.map((n) => ({
+        id: n.id.replace(/^lineage-/, ''),
+        platform: n.platforms?.[0] || undefined,
+        tableFqn: n.fullName || undefined,
+      }));
+      const engineIds = nodes.map((n) => n.id);
       const res = await fetch('/api/nodes/sla/discover-bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodeIds: engineIds, stackId }),
+        body: JSON.stringify({ nodeIds: engineIds, stackId, nodes }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -447,55 +454,146 @@ export function SLAEditorPanel({
         </div>
       )}
 
-      {/* Bulk discovery results */}
-      {bulkDiscoveryState === 'results' && (
+      {/* Bulk discovery results — paginated, 5 at a time */}
+      {bulkDiscoveryState === 'results' && (() => {
+        const PAGE_SIZE = 5;
+        const totalPages = Math.max(1, Math.ceil(bulkResults.length / PAGE_SIZE));
+        const pageResults = bulkResults.slice(bulkPage * PAGE_SIZE, (bulkPage + 1) * PAGE_SIZE);
+
+        return (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-[12px] font-medium text-[var(--text)]">
               {discoveredCount} discovered, {skippedCount} skipped
             </p>
             <button
-              onClick={() => { setBulkDiscoveryState('idle'); setBulkResults([]); }}
+              onClick={() => { setBulkDiscoveryState('idle'); setBulkResults([]); setBulkPage(0); }}
               className="text-[11px] text-[var(--muted)] hover:text-[var(--text)] underline"
             >
               Dismiss
             </button>
           </div>
 
-          {bulkResults.map((r) => {
+          {pageResults.map((r) => {
             const shortName = r.node_fqn.split('.').pop() || r.node_fqn;
-            const dims = [
-              r.freshness ? 'F' : null,
-              r.volume ? 'V' : null,
-              r.quality ? 'Q' : null,
-              r.schema_profile ? 'S' : null,
-              r.uniqueness && !r.uniqueness.skipped ? 'U' : null,
-            ].filter(Boolean);
+
+            if (r.unsupported) {
+              return (
+                <div key={r.node_fqn} className="p-2.5 rounded-lg border border-[var(--subtle-border)] opacity-50">
+                  <p className="text-[11px] font-mono text-[var(--text)] truncate" title={r.node_fqn}>{shortName}</p>
+                  <p className="text-[10px] text-[var(--text-faint)] mt-0.5">{r.skipped_reason}</p>
+                </div>
+              );
+            }
 
             return (
-              <div
-                key={r.node_fqn}
-                className={`p-2.5 rounded-lg border ${r.unsupported ? 'border-[var(--subtle-border)] opacity-50' : 'border-cyan-500/20 bg-cyan-500/5'}`}
-              >
-                <p className="text-[11px] font-mono text-[var(--text)] truncate" title={r.node_fqn}>
-                  {shortName}
-                </p>
-                {r.unsupported ? (
-                  <p className="text-[10px] text-[var(--text-faint)] mt-0.5">{r.skipped_reason}</p>
-                ) : (
-                  <div className="flex gap-1 mt-1">
-                    {dims.map((d) => (
-                      <span key={d} className="px-1.5 py-0.5 text-[9px] font-medium rounded bg-cyan-500/20 text-cyan-400">
-                        {d}
-                      </span>
-                    ))}
+              <div key={r.node_fqn} className="p-2.5 rounded-lg border border-cyan-500/20 bg-cyan-500/5 space-y-2">
+                <p className="text-[11px] font-mono text-[var(--text)] truncate" title={r.node_fqn}>{shortName}</p>
+
+                {/* Freshness */}
+                {r.freshness && (
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-medium text-cyan-400 uppercase tracking-wide">Freshness</p>
+                    {r.freshness.avgIntervalHours != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Avg interval: <span className="text-[var(--text)] font-medium">{r.freshness.avgIntervalHours}h</span>
+                        {r.freshness.dataPoints != null && <span className="text-[var(--text-faint)]"> ({r.freshness.dataPoints} updates)</span>}
+                      </p>
+                    )}
+                    {r.freshness.warningHours != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Warning: <span className="text-[var(--text)] font-medium">{r.freshness.warningHours}h</span></p>
+                    )}
+                    {r.freshness.maxHours != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Max: <span className="text-[var(--text)] font-medium">{r.freshness.maxHours}h</span></p>
+                    )}
+                    {r.freshness.lastModified && (
+                      <p className="text-[10px] text-[var(--text-faint)]">Last modified: {new Date(r.freshness.lastModified).toLocaleString()}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Volume */}
+                {r.volume && (
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-medium text-cyan-400 uppercase tracking-wide">Volume</p>
+                    {r.volume.currentRows != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Current: <span className="text-[var(--text)] font-medium">{Number(r.volume.currentRows).toLocaleString()} rows</span></p>
+                    )}
+                    {r.volume.minRows != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Min: <span className="text-[var(--text)] font-medium">{Number(r.volume.minRows).toLocaleString()}</span></p>
+                    )}
+                    {r.volume.maxRows != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Max: <span className="text-[var(--text)] font-medium">{Number(r.volume.maxRows).toLocaleString()}</span></p>
+                    )}
+                  </div>
+                )}
+
+                {/* Quality */}
+                {r.quality && (
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-medium text-cyan-400 uppercase tracking-wide">Quality</p>
+                    {r.quality.currentAvgNullRate != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Avg null rate: <span className="text-[var(--text)] font-medium">{(r.quality.currentAvgNullRate * 100).toFixed(1)}%</span></p>
+                    )}
+                    {r.quality.maxNullRate != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Threshold: <span className="text-[var(--text)] font-medium">{(r.quality.maxNullRate * 100).toFixed(1)}%</span></p>
+                    )}
+                  </div>
+                )}
+
+                {/* Schema */}
+                {r.schema_profile && (
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-medium text-cyan-400 uppercase tracking-wide">Schema</p>
+                    {r.schema_profile.columnCount != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Columns: <span className="text-[var(--text)] font-medium">{r.schema_profile.columnCount}</span></p>
+                    )}
+                    {r.schema_profile.strictness && (
+                      <p className="text-[10px] text-[var(--muted)]">Strictness: <span className="text-[var(--text)] font-medium">{r.schema_profile.strictness}</span></p>
+                    )}
+                  </div>
+                )}
+
+                {/* Uniqueness */}
+                {r.uniqueness && !r.uniqueness.skipped && (
+                  <div className="space-y-0.5">
+                    <p className="text-[10px] font-medium text-cyan-400 uppercase tracking-wide">Uniqueness</p>
+                    {r.uniqueness.duplicateRate != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Duplicate rate: <span className={`font-medium ${r.uniqueness.duplicateRate > 0 ? 'text-amber-400' : 'text-[var(--text)]'}`}>{(r.uniqueness.duplicateRate * 100).toFixed(2)}%</span></p>
+                    )}
+                    {r.uniqueness.primaryKeyColumns?.length > 0 && (
+                      <p className="text-[10px] text-[var(--muted)]">PK: <span className="text-[var(--text)] font-mono">{r.uniqueness.primaryKeyColumns.join(', ')}</span></p>
+                    )}
                   </div>
                 )}
               </div>
             );
           })}
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-1">
+              <button
+                onClick={() => setBulkPage((p) => Math.max(0, p - 1))}
+                disabled={bulkPage === 0}
+                className="text-[11px] px-2 py-1 rounded border border-[var(--subtle-border)] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Prev
+              </button>
+              <span className="text-[11px] text-[var(--muted)]">
+                {bulkPage + 1} / {totalPages}
+              </span>
+              <button
+                onClick={() => setBulkPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={bulkPage >= totalPages - 1}
+                className="text-[11px] px-2 py-1 rounded border border-[var(--subtle-border)] text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {bulkDiscoveryState !== 'results' && bulkDiscoveryState !== 'loading' && (
         <>
@@ -544,6 +642,16 @@ export function SLAEditorPanel({
           {applicableSections.includes('freshness') && (
             <div className="space-y-2 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
               <h4 className="text-[11px] font-medium text-[var(--text)] uppercase tracking-wide">Freshness</h4>
+              {getVal('freshnessConfig', 'avgIntervalHours') != null && (
+                <div className="text-[11px] text-[var(--muted)] space-y-0.5">
+                  <p>Avg update interval: <span className="text-[var(--text)] font-medium">{getVal('freshnessConfig', 'avgIntervalHours')}h</span>
+                    {getVal('freshnessConfig', 'dataPoints') != null && <span className="text-[var(--text-faint)]"> ({getVal('freshnessConfig', 'dataPoints')} updates observed)</span>}
+                  </p>
+                  {getVal('freshnessConfig', 'observedAgeHours') != null && (
+                    <p>Current age: <span className="text-[var(--text)] font-medium">{getVal('freshnessConfig', 'observedAgeHours')}h</span></p>
+                  )}
+                </div>
+              )}
               <NumberInput
                 label="Max hours"
                 value={getVal('freshnessConfig', 'maxHours')}

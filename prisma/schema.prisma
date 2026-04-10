@@ -1984,7 +1984,6 @@ enum MonitorKind {
   BI_UPSTREAM_BREAK_RISK
   BI_CONTENT_HEALTH
   BI_REFRESH_FAILURE
-  BI_LOGIC_VALIDATION
   // AI-powered monitors
   AI_PROMPT // LLM-based custom business logic monitor
 }
