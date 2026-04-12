@@ -53,10 +53,16 @@ export function DriftRecommendationCard({ rec, onAccept, onDismiss }: Props) {
 
   // Format field label: "freshness.maxHours" → "Max Hours"
   const fieldParts = rec.currentField.split('.');
-  const fieldLabel = (fieldParts[1] || fieldParts[0])
+  const rawFieldLabel = (fieldParts[1] || fieldParts[0])
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, s => s.toUpperCase())
     .trim();
+  // Clarify volume labels — monitors use daily bucketing, not total count
+  const fieldLabel = rec.driftCategory === 'volume' && rawFieldLabel === 'Min Rows'
+    ? 'Min Daily Volume'
+    : rec.driftCategory === 'volume' && rawFieldLabel === 'Max Rows'
+    ? 'Max Daily Volume'
+    : rawFieldLabel;
 
   const isTightening = !isNaN(Number(rec.currentValue)) && !isNaN(Number(rec.recommendedValue))
     && Number(rec.recommendedValue) < Number(rec.currentValue);
