@@ -167,7 +167,7 @@ export const MONITOR_CATALOG: MonitorDefinition[] = [
     supports_baselines: true,
     auto_configurable: true,
     config_schema: [
-      { key: 'columns', label: 'Columns (comma-separated, blank = auto-detect PKs)', type: 'text', placeholder: 'Auto-detect', advanced: true },
+      { key: 'columns', label: 'Columns (comma-separated)', type: 'text', placeholder: 'e.g. id, email', required: true },
       { key: 'max_duplicate_rate', label: 'Max duplicate rate (0-1)', type: 'number', placeholder: '0.01', default_value: 0.01, advanced: true },
     ],
   },
