@@ -315,7 +315,7 @@ export function MonitorEditPanel({ monitor, resolvedPolicy, onSave }: MonitorEdi
           type="button"
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-2 rounded-lg bg-slate-500/20 hover:bg-slate-500/30 text-slate-300 text-[13px] font-medium transition-colors disabled:opacity-50"
+          className="px-4 py-2 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white text-[13px] font-medium transition-colors disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Save changes'}
         </button>
