@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta, type ChildItem } from './NodeSelectionSurface';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertChannelPicker } from './AlertChannelPicker';
+import { AlertDestinationPicker, type AlertDestination } from './AlertDestinationPicker';
 import { ColumnPicker } from './ColumnPicker';
 import { getMonitorDefinition, DOMAIN_MONITOR_MAP, DOMAIN_COLORS, TOOL_HEALTH_DEFAULTS, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
 import type { MonitoringPlanPreview } from '@/types/health-watch';
@@ -406,6 +407,7 @@ export function MultiMonitorModal({
   const [schedule, setSchedule] = useState('0 */6 * * *');
   const [alertChannels, setAlertChannels] = useState<string[]>([]);
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'ERROR']);
+  const [alertDestinations, setAlertDestinations] = useState<AlertDestination[]>([]);
   const [creating, setCreating] = useState(false);
 
   // Collapsed node sections
@@ -443,6 +445,7 @@ export function MultiMonitorModal({
       setSchedule('0 */6 * * *');
       setAlertChannels([]);
       setAlertOnStatus(['FAIL', 'ERROR']);
+      setAlertDestinations([]);
       setCreating(false);
       setCollapsedNodes(new Set());
     }
@@ -896,11 +899,11 @@ export function MultiMonitorModal({
         if (totalMonitorCount === 0) return false;
         return !incompleteToolConfig;
       case 3:
-        return true;
+        return configTab === 'ai-prompt' || !!preview;
       default:
         return false;
     }
-  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, incompleteToolConfig]);
+  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, incompleteToolConfig, preview]);
 
   // ---- Create plan or task ----
   const handleCreate = useCallback(async () => {
@@ -1081,6 +1084,7 @@ export function MultiMonitorModal({
             timezone,
             alertChannels,
             alertOnStatus,
+            alertDestinations,
             groups: filteredGroups,
             stackId,
           }),
@@ -1116,6 +1120,7 @@ export function MultiMonitorModal({
     schedule,
     alertChannels,
     alertOnStatus,
+    alertDestinations,
     aiPrompt,
     aiIntegrationId,
     selectedNodesWithMonitors,
@@ -1550,14 +1555,17 @@ export function MultiMonitorModal({
                   <ScheduleInput value={schedule} onChange={setSchedule} />
                 </div>
 
-                {/* Alert Channels */}
+                {/* Alert destinations — per-integration routing */}
                 <div>
-                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Alerts</label>
-                  <AlertChannelPicker
-                    channels={alertChannels}
-                    onChannelsChange={setAlertChannels}
-                    alertOnStatus={alertOnStatus}
-                    onAlertOnStatusChange={setAlertOnStatus}
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Alert destinations</label>
+                  <p className="text-[11px] text-[var(--muted)] mb-2">
+                    Pick which integrations receive alerts, and which monitor states each one reacts to. These
+                    apply to every monitor being created — you can override per-monitor later from the monitor edit panel.
+                  </p>
+                  <AlertDestinationPicker
+                    destinations={alertDestinations}
+                    onChange={setAlertDestinations}
+                    defaultTriggerOn={['FAIL', 'ERROR']}
                     integrations={integrations.length > 0 ? integrations : undefined}
                   />
                 </div>
@@ -1664,7 +1672,7 @@ export function MultiMonitorModal({
                 'px-5 py-2 rounded-lg text-[13px] font-medium transition-colors',
                 canGoNext && !creating
                   ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90'
-                  : 'bg-[var(--muted)]/20 text-[var(--muted)] cursor-not-allowed',
+                  : 'bg-[var(--muted)]/30 text-[var(--muted)] cursor-not-allowed border border-[var(--muted)]/20',
               )}
             >
               {creating ? 'Creating...' : configTab === 'ai-prompt' ? 'Create AI Monitor' : 'Create Monitor'}
