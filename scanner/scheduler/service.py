@@ -103,6 +103,7 @@ class SchedulerService:
             try:
                 await self._check_due_tasks()
                 await self._check_drift_analysis()
+                await self._check_lineage_extraction()
             except Exception as e:
                 logger.error(f"[Scheduler] Error in loop: {e}")
             await asyncio.sleep(self._interval)
@@ -133,6 +134,93 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f"[Scheduler] Drift analysis check failed: {e}")
+
+    async def _check_lineage_extraction(self):
+        """Check for pipeline stacks due for automatic lineage re-extraction."""
+        import httpx
+        from datetime import timedelta
+
+        conn = self._get_connection()
+        if not conn:
+            return
+
+        try:
+            cursor = conn.cursor()
+            six_hours_ago = datetime.now(timezone.utc) - timedelta(hours=6)
+
+            # Find stacks where auto-extraction is enabled and last extraction was >6h ago
+            cursor.execute(
+                """
+                SELECT id, "lastLineageExtractedAt"
+                FROM "PipelineStack"
+                WHERE "lineageExtractionEnabled" = true
+                  AND (
+                    "lastLineageExtractedAt" IS NULL
+                    OR "lastLineageExtractedAt" <= %s
+                  )
+                """,
+                (six_hours_ago,),
+            )
+            due_stacks = cursor.fetchall()
+            cursor.close()
+
+            if not due_stacks:
+                return
+
+            logger.info(
+                "[Scheduler] Lineage extraction due",
+                count=len(due_stacks),
+            )
+
+            nextauth_url = os.environ.get("NEXTAUTH_URL", "http://localhost:3000")
+            internal_key = os.environ.get(
+                "INTERNAL_API_KEY", "dev-internal-key-not-for-production"
+            )
+
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(620.0)
+            ) as client:
+                for stack_id, last_extracted in due_stacks:
+                    try:
+                        logger.info(
+                            "[Scheduler] Starting lineage extraction",
+                            stack_id=stack_id,
+                            last_extracted=str(last_extracted),
+                        )
+                        resp = await client.post(
+                            f"{nextauth_url}/api/pipeline/{stack_id}/lineage/scheduled",
+                            headers={"x-internal-api-key": internal_key},
+                            json={},
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            logger.info(
+                                "[Scheduler] Lineage extraction complete",
+                                stack_id=stack_id,
+                                nodes=data.get("nodes", 0),
+                                edges=data.get("edges", 0),
+                                duration_ms=data.get("durationMs", 0),
+                            )
+                        else:
+                            logger.warning(
+                                "[Scheduler] Lineage extraction failed",
+                                stack_id=stack_id,
+                                status=resp.status_code,
+                                body=resp.text[:200],
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "[Scheduler] Lineage extraction error",
+                            stack_id=stack_id,
+                            error=str(e),
+                        )
+        except Exception as e:
+            logger.error(f"[Scheduler] Error checking lineage extraction: {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     async def _check_due_tasks(self):
         """Find and execute tasks that are due."""
@@ -269,7 +357,19 @@ class SchedulerService:
         # Pre-resolve integration config so the executor doesn't have to.
         # This mirrors what tasks/[taskId]/run/route.ts does: resolve config
         # BEFORE calling the executor, then pass it as integrationConfig.
+        #
+        # Route by monitor type so tool monitors (Airflow, Fivetran, dbt) don't
+        # accidentally get handed a warehouse config — _get_integration_config
+        # only knows about warehouse nodes and its auto-discover fallback would
+        # silently return the first BigQuery/Snowflake node otherwise.
         if not task.get("integrationConfig"):
+            from scanner.monitors.infrastructure import INFRA_MONITOR_TYPES
+            from scanner.monitors.tools import TOOL_MONITOR_TYPES
+
+            monitor_type_lc = (task.get("monitorType") or "").lower()
+            is_infra = monitor_type_lc in INFRA_MONITOR_TYPES
+            is_tool = monitor_type_lc in TOOL_MONITOR_TYPES
+
             executor = TaskExecutor()
             task_config = task.get("config") or {}
             if isinstance(task_config, str):
@@ -278,16 +378,31 @@ class SchedulerService:
             tool_node_id = task_config.get("toolNodeId") if isinstance(task_config, dict) else None
 
             try:
-                resolved = await executor._get_integration_config(
-                    task.get("integrationId"),
-                    task.get("organizationId"),
-                    node_id=node_id,
-                )
+                resolved: Optional[Dict[str, Any]] = None
+                if is_infra:
+                    # Infra monitors resolve their own server config inside
+                    # _execute_infrastructure — skip pre-resolve.
+                    pass
+                elif is_tool:
+                    resolved = await executor._get_tool_config(
+                        task.get("integrationId"),
+                        task.get("organizationId"),
+                        monitor_type_lc,
+                        node_id=tool_node_id or node_id,
+                    )
+                else:
+                    resolved = await executor._get_integration_config(
+                        task.get("integrationId"),
+                        task.get("organizationId"),
+                        node_id=node_id,
+                    )
+
                 if resolved:
                     task["integrationConfig"] = resolved
                     logger.info(
                         "[Scheduler] Pre-resolved integration config",
                         task=task_name,
+                        monitor_type=monitor_type_lc,
                         node=resolved.get("name"),
                         type=resolved.get("type"),
                     )
