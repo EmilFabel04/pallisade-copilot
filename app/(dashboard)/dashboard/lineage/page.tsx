@@ -649,15 +649,40 @@ function LineagePageInner() {
     }
   }, [stackId, activeTab, fetchLineage, fetchControlPlane]);
 
+  // Re-fetch lineage when the tab becomes visible after a long idle (e.g. overnight).
+  // Without this, stale renderedView positions and partially-revalidated cache data
+  // cause Dagre to produce a broken layout on wake.
+  useEffect(() => {
+    let hiddenAt: number | null = null;
+    const IDLE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        hiddenAt = Date.now();
+      } else if (hiddenAt && Date.now() - hiddenAt > IDLE_THRESHOLD_MS) {
+        hiddenAt = null;
+        invalidateCache('/api/pipeline/');
+        // Don't clear renderedView — keep previous layout visible until fresh data arrives
+        if (stackId) {
+          fetchLineage();
+          if (activeTab === 'control-plane') fetchControlPlane();
+        }
+      } else {
+        hiddenAt = null;
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [stackId, activeTab, fetchLineage, fetchControlPlane]);
+
   // Clear selection when switching tabs
   const handleTabChange = useCallback((tab: 'data' | 'control-plane') => {
     setActiveTab(tab);
     setSelectedNode(null);
     setSelectedEdge(null);
-    setLineageData(null); // Clear stale data to prevent wrong-layout flash
-    setRenderedView(null);
-    setRenderedOverview(null);
-    setLaneOverview(null);
+    // Don't clear renderedView/lineageData — activeTab controls which nodes render,
+    // and fetchLineage triggered by the stackId/activeTab effect atomically replaces data
   }, []);
 
   // Extract lineage from warehouse (uses original endpoint)
