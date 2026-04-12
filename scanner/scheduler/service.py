@@ -140,8 +140,10 @@ class SchedulerService:
         import httpx
         from datetime import timedelta
 
-        conn = self._get_connection()
-        if not conn:
+        try:
+            conn = _get_connection()
+        except Exception as e:
+            logger.warning(f"[Scheduler] Lineage extraction: no DB connection: {e}")
             return
 
         try:
