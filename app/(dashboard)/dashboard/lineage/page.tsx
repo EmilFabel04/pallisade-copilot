@@ -639,6 +639,8 @@ function LineagePageInner() {
       setLlmProgress([]);
       setLlmNodeCount(0);
       setLlmEdgeCount(0);
+      // Set loading in same batch so React shows spinner, not dagre flash
+      setLoading(true);
     }
     if (stackId) {
       // Always fetch unified lineage (provides allMonitors for pipeline overview tool cards)
@@ -1005,6 +1007,11 @@ function LineagePageInner() {
   // Build React Flow nodes and edges
   // Uses pre-positioned rendered view when available, falls back to Dagre
   const { flowNodes, flowEdges } = useMemo(() => {
+    // During pipeline switch: renderedView is null + loading is true → show spinner, not dagre
+    if (loading && !renderedView && !lineageData) {
+      return { flowNodes: [], flowEdges: [] };
+    }
+
     // Rendered view path: use backend-computed positions
     if (renderedView && renderedView.nodes.length > 0) {
       // Build lookup from unified nodes for enrichment (monitor status, issues, etc.)
@@ -1204,7 +1211,7 @@ function LineagePageInner() {
 
     const layouted = layoutGraph(nodes, edges, { direction: 'LR' });
     return { flowNodes: layouted.nodes, flowEdges: layouted.edges };
-  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView, slaMode, slaSelectedNodeIds, nodeSLAs]);
+  }, [filteredNodes, lineageData?.edges, lineageData?.nodes, filters, renderedView, slaMode, slaSelectedNodeIds, nodeSLAs, loading]);
 
   // Build control plane flow nodes/edges
   // Uses rendered overview positions when available, falls back to Dagre
