@@ -482,6 +482,15 @@ export async function POST(
       console.warn('[LINEAGE] Failed to persist engine graph snapshot (non-fatal):', e);
     }
 
+    // Mark stack as extraction-enabled and record timestamp (resets 6h auto-timer)
+    await prisma.pipelineStack.update({
+      where: { id: stackId },
+      data: {
+        lineageExtractionEnabled: true,
+        lastLineageExtractedAt: new Date(),
+      },
+    });
+
     // Build results summary from investigation tool profiles
     const results = Object.entries(investigationData.investigation?.tool_profiles || {}).map(
       ([toolType, profile]: [string, any]) => ({
