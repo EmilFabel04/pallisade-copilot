@@ -308,6 +308,10 @@ model PipelineStack {
   healthScore Float? // 0-100 overall health
   lastScanAt  DateTime?
 
+  // Scheduled lineage extraction
+  lastLineageExtractedAt   DateTime?
+  lineageExtractionEnabled Boolean   @default(false)
+
   // Token usage limits and tracking
   tokenLimitMonthly   Int? // Monthly token limit (null = unlimited)
   tokensUsedThisMonth Int      @default(0)
