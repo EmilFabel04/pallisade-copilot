@@ -106,13 +106,11 @@ export default function MonitorsPage() {
   // ---------------------------------------------------------------------------
 
   const fetchWatches = useCallback(async () => {
-    if (!selectedPipeline?.id) { setWatches([]); setLoading(false); return; }
-    setLoading(true);
+    if (!selectedPipeline?.id) { setWatches([]); return; }
     try {
       const res = await cachedFetch(`/api/schedule/watches?stackId=${selectedPipeline.id}`);
       if (res.ok) { const data = await res.json(); setWatches(data.watches || []); }
     } catch (err) { console.error('[Monitors] Failed to fetch watches:', err); }
-    finally { setLoading(false); }
   }, [selectedPipeline?.id]);
 
   const fetchPlans = useCallback(async () => {
@@ -160,9 +158,10 @@ export default function MonitorsPage() {
   useEffect(() => {
     setSelectedWatch(null);
     setWatchDetailMonitors([]);
-    fetchWatches();
-    fetchPlans();
-    fetchTasks();
+    setLoading(true);
+    Promise.all([fetchWatches(), fetchPlans(), fetchTasks()]).finally(() => {
+      setLoading(false);
+    });
   }, [fetchWatches, fetchPlans, fetchTasks]);
 
   // Poll every 5s while monitors are running, otherwise every 30s
