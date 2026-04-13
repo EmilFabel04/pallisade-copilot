@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { DriftRecommendationCard, type DriftRecommendation } from './DriftRecommendationCard';
 import { CategorySparklinePanel } from './CategorySparklinePanel';
+import { AssetHealthRow } from './AssetHealthRow';
 import type { WatchSummary } from '@/types/health-watch';
 import type { ScheduledTask } from '@/types/schedule';
 
@@ -45,6 +46,7 @@ interface MonitorTrend {
   id: string;
   name: string;
   targetFqn: string;
+  category: string;
   latestStatus: string | null;
   latestValue: number | null;
   baselineMean: number | null;
@@ -61,9 +63,21 @@ interface CategoryHealth {
   monitors: MonitorTrend[];
 }
 
+interface AssetHealth {
+  name: string;
+  fqn: string;
+  total: number;
+  passing: number;
+  warning: number;
+  failing: number;
+  status: string;
+  monitors: MonitorTrend[];
+}
+
 interface TrendData {
   dataHealth: Record<string, CategoryHealth>;
   pipelineHealth: Record<string, CategoryHealth>;
+  assets: Record<string, AssetHealth>;
   updatedAt: string;
 }
 
@@ -84,6 +98,7 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
   const [lastAnalyzedAt, setLastAnalyzedAt] = useState<string | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showDriftSection, setShowDriftSection] = useState(false);
+  const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
 
   const fetchTrends = useCallback(async () => {
     try {
@@ -176,6 +191,14 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
     setExpandedSection((prev) => (prev === key ? null : key));
   };
 
+  const toggleCategoryFilter = (key: string) => {
+    setActiveCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
   const dataCategories = useMemo(() => {
     if (!trendData) return [];
     return DATA_CATEGORIES
@@ -192,17 +215,30 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
     }));
   }, [trendData]);
 
+  const assetList = useMemo(() => {
+    if (!trendData?.assets) return [];
+    let list = Object.values(trendData.assets);
+    if (activeCategories.size > 0) {
+      list = list.filter((a) => a.monitors.some((m) => activeCategories.has(m.category)));
+    }
+    list.sort((a, b) => {
+      if (a.failing !== b.failing) return b.failing - a.failing;
+      if (a.warning !== b.warning) return b.warning - a.warning;
+      return a.name.localeCompare(b.name);
+    });
+    return list;
+  }, [trendData, activeCategories]);
+
   const totalDataMonitors = dataCategories.reduce((s, c) => s + c.total, 0);
   const totalPipelineMonitors = pipelineTools.reduce((s, t) => s + t.total, 0);
   const pending = counts.pending || 0;
 
-  // Auto-expand the first category with issues, or the first one if all stable
   useEffect(() => {
-    if (expandedSection !== null || !trendData) return;
-    const drifting = dataCategories.find((c) => c.status === 'drifting');
-    const warning = dataCategories.find((c) => c.status === 'warning');
-    const first = drifting || warning || dataCategories[0];
-    if (first) setExpandedSection(`data-${first.key}`);
+    if (expandedSection !== null || !trendData?.assets) return;
+    const failing = assetList.find((a) => a.status === 'drifting');
+    const warning = assetList.find((a) => a.status === 'warning');
+    const first = failing || warning || assetList[0];
+    if (first) setExpandedSection(`asset-${first.fqn}`);
   }, [trendData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (trendLoading && monitorsLoading) {
@@ -230,7 +266,7 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <h2 className="text-[14px] font-semibold text-[var(--text)]">Data Health</h2>
-              <span className="text-[11px] text-[var(--muted)]">{totalDataMonitors} monitors</span>
+              <span className="text-[11px] text-[var(--muted)]">{assetList.length} assets · {totalDataMonitors} monitors</span>
             </div>
             {trendData?.updatedAt && (
               <span className="text-[10px] text-[var(--muted)]">
@@ -239,60 +275,45 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
             )}
           </div>
 
-          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+          <div className="flex items-center gap-1.5 mb-3">
             {dataCategories.map((cat) => {
+              const isActive = activeCategories.has(cat.key);
               const style = STATUS_STYLES[cat.status] || STATUS_STYLES.pending;
-              const isExpanded = expandedSection === `data-${cat.key}`;
-              const passPct = cat.total > 0 ? (cat.passing / cat.total) * 100 : 0;
               return (
                 <button
                   key={cat.key}
-                  onClick={() => toggleSection(`data-${cat.key}`)}
+                  onClick={() => toggleCategoryFilter(cat.key)}
                   className={cn(
-                    'rounded-xl border overflow-hidden text-left transition-all hover:shadow-md',
-                    isExpanded ? `${style.border} bg-[var(--surface)] shadow-sm` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium transition-all border',
+                    isActive
+                      ? `${style.border} ${style.badgeBg} ${style.text}`
+                      : 'border-transparent bg-[var(--overlay-bg)] text-[var(--muted)] hover:text-[var(--text)]',
                   )}
                 >
-                  {/* Accent bar */}
-                  <div className={cn('h-1', style.accent, isExpanded ? 'opacity-100' : 'opacity-40')} />
-                  <div className="px-4 py-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[11px] font-semibold text-[var(--text)] uppercase tracking-wide">{cat.label}</span>
-                      <span className={cn('text-[9px] font-medium px-1.5 py-0.5 rounded-full', style.badgeBg, style.text)}>
-                        {STATUS_LABELS[cat.status] || cat.status}
-                      </span>
-                    </div>
-                    <div className={cn('text-[22px] font-bold tabular-nums', cat.failing > 0 ? 'text-red-500' : cat.warning > 0 ? 'text-amber-500' : 'text-emerald-500')}>
-                      {cat.passing}<span className="text-[14px] font-normal text-[var(--muted)]">/{cat.total}</span>
-                    </div>
-                    {/* Progress bar */}
-                    <div className="h-1.5 rounded-full bg-[var(--overlay-bg)] mt-2 overflow-hidden">
-                      <div
-                        className={cn('h-full rounded-full transition-all', style.accent)}
-                        style={{ width: `${passPct}%` }}
-                      />
-                    </div>
-                  </div>
+                  <div className={cn('w-1.5 h-1.5 rounded-full', style.accent)} />
+                  {cat.label}
+                  <span className="opacity-60">{cat.passing}/{cat.total}</span>
                 </button>
               );
             })}
           </div>
 
-          {dataCategories.map((cat) => {
-            if (expandedSection !== `data-${cat.key}`) return null;
-            const style = STATUS_STYLES[cat.status] || STATUS_STYLES.pending;
-            return (
-              <div key={cat.key} className="mt-2">
-                <CategorySparklinePanel
-                  label={cat.label}
-                  failingCount={cat.failing}
-                  monitors={cat.monitors}
-                  borderColor={style.border}
-                  onRunAnalysis={handleRunAnalysis}
-                />
-              </div>
-            );
-          })}
+          <div className="space-y-2">
+            {assetList.map((asset) => (
+              <AssetHealthRow
+                key={asset.fqn}
+                asset={asset}
+                expanded={expandedSection === `asset-${asset.fqn}`}
+                onToggle={() => toggleSection(`asset-${asset.fqn}`)}
+                activeCategories={activeCategories}
+                onRunAnalysis={handleRunAnalysis}
+              />
+            ))}
+          </div>
+
+          {assetList.length === 0 && activeCategories.size > 0 && (
+            <p className="text-[12px] text-[var(--muted)] text-center py-6">No assets have monitors in the selected categories</p>
+          )}
         </div>
       )}
 
