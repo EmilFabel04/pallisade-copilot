@@ -48,6 +48,54 @@ export async function PATCH(
           where: { id: rec.monitorId },
           data: { config },
         });
+
+        // Write to SLA PolicyAssignment overrides
+        try {
+          const targetFqn = rec.targetFqn;
+          if (targetFqn && section) {
+            const parsedValue = isNaN(Number(applyValue)) ? applyValue : Number(applyValue);
+
+            const existingAssignment = await prisma.policyAssignment.findFirst({
+              where: {
+                nodeFqn: targetFqn,
+                assignmentType: 'direct',
+                status: 'active',
+                organizationId,
+              },
+            });
+
+            if (existingAssignment) {
+              const overrides = (existingAssignment.overrides as Record<string, any>) || {};
+              if (!overrides[section]) overrides[section] = {};
+              overrides[section][field] = parsedValue;
+              await prisma.policyAssignment.update({
+                where: { id: existingAssignment.id },
+                data: { overrides },
+              });
+            } else {
+              const defaultProfile = await prisma.policyProfile.findFirst({
+                where: { organizationId, isBuiltIn: true },
+              }) || await prisma.policyProfile.findFirst({
+                where: { organizationId },
+                orderBy: { createdAt: 'asc' },
+              });
+
+              if (defaultProfile) {
+                await prisma.policyAssignment.create({
+                  data: {
+                    profileId: defaultProfile.id,
+                    nodeFqn: targetFqn,
+                    assignmentType: 'direct',
+                    organizationId,
+                    overrides: { [section]: { [field]: parsedValue } },
+                  },
+                });
+              }
+            }
+          }
+        } catch (slaErr) {
+          console.warn('[Drift] SLA writeback failed (non-fatal):', slaErr);
+        }
       }
 
       await prisma.driftRecommendation.update({
