@@ -33,12 +33,12 @@ const STATUS_LABELS: Record<string, string> = {
   degraded: 'Degraded', drifting: 'Drifting', down: 'Down', pending: 'Pending',
 };
 
-function gridColsClass(count: number): string {
+function gridColsClass(count: number, max: number = 6): string {
   const map: Record<number, string> = {
     1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3',
     4: 'grid-cols-4', 5: 'grid-cols-5', 6: 'grid-cols-6',
   };
-  return map[Math.min(count, 6)] || 'grid-cols-6';
+  return map[Math.min(count, max)] || `grid-cols-${max}`;
 }
 
 interface MonitorTrend {
@@ -196,6 +196,15 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
   const totalPipelineMonitors = pipelineTools.reduce((s, t) => s + t.total, 0);
   const pending = counts.pending || 0;
 
+  // Auto-expand the first category with issues, or the first one if all stable
+  useEffect(() => {
+    if (expandedSection !== null || !trendData) return;
+    const drifting = dataCategories.find((c) => c.status === 'drifting');
+    const warning = dataCategories.find((c) => c.status === 'warning');
+    const first = drifting || warning || dataCategories[0];
+    if (first) setExpandedSection(`data-${first.key}`);
+  }, [trendData]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (trendLoading && monitorsLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -230,7 +239,7 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
             )}
           </div>
 
-          <div className={cn('grid gap-3', gridColsClass(dataCategories.length))}>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
             {dataCategories.map((cat) => {
               const style = STATUS_STYLES[cat.status] || STATUS_STYLES.pending;
               const isExpanded = expandedSection === `data-${cat.key}`;
@@ -297,7 +306,7 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
             </div>
           </div>
 
-          <div className={cn('grid gap-3', gridColsClass(pipelineTools.length))}>
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
             {pipelineTools.map((tool) => {
               const style = STATUS_STYLES[tool.status] || STATUS_STYLES.pending;
               const isExpanded = expandedSection === `pipeline-${tool.key}`;
