@@ -1,53 +1,70 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Loader2, Play, Activity, AlertTriangle, CheckCircle, XCircle, Database, Workflow } from 'lucide-react';
+import { Loader2, Play, Activity, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { DriftRecommendationCard, type DriftRecommendation } from './DriftRecommendationCard';
+import { CategorySparklinePanel } from './CategorySparklinePanel';
 import type { WatchSummary } from '@/types/health-watch';
 import type { ScheduledTask } from '@/types/schedule';
 
-const DATA_MONITOR_TYPES = new Set([
-  'FRESHNESS', 'VOLUME', 'SCHEMA_CHANGE', 'NULL_CHECK', 'UNIQUENESS_CHECK',
-  'OUTLIER_DETECTION', 'ANOMALY', 'RANGE_VALIDATION', 'ACCEPTED_VALUES',
-  'DATE_CONSISTENCY', 'DATA_TYPE_VALIDATION',
-]);
+const DATA_CATEGORIES = [
+  { key: 'freshness', label: 'Freshness' },
+  { key: 'volume', label: 'Volume' },
+  { key: 'quality', label: 'Quality' },
+  { key: 'schema', label: 'Schema' },
+  { key: 'anomaly', label: 'Anomaly' },
+  { key: 'uniqueness', label: 'Uniqueness' },
+] as const;
 
-const PIPELINE_MONITOR_TYPES = new Set([
-  'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
-  'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
-  'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
-  'BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK', 'BI_REFRESH_FAILURE', 'BI_CONTENT_HEALTH',
-  'SERVER_HEALTH', 'CERTIFICATE', 'LOG_ANALYSIS',
-]);
+const STATUS_STYLES: Record<string, { border: string; text: string }> = {
+  stable:   { border: 'border-emerald-500/30', text: 'text-emerald-400' },
+  healthy:  { border: 'border-emerald-500/30', text: 'text-emerald-400' },
+  warning:  { border: 'border-amber-500/30',   text: 'text-amber-400' },
+  degraded: { border: 'border-amber-500/30',   text: 'text-amber-400' },
+  drifting: { border: 'border-red-500/30',     text: 'text-red-400' },
+  down:     { border: 'border-red-500/30',     text: 'text-red-400' },
+  pending:  { border: 'border-[var(--subtle-border)]', text: 'text-[var(--muted)]' },
+};
 
-const CATEGORIES = [
-  { key: 'freshness', label: 'Freshness', color: 'text-blue-400' },
-  { key: 'volume', label: 'Volume', color: 'text-purple-400' },
-  { key: 'quality', label: 'Quality', color: 'text-amber-400' },
-  { key: 'schema', label: 'Schema', color: 'text-orange-400' },
-  { key: 'anomaly', label: 'Anomaly', color: 'text-red-400' },
-  { key: 'uniqueness', label: 'Uniqueness', color: 'text-cyan-400' },
-];
+const STATUS_LABELS: Record<string, string> = {
+  stable: 'Stable', healthy: 'Healthy', warning: 'Warning',
+  degraded: 'Degraded', drifting: 'Drifting', down: 'Down', pending: 'Pending',
+};
 
-function countMonitors(watches: WatchSummary[], tasks: ScheduledTask[], typeSet: Set<string>) {
-  let total = 0, passing = 0, failing = 0;
-  for (const w of watches) {
-    const monitors = w.monitors || [];
-    const matched = monitors.filter(m => typeSet.has((m.monitorType || '').toUpperCase()));
-    total += matched.length;
-    passing += matched.filter(m => m.lastStatus === 'PASS').length;
-    failing += matched.filter(m => m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR' || m.lastStatus === 'WARN').length;
-  }
-  for (const t of tasks) {
-    if (!typeSet.has((t.monitorType || '').toUpperCase())) continue;
-    total++;
-    const s = (t.lastStatus || '').toUpperCase();
-    if (s === 'PASS') passing++;
-    if (s === 'FAIL' || s === 'ERROR' || s === 'WARN') failing++;
-  }
-  return { total, passing, failing };
+function gridColsClass(count: number): string {
+  const map: Record<number, string> = {
+    1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3',
+    4: 'grid-cols-4', 5: 'grid-cols-5', 6: 'grid-cols-6',
+  };
+  return map[Math.min(count, 6)] || 'grid-cols-6';
+}
+
+interface MonitorTrend {
+  id: string;
+  name: string;
+  targetFqn: string;
+  latestStatus: string | null;
+  latestValue: number | null;
+  baselineMean: number | null;
+  pctChange: number | null;
+  runs: Array<{ value: number | null; status: string; at: string }>;
+}
+
+interface CategoryHealth {
+  total: number;
+  passing: number;
+  warning: number;
+  failing: number;
+  status: string;
+  monitors: MonitorTrend[];
+}
+
+interface TrendData {
+  dataHealth: Record<string, CategoryHealth>;
+  pipelineHealth: Record<string, CategoryHealth>;
+  updatedAt: string;
 }
 
 interface Props {
@@ -57,21 +74,42 @@ interface Props {
 }
 
 export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Props) {
+  const [trendData, setTrendData] = useState<TrendData | null>(null);
+  const [trendLoading, setTrendLoading] = useState(true);
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
   const [recommendations, setRecommendations] = useState<DriftRecommendation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [driftLoading, setDriftLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [lastAnalyzedAt, setLastAnalyzedAt] = useState<string | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  const [showDriftSection, setShowDriftSection] = useState(false);
 
-  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set());
-  const [driftStatusFilter, setDriftStatusFilter] = useState<string>('pending');
+  const fetchTrends = useCallback(async () => {
+    try {
+      const res = await fetch('/api/schedule/monitor-trends');
+      if (res.ok) {
+        const data = await res.json();
+        setTrendData(data);
+      }
+    } catch (err) {
+      console.error('[HealthDashboard] Fetch error:', err);
+    } finally {
+      setTrendLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchTrends(); }, [fetchTrends]);
+
+  useEffect(() => {
+    const timer = setInterval(fetchTrends, 30000);
+    return () => clearInterval(timer);
+  }, [fetchTrends]);
 
   const fetchRecommendations = useCallback(async () => {
-    setLoading(true);
+    setDriftLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (driftStatusFilter) params.set('status', driftStatusFilter);
-      const res = await fetch(`/api/drift?${params}`);
+      const res = await fetch('/api/drift?status=pending');
       if (res.ok) {
         const data = await res.json();
         setRecommendations(data.recommendations || []);
@@ -81,9 +119,9 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
     } catch (err) {
       console.error('[DriftSummary] Fetch error:', err);
     } finally {
-      setLoading(false);
+      setDriftLoading(false);
     }
-  }, [driftStatusFilter]);
+  }, []);
 
   useEffect(() => { fetchRecommendations(); }, [fetchRecommendations]);
 
@@ -134,228 +172,226 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
     }
   };
 
-  const toggleCategory = (key: string) => {
-    setCategoryFilter(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
+  const toggleSection = (key: string) => {
+    setExpandedSection((prev) => (prev === key ? null : key));
   };
 
-  const filteredDrift = useMemo(() => {
-    let result = recommendations;
-    if (categoryFilter.size > 0) {
-      result = result.filter(r => categoryFilter.has(r.driftCategory));
-    }
-    return result;
-  }, [recommendations, categoryFilter]);
+  const dataCategories = useMemo(() => {
+    if (!trendData) return [];
+    return DATA_CATEGORIES
+      .filter((cat) => trendData.dataHealth[cat.key])
+      .map((cat) => ({ ...cat, ...trendData.dataHealth[cat.key] }));
+  }, [trendData]);
 
-  const dataCounts = useMemo(() => countMonitors(watches, tasks, DATA_MONITOR_TYPES), [watches, tasks]);
-  const pipelineCounts = useMemo(() => countMonitors(watches, tasks, PIPELINE_MONITOR_TYPES), [watches, tasks]);
+  const pipelineTools = useMemo(() => {
+    if (!trendData) return [];
+    return Object.entries(trendData.pipelineHealth).map(([key, data]) => ({
+      key,
+      label: key.charAt(0).toUpperCase() + key.slice(1),
+      ...data,
+    }));
+  }, [trendData]);
 
+  const totalDataMonitors = dataCategories.reduce((s, c) => s + c.total, 0);
+  const totalPipelineMonitors = pipelineTools.reduce((s, t) => s + t.total, 0);
   const pending = counts.pending || 0;
-  const accepted = counts.accepted || 0;
-  const dismissed = counts.dismissed || 0;
-  const highCount = filteredDrift.filter(r => r.severity === 'high').length;
-  const mediumCount = filteredDrift.filter(r => r.severity === 'medium').length;
-  const lowCount = filteredDrift.filter(r => r.severity === 'low').length;
+
+  if (trendLoading && monitorsLoading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 animate-spin text-[var(--muted)]" />
+      </div>
+    );
+  }
+
+  if (totalDataMonitors === 0 && totalPipelineMonitors === 0 && !trendLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <Activity className="w-8 h-8 text-[var(--text-faint)] mb-3" />
+        <p className="text-[13px] text-[var(--muted)]">No monitors configured yet.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 w-full">
-      {/* ── Monitor Status ──────────────────────────────────────── */}
-      <div className="flex gap-4">
-        {/* Data Monitors Card */}
-        <div className="flex-1 rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] p-5">
-          <div className="flex items-center justify-between mb-4">
+      {/* Data Health */}
+      {totalDataMonitors > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                <Database className="w-3.5 h-3.5 text-blue-400" />
-              </div>
-              <span className="text-[13px] font-semibold text-[var(--text)]">Data Monitors</span>
+              <h2 className="text-[14px] font-semibold text-[var(--text)]">Data Health</h2>
+              <span className="text-[11px] text-[var(--muted)]">{totalDataMonitors} monitors</span>
             </div>
-            {dataCounts.total > 0 && (
-              <span className="text-[11px] text-[var(--muted)]">{dataCounts.total} total</span>
+            {trendData?.updatedAt && (
+              <span className="text-[10px] text-[var(--muted)]">
+                Updated {new Date(trendData.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </span>
             )}
           </div>
-          {dataCounts.total > 0 ? (
-            <>
-              <div className="flex h-2 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-4">
-                {dataCounts.passing > 0 && <div className="bg-emerald-500 h-full transition-all" style={{ width: `${(dataCounts.passing / dataCounts.total) * 100}%` }} />}
-                {dataCounts.failing > 0 && <div className="bg-red-500 h-full transition-all" style={{ width: `${(dataCounts.failing / dataCounts.total) * 100}%` }} />}
-                {(dataCounts.total - dataCounts.passing - dataCounts.failing) > 0 && <div className="bg-zinc-700 h-full flex-1" />}
-              </div>
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                  <span className="text-[18px] font-semibold text-[var(--text)]">{dataCounts.passing}</span>
-                  <span className="text-[12px] text-[var(--muted)]">passing</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
-                  <span className="text-[18px] font-semibold text-[var(--text)]">{dataCounts.failing}</span>
-                  <span className="text-[12px] text-[var(--muted)]">failing</span>
-                </div>
-              </div>
-            </>
-          ) : (
-            <p className="text-[12px] text-[var(--muted)]">No data monitors configured</p>
-          )}
-        </div>
 
-        {/* Pipeline Monitors Card */}
-        <div className="flex-1 rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                <Workflow className="w-3.5 h-3.5 text-purple-400" />
-              </div>
-              <span className="text-[13px] font-semibold text-[var(--text)]">Pipeline Monitors</span>
-            </div>
-            {pipelineCounts.total > 0 && (
-              <span className="text-[11px] text-[var(--muted)]">{pipelineCounts.total} total</span>
-            )}
+          <div className={cn('grid gap-2', gridColsClass(dataCategories.length))}>
+            {dataCategories.map((cat) => {
+              const style = STATUS_STYLES[cat.status] || STATUS_STYLES.pending;
+              const isExpanded = expandedSection === `data-${cat.key}`;
+              return (
+                <button
+                  key={cat.key}
+                  onClick={() => toggleSection(`data-${cat.key}`)}
+                  className={cn(
+                    'rounded-lg border p-3 text-center transition-all hover:bg-[var(--hover-bg)]',
+                    isExpanded ? `${style.border} bg-[var(--surface)]` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
+                    isExpanded && 'ring-1 ring-current/20',
+                  )}
+                >
+                  <div className="text-[9px] text-[var(--muted)] uppercase tracking-wide mb-1">{cat.label}</div>
+                  <div className={cn('text-[18px] font-semibold', cat.failing > 0 ? 'text-red-400' : cat.warning > 0 ? 'text-amber-400' : 'text-emerald-400')}>
+                    {cat.passing}/{cat.total}
+                  </div>
+                  <div className={cn('text-[8px] font-medium mt-0.5', style.text)}>
+                    {STATUS_LABELS[cat.status] || cat.status}
+                  </div>
+                </button>
+              );
+            })}
           </div>
-          {pipelineCounts.total > 0 ? (
-            <>
-              <div className="flex h-2 rounded-full overflow-hidden bg-[var(--overlay-bg)] mb-4">
-                {pipelineCounts.passing > 0 && <div className="bg-emerald-500 h-full transition-all" style={{ width: `${(pipelineCounts.passing / pipelineCounts.total) * 100}%` }} />}
-                {pipelineCounts.failing > 0 && <div className="bg-red-500 h-full transition-all" style={{ width: `${(pipelineCounts.failing / pipelineCounts.total) * 100}%` }} />}
-                {(pipelineCounts.total - pipelineCounts.passing - pipelineCounts.failing) > 0 && <div className="bg-zinc-700 h-full flex-1" />}
-              </div>
-              <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                  <span className="text-[18px] font-semibold text-[var(--text)]">{pipelineCounts.passing}</span>
-                  <span className="text-[12px] text-[var(--muted)]">passing</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-red-500" />
-                  <span className="text-[18px] font-semibold text-[var(--text)]">{pipelineCounts.failing}</span>
-                  <span className="text-[12px] text-[var(--muted)]">failing</span>
-                </div>
-              </div>
-            </>
-          ) : (
-            <p className="text-[12px] text-[var(--muted)]">No pipeline monitors configured</p>
-          )}
-        </div>
-      </div>
 
-      {/* ── Drift Analysis ──────────────────────────────────────── */}
+          {dataCategories.map((cat) => {
+            if (expandedSection !== `data-${cat.key}`) return null;
+            const style = STATUS_STYLES[cat.status] || STATUS_STYLES.pending;
+            return (
+              <div key={cat.key} className="mt-2">
+                <CategorySparklinePanel
+                  label={cat.label}
+                  failingCount={cat.failing}
+                  monitors={cat.monitors}
+                  borderColor={style.border}
+                  onRunAnalysis={handleRunAnalysis}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pipeline Health */}
+      {totalPipelineMonitors > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-[14px] font-semibold text-[var(--text)]">Pipeline Health</h2>
+              <span className="text-[11px] text-[var(--muted)]">{totalPipelineMonitors} monitors</span>
+            </div>
+          </div>
+
+          <div className={cn('grid gap-2', gridColsClass(pipelineTools.length))}>
+            {pipelineTools.map((tool) => {
+              const style = STATUS_STYLES[tool.status] || STATUS_STYLES.pending;
+              const isExpanded = expandedSection === `pipeline-${tool.key}`;
+              return (
+                <button
+                  key={tool.key}
+                  onClick={() => toggleSection(`pipeline-${tool.key}`)}
+                  className={cn(
+                    'rounded-lg border p-3 text-center transition-all hover:bg-[var(--hover-bg)]',
+                    isExpanded ? `${style.border} bg-[var(--surface)]` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
+                    isExpanded && 'ring-1 ring-current/20',
+                  )}
+                >
+                  <div className="text-[9px] text-[var(--muted)] uppercase tracking-wide mb-1">{tool.label}</div>
+                  <div className={cn('text-[18px] font-semibold', tool.failing > 0 ? 'text-red-400' : tool.warning > 0 ? 'text-amber-400' : 'text-emerald-400')}>
+                    {tool.passing}/{tool.total}
+                  </div>
+                  <div className={cn('text-[8px] font-medium mt-0.5', style.text)}>
+                    {STATUS_LABELS[tool.status] || tool.status}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {pipelineTools.map((tool) => {
+            if (expandedSection !== `pipeline-${tool.key}`) return null;
+            const style = STATUS_STYLES[tool.status] || STATUS_STYLES.pending;
+            return (
+              <div key={tool.key} className="mt-2">
+                <CategorySparklinePanel
+                  label={tool.label}
+                  failingCount={tool.failing}
+                  monitors={tool.monitors}
+                  borderColor={style.border}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* SLA Recommendations */}
       <div className="rounded-xl border border-[var(--subtle-border)] bg-[var(--surface)] overflow-hidden">
-        <div className="px-5 py-3 border-b border-[var(--subtle-border)] flex items-center justify-between">
+        <button
+          onClick={() => setShowDriftSection(!showDriftSection)}
+          className="w-full px-5 py-3 flex items-center justify-between hover:bg-[var(--hover-bg)] transition-colors"
+        >
           <div className="flex items-center gap-3">
-            <h2 className="text-[13px] font-semibold text-[var(--text)]">Drift Analysis</h2>
+            <span className="text-[13px] font-medium text-[var(--muted)]">SLA Recommendations</span>
+            {pending > 0 && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[var(--accent)]/10 text-[var(--accent)]">
+                {pending} pending
+              </span>
+            )}
             {lastAnalyzedAt && (
-              <span className="text-[11px] text-[var(--muted)]">
+              <span className="text-[10px] text-[var(--text-faint)]">
                 Last run: {new Date(lastAnalyzedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
               </span>
             )}
-            <div className="flex items-center gap-2 text-[11px]">
-              {pending > 0 && <span className="text-amber-400 font-medium">{pending} pending</span>}
-              {accepted > 0 && <span className="text-emerald-400">{accepted} applied</span>}
-              {dismissed > 0 && <span className="text-zinc-400">{dismissed} dismissed</span>}
-            </div>
           </div>
-          <button
-            onClick={handleRunAnalysis}
-            disabled={running}
-            className="flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-          >
-            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-            {running ? 'Analyzing...' : 'Run Analysis'}
-          </button>
-        </div>
-
-        <div className="p-5">
-        <div className="flex items-center gap-2 mb-4">
-            {/* Drift status tabs */}
-            <div className="flex items-center bg-[var(--overlay-bg)] rounded-lg p-0.5">
-              {[
-                { key: 'pending', label: 'Pending' },
-                { key: 'accepted', label: 'Applied' },
-                { key: 'dismissed', label: 'Dismissed' },
-                { key: '', label: 'All' },
-              ].map(s => (
-                <button
-                  key={s.key}
-                  onClick={() => setDriftStatusFilter(s.key)}
-                  className={cn(
-                    'px-3 py-1 text-[11px] font-medium rounded-md transition-colors',
-                    driftStatusFilter === s.key
-                      ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-                      : 'text-[var(--muted)] hover:text-[var(--text)]'
-                  )}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="w-px h-5 bg-[var(--subtle-border)] mx-1" />
-            <div className="flex items-center gap-0.5">
-              {CATEGORIES.map(cat => (
-                <button
-                  key={cat.key}
-                  onClick={() => toggleCategory(cat.key)}
-                  className={cn(
-                    'px-2 py-1 text-[10px] font-medium rounded-md transition-colors',
-                    categoryFilter.has(cat.key)
-                      ? `${cat.color} bg-[var(--surface)] shadow-sm`
-                      : 'text-[var(--muted)] hover:text-[var(--text)]'
-                  )}
-                >
-                  {cat.label}
-                </button>
-              ))}
-            </div>
-        </div>
-
-        {/* Drift results */}
-        {loading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="w-5 h-5 animate-spin text-[var(--muted)]" />
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-[var(--text-faint)]">AI-powered threshold tuning</span>
+            <ChevronDown className={cn('w-4 h-4 text-[var(--muted)] transition-transform', showDriftSection && 'rotate-180')} />
           </div>
-        ) : filteredDrift.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-12">
-            <Activity className="w-8 h-8 text-[var(--text-faint)] mb-3" />
-            <p className="text-[13px] text-[var(--muted)]">
-              {recommendations.length === 0
-                ? 'No drift analysis results yet. Run an analysis to detect SLA drift.'
-                : 'No recommendations match your filters.'}
-            </p>
-            {recommendations.length === 0 && (
+        </button>
+
+        {showDriftSection && (
+          <div className="px-5 pb-5 border-t border-[var(--subtle-border)]">
+            <div className="flex items-center justify-between pt-3 mb-4">
+              <div className="flex items-center gap-2 text-[11px]">
+                {(counts.accepted || 0) > 0 && <span className="text-emerald-400">{counts.accepted} applied</span>}
+                {(counts.dismissed || 0) > 0 && <span className="text-zinc-400">{counts.dismissed} dismissed</span>}
+              </div>
               <button
                 onClick={handleRunAnalysis}
                 disabled={running}
-                className="mt-3 px-4 py-1.5 text-[11px] font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                className="flex items-center gap-1.5 px-4 py-1.5 text-[11px] font-medium rounded-lg bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
               >
-                {running ? 'Analyzing...' : 'Run First Analysis'}
+                {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                {running ? 'Analyzing...' : 'Run Analysis'}
               </button>
-            )}
-          </div>
-        ) : (
-          <div>
-            {(highCount > 0 || mediumCount > 0) && (
-              <div className="flex items-center gap-3 mb-3 text-[11px]">
-                {highCount > 0 && <span className="text-red-400 font-medium">{highCount} high severity</span>}
-                {mediumCount > 0 && <span className="text-amber-400 font-medium">{mediumCount} medium</span>}
-                {lowCount > 0 && <span className="text-zinc-400">{lowCount} low</span>}
+            </div>
+
+            {driftLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-5 h-5 animate-spin text-[var(--muted)]" />
+              </div>
+            ) : recommendations.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8">
+                <Activity className="w-6 h-6 text-[var(--text-faint)] mb-2" />
+                <p className="text-[12px] text-[var(--muted)]">No pending recommendations. Run an analysis to check for SLA drift.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {recommendations.map((rec) => (
+                  <DriftRecommendationCard
+                    key={rec.id}
+                    rec={rec}
+                    onAccept={handleAccept}
+                    onDismiss={handleDismiss}
+                  />
+                ))}
               </div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {filteredDrift.map(rec => (
-                <DriftRecommendationCard
-                  key={rec.id}
-                  rec={rec}
-                  onAccept={handleAccept}
-                  onDismiss={handleDismiss}
-                />
-              ))}
-            </div>
           </div>
         )}
-        </div>
       </div>
     </div>
   );
