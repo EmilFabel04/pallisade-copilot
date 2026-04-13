@@ -18,14 +18,14 @@ const DATA_CATEGORIES = [
   { key: 'uniqueness', label: 'Uniqueness' },
 ] as const;
 
-const STATUS_STYLES: Record<string, { border: string; text: string }> = {
-  stable:   { border: 'border-emerald-500/30', text: 'text-emerald-400' },
-  healthy:  { border: 'border-emerald-500/30', text: 'text-emerald-400' },
-  warning:  { border: 'border-amber-500/30',   text: 'text-amber-400' },
-  degraded: { border: 'border-amber-500/30',   text: 'text-amber-400' },
-  drifting: { border: 'border-red-500/30',     text: 'text-red-400' },
-  down:     { border: 'border-red-500/30',     text: 'text-red-400' },
-  pending:  { border: 'border-[var(--subtle-border)]', text: 'text-[var(--muted)]' },
+const STATUS_STYLES: Record<string, { border: string; text: string; accent: string; badgeBg: string }> = {
+  stable:   { border: 'border-emerald-500/30', text: 'text-emerald-500', accent: 'bg-emerald-500', badgeBg: 'bg-emerald-500/10' },
+  healthy:  { border: 'border-emerald-500/30', text: 'text-emerald-500', accent: 'bg-emerald-500', badgeBg: 'bg-emerald-500/10' },
+  warning:  { border: 'border-amber-500/30',   text: 'text-amber-500',   accent: 'bg-amber-500',   badgeBg: 'bg-amber-500/10' },
+  degraded: { border: 'border-amber-500/30',   text: 'text-amber-500',   accent: 'bg-amber-500',   badgeBg: 'bg-amber-500/10' },
+  drifting: { border: 'border-red-500/30',     text: 'text-red-500',     accent: 'bg-red-500',     badgeBg: 'bg-red-500/10' },
+  down:     { border: 'border-red-500/30',     text: 'text-red-500',     accent: 'bg-red-500',     badgeBg: 'bg-red-500/10' },
+  pending:  { border: 'border-[var(--subtle-border)]', text: 'text-[var(--muted)]', accent: 'bg-zinc-400', badgeBg: 'bg-zinc-500/10' },
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -230,26 +230,39 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
             )}
           </div>
 
-          <div className={cn('grid gap-2', gridColsClass(dataCategories.length))}>
+          <div className={cn('grid gap-3', gridColsClass(dataCategories.length))}>
             {dataCategories.map((cat) => {
               const style = STATUS_STYLES[cat.status] || STATUS_STYLES.pending;
               const isExpanded = expandedSection === `data-${cat.key}`;
+              const passPct = cat.total > 0 ? (cat.passing / cat.total) * 100 : 0;
               return (
                 <button
                   key={cat.key}
                   onClick={() => toggleSection(`data-${cat.key}`)}
                   className={cn(
-                    'rounded-lg border p-3 text-center transition-all hover:bg-[var(--hover-bg)]',
-                    isExpanded ? `${style.border} bg-[var(--surface)]` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
-                    isExpanded && 'ring-1 ring-current/20',
+                    'rounded-xl border overflow-hidden text-left transition-all hover:shadow-md',
+                    isExpanded ? `${style.border} bg-[var(--surface)] shadow-sm` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
                   )}
                 >
-                  <div className="text-[9px] text-[var(--muted)] uppercase tracking-wide mb-1">{cat.label}</div>
-                  <div className={cn('text-[18px] font-semibold', cat.failing > 0 ? 'text-red-400' : cat.warning > 0 ? 'text-amber-400' : 'text-emerald-400')}>
-                    {cat.passing}/{cat.total}
-                  </div>
-                  <div className={cn('text-[8px] font-medium mt-0.5', style.text)}>
-                    {STATUS_LABELS[cat.status] || cat.status}
+                  {/* Accent bar */}
+                  <div className={cn('h-1', style.accent, isExpanded ? 'opacity-100' : 'opacity-40')} />
+                  <div className="px-4 py-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-semibold text-[var(--text)] uppercase tracking-wide">{cat.label}</span>
+                      <span className={cn('text-[9px] font-medium px-1.5 py-0.5 rounded-full', style.badgeBg, style.text)}>
+                        {STATUS_LABELS[cat.status] || cat.status}
+                      </span>
+                    </div>
+                    <div className={cn('text-[22px] font-bold tabular-nums', cat.failing > 0 ? 'text-red-500' : cat.warning > 0 ? 'text-amber-500' : 'text-emerald-500')}>
+                      {cat.passing}<span className="text-[14px] font-normal text-[var(--muted)]">/{cat.total}</span>
+                    </div>
+                    {/* Progress bar */}
+                    <div className="h-1.5 rounded-full bg-[var(--overlay-bg)] mt-2 overflow-hidden">
+                      <div
+                        className={cn('h-full rounded-full transition-all', style.accent)}
+                        style={{ width: `${passPct}%` }}
+                      />
+                    </div>
                   </div>
                 </button>
               );
@@ -284,26 +297,37 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
             </div>
           </div>
 
-          <div className={cn('grid gap-2', gridColsClass(pipelineTools.length))}>
+          <div className={cn('grid gap-3', gridColsClass(pipelineTools.length))}>
             {pipelineTools.map((tool) => {
               const style = STATUS_STYLES[tool.status] || STATUS_STYLES.pending;
               const isExpanded = expandedSection === `pipeline-${tool.key}`;
+              const passPct = tool.total > 0 ? (tool.passing / tool.total) * 100 : 0;
               return (
                 <button
                   key={tool.key}
                   onClick={() => toggleSection(`pipeline-${tool.key}`)}
                   className={cn(
-                    'rounded-lg border p-3 text-center transition-all hover:bg-[var(--hover-bg)]',
-                    isExpanded ? `${style.border} bg-[var(--surface)]` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
-                    isExpanded && 'ring-1 ring-current/20',
+                    'rounded-xl border overflow-hidden text-left transition-all hover:shadow-md',
+                    isExpanded ? `${style.border} bg-[var(--surface)] shadow-sm` : 'border-[var(--subtle-border)] bg-[var(--surface)]',
                   )}
                 >
-                  <div className="text-[9px] text-[var(--muted)] uppercase tracking-wide mb-1">{tool.label}</div>
-                  <div className={cn('text-[18px] font-semibold', tool.failing > 0 ? 'text-red-400' : tool.warning > 0 ? 'text-amber-400' : 'text-emerald-400')}>
-                    {tool.passing}/{tool.total}
-                  </div>
-                  <div className={cn('text-[8px] font-medium mt-0.5', style.text)}>
-                    {STATUS_LABELS[tool.status] || tool.status}
+                  <div className={cn('h-1', style.accent, isExpanded ? 'opacity-100' : 'opacity-40')} />
+                  <div className="px-4 py-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[11px] font-semibold text-[var(--text)] uppercase tracking-wide">{tool.label}</span>
+                      <span className={cn('text-[9px] font-medium px-1.5 py-0.5 rounded-full', style.badgeBg, style.text)}>
+                        {STATUS_LABELS[tool.status] || tool.status}
+                      </span>
+                    </div>
+                    <div className={cn('text-[22px] font-bold tabular-nums', tool.failing > 0 ? 'text-red-500' : tool.warning > 0 ? 'text-amber-500' : 'text-emerald-500')}>
+                      {tool.passing}<span className="text-[14px] font-normal text-[var(--muted)]">/{tool.total}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-[var(--overlay-bg)] mt-2 overflow-hidden">
+                      <div
+                        className={cn('h-full rounded-full transition-all', style.accent)}
+                        style={{ width: `${passPct}%` }}
+                      />
+                    </div>
                   </div>
                 </button>
               );
