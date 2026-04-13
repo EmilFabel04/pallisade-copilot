@@ -28,6 +28,7 @@ interface MonitorTrend {
   id: string;
   name: string;
   targetFqn: string;
+  category: string;
   latestStatus: string | null;
   latestValue: number | null;
   baselineMean: number | null;
@@ -120,7 +121,7 @@ export async function GET(request: NextRequest) {
     );
 
     // Helper to build a MonitorTrend from a monitor record
-    function buildTrend(m: typeof allMonitors[0]): MonitorTrend {
+    function buildTrend(m: typeof allMonitors[0], category: string): MonitorTrend {
       const runs = m.runs.map((r) => ({
         value: r.value,
         status: r.status,
@@ -140,6 +141,7 @@ export async function GET(request: NextRequest) {
         id: m.id,
         name: m.name,
         targetFqn: m.targetFqn || '',
+        category,
         latestStatus: m.lastStatus,
         latestValue,
         baselineMean: baselineMean !== null ? Math.round(baselineMean * 100) / 100 : null,
@@ -166,12 +168,45 @@ export async function GET(request: NextRequest) {
       else if (ls === 'WARN') cat.warning++;
       else if (ls === 'FAIL' || ls === 'ERROR') cat.failing++;
 
-      cat.monitors.push(buildTrend(m));
+      cat.monitors.push(buildTrend(m, category));
     }
 
     // Derive status for each category
     for (const cat of Object.values(dataHealth)) {
       cat.status = deriveDataStatus(cat.passing, cat.warning, cat.failing, cat.total);
+    }
+
+    // Build per-asset grouping (data monitors only)
+    const assets: Record<string, { name: string; fqn: string; total: number; passing: number; warning: number; failing: number; status: CategoryHealth['status']; monitors: MonitorTrend[] }> = {};
+    for (const m of dataMonitors) {
+      const fqn = m.targetFqn || '';
+      if (!fqn) continue;
+      const category = MONITOR_TYPE_TO_CATEGORY[(m.monitorType || '').toUpperCase()];
+      if (!category) continue;
+
+      if (!assets[fqn]) {
+        const parts = fqn.split('.');
+        assets[fqn] = {
+          name: parts[parts.length - 1] || fqn,
+          fqn,
+          total: 0, passing: 0, warning: 0, failing: 0,
+          status: 'pending',
+          monitors: [],
+        };
+      }
+
+      const asset = assets[fqn];
+      asset.total++;
+      const ls = (m.lastStatus || '').toUpperCase();
+      if (ls === 'PASS') asset.passing++;
+      else if (ls === 'WARN') asset.warning++;
+      else if (ls === 'FAIL' || ls === 'ERROR') asset.failing++;
+
+      asset.monitors.push(buildTrend(m, category));
+    }
+
+    for (const asset of Object.values(assets)) {
+      asset.status = deriveDataStatus(asset.passing, asset.warning, asset.failing, asset.total);
     }
 
     // Build pipeline health by platform
@@ -191,7 +226,7 @@ export async function GET(request: NextRequest) {
       else if (ls === 'WARN') ph.warning++;
       else if (ls === 'FAIL' || ls === 'ERROR') ph.failing++;
 
-      ph.monitors.push(buildTrend(m));
+      ph.monitors.push(buildTrend(m, 'pipeline'));
     }
 
     for (const ph of Object.values(pipelineHealth)) {
@@ -200,6 +235,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       dataHealth,
+      assets,
       pipelineHealth,
       updatedAt: new Date().toISOString(),
     });
