@@ -231,7 +231,7 @@ MONITOR_TYPE_TO_CATEGORY: Dict[str, str] = {
     "RANGE_VALIDATION": "anomaly",
     "ACCEPTED_VALUES": "quality",
     "DATE_CONSISTENCY": "quality",
-    "DATA_TYPE_VALIDATION": "schema",
+    "DATA_TYPE_VALIDATION": "quality",
 }
 
 CATEGORY_STAT_FN = {

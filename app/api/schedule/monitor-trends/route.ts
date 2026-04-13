@@ -13,7 +13,7 @@ const MONITOR_TYPE_TO_CATEGORY: Record<string, string> = {
   RANGE_VALIDATION: 'anomaly',
   ACCEPTED_VALUES: 'quality',
   DATE_CONSISTENCY: 'quality',
-  DATA_TYPE_VALIDATION: 'schema',
+  DATA_TYPE_VALIDATION: 'quality',
 };
 
 const PIPELINE_MONITOR_TYPES = new Set([

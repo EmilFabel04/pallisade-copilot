@@ -259,6 +259,7 @@ def _recommend_direct(node: LineageNode, policy: Any = None) -> List[MonitorReco
         _add(FRESHNESS, 1, "Core data quality — detect stale data in this asset")
         _add(VOLUME, 2, "Core data quality — detect unexpected row count changes")
         _add(SCHEMA_CHANGE, 2, "Core data quality — detect column additions or removals")
+        _add(DATA_TYPE_VALIDATION, 3, "Data quality — detect column type mismatches")
         _add(NULL_CHECK, 2, "Data quality — monitor null spikes in key columns")
         _add(UNIQUENESS_CHECK, 2, "Data quality — detect duplicate values in key columns")
 
