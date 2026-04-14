@@ -227,7 +227,7 @@ export function WatchDetailPanel({
   }, [expandedMonitorId, fetchMonitorRuns]);
 
   return (
-    <div className={cn("flex flex-col h-full bg-[var(--surface-inset)]", !watch.enabled && "opacity-60")}>
+    <div className={cn("flex flex-col h-full bg-[var(--surface-inset)]", watch.enabled === false && "opacity-60")}>
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--subtle-border)]">
         <div className="flex items-center gap-3">
@@ -242,12 +242,12 @@ export function WatchDetailPanel({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-[16px] font-semibold text-[var(--text)]">{watch.name}</h2>
-              {!watch.enabled && (
+              {watch.enabled === false && (
                 <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--overlay-medium)] text-[var(--muted)]">
                   Disabled
                 </span>
               )}
-              {watch.enabled && healthStatus && (
+              {watch.enabled !== false && healthStatus && (
                 <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', HEALTH_STATUS_COLORS[healthStatus])}>
                   {HEALTH_STATUS_LABELS[healthStatus]}
                 </span>
@@ -273,17 +273,17 @@ export function WatchDetailPanel({
             </button>
           )}
           <button
-            onClick={() => onToggleEnabled(!watch.enabled)}
+            onClick={() => onToggleEnabled(watch.enabled === false)}
             className={cn(
               'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
-              watch.enabled ? 'bg-blue-500' : 'bg-[var(--overlay-strong)]'
+              watch.enabled !== false ? 'bg-blue-500' : 'bg-[var(--overlay-strong)]'
             )}
-            title={watch.enabled ? 'Disable watch' : 'Enable watch'}
+            title={watch.enabled !== false ? 'Disable watch' : 'Enable watch'}
           >
             <span
               className={cn(
                 'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transition-transform',
-                watch.enabled ? 'translate-x-4' : 'translate-x-0'
+                watch.enabled !== false ? 'translate-x-4' : 'translate-x-0'
               )}
             />
           </button>
