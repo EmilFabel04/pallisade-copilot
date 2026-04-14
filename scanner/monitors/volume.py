@@ -42,7 +42,10 @@ class VolumeMonitor(BaseMonitor):
         time_bucket_column : str | None
             Column to bucket by time for time-series volume analysis.
         time_bucket_interval : str
-            Interval for time buckets (default: "1 day").
+            Interval for time buckets (default: "1 day"). For daily mode,
+            uses rolling 24-hour windows ending at NOW (not calendar days)
+            so monitor runs at any time of day produce apples-to-apples
+            comparisons against historical windows.
         lookback_days : int
             How many days of history to analyze (default: 30).
         detrend : bool
@@ -97,41 +100,72 @@ class VolumeMonitor(BaseMonitor):
 
             if dialect == "bigquery":
                 if is_hourly:
+                    # Hourly mode: still uses calendar hour buckets
                     bucket_expr = f"TIMESTAMP_TRUNC(CAST({col} AS TIMESTAMP), HOUR)"
                     bucket_alias = "bucket_ts"
-                else:
-                    bucket_expr = f"CAST(CAST({col} AS TIMESTAMP) AS DATE)"
-                    bucket_alias = "bucket_date"
+                    sql = (
+                        f"SELECT "
+                        f"{bucket_expr} AS {bucket_alias}, "
+                        f"COUNT(*) AS row_count "
+                        f"FROM {fqn} "
+                        f"WHERE {bucket_expr} >= "
+                        f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {self.lookback_days} DAY) "
+                        f"GROUP BY {bucket_alias} "
+                        f"ORDER BY {bucket_alias}"
+                    )
+                    return sql
+
+                # Daily mode: rolling 24-hour windows ending at NOW (not calendar days).
+                # bucket_ts marks the end of each 24h window; bucket 0 is last 24h.
+                days_ago_expr = (
+                    f"DIV(TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), "
+                    f"CAST({col} AS TIMESTAMP), SECOND), 86400)"
+                )
                 sql = (
                     f"SELECT "
-                    f"{bucket_expr} AS {bucket_alias}, "
+                    f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), "
+                    f"INTERVAL {days_ago_expr} DAY) AS bucket_ts, "
+                    f"CAST(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), "
+                    f"INTERVAL {days_ago_expr} DAY) AS DATE) AS bucket_date, "
                     f"COUNT(*) AS row_count "
                     f"FROM {fqn} "
-                    f"WHERE {bucket_expr} >= "
-                    f"{'TIMESTAMP' if is_hourly else 'DATE'}_SUB("
-                    f"{'CURRENT_TIMESTAMP()' if is_hourly else 'CURRENT_DATE()'}, "
-                    f"INTERVAL {self.lookback_days} DAY) "
-                    f"GROUP BY {bucket_alias} "
-                    f"ORDER BY {bucket_alias}"
+                    f"WHERE CAST({col} AS TIMESTAMP) >= "
+                    f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {self.lookback_days} DAY) "
+                    f"AND CAST({col} AS TIMESTAMP) < CURRENT_TIMESTAMP() "
+                    f"GROUP BY bucket_ts, bucket_date "
+                    f"ORDER BY bucket_ts"
                 )
                 return sql
 
             if is_hourly:
                 bucket_expr = f"DATE_TRUNC('hour', {col})"
                 bucket_alias = "bucket_ts"
+                sql = (
+                    f"SELECT "
+                    f"{bucket_expr} AS {bucket_alias}, "
+                    f"COUNT(*) AS row_count "
+                    f"FROM {fqn} "
+                    f"WHERE {col} >= NOW() - INTERVAL '{self.lookback_days} days' "
+                    f"GROUP BY {bucket_expr} "
+                    f"ORDER BY {bucket_alias}"
+                )
             else:
-                bucket_expr = f"CAST({col} AS DATE)"
-                bucket_alias = "bucket_date"
-
-            sql = (
-                f"SELECT "
-                f"{bucket_expr} AS {bucket_alias}, "
-                f"COUNT(*) AS row_count "
-                f"FROM {fqn} "
-                f"WHERE {col} >= CURRENT_DATE - INTERVAL '{self.lookback_days} days' "
-                f"GROUP BY {bucket_expr} "
-                f"ORDER BY {bucket_alias}"
-            )
+                # Daily mode: rolling 24-hour windows ending at NOW.
+                # Postgres/Snowflake/Redshift compatible form.
+                days_ago_expr = (
+                    f"FLOOR(EXTRACT(EPOCH FROM (NOW() - {col})) / 86400)"
+                )
+                sql = (
+                    f"SELECT "
+                    f"NOW() - INTERVAL '1 day' * {days_ago_expr} AS bucket_ts, "
+                    f"CAST(NOW() - INTERVAL '1 day' * {days_ago_expr} AS DATE) AS bucket_date, "
+                    f"COUNT(*) AS row_count "
+                    f"FROM {fqn} "
+                    f"WHERE {col} >= NOW() - INTERVAL '{self.lookback_days} days' "
+                    f"AND {col} < NOW() "
+                    f"GROUP BY bucket_ts, bucket_date "
+                    f"ORDER BY bucket_ts"
+                )
         elif self.partition_column:
             # Partition-aware: count per partition value
             pcol = self.partition_column
