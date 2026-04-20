@@ -162,6 +162,12 @@ model Organization {
   // SSO
   oidcConfig OrgOidcConfig?
 
+  // Billing
+  billingSubscription BillingSubscription?
+  usageLedgers        UsageLedger[]
+  creditBalance       CreditBalance?
+  creditPurchases     CreditPurchase[]
+
   @@index([domain])
 }
 
@@ -947,9 +953,24 @@ model LineageSnapshot {
 }
 
 enum Plan {
-  STARTER
-  PROFESSIONAL
+  STARTER      // Legacy — maps to GROWTH
+  PROFESSIONAL // Legacy — maps to BUSINESS
+  GROWTH
+  BUSINESS
   ENTERPRISE
+}
+
+enum BillingPlan {
+  GROWTH
+  BUSINESS
+  ENTERPRISE
+}
+
+enum BillingStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
 }
 
 // ============================================
@@ -1195,6 +1216,7 @@ enum NotificationSeverity {
   WARN
   ERROR
   CRITICAL
+  ORG_DEFAULTS
 }
 
 model NotificationRead {
@@ -1238,6 +1260,81 @@ model NotificationMute {
 
   @@index([organizationId, userId])
   @@index([eventType, entityType, entityId])
+}
+
+// ============================================
+// BILLING & USAGE METERING
+// ============================================
+
+model BillingSubscription {
+  id                   String        @id @default(cuid())
+  orgId                String        @unique
+  stripeCustomerId     String
+  stripeSubscriptionId String?
+  plan                 BillingPlan
+  status               BillingStatus @default(ACTIVE)
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  tokenAllowance       Int
+  storageAllowanceGb   Int
+  memberAllowance      Int
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  usageLedgers UsageLedger[]
+
+  @@index([stripeCustomerId])
+}
+
+model UsageLedger {
+  id               String    @id @default(cuid())
+  orgId            String
+  periodStart      DateTime
+  periodEnd        DateTime
+  tokensUsed       Int       @default(0)
+  storageUsedGb    Float     @default(0)
+  lastStorageScanAt DateTime?
+  notifiedAt80Pct  DateTime?
+  notifiedAt100Pct DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  organization         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade, map: "UsageLedger_org_fkey")
+  billingSubscription  BillingSubscription? @relation(fields: [orgId], references: [orgId], map: "UsageLedger_billing_fkey")
+
+  @@unique([orgId, periodStart])
+  @@index([orgId])
+}
+
+model CreditBalance {
+  id              String   @id @default(cuid())
+  orgId           String   @unique
+  tokensRemaining Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+model CreditPurchase {
+  id                    String   @id @default(cuid())
+  orgId                 String
+  tokensAmount          Int
+  pricePaid             Int      // cents
+  stripePaymentIntentId String
+  createdAt             DateTime @default(now())
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+}
+
+model ProcessedWebhookEvent {
+  id            String   @id @default(cuid())
+  stripeEventId String   @unique
+  eventType     String
+  processedAt   DateTime @default(now())
+
+  @@index([stripeEventId])
 }
 
 // ============================================
