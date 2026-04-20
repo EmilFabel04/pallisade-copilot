@@ -6,6 +6,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { Settings as SettingsIcon, Bell, Key, CreditCard, User, SlidersHorizontal } from 'lucide-react';
 import NotificationRoutingSettings from '@/components/settings/NotificationRoutingSettings';
 import ConnectedAccounts from '@/components/settings/ConnectedAccounts';
+import BillingSettings from '@/components/settings/BillingSettings';
 
 export default function SettingsPage() {
   const { data: session } = useSession();
@@ -175,46 +176,7 @@ export default function SettingsPage() {
       )}
 
       {/* Billing Tab */}
-      {activeTab === 'billing' && (
-        <div className="space-y-6">
-          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-            <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4 flex items-center gap-2"><CreditCard size={16} className="text-[var(--muted)]" /> Current Plan</h2>
-            <div className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-br from-[var(--accent)]/10 to-[var(--accent)]/5 border border-[var(--accent)]/20">
-              <div>
-                <p className="text-[18px] font-semibold text-[var(--text)] mb-1">Pro Plan</p>
-                <p className="text-[13px] text-[var(--muted)]">Unlimited sources, priority support</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[24px] font-bold text-[var(--text)]">$99<span className="text-[14px] font-normal text-[var(--muted)]">/mo</span></p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-            <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4">Usage This Month</h2>
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[13px] text-[var(--text-tertiary)]">AI Queries</span>
-                  <span className="text-[13px] text-[var(--text)]">1,247 / 5,000</span>
-                </div>
-                <div className="h-2 rounded-full bg-[var(--overlay-medium)]">
-                  <div className="h-full w-[25%] rounded-full bg-[var(--accent)]" />
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[13px] text-[var(--text-tertiary)]">Data Sources</span>
-                  <span className="text-[13px] text-[var(--text)]">3 / 10</span>
-                </div>
-                <div className="h-2 rounded-full bg-[var(--overlay-medium)]">
-                  <div className="h-full w-[30%] rounded-full bg-blue-500" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {activeTab === 'billing' && <BillingSettings />}
 
       {/* Saved Notification */}
       {savedNotification && (
