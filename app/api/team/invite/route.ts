@@ -11,6 +11,7 @@ import prisma from '@/lib/db';
 import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
 import { notifyEvents } from '@/lib/notifications';
 import { sendInviteEmail } from '@/lib/email/invite';
+import { getBillingState } from '@/lib/billing';
 
 // POST - Send invite
 export async function POST(request: NextRequest) {
@@ -43,6 +44,18 @@ export async function POST(request: NextRequest) {
 
     if (!currentMember || (currentMember.role !== 'OWNER' && currentMember.role !== 'ADMIN')) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
+
+    // Member limit enforcement
+    const billingState = await getBillingState(organizationId);
+    if (billingState.subscription) {
+      const currentCount = await prisma.teamMember.count({ where: { organizationId } });
+      if (currentCount >= billingState.subscription.memberAllowance) {
+        return NextResponse.json(
+          { error: `Team member limit reached (${billingState.subscription.memberAllowance}). Upgrade your plan to add more members.` },
+          { status: 402 },
+        );
+      }
     }
 
     const body = await request.json();
