@@ -6,12 +6,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { PipelineSelector } from './PipelineSelector';
+import BillingBanner from './BillingBanner';
 
 // Map routes to page titles
 const pageTitles: Record<string, string> = {
   '/dashboard': 'Dashboard',
   '/dashboard/chat': 'Chat',
-  '/dashboard/assistant': 'Scout',
+  '/dashboard/assistant': 'Assistant',
   '/dashboard/lineage': 'Lineage',
   '/dashboard/sources': 'Data Sources',
   '/dashboard/pipeline': 'Pipeline',
@@ -69,7 +70,7 @@ const SEARCH_ICONS: Record<string, string | string[]> = {
 const STATIC_ITEMS: SearchResult[] = [
   // Pages (match sidebar nav 1:1)
   { id: 'p-dashboard', title: 'Dashboard', subtitle: 'Overview and health metrics', category: 'page', href: '/dashboard', icon: 'dashboard' },
-  { id: 'p-scout', title: 'Scout', subtitle: 'AI assistant', category: 'page', href: '/dashboard/assistant', icon: 'scout' },
+  { id: 'p-scout', title: 'Assistant', subtitle: 'AI assistant', category: 'page', href: '/dashboard/assistant', icon: 'scout' },
   { id: 'p-artifacts', title: 'Artifacts', subtitle: 'Saved queries, docs, and reports', category: 'page', href: '/dashboard/artifacts', icon: 'artifacts' },
   { id: 'p-lineage', title: 'Lineage', subtitle: 'Data lineage graph', category: 'page', href: '/dashboard/lineage', icon: 'lineage' },
   { id: 'p-sources', title: 'Sources', subtitle: 'Manage integrations and connections', category: 'page', href: '/dashboard/sources', icon: 'sources' },
@@ -94,7 +95,7 @@ const STATIC_ITEMS: SearchResult[] = [
   { id: 'f-lineage-graph', title: 'Lineage Graph', subtitle: 'Visualize data dependencies and flow', category: 'feature', href: '/dashboard/lineage', icon: 'lineage' },
   { id: 'f-alerts', title: 'Alerts & Errors', subtitle: 'Error notifications and failed monitors', category: 'feature', href: '/dashboard/notifications', icon: 'notifications' },
   { id: 'f-scans', title: 'Scans', subtitle: 'Run and schedule pipeline scans', category: 'feature', href: '/dashboard/schedule', icon: 'tasks' },
-  { id: 'f-copilot', title: 'AI Copilot / Scout', subtitle: 'Ask questions about your data pipeline', category: 'feature', href: '/dashboard/assistant', icon: 'scout' },
+  { id: 'f-copilot', title: 'AI Assistant', subtitle: 'Ask questions about your data pipeline', category: 'feature', href: '/dashboard/assistant', icon: 'scout' },
   { id: 'f-contracts', title: 'Contracts', subtitle: 'Pipeline and source contracts', category: 'feature', href: '/dashboard/pipeline/settings', icon: 'pipeline' },
   { id: 'f-profile', title: 'Profile', subtitle: 'Your account and preferences', category: 'feature', href: '/dashboard/settings', icon: 'settings' },
 ];
@@ -134,7 +135,7 @@ export function DashboardHeader() {
 
   const checkNewAlerts = useCallback(async () => {
     try {
-      const res = await fetch('/api/notifications?severity=ERROR&limit=5&unreadOnly=true');
+      const res = await fetch('/api/notifications?limit=5&unreadOnly=true');
       if (!res.ok) return;
       const data = await res.json();
       const events = data.notifications || [];
@@ -277,6 +278,7 @@ export function DashboardHeader() {
 
   return (
     <>
+    <BillingBanner />
     <header className="h-14 flex items-center justify-between px-6 border-b border-[var(--border-faint)] bg-[var(--surface-inset)]/90 backdrop-blur-sm sticky top-0 z-30">
       {/* Left - Pipeline Selector & Page Title */}
       <div className="flex items-center gap-4">
