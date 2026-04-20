@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { resolveStackIntegrations } from '@/lib/integration-credentials';
+import { getBillingState, checkTokenAccess, deductTokens } from '@/lib/billing';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
@@ -20,6 +21,13 @@ export async function POST(request: Request) {
 
     if (!user?.organizationId) {
       return NextResponse.json({ error: 'No organization' }, { status: 400 });
+    }
+
+    // Billing enforcement — pre-request check
+    const billingState = await getBillingState(user.organizationId);
+    const enforcement = checkTokenAccess(billingState);
+    if (!enforcement.allowed) {
+      return NextResponse.json({ error: enforcement.reason }, { status: 402 });
     }
 
     const body = await request.json();
@@ -223,7 +231,7 @@ export async function POST(request: Request) {
       const title = generateSessionTitle(message);
       await prisma.copilotSession.update({
         where: { id: chatSession.id },
-        data: { 
+        data: {
           title,
           totalInputTokens: { increment: inputTokens },
           totalOutputTokens: { increment: outputTokens },
@@ -239,6 +247,9 @@ export async function POST(request: Request) {
         },
       });
     }
+
+    // Billing: deduct tokens from org ledger
+    await deductTokens(user.organizationId, inputTokens, outputTokens);
 
     return NextResponse.json({
       sessionId: chatSession.id,
@@ -426,6 +437,13 @@ async function handleStreamingChat(
   }
 
   const effectivePipelineStackId = pipelineStackId || pipeline_stack_id;
+
+  // Billing enforcement — pre-request check
+  const billingState = await getBillingState(user.organizationId);
+  const enforcement = checkTokenAccess(billingState);
+  if (!enforcement.allowed) {
+    return NextResponse.json({ error: enforcement.reason }, { status: 402 });
+  }
 
   // Get or create chat session
   let chatSession;
@@ -645,6 +663,9 @@ async function handleStreamingChat(
               },
             });
           }
+
+          // Billing: deduct tokens from org ledger
+          await deductTokens(user.organizationId, inputTokens, outputTokens);
         }
       } catch (saveErr) {
         console.error('[COPILOT/Stream] Failed to save to DB:', saveErr);
