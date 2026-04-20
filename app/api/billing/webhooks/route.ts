@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Stripe from 'stripe';
+import crypto from 'crypto';
 import prisma from '@/lib/db';
 import { invalidateBillingCache } from '@/lib/billing';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 // Plan defaults — keep in sync with pricing table in spec
 const PLAN_DEFAULTS: Record<string, { tokenAllowance: number; storageAllowanceGb: number; memberAllowance: number }> = {
@@ -17,67 +15,63 @@ const CREDIT_BLOCKS: Record<string, number> = {
   '20M': 20_000_000,
 };
 
-// Stripe SDK v22 moved current_period_start/end from Subscription to SubscriptionItem
-function getSubscriptionPeriod(sub: Stripe.Subscription): { periodStart: Date; periodEnd: Date } {
-  const item = sub.items.data[0];
-  return {
-    periodStart: new Date(item.current_period_start * 1000),
-    periodEnd: new Date(item.current_period_end * 1000),
-  };
-}
-
-// Disable body parsing — Stripe needs the raw body for signature verification
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   const body = await request.text();
-  const signature = request.headers.get('stripe-signature');
+  const signature = request.headers.get('x-paystack-signature');
 
   if (!signature) {
     return NextResponse.json({ error: 'Missing signature' }, { status: 400 });
   }
 
-  let event: Stripe.Event;
-  try {
-    event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
-  } catch (err: any) {
-    console.error('Webhook signature verification failed:', err.message);
+  // Verify PayStack webhook signature (HMAC SHA512)
+  const hash = crypto
+    .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY!)
+    .update(body)
+    .digest('hex');
+
+  if (hash !== signature) {
+    console.error('Webhook signature verification failed');
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
   }
 
+  const payload = JSON.parse(body);
+  const event = payload.event as string;
+  const data = payload.data;
+
   // Idempotency: skip already-processed events
+  // PayStack doesn't send event IDs — use reference as dedup key
+  const eventId = data.reference || `${event}-${data.subscription_code || data.id || Date.now()}`;
   const existing = await prisma.processedWebhookEvent.findUnique({
-    where: { stripeEventId: event.id },
+    where: { eventId },
   });
   if (existing) {
     return NextResponse.json({ received: true });
   }
 
   try {
-    switch (event.type) {
-      case 'checkout.session.completed':
-        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+    switch (event) {
+      case 'charge.success':
+        await handleChargeSuccess(data);
         break;
-      case 'invoice.paid':
-        await handleInvoicePaid(event.data.object as Stripe.Invoice);
+      case 'subscription.create':
+        await handleSubscriptionCreate(data);
+        break;
+      case 'subscription.not_renew':
+      case 'subscription.disable':
+        await handleSubscriptionDisabled(data);
         break;
       case 'invoice.payment_failed':
-        await handlePaymentFailed(event.data.object as Stripe.Invoice);
-        break;
-      case 'customer.subscription.updated':
-        await handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
-        break;
-      case 'customer.subscription.deleted':
-        await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        await handlePaymentFailed(data);
         break;
     }
 
-    // Record event as processed
     await prisma.processedWebhookEvent.create({
-      data: { stripeEventId: event.id, eventType: event.type },
+      data: { eventId, eventType: event },
     });
   } catch (err) {
-    console.error(`Webhook handler error for ${event.type}:`, err);
+    console.error(`Webhook handler error for ${event}:`, err);
     return NextResponse.json({ error: 'Handler failed' }, { status: 500 });
   }
 
@@ -86,14 +80,15 @@ export async function POST(request: NextRequest) {
 
 // ── Handlers ─────────────────────────────────────────────────
 
-async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
-  const orgId = session.metadata?.orgId;
+async function handleChargeSuccess(data: any) {
+  const metadata = data.metadata || {};
+  const orgId = metadata.orgId;
   if (!orgId) return;
 
-  const checkoutType = session.metadata?.type; // 'subscription' or 'credit'
+  const checkoutType = metadata.type; // 'subscription' or 'credit'
 
   if (checkoutType === 'credit') {
-    const block = session.metadata?.block as string;
+    const block = metadata.block as string;
     const tokensAmount = CREDIT_BLOCKS[block];
     if (!tokensAmount) return;
 
@@ -107,8 +102,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
       data: {
         orgId,
         tokensAmount,
-        pricePaid: session.amount_total ?? 0,
-        stripePaymentIntentId: (session.payment_intent as string) ?? '',
+        pricePaid: data.amount ?? 0,
+        paystackReference: data.reference ?? '',
       },
     });
 
@@ -116,124 +111,97 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     return;
   }
 
-  // Subscription checkout
-  const plan = (session.metadata?.plan ?? 'GROWTH') as keyof typeof PLAN_DEFAULTS;
-  const defaults = PLAN_DEFAULTS[plan] ?? PLAN_DEFAULTS.GROWTH;
-  const stripeSubscriptionId = session.subscription as string;
+  // Subscription payment — handled by subscription.create for new subs
+  // For renewals, update the period
+  if (data.plan && data.subscription_code) {
+    const sub = await prisma.billingSubscription.findFirst({
+      where: { paystackSubscriptionCode: data.subscription_code },
+    });
+    if (sub) {
+      const now = new Date();
+      const periodEnd = new Date(now);
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
 
-  const stripeSubResponse = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-  const { periodStart, periodEnd } = getSubscriptionPeriod(stripeSubResponse as unknown as Stripe.Subscription);
+      await prisma.billingSubscription.update({
+        where: { orgId: sub.orgId },
+        data: { currentPeriodStart: now, currentPeriodEnd: periodEnd, status: 'ACTIVE' },
+      });
 
-  await prisma.billingSubscription.upsert({
-    where: { orgId },
-    create: {
-      orgId,
-      stripeCustomerId: session.customer as string,
-      stripeSubscriptionId,
-      plan: plan as any,
-      status: 'ACTIVE',
-      currentPeriodStart: periodStart,
-      currentPeriodEnd: periodEnd,
-      ...defaults,
-    },
-    update: {
-      stripeSubscriptionId,
-      plan: plan as any,
-      status: 'ACTIVE',
-      currentPeriodStart: periodStart,
-      currentPeriodEnd: periodEnd,
-      ...defaults,
-    },
-  });
+      // Create new usage ledger for the new period (idempotent)
+      await prisma.usageLedger.upsert({
+        where: { orgId_periodStart: { orgId: sub.orgId, periodStart: now } },
+        create: { orgId: sub.orgId, periodStart: now, periodEnd, tokensUsed: 0, storageUsedGb: 0 },
+        update: {},
+      });
 
-  // Create initial usage ledger for this period
-  await prisma.usageLedger.upsert({
-    where: { orgId_periodStart: { orgId, periodStart } },
-    create: { orgId, periodStart, periodEnd, tokensUsed: 0, storageUsedGb: 0 },
-    update: {}, // no-op if exists (idempotent)
-  });
-
-  invalidateBillingCache(orgId);
+      invalidateBillingCache(sub.orgId);
+    }
+  }
 }
 
-async function handleInvoicePaid(invoice: Stripe.Invoice) {
-  // Stripe v22 removed invoice.subscription — extract from parent or raw event data
-  const subId = (invoice as any).subscription as string | undefined
-    ?? (typeof invoice.parent?.subscription_details === 'object' ? (invoice.parent.subscription_details as any)?.subscription : undefined);
-  if (!subId) return;
+async function handleSubscriptionCreate(data: any) {
+  const customerCode = data.customer?.customer_code;
+  if (!customerCode) return;
 
-  const sub = await prisma.billingSubscription.findFirst({
-    where: { stripeSubscriptionId: subId },
+  // Look up org by customer code
+  const existingSub = await prisma.billingSubscription.findFirst({
+    where: { paystackCustomerCode: customerCode },
   });
-  if (!sub) return;
 
-  const stripeSubResponse = await stripe.subscriptions.retrieve(subId);
-  const { periodStart, periodEnd } = getSubscriptionPeriod(stripeSubResponse as unknown as Stripe.Subscription);
+  if (!existingSub) return;
 
-  // Update subscription period
+  const now = new Date();
+  const periodEnd = new Date(data.next_payment_date || now);
+  if (periodEnd <= now) periodEnd.setMonth(now.getMonth() + 1);
+
   await prisma.billingSubscription.update({
-    where: { orgId: sub.orgId },
-    data: { currentPeriodStart: periodStart, currentPeriodEnd: periodEnd, status: 'ACTIVE' },
+    where: { orgId: existingSub.orgId },
+    data: {
+      paystackSubscriptionCode: data.subscription_code,
+      paystackEmailToken: data.email_token || null,
+      status: 'ACTIVE',
+      currentPeriodStart: now,
+      currentPeriodEnd: periodEnd,
+    },
   });
 
-  // Create new usage ledger for the new period (idempotent via unique constraint)
+  // Create initial usage ledger
   await prisma.usageLedger.upsert({
-    where: { orgId_periodStart: { orgId: sub.orgId, periodStart } },
-    create: { orgId: sub.orgId, periodStart, periodEnd, tokensUsed: 0, storageUsedGb: 0 },
+    where: { orgId_periodStart: { orgId: existingSub.orgId, periodStart: now } },
+    create: { orgId: existingSub.orgId, periodStart: now, periodEnd, tokensUsed: 0, storageUsedGb: 0 },
     update: {},
   });
 
-  invalidateBillingCache(sub.orgId);
+  invalidateBillingCache(existingSub.orgId);
 }
 
-async function handlePaymentFailed(invoice: Stripe.Invoice) {
-  const subId = (invoice as any).subscription as string | undefined
-    ?? (typeof invoice.parent?.subscription_details === 'object' ? (invoice.parent.subscription_details as any)?.subscription : undefined);
-  if (!subId) return;
+async function handleSubscriptionDisabled(data: any) {
+  const subCode = data.subscription_code;
+  if (!subCode) return;
 
   await prisma.billingSubscription.updateMany({
-    where: { stripeSubscriptionId: subId },
-    data: { status: 'PAST_DUE' },
+    where: { paystackSubscriptionCode: subCode },
+    data: { status: 'CANCELED' },
   });
 
   const sub = await prisma.billingSubscription.findFirst({
-    where: { stripeSubscriptionId: subId },
+    where: { paystackSubscriptionCode: subCode },
     select: { orgId: true },
   });
   if (sub) invalidateBillingCache(sub.orgId);
 }
 
-async function handleSubscriptionUpdated(stripeSub: Stripe.Subscription) {
-  const sub = await prisma.billingSubscription.findFirst({
-    where: { stripeSubscriptionId: stripeSub.id },
-  });
-  if (!sub) return;
+async function handlePaymentFailed(data: any) {
+  const subCode = data.subscription?.subscription_code;
+  if (!subCode) return;
 
-  const planMeta = stripeSub.metadata?.plan as string | undefined;
-  const plan = planMeta && PLAN_DEFAULTS[planMeta] ? planMeta : sub.plan;
-  const defaults = PLAN_DEFAULTS[plan] ?? PLAN_DEFAULTS.GROWTH;
-
-  await prisma.billingSubscription.update({
-    where: { orgId: sub.orgId },
-    data: {
-      plan: plan as any,
-      currentPeriodStart: getSubscriptionPeriod(stripeSub).periodStart,
-      currentPeriodEnd: getSubscriptionPeriod(stripeSub).periodEnd,
-      ...defaults,
-    },
-  });
-
-  invalidateBillingCache(sub.orgId);
-}
-
-async function handleSubscriptionDeleted(stripeSub: Stripe.Subscription) {
   await prisma.billingSubscription.updateMany({
-    where: { stripeSubscriptionId: stripeSub.id },
-    data: { status: 'CANCELED' },
+    where: { paystackSubscriptionCode: subCode },
+    data: { status: 'PAST_DUE' },
   });
 
   const sub = await prisma.billingSubscription.findFirst({
-    where: { stripeSubscriptionId: stripeSub.id },
+    where: { paystackSubscriptionCode: subCode },
     select: { orgId: true },
   });
   if (sub) invalidateBillingCache(sub.orgId);

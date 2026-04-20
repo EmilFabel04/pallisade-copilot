@@ -1267,24 +1267,25 @@ model NotificationMute {
 // ============================================
 
 model BillingSubscription {
-  id                   String        @id @default(cuid())
-  orgId                String        @unique
-  stripeCustomerId     String
-  stripeSubscriptionId String?
-  plan                 BillingPlan
-  status               BillingStatus @default(ACTIVE)
-  currentPeriodStart   DateTime
-  currentPeriodEnd     DateTime
-  tokenAllowance       Int
-  storageAllowanceGb   Int
-  memberAllowance      Int
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
+  id                       String        @id @default(cuid())
+  orgId                    String        @unique
+  paystackCustomerCode     String
+  paystackSubscriptionCode String?
+  paystackEmailToken       String?       // needed to manage subscriptions via PayStack API
+  plan                     BillingPlan
+  status                   BillingStatus @default(ACTIVE)
+  currentPeriodStart       DateTime
+  currentPeriodEnd         DateTime
+  tokenAllowance           Int
+  storageAllowanceGb       Int
+  memberAllowance          Int
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
 
   organization Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
   usageLedgers UsageLedger[]
 
-  @@index([stripeCustomerId])
+  @@index([paystackCustomerCode])
 }
 
 model UsageLedger {
@@ -1319,8 +1320,8 @@ model CreditPurchase {
   id                    String   @id @default(cuid())
   orgId                 String
   tokensAmount          Int
-  pricePaid             Int      // cents
-  stripePaymentIntentId String
+  pricePaid             Int      // kobo/cents
+  paystackReference     String
   createdAt             DateTime @default(now())
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
@@ -1329,12 +1330,12 @@ model CreditPurchase {
 }
 
 model ProcessedWebhookEvent {
-  id            String   @id @default(cuid())
-  stripeEventId String   @unique
-  eventType     String
-  processedAt   DateTime @default(now())
+  id          String   @id @default(cuid())
+  eventId     String   @unique
+  eventType   String
+  processedAt DateTime @default(now())
 
-  @@index([stripeEventId])
+  @@index([eventId])
 }
 
 // ============================================

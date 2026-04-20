@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CreditCard, ExternalLink, Coins, FileText } from 'lucide-react';
+import { CreditCard, Coins, FileText } from 'lucide-react';
 
 interface Subscription {
   plan: string;
@@ -103,12 +103,18 @@ export default function BillingSettings() {
     }
   };
 
-  const handlePortal = async () => {
-    setActionLoading('portal');
+  const handleCancelSubscription = async () => {
+    if (!confirm('Are you sure you want to cancel your subscription? You will retain access until the end of your billing period.')) return;
+    setActionLoading('cancel');
     try {
-      const res = await fetch('/api/billing/portal', { method: 'POST' });
-      const { url } = await res.json();
-      if (url) window.location.href = url;
+      const res = await fetch('/api/billing/portal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel' }),
+      });
+      if (res.ok) {
+        window.location.reload();
+      }
     } finally {
       setActionLoading(null);
     }
@@ -225,11 +231,11 @@ export default function BillingSettings() {
             Change Plan
           </button>
           <button
-            onClick={handlePortal}
+            onClick={handleCancelSubscription}
             disabled={!!actionLoading}
-            className="px-4 py-2 text-sm text-[var(--muted)] hover:text-[var(--text)] transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            className="px-4 py-2 text-sm text-red-400 hover:text-red-300 transition-colors disabled:opacity-50"
           >
-            Manage Payment Method <ExternalLink size={12} />
+            {actionLoading === 'cancel' ? 'Canceling...' : 'Cancel Subscription'}
           </button>
         </div>
       </div>
@@ -285,10 +291,7 @@ export default function BillingSettings() {
           <FileText size={16} className="text-[var(--muted)]" /> Invoices
         </h2>
         <p className="text-[13px] text-[var(--muted)]">
-          View and download invoices from{' '}
-          <button onClick={handlePortal} className="text-[var(--accent)] hover:underline">
-            Stripe Customer Portal
-          </button>.
+          Invoice receipts are sent to your email after each payment.
         </p>
       </div>
     </div>
