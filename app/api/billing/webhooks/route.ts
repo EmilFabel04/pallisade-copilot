@@ -17,6 +17,15 @@ const CREDIT_BLOCKS: Record<string, number> = {
   '20M': 20_000_000,
 };
 
+// Stripe SDK v22 moved current_period_start/end from Subscription to SubscriptionItem
+function getSubscriptionPeriod(sub: Stripe.Subscription): { periodStart: Date; periodEnd: Date } {
+  const item = sub.items.data[0];
+  return {
+    periodStart: new Date(item.current_period_start * 1000),
+    periodEnd: new Date(item.current_period_end * 1000),
+  };
+}
+
 // Disable body parsing — Stripe needs the raw body for signature verification
 export const dynamic = 'force-dynamic';
 
@@ -112,9 +121,8 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   const defaults = PLAN_DEFAULTS[plan] ?? PLAN_DEFAULTS.GROWTH;
   const stripeSubscriptionId = session.subscription as string;
 
-  const stripeSub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-  const periodStart = new Date(stripeSub.current_period_start * 1000);
-  const periodEnd = new Date(stripeSub.current_period_end * 1000);
+  const stripeSubResponse = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+  const { periodStart, periodEnd } = getSubscriptionPeriod(stripeSubResponse as unknown as Stripe.Subscription);
 
   await prisma.billingSubscription.upsert({
     where: { orgId },
@@ -149,7 +157,9 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
 }
 
 async function handleInvoicePaid(invoice: Stripe.Invoice) {
-  const subId = invoice.subscription as string;
+  // Stripe v22 removed invoice.subscription — extract from parent or raw event data
+  const subId = (invoice as any).subscription as string | undefined
+    ?? (typeof invoice.parent?.subscription_details === 'object' ? (invoice.parent.subscription_details as any)?.subscription : undefined);
   if (!subId) return;
 
   const sub = await prisma.billingSubscription.findFirst({
@@ -157,9 +167,8 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   });
   if (!sub) return;
 
-  const stripeSub = await stripe.subscriptions.retrieve(subId);
-  const periodStart = new Date(stripeSub.current_period_start * 1000);
-  const periodEnd = new Date(stripeSub.current_period_end * 1000);
+  const stripeSubResponse = await stripe.subscriptions.retrieve(subId);
+  const { periodStart, periodEnd } = getSubscriptionPeriod(stripeSubResponse as unknown as Stripe.Subscription);
 
   // Update subscription period
   await prisma.billingSubscription.update({
@@ -178,7 +187,8 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
 }
 
 async function handlePaymentFailed(invoice: Stripe.Invoice) {
-  const subId = invoice.subscription as string;
+  const subId = (invoice as any).subscription as string | undefined
+    ?? (typeof invoice.parent?.subscription_details === 'object' ? (invoice.parent.subscription_details as any)?.subscription : undefined);
   if (!subId) return;
 
   await prisma.billingSubscription.updateMany({
@@ -207,8 +217,8 @@ async function handleSubscriptionUpdated(stripeSub: Stripe.Subscription) {
     where: { orgId: sub.orgId },
     data: {
       plan: plan as any,
-      currentPeriodStart: new Date(stripeSub.current_period_start * 1000),
-      currentPeriodEnd: new Date(stripeSub.current_period_end * 1000),
+      currentPeriodStart: getSubscriptionPeriod(stripeSub).periodStart,
+      currentPeriodEnd: getSubscriptionPeriod(stripeSub).periodEnd,
       ...defaults,
     },
   });
