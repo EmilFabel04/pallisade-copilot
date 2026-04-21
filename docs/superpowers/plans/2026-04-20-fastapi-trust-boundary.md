@@ -764,6 +764,8 @@ git commit -m "feat(lib): add scannerClient helper for Next.js → FastAPI calls
 
 This is a mechanical refactor across ~20 files. Do it in batches; each batch is one commit.
 
+> **Scope note:** The billing routes under `app/api/billing/**` (added after the spec was written) do NOT call FastAPI and are intentionally excluded from this migration. The grep in Step 1 will not return them; if they show up, something changed and this note needs updating. Webhooks from PayStack remain session-less by design.
+
 **Enumerate the targets:**
 
 - [ ] **Step 1: List all files to change**
@@ -836,6 +838,8 @@ Expected: zero errors.
 
 **Files:**
 - Modify: `middleware.ts:11-13`
+
+> **Scope note:** The matcher (`['/dashboard/:path*', '/onboarding/:path*', '/login', '/signup']`) intentionally excludes `/api/*`, so PayStack webhooks at `/api/billing/webhooks` continue to bypass NextAuth as required. No matcher change needed in this task.
 
 - [ ] **Step 1: Remove the bypass**
 
