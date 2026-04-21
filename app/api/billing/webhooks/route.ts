@@ -4,10 +4,10 @@ import prisma from '@/lib/db';
 import { invalidateBillingCache } from '@/lib/billing';
 
 // Plan defaults — keep in sync with pricing table in spec
-const PLAN_DEFAULTS: Record<string, { tokenAllowance: number; storageAllowanceGb: number; memberAllowance: number }> = {
-  GROWTH: { tokenAllowance: 5_000_000, storageAllowanceGb: 100, memberAllowance: 5 },
-  BUSINESS: { tokenAllowance: 20_000_000, storageAllowanceGb: 500, memberAllowance: 15 },
-  ENTERPRISE: { tokenAllowance: 100_000_000, storageAllowanceGb: 10_000, memberAllowance: 1000 },
+const PLAN_DEFAULTS: Record<string, { tokenAllowance: number; storageAllowanceGb: number; memberAllowance: number; pipelineAllowance: number }> = {
+  GROWTH: { tokenAllowance: 5_000_000, storageAllowanceGb: 100, memberAllowance: 5, pipelineAllowance: 3 },
+  BUSINESS: { tokenAllowance: 20_000_000, storageAllowanceGb: 500, memberAllowance: 15, pipelineAllowance: 6 },
+  ENTERPRISE: { tokenAllowance: 100_000_000, storageAllowanceGb: 10_000, memberAllowance: 1000, pipelineAllowance: 100 },
 };
 
 const CREDIT_BLOCKS: Record<string, number> = {
@@ -25,13 +25,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing signature' }, { status: 400 });
   }
 
-  // Verify PayStack webhook signature (HMAC SHA512)
+  // Verify PayStack webhook signature (HMAC SHA512) using constant-time compare
   const hash = crypto
     .createHmac('sha512', process.env.PAYSTACK_SECRET_KEY!)
     .update(body)
     .digest('hex');
 
-  if (hash !== signature) {
+  const hashBuf = Buffer.from(hash, 'hex');
+  const sigBuf = Buffer.from(signature, 'hex');
+
+  if (hashBuf.length !== sigBuf.length || !crypto.timingSafeEqual(hashBuf, sigBuf)) {
     console.error('Webhook signature verification failed');
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
   }
