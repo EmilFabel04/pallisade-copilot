@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/nodes/[nodeId]/sla/discover — On-demand SLA discovery for a single node
 export async function POST(
@@ -40,7 +39,7 @@ export async function POST(
         );
       }
 
-      const res = await fetch(`${SCANNER_API_URL}/api/v1/discovery/direct`, {
+      const res = await scannerClient.fetch(session, '/api/v1/discovery/direct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ platform, tableFqn, credentials }),
@@ -61,7 +60,7 @@ export async function POST(
 
     // Fallback: use the graph-based endpoint (requires lineage to be populated)
     const qs = stackId ? `?stack_id=${encodeURIComponent(stackId)}` : '';
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/discovery/node${qs}`, {
+    const res = await scannerClient.fetch(session, `/api/v1/discovery/node${qs}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nodeId }),

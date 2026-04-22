@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
-
-const SCANNER_URL = process.env.SCANNER_URL || 'http://localhost:8000';
+import { auth } from '@/auth';
+import { scannerClient } from '@/lib/scanner-client';
 
 export async function GET(req: Request) {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(req.url);
   const layer = searchParams.get('layer') || '';
   const graphDomain = searchParams.get('graphDomain') || '';
@@ -12,10 +17,10 @@ export async function GET(req: Request) {
   if (graphDomain) params.set('graph_domain', graphDomain);
 
   const qs = params.toString();
-  const url = `${SCANNER_URL}/api/v1/drivers${qs ? `?${qs}` : ''}`;
+  const path = `/api/v1/drivers${qs ? `?${qs}` : ''}`;
 
   try {
-    const resp = await fetch(url, { cache: 'no-store' });
+    const resp = await scannerClient.fetch(session, path, { cache: 'no-store' });
     const data = await resp.json();
     return NextResponse.json(data, { status: resp.status });
   } catch {
