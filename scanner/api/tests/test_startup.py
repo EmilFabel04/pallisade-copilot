@@ -45,3 +45,22 @@ class TestSettingsProd:
         with patch.dict("os.environ", {"ENVIRONMENT": "development"}, clear=True):
             s = Settings()
             assert s.shared_secret == "dev-insecure-secret-do-not-use-in-production"
+
+
+class TestLoopbackCheck:
+    def test_prod_non_loopback_raises(self):
+        from scanner.api.app import enforce_loopback_in_production
+        with pytest.raises(RuntimeError, match="loopback"):
+            enforce_loopback_in_production(environment="production", host="0.0.0.0")
+
+    def test_prod_loopback_v4_passes(self):
+        from scanner.api.app import enforce_loopback_in_production
+        enforce_loopback_in_production(environment="production", host="127.0.0.1")  # no raise
+
+    def test_prod_loopback_v6_passes(self):
+        from scanner.api.app import enforce_loopback_in_production
+        enforce_loopback_in_production(environment="production", host="::1")
+
+    def test_dev_non_loopback_allowed(self):
+        from scanner.api.app import enforce_loopback_in_production
+        enforce_loopback_in_production(environment="development", host="0.0.0.0")

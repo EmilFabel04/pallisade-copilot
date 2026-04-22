@@ -27,10 +27,33 @@ setup_logging()
 logger = structlog.get_logger()
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def enforce_loopback_in_production(environment: str, host: str) -> None:
+    """Exit loudly if FastAPI is bound to a non-loopback interface in production.
+
+    Called from create_app() when ENVIRONMENT=production. Host is read from
+    the HOST env var, which is what uvicorn/gunicorn conventionally set.
+    """
+    if environment != "production":
+        return
+    if host not in _LOOPBACK_HOSTS:
+        raise RuntimeError(
+            f"startup.loopback_violation: FastAPI must bind to loopback in production, got host={host!r}"
+        )
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
-    
+
+    # Refuse to boot on non-loopback in production.
+    enforce_loopback_in_production(
+        environment=settings.environment,
+        host=os.getenv("HOST", "127.0.0.1"),
+    )
+
     app = FastAPI(
         title="Pallisade Co-Pilot API",
         description="AI-powered data pipeline assistant",
