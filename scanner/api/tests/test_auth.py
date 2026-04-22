@@ -127,3 +127,30 @@ class TestActingPrincipalMiddleware:
         r = client.get("/api/v1/whoami", headers=headers)
         assert r.status_code == 200
         assert r.json()["request_id"]  # server-generated
+
+
+class TestFullAppStack:
+    SECRET = "a" * 64
+
+    def test_health_endpoint_accessible_without_headers(self):
+        env = {"ENVIRONMENT": "development", "SCANNER_SHARED_SECRET": self.SECRET}
+        with patch.dict("os.environ", env):
+            # Force re-import so get_settings cache picks up env
+            from scanner.api.dependencies import get_settings
+            get_settings.cache_clear()
+            from scanner.api.app import create_app
+            app = create_app()
+            client = TestClient(app)
+            r = client.get("/health")
+            assert r.status_code == 200
+
+    def test_api_endpoint_rejected_without_secret(self):
+        env = {"ENVIRONMENT": "development", "SCANNER_SHARED_SECRET": self.SECRET}
+        with patch.dict("os.environ", env):
+            from scanner.api.dependencies import get_settings
+            get_settings.cache_clear()
+            from scanner.api.app import create_app
+            app = create_app()
+            client = TestClient(app)
+            r = client.get("/api/v1/drivers")
+            assert r.status_code == 401

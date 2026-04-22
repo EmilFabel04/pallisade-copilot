@@ -62,14 +62,29 @@ def create_app() -> FastAPI:
         redoc_url="/redoc"
     )
     
-    # CORS Middleware
+    # Register auth middlewares FIRST — ordering note:
+    # Starlette applies middlewares in reverse registration order, so the
+    # add_middleware call made LAST runs FIRST on inbound requests.
+    # We want: InternalAuth (outer) → ActingPrincipal (inner) → CORS → app.
+    from .auth import InternalAuthMiddleware, ActingPrincipalMiddleware
+
+    # CORS Middleware — explicit origins only in prod (enforced by Settings)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Internal-Auth",
+            "X-Acting-User",
+            "X-Acting-Org",
+            "X-Request-Id",
+        ],
     )
+    app.add_middleware(ActingPrincipalMiddleware)
+    app.add_middleware(InternalAuthMiddleware, settings=settings)
     
     # Request Logging Middleware
     @app.middleware("http")
