@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-
-const SCANNER_URL = process.env.SCANNER_URL || 'http://localhost:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // GET /api/schedule/plans/families - List monitor families with eligibility
 export async function GET(request: NextRequest) {
@@ -23,8 +22,9 @@ export async function GET(request: NextRequest) {
     if (nodeIds) params.set('node_ids', nodeIds);
     const qs = params.toString() ? `?${params.toString()}` : '';
 
-    const res = await fetch(
-      `${SCANNER_URL}/api/v1/monitors/plans/families${qs}`,
+    const res = await scannerClient.fetch(
+      session,
+      `/api/v1/monitors/plans/families${qs}`,
       {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },

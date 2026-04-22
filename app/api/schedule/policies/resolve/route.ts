@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/schedule/policies/resolve — Resolve effective policies for nodes
 // This loads assignments + profiles from DB, then sends to FastAPI for graph-aware resolution.
@@ -45,9 +46,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Try to proxy to FastAPI for graph-aware resolution (branch distance, etc.)
-    const scannerUrl = process.env.SCANNER_API_URL || 'http://localhost:8000';
     try {
-      const res = await fetch(`${scannerUrl}/api/v1/policies/resolve`, {
+      const res = await scannerClient.fetch(session, '/api/v1/policies/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

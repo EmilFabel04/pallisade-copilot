@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-
-const SCANNER_URL = process.env.SCANNER_URL || 'http://localhost:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/schedule/plans/preview - Preview a monitoring plan
 export async function POST(request: NextRequest) {
@@ -31,8 +30,9 @@ export async function POST(request: NextRequest) {
 
     const qs = stackId ? `?stack_id=${encodeURIComponent(stackId)}` : '';
 
-    const res = await fetch(
-      `${SCANNER_URL}/api/v1/monitors/plans/preview${qs}`,
+    const res = await scannerClient.fetch(
+      session,
+      `/api/v1/monitors/plans/preview${qs}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

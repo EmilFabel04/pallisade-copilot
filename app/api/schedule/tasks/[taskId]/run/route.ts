@@ -4,13 +4,12 @@ import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { computeNextRun } from '@/lib/cron';
 import { notifyEvents } from '@/lib/notifications';
+import { scannerClient } from '@/lib/scanner-client';
 import {
   computeWatchHealthScore,
   watchHealthStatusFromScore,
   signalsFromMonitors,
 } from '@/lib/watch-health';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 const WAREHOUSE_TOOL_TYPES = ['bigquery', 'snowflake', 'postgres', 'redshift'];
 
@@ -420,7 +419,7 @@ export async function POST(
     // Call the Python backend to execute
     const startedAt = new Date();
 
-    const executeResponse = await fetch(`${SCANNER_API_URL}/api/v1/schedule/execute`, {
+    const executeResponse = await scannerClient.fetch(session, '/api/v1/schedule/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

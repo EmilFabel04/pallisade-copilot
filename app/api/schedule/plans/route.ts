@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { createWatchInTransaction } from '@/lib/watch-helpers';
+import { scannerClient } from '@/lib/scanner-client';
 import { SLA_FIELD_MAP, getSLAValueForField } from '@/lib/sla-utils';
 
 // GET /api/schedule/plans - List all monitoring plans
@@ -146,6 +148,7 @@ export async function POST(request: NextRequest) {
     // Support both session auth (browser) and internal auth (copilot executor)
     let organizationId: string | undefined;
     let userId: string = '';
+    let session: Session | null = null;
 
     const internalSecret = request.headers.get('X-Internal-Secret');
     const expectedSecret = process.env.INTERNAL_API_SECRET || 'pallisade-internal';
@@ -153,8 +156,13 @@ export async function POST(request: NextRequest) {
     if (internalSecret && internalSecret === expectedSecret) {
       organizationId = request.headers.get('X-Organization-Id') || undefined;
       userId = 'copilot-system';
+      // Synthesize a session for downstream scannerClient calls
+      session = {
+        user: { id: userId, organizationId },
+        expires: '',
+      } as unknown as Session;
     } else {
-      const session = await auth();
+      session = await auth();
       if (!session?.user) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       }
@@ -216,8 +224,7 @@ export async function POST(request: NextRequest) {
     let resolvedPolicies: Record<string, any> = {};
     if (targetFqns.size > 0) {
       try {
-        const scannerUrl = process.env.SCANNER_API_URL || 'http://localhost:8000';
-        const policyRes = await fetch(`${scannerUrl}/api/v1/policies/resolve`, {
+        const policyRes = await scannerClient.fetch(session!, '/api/v1/policies/resolve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
