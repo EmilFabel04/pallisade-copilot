@@ -5,8 +5,7 @@ import { decrypt } from '@/lib/crypto';
 import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
 import { resolveStackIntegrations } from '@/lib/integration-credentials';
 import { notifyEvents } from '@/lib/notifications';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 export async function POST(request: Request) {
   try {
@@ -147,7 +146,7 @@ export async function POST(request: Request) {
     console.log('[apply-plan] Calling FastAPI:', { plan_id, repo_owner, repo_name });
 
     // ── 3. Call FastAPI with token + repo resolved ────────────────
-    const response = await fetch(`${SCANNER_API_URL}/api/v1/copilot/apply-plan`, {
+    const response = await scannerClient.fetch(session, '/api/v1/copilot/apply-plan', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

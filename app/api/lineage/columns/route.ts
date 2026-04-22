@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // GET /api/lineage/columns?fqn=acme-484520.public.orders&stackId=...
 // Returns columns with types from the lineage engine graph for a given table FQN.
@@ -24,7 +23,7 @@ export async function GET(request: NextRequest) {
     const params = new URLSearchParams({ plane: 'data' });
     if (stackId) params.set('stack_id', stackId);
 
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/graph?${params}`, {
+    const res = await scannerClient.fetch(session, `/api/v1/lineage/engine/graph?${params}`, {
       signal: AbortSignal.timeout(5000),
     });
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { scannerClient } from '@/lib/scanner-client';
 
 export async function POST(request: NextRequest) {
   try {
@@ -35,7 +36,6 @@ export async function POST(request: NextRequest) {
     const fqns = [...new Set(monitors.map(m => m.targetFqn).filter(Boolean))] as string[];
     let policies: Record<string, any> = {};
     try {
-      const scannerUrl = process.env.SCANNER_API_URL || 'http://localhost:8000';
       const nodes = fqns.map(fqn => ({ fqn, domain: 'warehouse', criticality: 'medium' }));
       const assignments = await prisma.policyAssignment.findMany({
         where: { organizationId },
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
       const profileMap: Record<string, any> = {};
       for (const p of profiles) profileMap[p.id] = p;
 
-      const res = await fetch(`${scannerUrl}/api/v1/policies/resolve`, {
+      const res = await scannerClient.fetch(session, '/api/v1/policies/resolve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -68,8 +68,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Call FastAPI drift analyzer
-    const scannerUrl = process.env.SCANNER_API_URL || 'http://localhost:8000';
-    const analyzeRes = await fetch(`${scannerUrl}/api/v1/drift/analyze`, {
+    const analyzeRes = await scannerClient.fetch(session, '/api/v1/drift/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

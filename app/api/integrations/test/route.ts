@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/auth';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/integrations/test - Test credentials before creating integration
 export async function POST(request: NextRequest) {
@@ -16,40 +18,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Integration type is required' }, { status: 400 });
     }
 
-    const result = await testConnection(type, credentials, config);
+    const result = await testConnection(session, type, credentials, config);
     return NextResponse.json(result);
   } catch (error) {
     console.error('Error testing connection:', error);
-    return NextResponse.json({ 
-      success: false, 
-      error: 'Failed to test connection' 
+    return NextResponse.json({
+      success: false,
+      error: 'Failed to test connection'
     }, { status: 500 });
   }
 }
 
 // Test connection implementations
 async function testConnection(
-  type: string, 
-  credentials: any, 
+  session: Session,
+  type: string,
+  credentials: any,
   config: any
 ): Promise<{ success: boolean; error?: string; metadata?: any }> {
   switch (type) {
     case 'SNOWFLAKE':
-      return testSnowflake(credentials);
+      return testSnowflake(session, credentials);
     case 'SQLSERVER':
     case 'AZURE_SQL':
     case 'AZURE_SYNAPSE':
-      return testSqlServer(credentials, type);
+      return testSqlServer(session, credentials, type);
     case 'AZURE_DATA_FACTORY':
       return testAzureDataFactory(credentials);
     case 'POSTGRES':
-      return testPostgres(credentials);
+      return testPostgres(session, credentials);
     case 'MYSQL':
-      return testMysql(credentials);
+      return testMysql(session, credentials);
     case 'BIGQUERY':
-      return testBigQuery(credentials);
+      return testBigQuery(session, credentials);
     case 'REDSHIFT':
-      return testRedshift(credentials);
+      return testRedshift(session, credentials);
     case 'GITHUB':
       return testGitHub(credentials);
     case 'DBT_CLOUD':
@@ -67,7 +70,7 @@ async function testConnection(
   }
 }
 
-async function testSnowflake(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testSnowflake(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   // Validate required fields first
   if (!credentials?.account || !credentials?.user || !credentials?.password) {
     return { success: false, error: 'Missing required: account, user, password' };
@@ -79,12 +82,9 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
     return { success: false, error: 'Missing required: database' };
   }
 
-  // Try to actually connect via the Python backend
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-
   try {
     // First check if scanner backend is available
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
@@ -104,7 +104,7 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
     }
 
     // Call the Python backend to test the actual connection
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/snowflake`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/snowflake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -445,7 +445,7 @@ async function testSlack(credentials: any): Promise<{ success: boolean; error?: 
 }
 
 // SQL Server / Azure SQL / Azure Synapse connection test
-async function testSqlServer(credentials: any, type: string): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testSqlServer(session: Session, credentials: any, type: string): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: server host' };
   }
@@ -459,30 +459,28 @@ async function testSqlServer(credentials: any, type: string): Promise<{ success:
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
   try {
     // Check if scanner backend is available
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
       console.log('[TEST] Scanner backend not available, using basic validation');
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: `Credentials validated (backend offline - full ${type} test skipped)`,
-        metadata: { 
+        metadata: {
           host: credentials.host,
           database: credentials.database,
           type,
-        } 
+        }
       };
     }
 
     // Call the Python backend to test the actual connection
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/sqlserver`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/sqlserver', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -634,7 +632,7 @@ async function testAzureDataFactory(credentials: any): Promise<{ success: boolea
 }
 
 // PostgreSQL connection test
-async function testPostgres(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testPostgres(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: host' };
   }
@@ -648,26 +646,24 @@ async function testPostgres(credentials: any): Promise<{ success: boolean; error
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
   try {
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: 'Credentials validated (backend offline - full test skipped)',
-        metadata: { 
+        metadata: {
           host: credentials.host,
           database: credentials.database,
-        } 
+        }
       };
     }
 
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/postgres`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/postgres', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -712,7 +708,7 @@ async function testPostgres(credentials: any): Promise<{ success: boolean; error
 }
 
 // MySQL connection test
-async function testMysql(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testMysql(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: host' };
   }
@@ -726,26 +722,24 @@ async function testMysql(credentials: any): Promise<{ success: boolean; error?: 
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
   try {
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: 'Credentials validated (backend offline - full test skipped)',
-        metadata: { 
+        metadata: {
           host: credentials.host,
           database: credentials.database,
-        } 
+        }
       };
     }
 
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/mysql`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/mysql', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -789,7 +783,7 @@ async function testMysql(credentials: any): Promise<{ success: boolean; error?: 
 }
 
 // BigQuery connection test
-async function testBigQuery(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testBigQuery(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.project_id) {
     return { success: false, error: 'Missing required: project_id' };
   }
@@ -798,10 +792,8 @@ async function testBigQuery(credentials: any): Promise<{ success: boolean; error
     return { success: false, error: 'Missing required: service account key (credentials)' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-
   try {
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000),
     });
@@ -814,7 +806,7 @@ async function testBigQuery(credentials: any): Promise<{ success: boolean; error
       };
     }
 
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/v1/test-connection`, {
+    const testResponse = await scannerClient.fetch(session, '/api/v1/test-connection', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -858,7 +850,7 @@ async function testBigQuery(credentials: any): Promise<{ success: boolean; error
 }
 
 // Redshift connection test
-async function testRedshift(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testRedshift(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: cluster endpoint (host)' };
   }
@@ -872,10 +864,8 @@ async function testRedshift(credentials: any): Promise<{ success: boolean; error
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-
   try {
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000),
     });
@@ -888,7 +878,7 @@ async function testRedshift(credentials: any): Promise<{ success: boolean; error
       };
     }
 
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/v1/test-connection`, {
+    const testResponse = await scannerClient.fetch(session, '/api/v1/test-connection', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

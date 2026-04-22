@@ -8,9 +8,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
-
-// Scanner API URL
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+import { scannerClient } from '@/lib/scanner-client';
 
 interface DbtAnalysisResult {
   project_name: string;
@@ -58,7 +56,7 @@ export async function POST(req: NextRequest) {
     // Action: analyze - Run dbt project analysis
     if (action === 'analyze') {
       // Call the scanner's dbt analysis endpoint
-      const response = await fetch(`${SCANNER_API_URL}/api/dbt/analyze`, {
+      const response = await scannerClient.fetch(session, '/api/dbt/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -92,7 +90,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Warehouse integration not found' }, { status: 404 });
       }
 
-      const response = await fetch(`${SCANNER_API_URL}/api/dbt/freshness`, {
+      const response = await scannerClient.fetch(session, '/api/dbt/freshness', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -126,7 +124,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Warehouse integration not found' }, { status: 404 });
       }
 
-      const response = await fetch(`${SCANNER_API_URL}/api/dbt/test`, {
+      const response = await scannerClient.fetch(session, '/api/dbt/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

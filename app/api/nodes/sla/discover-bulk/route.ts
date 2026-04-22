@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/nodes/sla/discover-bulk — Bulk SLA discovery for multiple nodes
 export async function POST(request: NextRequest) {
@@ -47,7 +46,7 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        const res = await fetch(`${SCANNER_API_URL}/api/v1/discovery/direct-bulk`, {
+        const res = await scannerClient.fetch(session, '/api/v1/discovery/direct-bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ platform, tableFqns, credentials }),
@@ -80,7 +79,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Max 50 nodes per request' }, { status: 400 });
     }
 
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/discovery/bulk`, {
+    const res = await scannerClient.fetch(session, '/api/v1/discovery/bulk', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ nodeIds, stackId }),
