@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // GET /api/pipeline/[stackId]/nodes/[nodeId]/tables - Get data from any pipeline node
 // Use ?refresh=true to force fresh discovery from warehouse
@@ -108,16 +108,16 @@ export async function GET(
     let result: Response;
     switch (node.layer) {
       case 'WAREHOUSE':
-        result = await getWarehouseData(node, credentials);
+        result = await getWarehouseData(node, credentials, session);
         break;
       case 'TRANSFORMATION':
-        result = await getTransformationData(node, credentials);
+        result = await getTransformationData(node, credentials, session);
         break;
       case 'INGESTION':
-        result = await getIngestionData(node, credentials);
+        result = await getIngestionData(node, credentials, session);
         break;
       case 'REPORTING':
-        result = await getReportingData(node, credentials);
+        result = await getReportingData(node, credentials, session);
         break;
       default:
         return NextResponse.json({ tables: [], models: [], connectors: [] });
@@ -155,7 +155,7 @@ export async function GET(
 }
 
 // Get tables from warehouse nodes (Snowflake, BigQuery, Postgres, etc.)
-async function getWarehouseData(node: any, credentials: Record<string, any>) {
+async function getWarehouseData(node: any, credentials: Record<string, any>, session: Session) {
   // Check connection status - allow CONNECTED, HEALTHY, WARNING (exclude PENDING, TESTING, ERROR)
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   if (!validStatuses.includes(node.status)) {
@@ -221,10 +221,10 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
 
   // Try to fetch tables from scanner backend
   try {
-    console.log(`[WAREHOUSE] Fetching tables from scanner: ${SCANNER_API_URL}/api/v1/tables`);
+    console.log(`[WAREHOUSE] Fetching tables from scanner: /api/v1/tables`);
     console.log(`[WAREHOUSE] Connection type: ${connectionType}, project_id: ${scannerCredentials.project_id}, datasets: ${scannerCredentials.datasets}`);
 
-    const response = await fetch(`${SCANNER_API_URL}/api/v1/tables`, {
+    const response = await scannerClient.fetch(session, '/api/v1/tables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -280,7 +280,7 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
 }
 
 // Get dbt models from transformation nodes
-async function getTransformationData(node: any, credentials: Record<string, any>) {
+async function getTransformationData(node: any, credentials: Record<string, any>, session: Session) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
@@ -375,7 +375,7 @@ async function getTransformationData(node: any, credentials: Record<string, any>
       }
 
       console.log(`[DBT] Fetching ${configType} models from scanner`);
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/dbt/models`, {
+      const response = await scannerClient.fetch(session, '/api/v1/dbt/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -464,14 +464,14 @@ async function getTransformationData(node: any, credentials: Record<string, any>
 }
 
 // Get connectors from ingestion nodes (Fivetran, Airbyte)
-async function getIngestionData(node: any, credentials: Record<string, any>) {
+async function getIngestionData(node: any, credentials: Record<string, any>, session: Session) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
   if (node.toolType === 'fivetran') {
     // Try to fetch from Fivetran API
     try {
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/fivetran/connectors`, {
+      const response = await scannerClient.fetch(session, '/api/v1/fivetran/connectors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -545,7 +545,7 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
 }
 
 // Get reporting tool data (Looker, Tableau, Power BI, Metabase)
-async function getReportingData(node: any, credentials: Record<string, any>) {
+async function getReportingData(node: any, credentials: Record<string, any>, session: Session) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
@@ -561,7 +561,7 @@ async function getReportingData(node: any, credentials: Record<string, any>) {
   }
 
   try {
-    const response = await fetch(`${SCANNER_API_URL}/api/v1/reporting/metadata`, {
+    const response = await scannerClient.fetch(session, '/api/v1/reporting/metadata', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

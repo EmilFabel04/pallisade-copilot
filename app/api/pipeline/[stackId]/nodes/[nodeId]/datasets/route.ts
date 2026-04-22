@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/pipeline/[stackId]/nodes/[nodeId]/datasets - Get available datasets/schemas
 // POST is used because config might be passed in body (for nodes not yet saved)
@@ -106,11 +105,11 @@ export async function POST(
     const connectionType = connectionTypeMap[node.toolType] || node.toolType;
 
     // Fetch datasets from scanner backend (uses /schemas endpoint)
-    console.log('[DATASETS] Calling scanner at:', `${SCANNER_API_URL}/api/v1/schemas`);
+    console.log('[DATASETS] Calling scanner at /api/v1/schemas');
     console.log('[DATASETS] Connection type:', connectionType);
 
     try {
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/schemas`, {
+      const response = await scannerClient.fetch(session, '/api/v1/schemas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

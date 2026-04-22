@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/pipeline/[stackId]/nodes/[nodeId]/schemas - Get available schemas (Snowflake, Postgres)
 export async function POST(
@@ -105,11 +104,11 @@ export async function POST(
     }
 
     // Fetch schemas from scanner backend
-    console.log('[SCHEMAS] Calling scanner at:', `${SCANNER_API_URL}/api/v1/schemas`);
+    console.log('[SCHEMAS] Calling scanner at /api/v1/schemas');
     console.log('[SCHEMAS] Connection type:', connectionType);
 
     try {
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/schemas`, {
+      const response = await scannerClient.fetch(session, '/api/v1/schemas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

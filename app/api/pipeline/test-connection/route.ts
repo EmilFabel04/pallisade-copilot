@@ -8,8 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 /**
  * Resolve the GitHub access token from the GitHub connector node in the same stack.
@@ -53,13 +52,13 @@ export async function POST(request: NextRequest) {
     const organizationId = (session.user as any).organizationId;
 
     // Route to appropriate test endpoint based on tool type
-    let testEndpoint: string;
+    let scannerPath: string;
     let testBody: any;
 
     switch (toolType) {
       // Warehouse connections - use scanner's /api/v1/test-connection endpoint
       case 'snowflake':
-        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
+        scannerPath = '/api/v1/test-connection';
         testBody = {
           connection_type: 'snowflake',
           connection_config: {
@@ -74,7 +73,7 @@ export async function POST(request: NextRequest) {
         break;
 
       case 'bigquery':
-        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
+        scannerPath = '/api/v1/test-connection';
         testBody = {
           connection_type: 'bigquery',
           connection_config: {
@@ -86,7 +85,7 @@ export async function POST(request: NextRequest) {
         break;
 
       case 'postgres':
-        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
+        scannerPath = '/api/v1/test-connection';
         testBody = {
           connection_type: 'postgres',
           connection_config: {
@@ -102,7 +101,7 @@ export async function POST(request: NextRequest) {
 
       case 'sqlserver':
       case 'azure_sql':
-        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
+        scannerPath = '/api/v1/test-connection';
         testBody = {
           connection_type: 'sqlserver',
           connection_config: {
@@ -116,7 +115,7 @@ export async function POST(request: NextRequest) {
         break;
 
       case 'redshift':
-        testEndpoint = `${SCANNER_API_URL}/api/v1/test-connection`;
+        scannerPath = '/api/v1/test-connection';
         testBody = {
           connection_type: 'redshift',
           connection_config: {
@@ -521,7 +520,7 @@ export async function POST(request: NextRequest) {
 
       // Reporting tools
       case 'tableau':
-        testEndpoint = `${SCANNER_API_URL}/api/test/tableau`;
+        scannerPath = '/api/test/tableau';
         testBody = {
           server: config.server,
           token_name: config.token_name,
@@ -531,7 +530,7 @@ export async function POST(request: NextRequest) {
         break;
 
       case 'looker':
-        testEndpoint = `${SCANNER_API_URL}/api/test/looker`;
+        scannerPath = '/api/test/looker';
         testBody = {
           host: config.host,
           client_id: config.client_id,
@@ -540,7 +539,7 @@ export async function POST(request: NextRequest) {
         break;
 
       case 'powerbi':
-        testEndpoint = `${SCANNER_API_URL}/api/test/powerbi`;
+        scannerPath = '/api/test/powerbi';
         testBody = {
           tenant_id: config.tenant_id,
           client_id: config.client_id,
@@ -725,7 +724,7 @@ export async function POST(request: NextRequest) {
       // Infrastructure tools - test via scanner SSH endpoint
       case 'linux_server': {
         try {
-          const serverResponse = await fetch(`${SCANNER_API_URL}/api/v1/server/test-connection`, {
+          const serverResponse = await scannerClient.fetch(session, '/api/v1/server/test-connection', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -861,7 +860,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Make request to scanner API for warehouse tests
-    const response = await fetch(testEndpoint, {
+    const response = await scannerClient.fetch(session, scannerPath, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(testBody),

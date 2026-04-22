@@ -5,10 +5,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/db';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+import { scannerClient } from '@/lib/scanner-client';
 
 export async function POST(request: NextRequest) {
   try {
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
 
     // Start scanning each node asynchronously
     // In production, this would be handled by a job queue
-    scanNodesInBackground(stack.id, scan.id, configuredNodes, organizationId);
+    scanNodesInBackground(stack.id, scan.id, configuredNodes, organizationId, session);
 
     return NextResponse.json({
       success: true,
@@ -79,7 +79,8 @@ async function scanNodesInBackground(
   stackId: string,
   scanId: string,
   nodes: any[],
-  organizationId: string
+  organizationId: string,
+  session: Session
 ) {
   const startTime = Date.now();
   let totalFindings = 0;
@@ -100,19 +101,19 @@ async function scanNodesInBackground(
         switch (node.layer) {
           case 'WAREHOUSE':
             // Use existing warehouse scanners
-            findings = await scanWarehouse(node);
+            findings = await scanWarehouse(node, session);
             break;
-          
+
           case 'TRANSFORMATION':
             // Scan dbt/transformation layer
             findings = await scanTransformation(node);
             break;
-          
+
           case 'INGESTION':
             // Scan ingestion layer
             findings = await scanIngestion(node);
             break;
-          
+
           case 'REPORTING':
             // Scan reporting layer
             findings = await scanReporting(node);
@@ -233,9 +234,9 @@ async function scanNodesInBackground(
 }
 
 // Warehouse scanning
-async function scanWarehouse(node: any): Promise<any[]> {
+async function scanWarehouse(node: any, session: Session): Promise<any[]> {
   const findings: any[] = [];
-  
+
   try {
     // Map tool type to scanner connection type
     const connectionTypeMap: Record<string, string> = {
@@ -251,7 +252,7 @@ async function scanWarehouse(node: any): Promise<any[]> {
     if (!connectionType || !node.config) return findings;
 
     // Run quality scan
-    const scanResponse = await fetch(`${SCANNER_API_URL}/api/scan`, {
+    const scanResponse = await scannerClient.fetch(session, '/api/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
