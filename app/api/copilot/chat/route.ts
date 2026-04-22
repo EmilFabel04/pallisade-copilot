@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { resolveStackIntegrations } from '@/lib/integration-credentials';
 import { getBillingState, checkTokenAccess, deductTokens } from '@/lib/billing';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 export async function POST(request: Request) {
   try {
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
 
     // If streaming requested, delegate to the streaming handler
     if (stream) {
-      return handleStreamingChat(request, body, user as { id: string; organizationId: string });
+      return handleStreamingChat(request, body, user as { id: string; organizationId: string }, session as Session);
     }
 
     // Get or create chat session
@@ -169,7 +169,7 @@ export async function POST(request: Request) {
     }
 
     // Call the scanner copilot API with full conversation history
-    const response = await fetch(`${SCANNER_API_URL}/api/v1/copilot/chat`, {
+    const response = await scannerClient.fetch(session, '/api/v1/copilot/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -383,6 +383,7 @@ async function handleStreamingChat(
   _request: Request,
   body: any,
   user: { id: string; organizationId: string },
+  session: Session,
 ) {
   const {
     message: rawMessage,
@@ -528,7 +529,7 @@ async function handleStreamingChat(
   }
 
   // Call FastAPI streaming endpoint
-  const scannerResponse = await fetch(`${SCANNER_API_URL}/api/v1/copilot/chat/stream`, {
+  const scannerResponse = await scannerClient.fetch(session, '/api/v1/copilot/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
