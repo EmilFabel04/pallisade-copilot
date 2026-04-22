@@ -57,3 +57,43 @@ class InternalAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"error": "unauthorized"})
 
         return await call_next(request)
+
+
+class ActingPrincipalMiddleware(BaseHTTPMiddleware):
+    """Parses caller identity headers into request.state.principal.
+
+    Runs AFTER InternalAuthMiddleware (added first, Starlette wraps in reverse).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path in EXEMPT_PATHS:
+            return await call_next(request)
+
+        user_id = request.headers.get(HEADER_ACTING_USER, "").strip()
+        org_id = request.headers.get(HEADER_ACTING_ORG, "").strip()
+
+        if not user_id or not org_id:
+            logger.warning(
+                "auth.principal.missing",
+                path=request.url.path,
+                has_user=bool(user_id),
+                has_org=bool(org_id),
+            )
+            return JSONResponse(status_code=400, content={"error": "missing_principal"})
+
+        request_id = request.headers.get(HEADER_REQUEST_ID, "").strip() or f"srv_{uuid.uuid4().hex}"
+        request.state.principal = ActingPrincipal(
+            user_id=user_id,
+            organization_id=org_id,
+            request_id=request_id,
+        )
+        return await call_next(request)
+
+
+def require_principal(request: Request) -> ActingPrincipal:
+    """FastAPI dependency: pull the principal set by ActingPrincipalMiddleware."""
+    principal: Optional[ActingPrincipal] = getattr(request.state, "principal", None)
+    if principal is None:
+        # Should not happen if middleware is registered — fail loudly.
+        raise RuntimeError("ActingPrincipalMiddleware is not registered")
+    return principal
