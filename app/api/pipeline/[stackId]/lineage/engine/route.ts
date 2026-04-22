@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 /**
  * GET /api/pipeline/[stackId]/lineage/engine
@@ -136,7 +135,7 @@ export async function GET(
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
 
-    let res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
+    let res = await scannerClient.fetch(session, endpoint, {
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(30000),
     });
@@ -163,7 +162,7 @@ export async function GET(
 
         if (snapshot?.graphData) {
           console.log(`[ENGINE PROXY] Restoring graph from snapshot ${snapshot.id}`);
-          const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore?stack_id=${stackId}`, {
+          const restoreRes = await scannerClient.fetch(session, `/api/v1/lineage/engine/restore?stack_id=${stackId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ graph_data: snapshot.graphData }),
@@ -172,7 +171,7 @@ export async function GET(
 
           if (restoreRes.ok) {
             // Retry the original request now that the graph is loaded
-            res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
+            res = await scannerClient.fetch(session, endpoint, {
               headers: { 'Content-Type': 'application/json' },
               signal: AbortSignal.timeout(30000),
             });
@@ -225,7 +224,7 @@ export async function POST(
       }
 
       // Fetch the serialized graph from FastAPI
-      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot?stack_id=${stackId}`, {
+      const snapshotRes = await scannerClient.fetch(session, `/api/v1/lineage/engine/snapshot?stack_id=${stackId}`, {
         signal: AbortSignal.timeout(10000),
       });
       if (!snapshotRes.ok) {
@@ -300,7 +299,7 @@ export async function POST(
         return NextResponse.json({ error: `Unknown POST action: ${action}` }, { status: 400 });
     }
 
-    const res = await fetch(`${SCANNER_API_URL}${endpoint}`, {
+    const res = await scannerClient.fetch(session, endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

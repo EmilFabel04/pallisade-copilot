@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { scannerClient } from '@/lib/scanner-client';
 import type { PipelineLayer } from '@/components/pipeline/types';
 import type {
   UnifiedLineageNode,
@@ -16,21 +18,18 @@ import {
   getApplicableMonitorTypes,
 } from '@/lib/monitor-scoring';
 
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
-
 /**
  * Fetch the engine graph (nodes + edges with confidence/evidence).
  * Returns null if engine is not available or has no data.
  */
-async function fetchEngineGraph(stackId: string, plane?: string): Promise<{
+async function fetchEngineGraph(session: Session, stackId: string, plane?: string): Promise<{
   nodes: any[];
   edges: any[];
 } | null> {
   try {
     const params = new URLSearchParams({ stack_id: stackId });
     if (plane) params.set('plane', plane);
-    const url = `${SCANNER_API_URL}/api/v1/lineage/engine/graph?${params}`;
-    const res = await fetch(url, {
+    const res = await scannerClient.fetch(session, `/api/v1/lineage/engine/graph?${params}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
@@ -48,6 +47,7 @@ async function fetchEngineGraph(stackId: string, plane?: string): Promise<{
  * Returns the restored engine graph, or null if no snapshot exists.
  */
 async function tryRestoreEngineFromSnapshot(
+  session: Session,
   organizationId: string,
   stackId: string,
 ): Promise<{ nodes: any[]; edges: any[] } | null> {
@@ -68,7 +68,7 @@ async function tryRestoreEngineFromSnapshot(
     console.log(`[UNIFIED LINEAGE] Restoring engine graph from snapshot ${snapshot.id}`);
 
     // Send the graph data to FastAPI to restore the in-memory store
-    const restoreRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/restore?stack_id=${stackId}`, {
+    const restoreRes = await scannerClient.fetch(session, `/api/v1/lineage/engine/restore?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ graph_data: snapshot.graphData }),
@@ -82,7 +82,7 @@ async function tryRestoreEngineFromSnapshot(
     console.log(`[UNIFIED LINEAGE] Engine graph restored: ${restoreData.nodes} nodes, ${restoreData.edges} edges`);
 
     // Now fetch the engine graph normally (it's in memory again)
-    return fetchEngineGraph(stackId);
+    return fetchEngineGraph(session, stackId);
   } catch (e) {
     console.warn('[UNIFIED LINEAGE] Failed to restore engine from snapshot:', e);
     return null;
@@ -92,9 +92,9 @@ async function tryRestoreEngineFromSnapshot(
 /**
  * Fetch engine coverage stats.
  */
-async function fetchEngineStats(stackId: string) {
+async function fetchEngineStats(session: Session, stackId: string) {
   try {
-    const res = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/stats?stack_id=${stackId}`, {
+    const res = await scannerClient.fetch(session, `/api/v1/lineage/engine/stats?stack_id=${stackId}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return undefined;
@@ -375,20 +375,20 @@ export async function GET(
 
     // Fetch engine graph and stats in parallel
     let [engineGraph, engineStats] = await Promise.all([
-      fetchEngineGraph(stackId, enginePlaneFilter),
-      fetchEngineStats(stackId),
+      fetchEngineGraph(session, stackId, enginePlaneFilter),
+      fetchEngineStats(session, stackId),
     ]);
 
     // If engine graph is empty, only restore from snapshot if explicitly requested
     // (via ?restore=true query param). Auto-restoring on every page load can show
     // stale data from a different pipeline since snapshots are org-scoped.
     if (!engineGraph && searchParams.get('restore') === 'true') {
-      const restored = await tryRestoreEngineFromSnapshot(organizationId, stackId);
+      const restored = await tryRestoreEngineFromSnapshot(session, organizationId, stackId);
       if (restored) {
         // Re-fetch with plane filter now that the graph is restored
         [engineGraph, engineStats] = await Promise.all([
-          fetchEngineGraph(stackId, enginePlaneFilter),
-          fetchEngineStats(stackId),
+          fetchEngineGraph(session, stackId, enginePlaneFilter),
+          fetchEngineStats(session, stackId),
         ]);
       }
     }

@@ -3,8 +3,7 @@ import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { notifyEvents } from '@/lib/notifications';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // Resolve credentials for a node — prefers Integration table, falls back to PipelineNode.config
 function resolveNodeConfig(node: any): Record<string, any> | null {
@@ -325,7 +324,7 @@ export async function POST(
     );
 
     // Call the FastAPI LLM extraction SSE endpoint
-    const scannerResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract-llm?stack_id=${stackId}`, {
+    const scannerResponse = await scannerClient.fetch(session, `/api/v1/lineage/extract-llm?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

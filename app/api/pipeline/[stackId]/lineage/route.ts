@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { scannerClient } from '@/lib/scanner-client';
 import { extractLineageForStack } from './extract-lineage';
 
 // POST /api/pipeline/[stackId]/lineage - Extract lineage from warehouse nodes
@@ -19,7 +20,7 @@ export async function POST(
     }
     const { stackId } = await params;
     const body = await request.json().catch(() => ({}));
-    return extractLineageForStack(stackId, organizationId, body);
+    return extractLineageForStack(stackId, organizationId, body, session);
   } catch (error) {
     console.error('[LINEAGE] Error extracting lineage:', error);
     return NextResponse.json({ error: 'Failed to extract lineage' }, { status: 500 });
@@ -185,10 +186,9 @@ export async function DELETE(
     });
 
     // Clear in-memory engine graph and run registry so stale views aren't served
-    const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
     try {
       const { stackId: delStackId } = await params;
-      await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/clear-cache?stack_id=${delStackId}`, {
+      await scannerClient.fetch(session, `/api/v1/lineage/engine/clear-cache?stack_id=${delStackId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(5000),

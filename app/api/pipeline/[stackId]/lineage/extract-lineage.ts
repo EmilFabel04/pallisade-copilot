@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // Resolve credentials for a node — prefers Integration table, falls back to PipelineNode.config
 function resolveNodeConfig(node: any): Record<string, any> | null {
@@ -72,7 +72,8 @@ function resolveNodeConfig(node: any): Record<string, any> | null {
 export async function extractLineageForStack(
   stackId: string,
   organizationId: string,
-  body: { nodeId?: string; options?: any }
+  body: { nodeId?: string; options?: any },
+  session: Session,
 ): Promise<NextResponse> {
   try {
     const { nodeId, options = {} } = body;
@@ -322,7 +323,7 @@ export async function extractLineageForStack(
     console.log(`[LINEAGE] Starting LLM-enhanced investigation with ${toolConfigs.length} tools: ${toolConfigs.map(t => t.tool_type).join(', ')}`);
 
     // --- Call the LLM-enhanced Investigator (adapters + planner + reconciler) ---
-    const investigateResponse = await fetch(`${SCANNER_API_URL}/api/v1/lineage/investigate-llm?stack_id=${stackId}`, {
+    const investigateResponse = await scannerClient.fetch(session, `/api/v1/lineage/investigate-llm?stack_id=${stackId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -450,7 +451,7 @@ export async function extractLineageForStack(
 
     // Persist engine graph to snapshot for restart recovery
     try {
-      const snapshotRes = await fetch(`${SCANNER_API_URL}/api/v1/lineage/engine/snapshot?stack_id=${stackId}`, {
+      const snapshotRes = await scannerClient.fetch(session, `/api/v1/lineage/engine/snapshot?stack_id=${stackId}`, {
         signal: AbortSignal.timeout(10000),
       });
       if (snapshotRes.ok) {

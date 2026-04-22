@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Session } from 'next-auth';
 import prisma from '@/lib/db';
 import { extractLineageForStack } from '../extract-lineage';
 
@@ -26,11 +27,33 @@ export async function POST(
     return NextResponse.json({ error: 'Stack not found' }, { status: 404 });
   }
 
+  // Build a synthetic session for scanner API calls. Use any user in the org
+  // as the acting principal — this is an internal system trigger, not a user action.
+  const actingUser = await prisma.user.findFirst({
+    where: { organizationId: stack.organizationId },
+    select: { id: true },
+  });
+
+  if (!actingUser) {
+    return NextResponse.json(
+      { error: 'No user found in organization to act as principal' },
+      { status: 500 },
+    );
+  }
+
+  const syntheticSession = {
+    user: {
+      id: actingUser.id,
+      organizationId: stack.organizationId,
+    },
+    expires: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  } as unknown as Session;
+
   console.log(`[LINEAGE-SCHEDULED] Starting auto-extraction for stack ${stackId}`);
   const start = Date.now();
 
   try {
-    const result = await extractLineageForStack(stackId, stack.organizationId, {});
+    const result = await extractLineageForStack(stackId, stack.organizationId, {}, syntheticSession);
     const duration = Date.now() - start;
 
     if (result.status === 200) {
