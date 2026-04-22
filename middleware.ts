@@ -8,10 +8,6 @@ export default auth((req) => {
   const isDashboard = req.nextUrl.pathname.startsWith('/dashboard');
   const isOnboarding = req.nextUrl.pathname.startsWith('/onboarding');
 
-  if (process.env.ENABLE_AUTH_MIDDLEWARE !== 'true') {
-    return NextResponse.next();
-  }
-
   if (isLoggedIn && isAuthPage) {
     return NextResponse.redirect(new URL('/dashboard', req.nextUrl));
   }
