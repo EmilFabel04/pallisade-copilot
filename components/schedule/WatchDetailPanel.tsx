@@ -111,10 +111,17 @@ function buildFallbackHealthReport(
   const pass = watch.passCount ?? 0;
   const warn = watch.warnCount ?? 0;
 
-  const score = watch.healthScore != null
-    ? watch.healthScore
-    : total > 0
-      ? Math.round(((pass + 0.5 * warn) / total) * 1000) / 10
+  // Always recompute from live pass/warn counts when we have monitors.
+  // The persisted `watch.healthScore` only updates on full "Run All" passes,
+  // so it goes stale whenever an individual monitor reruns — e.g. a group
+  // whose last "Run All" failed everything stays at 0 even after a single
+  // monitor flips back to PASS. The counts in `watch` are computed from
+  // current monitor statuses each time the list is fetched, so they're
+  // always fresh.
+  const score = total > 0
+    ? Math.round(((pass + 0.5 * warn) / total) * 1000) / 10
+    : watch.healthScore != null
+      ? watch.healthScore
       : 100;
 
   const depthOf = (m: any): number =>
@@ -192,7 +199,13 @@ export function WatchDetailPanel({
   onMonitorConfigSaved,
 }: WatchDetailPanelProps) {
   const storedReport = watch.healthDetails as HealthReport | undefined;
-  const healthReport: HealthReport = storedReport || buildFallbackHealthReport(watch, detailMonitors);
+  // Prefer a fresh computation whenever we have live monitor counts or
+  // detail rows — the stored report is only refreshed on a full "Run All"
+  // and quickly goes stale as individual monitors rerun.
+  const hasFreshSignal = (watch.monitorCount ?? 0) > 0 || detailMonitors.length > 0;
+  const healthReport: HealthReport = hasFreshSignal
+    ? buildFallbackHealthReport(watch, detailMonitors)
+    : (storedReport || buildFallbackHealthReport(watch, detailMonitors));
   const healthStatus: HealthStatus = healthReport.healthStatus;
   const failureGroups = healthReport.failureGroups || [];
   const coveragePct = watch.coveragePct != null ? Math.round(watch.coveragePct * 100) : null;

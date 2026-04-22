@@ -27,6 +27,7 @@ TOOL_MONITOR_TYPES = {
     "sync_lag", "failed_syncs", "connector_schema_drift",
     "dag_last_run", "dag_schedule_lag", "task_failure_rate",
     "dbt_test_failures", "dbt_model_freshness", "dbt_source_freshness",
+    "dbt_core_source_validation", "dbt_core_ref_integrity",
     "query_performance", "cost_anomaly", "storage_growth",
 }
 
@@ -39,16 +40,24 @@ TOOL_MONITOR_TYPES = {
 class SyncLagMonitor:
     """Monitors Fivetran connector sync freshness.
 
+    ``max_lag_minutes`` is a **grace period beyond the connector's configured
+    sync frequency**, not an absolute ceiling on time since last sync. A
+    connector that syncs every 360 min with a 60 min grace is healthy up to
+    420 min since last sync — setting it as an absolute ceiling would make
+    any connector whose frequency exceeds the grace impossible to satisfy.
+
     Config keys:
         connector_id : str (REQUIRED)
             Fivetran connector ID to monitor.
         max_lag_minutes : int | None
-            Maximum acceptable minutes since last successful sync.
-            If None, auto-derived from connector's sync_frequency.
+            Grace period (in minutes) beyond sync_frequency before alerting.
+            If None, uses multiplicative thresholds on sync_frequency instead.
         warn_multiplier : float
             Multiplier on sync frequency for WARN threshold (default: 1.5).
+            Only used when max_lag_minutes is None.
         fail_multiplier : float
             Multiplier on sync frequency for FAIL threshold (default: 3.0).
+            Only used when max_lag_minutes is None.
     """
 
     monitor_type = "sync_lag"
@@ -139,13 +148,20 @@ class SyncLagMonitor:
         minutes_since = hours_since * 60
         sync_freq_minutes = connector.sync_frequency  # Already in minutes
 
-        # Determine thresholds
-        if self.max_lag_minutes:
-            warn_threshold = float(self.max_lag_minutes)
-            fail_threshold = float(self.max_lag_minutes) * 2
+        # Determine thresholds. When max_lag_minutes is set, treat it as a
+        # grace period *on top of* the sync frequency — the healthy baseline
+        # for a connector is to have synced within the last sync_frequency
+        # minutes, and we tolerate max_lag_minutes of slippage beyond that.
+        if self.max_lag_minutes is not None:
+            fail_threshold = float(sync_freq_minutes) + float(self.max_lag_minutes)
+            warn_threshold = float(sync_freq_minutes) + float(self.max_lag_minutes) / 2
+            threshold_label = (
+                f"{sync_freq_minutes} min frequency + {self.max_lag_minutes} min grace"
+            )
         else:
             warn_threshold = sync_freq_minutes * self.warn_multiplier
             fail_threshold = sync_freq_minutes * self.fail_multiplier
+            threshold_label = f"{sync_freq_minutes} min frequency"
 
         details = {
             "connector_id": self.connector_id,
@@ -153,6 +169,7 @@ class SyncLagMonitor:
             "service": connector.service,
             "minutes_since_sync": round(minutes_since, 1),
             "sync_frequency_minutes": sync_freq_minutes,
+            "grace_minutes": self.max_lag_minutes,
             "warn_threshold_minutes": round(warn_threshold, 1),
             "fail_threshold_minutes": round(fail_threshold, 1),
             "succeeded_at": connector.succeeded_at.isoformat() if connector.succeeded_at else None,
@@ -167,7 +184,7 @@ class SyncLagMonitor:
                 threshold=round(fail_threshold, 1),
                 message=(
                     f"Connector '{connector.name}' sync lag: {minutes_since:.0f} min "
-                    f"(threshold: {fail_threshold:.0f} min, frequency: {sync_freq_minutes} min)."
+                    f"(fail at {fail_threshold:.0f} min = {threshold_label})."
                 ),
                 details=details,
             )
@@ -181,7 +198,8 @@ class SyncLagMonitor:
                 threshold=round(warn_threshold, 1),
                 message=(
                     f"Connector '{connector.name}' sync slightly delayed: "
-                    f"{minutes_since:.0f} min since last sync (warn at {warn_threshold:.0f} min)."
+                    f"{minutes_since:.0f} min since last sync "
+                    f"(warn at {warn_threshold:.0f} min)."
                 ),
                 details=details,
             )
@@ -191,6 +209,7 @@ class SyncLagMonitor:
             target_fqn=target,
             status=MonitorStatus.PASS,
             value=round(minutes_since, 1),
+            threshold=round(fail_threshold, 1),
             message=(
                 f"Connector '{connector.name}' synced {minutes_since:.0f} min ago "
                 f"(frequency: {sync_freq_minutes} min)."
@@ -502,7 +521,7 @@ class DagLastRunMonitor:
             return MonitorResult(
                 monitor_type=self.monitor_type,
                 target_fqn=target,
-                status=MonitorStatus.WARN,
+                status=MonitorStatus.ERROR,
                 message=f"No runs found for DAG '{self.dag_id}'.",
                 details={"dag_id": self.dag_id},
             )
@@ -593,14 +612,23 @@ class DagLastRunMonitor:
 
 
 class DagScheduleLagMonitor:
-    """Monitors Airflow DAG schedule lag."""
+    """Monitors Airflow DAG schedule lag.
+
+    Measures the delay between when Airflow was supposed to trigger a run
+    (``data_interval_end``) and when it actually started (``start_date``).
+
+    Note: ``execution_date``/``logical_date`` is the START of the data interval,
+    not the trigger time. Using it here would add one full schedule interval
+    of baseline "lag" even on a healthy DAG (e.g. a @daily DAG would always
+    report ~1440 min). ``data_interval_end`` is the correct reference.
+    """
 
     monitor_type = "dag_schedule_lag"
 
     def __init__(self, config: Dict[str, Any] | None = None):
         self.config = config or {}
         self.dag_id: str = str(self.config.get("dag_id", ""))
-        self.max_lag_minutes: int = int(self.config.get("max_lag_minutes", 30))
+        self.max_lag_minutes: int = int(self.config.get("max_lag_minutes", 15))
 
     def execute(self, integration: Any) -> MonitorResult:
         target = f"airflow:{self.dag_id}"
@@ -614,7 +642,7 @@ class DagScheduleLagMonitor:
             )
 
         try:
-            runs = integration.get_dag_runs(self.dag_id, limit=5)
+            runs = integration.get_dag_runs(self.dag_id, limit=20)
         except Exception as e:
             return MonitorResult(
                 monitor_type=self.monitor_type,
@@ -627,27 +655,66 @@ class DagScheduleLagMonitor:
             return MonitorResult(
                 monitor_type=self.monitor_type,
                 target_fqn=target,
-                status=MonitorStatus.WARN,
+                status=MonitorStatus.ERROR,
                 message=f"No runs found for DAG '{self.dag_id}'.",
                 details={"dag_id": self.dag_id},
             )
 
-        latest = runs[0]
-        execution_date = latest.execution_date
+        # Schedule lag only applies to *scheduled* runs. Manual / externally
+        # triggered runs (run_id "manual__…", external_trigger=True) are
+        # on-demand — Airflow still stamps them with a data_interval_end that
+        # points to the next schedule slot, which would otherwise surface as a
+        # false-positive lag whenever someone hits "Trigger DAG".
+        scheduled_runs = [
+            r for r in runs
+            if not getattr(r, "external_trigger", False)
+            and not (getattr(r, "run_id", "") or "").startswith("manual__")
+        ]
+
+        if not scheduled_runs:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.PASS,
+                message=(
+                    f"DAG '{self.dag_id}' has only manual runs in the recent window — "
+                    "no scheduled runs to evaluate schedule lag against."
+                ),
+                details={
+                    "dag_id": self.dag_id,
+                    "scanned_runs": len(runs),
+                    "scheduled_runs": 0,
+                },
+            )
+
+        latest = scheduled_runs[0]
         start_date = getattr(latest, "start_date", None)
+        # Prefer data_interval_end (the actual scheduled trigger time).
+        # Fall back to execution_date for Airflow <2.2, noting the caveat
+        # in the details so users see what reference was used.
+        scheduled_for = getattr(latest, "data_interval_end", None)
+        reference_field = "data_interval_end"
+        if scheduled_for is None:
+            scheduled_for = latest.execution_date
+            reference_field = "execution_date"
 
         details: Dict[str, Any] = {
             "dag_id": self.dag_id,
             "run_id": latest.run_id,
+            "reference_field": reference_field,
         }
 
-        if execution_date and start_date:
-            if execution_date.tzinfo is None:
-                execution_date = execution_date.replace(tzinfo=timezone.utc)
+        if scheduled_for and start_date:
+            if scheduled_for.tzinfo is None:
+                scheduled_for = scheduled_for.replace(tzinfo=timezone.utc)
             if start_date.tzinfo is None:
                 start_date = start_date.replace(tzinfo=timezone.utc)
-            lag_minutes = (start_date - execution_date).total_seconds() / 60
+            # Clamp at 0 so externally-triggered runs that start before their
+            # data interval (rare but possible) don't report negative lag.
+            lag_minutes = max(0.0, (start_date - scheduled_for).total_seconds() / 60)
             details["lag_minutes"] = round(lag_minutes, 1)
+            details["scheduled_for"] = scheduled_for.isoformat()
+            details["started_at"] = start_date.isoformat()
 
             if lag_minutes > self.max_lag_minutes:
                 return MonitorResult(
@@ -667,6 +734,8 @@ class DagScheduleLagMonitor:
             monitor_type=self.monitor_type,
             target_fqn=target,
             status=MonitorStatus.PASS,
+            value=round(details.get("lag_minutes", 0.0), 1),
+            threshold=float(self.max_lag_minutes),
             message=f"DAG '{self.dag_id}' is on schedule.",
             details=details,
         )
@@ -680,7 +749,14 @@ class TaskFailureRateMonitor:
     def __init__(self, config: Dict[str, Any] | None = None):
         self.config = config or {}
         self.dag_id: str = str(self.config.get("dag_id", ""))
-        self.max_failure_pct: float = float(self.config.get("max_failure_pct", 10))
+        raw_pct = self.config.get("max_failure_pct", 10)
+        try:
+            self.max_failure_pct: float = float(raw_pct)
+        except (TypeError, ValueError):
+            # Legacy configs may have stored the tolerance enum
+            # ("strict"/"normal"/"relaxed") in this numeric field.
+            from .policy_config import tolerance_to_failure_pct
+            self.max_failure_pct = tolerance_to_failure_pct(raw_pct)
         self.lookback_hours: int = int(self.config.get("lookback_hours", 24))
 
     def execute(self, integration: Any) -> MonitorResult:
@@ -814,7 +890,7 @@ class DbtTestFailuresMonitor:
             return MonitorResult(
                 monitor_type=self.monitor_type,
                 target_fqn=target,
-                status=MonitorStatus.WARN,
+                status=MonitorStatus.ERROR,
                 message=f"No runs found for dbt job {self.job_id}.",
                 details={"job_id": self.job_id},
             )
@@ -960,7 +1036,7 @@ class DbtModelFreshnessMonitor:
             return MonitorResult(
                 monitor_type=self.monitor_type,
                 target_fqn=target,
-                status=MonitorStatus.WARN,
+                status=MonitorStatus.ERROR,
                 message=f"No runs found for dbt job {self.job_id}.",
             )
 
@@ -1040,7 +1116,7 @@ class DbtSourceFreshnessMonitor:
             return MonitorResult(
                 monitor_type=self.monitor_type,
                 target_fqn=target,
-                status=MonitorStatus.WARN,
+                status=MonitorStatus.ERROR,
                 message=f"No runs found for dbt job {self.job_id}.",
             )
 
@@ -1088,6 +1164,236 @@ class DbtSourceFreshnessMonitor:
                 message=f"No source freshness data available for run {run_id}.",
                 details={"job_id": self.job_id, "run_id": run_id},
             )
+
+
+# =============================================================================
+# DBT CORE MONITORS (static validation against manifest + warehouse)
+# =============================================================================
+
+
+class DbtCoreValidationClient:
+    """Bundle of artifacts needed by static dbt Core validation monitors.
+
+    dbt Core has no runtime API — monitors validate the parsed manifest
+    (from GitHub repo / uploaded zip / uploaded manifest.json) against the
+    live warehouse schema the models target.
+    """
+
+    def __init__(self, manifest: Dict[str, Any], warehouse_adapter: Any = None):
+        self.manifest = manifest or {}
+        self.warehouse_adapter = warehouse_adapter
+
+
+def _dbt_source_fqn(source_node: Dict[str, Any]) -> str:
+    """Build a fully-qualified name for a dbt source node."""
+    db = source_node.get("database") or ""
+    sch = source_node.get("schema") or ""
+    name = source_node.get("identifier") or source_node.get("name") or ""
+    parts = [p for p in (db, sch, name) if p]
+    return ".".join(parts)
+
+
+class DbtCoreSourceValidationMonitor:
+    """Validates that every dbt source resolves in the live warehouse.
+
+    For each source declared in the parsed manifest, verifies the table
+    exists and that declared columns are present. Catches drift between
+    dbt code and warehouse reality (dropped tables, renamed columns).
+
+    Config keys:
+        check_columns : bool
+            Also validate declared columns exist (default: True).
+        max_sources : int
+            Cap on sources checked per run (default: 500).
+    """
+
+    monitor_type = "dbt_core_source_validation"
+
+    def __init__(self, config: Dict[str, Any] | None = None):
+        self.config = config or {}
+        self.check_columns: bool = bool(self.config.get("check_columns", True))
+        self.max_sources: int = int(self.config.get("max_sources", 500))
+
+    def execute(self, client: Any) -> MonitorResult:
+        target = "dbt_core:sources"
+        manifest = getattr(client, "manifest", None) or {}
+        adapter = getattr(client, "warehouse_adapter", None)
+
+        sources = manifest.get("sources") or {}
+        if not sources:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.PASS,
+                message="No dbt sources declared in manifest.",
+                details={"total_sources": 0},
+            )
+
+        if adapter is None:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message=(
+                    "No warehouse adapter available. Connect a warehouse integration "
+                    "in the same pipeline to validate dbt sources against live schema."
+                ),
+            )
+
+        try:
+            adapter.connect()
+        except AttributeError:
+            pass
+        except Exception as e:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.ERROR,
+                message=f"Warehouse connection failed: {e}",
+            )
+
+        items = list(sources.items())[: self.max_sources]
+        missing_tables: List[Dict[str, Any]] = []
+        missing_columns: List[Dict[str, Any]] = []
+        checked = 0
+
+        for source_id, source in items:
+            fqn = _dbt_source_fqn(source)
+            if not fqn:
+                continue
+            checked += 1
+            try:
+                columns = adapter.get_columns(fqn)
+            except Exception as e:
+                missing_tables.append({"source": source_id, "fqn": fqn, "error": str(e)})
+                continue
+
+            if not columns:
+                missing_tables.append({"source": source_id, "fqn": fqn})
+                continue
+
+            if self.check_columns:
+                declared = {(c.get("name") or "").lower()
+                            for c in (source.get("columns") or {}).values()
+                            if isinstance(c, dict)}
+                actual = {str(getattr(c, "name", c.get("name") if isinstance(c, dict) else "")).lower()
+                          for c in columns}
+                declared.discard("")
+                for col in declared - actual:
+                    missing_columns.append({"source": source_id, "fqn": fqn, "column": col})
+
+        details: Dict[str, Any] = {
+            "total_sources": len(sources),
+            "checked_sources": checked,
+            "missing_tables": missing_tables[:20],
+            "missing_columns": missing_columns[:20],
+            "missing_table_count": len(missing_tables),
+            "missing_column_count": len(missing_columns),
+        }
+
+        if missing_tables:
+            names = [m.get("fqn", "?") for m in missing_tables[:5]]
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.FAIL,
+                value=float(len(missing_tables)),
+                message=(
+                    f"{len(missing_tables)} dbt source(s) missing in warehouse: "
+                    f"{', '.join(names)}"
+                ),
+                details=details,
+            )
+
+        if missing_columns:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.WARN,
+                value=float(len(missing_columns)),
+                message=(
+                    f"{len(missing_columns)} declared column(s) missing across "
+                    f"{len({m['source'] for m in missing_columns})} source(s)."
+                ),
+                details=details,
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target,
+            status=MonitorStatus.PASS,
+            message=f"All {checked} dbt source(s) resolved in warehouse.",
+            details=details,
+        )
+
+
+class DbtCoreRefIntegrityMonitor:
+    """Validates that every dbt ref()/source() dependency resolves in the manifest.
+
+    Walks the manifest graph and flags nodes whose ``depends_on`` points to
+    a unique_id that does not exist. Catches broken renames and orphaned
+    references in the dbt project code.
+    """
+
+    monitor_type = "dbt_core_ref_integrity"
+
+    def __init__(self, config: Dict[str, Any] | None = None):
+        self.config = config or {}
+
+    def execute(self, client: Any) -> MonitorResult:
+        target = "dbt_core:refs"
+        manifest = getattr(client, "manifest", None) or {}
+        nodes = manifest.get("nodes") or {}
+        sources = manifest.get("sources") or {}
+        exposures = manifest.get("exposures") or {}
+
+        if not nodes and not exposures:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.PASS,
+                message="Manifest contains no nodes to validate.",
+                details={"total_nodes": 0},
+            )
+
+        known_ids = set(nodes.keys()) | set(sources.keys())
+        broken: List[Dict[str, str]] = []
+
+        for node_id, node in list(nodes.items()) + list(exposures.items()):
+            deps = ((node or {}).get("depends_on") or {}).get("nodes") or []
+            for dep in deps:
+                if dep and dep not in known_ids:
+                    broken.append({"node": node_id, "missing_ref": dep})
+
+        details: Dict[str, Any] = {
+            "total_nodes": len(nodes),
+            "total_sources": len(sources),
+            "total_exposures": len(exposures),
+            "broken_count": len(broken),
+            "broken_refs": broken[:20],
+        }
+
+        if broken:
+            affected = {b["node"] for b in broken}
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target,
+                status=MonitorStatus.FAIL,
+                value=float(len(broken)),
+                message=(
+                    f"{len(broken)} broken ref(s) across {len(affected)} node(s) "
+                    f"in dbt manifest."
+                ),
+                details=details,
+            )
+
+        return MonitorResult(
+            monitor_type=self.monitor_type,
+            target_fqn=target,
+            status=MonitorStatus.PASS,
+            message=f"All refs resolve across {len(nodes)} node(s).",
+            details=details,
+        )
 
 
 # =============================================================================
@@ -1460,6 +1766,8 @@ TOOL_MONITOR_REGISTRY = {
     "dbt_test_failures": DbtTestFailuresMonitor,
     "dbt_model_freshness": DbtModelFreshnessMonitor,
     "dbt_source_freshness": DbtSourceFreshnessMonitor,
+    "dbt_core_source_validation": DbtCoreSourceValidationMonitor,
+    "dbt_core_ref_integrity": DbtCoreRefIntegrityMonitor,
     "query_performance": QueryPerformanceMonitor,
     "cost_anomaly": CostAnomalyMonitor,
     "storage_growth": StorageGrowthMonitor,

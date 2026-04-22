@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { ArtifactType } from '@prisma/client';
 import { toast } from 'sonner';
+import { Pin, PinOff } from 'lucide-react';
 
 interface Artifact {
   id: string;
@@ -125,17 +126,13 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
 
   return (
     <div className="group relative bg-[var(--surface-inset)] border border-[var(--subtle-border)] rounded-lg p-4 hover:border-[var(--overlay-strong)] transition-all">
-      {/* Pin indicator */}
-      {artifact.isPinned && (
-        <div className="absolute top-2 left-2">
-          <svg className="w-4 h-4 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
-          </svg>
-        </div>
-      )}
-
-      {/* Three-dot menu */}
-      <div className="absolute top-2 right-2">
+      {/* Top-right controls: pin indicator + three-dot menu */}
+      <div className="absolute top-2 right-2 flex items-center gap-1">
+        {artifact.isPinned && (
+          <div className="p-1.5" title="Pinned">
+            <Pin className="w-3.5 h-3.5 text-amber-400 fill-amber-400/80 rotate-45" strokeWidth={1.75} />
+          </div>
+        )}
         <button
           onClick={() => setIsMenuOpen(!isMenuOpen)}
           className="p-1.5 rounded-md opacity-0 group-hover:opacity-100 hover:bg-[var(--hover-bg)] transition-opacity"
@@ -165,9 +162,11 @@ export function ArtifactCard({ artifact, onDelete, onTogglePin, onViewSource }: 
                 onClick={handleTogglePin}
                 className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-[var(--text-tertiary)] hover:bg-[var(--overlay-bg)] hover:text-[var(--text)] transition-colors"
               >
-                <svg className="w-4 h-4" fill={artifact.isPinned ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                </svg>
+                {artifact.isPinned ? (
+                  <PinOff className="w-4 h-4" strokeWidth={1.75} />
+                ) : (
+                  <Pin className="w-4 h-4" strokeWidth={1.75} />
+                )}
                 {artifact.isPinned ? 'Unpin' : 'Pin'}
               </button>
               {artifact.sourceSession && (

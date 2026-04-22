@@ -46,7 +46,6 @@ interface IntegrationRecord {
 
 const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
 const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
-const ENVIRONMENTS = ['Dev', 'Staging', 'Prod'] as const;
 
 const CONNECTION_STATUS_CATEGORIES: Array<{ key: string; label: string; connectorIds: string[] }> = [
   { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'] },
@@ -157,7 +156,6 @@ export default function PipelinePage() {
   const [integrationRecords, setIntegrationRecords] = useState<IntegrationRecord[]>([]);
   const [search, setSearch] = useState('');
   const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
-  const [environment, setEnvironment] = useState<(typeof ENVIRONMENTS)[number]>('Prod');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set(CORE_GROUP_ORDER));
   const [nodeModal, setNodeModal] = useState<PipelineNode | null>(null);
   const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
@@ -505,13 +503,6 @@ export default function PipelinePage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={environment}
-              onChange={(e) => setEnvironment(e.target.value as (typeof ENVIRONMENTS)[number])}
-              className="form-select !py-2 !text-sm !rounded-lg"
-            >
-              {ENVIRONMENTS.map((env) => <option key={env} value={env}>{env}</option>)}
-            </select>
             <button onClick={() => savePipeline(stack)} className="btn btn-primary !py-2 !px-4 !text-sm" disabled={saving}>
               {saving ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" />Saving...</> : 'Save'}
             </button>

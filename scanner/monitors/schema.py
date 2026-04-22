@@ -199,6 +199,7 @@ class SchemaMonitor(BaseMonitor):
                 monitor_type=self.monitor_type,
                 target_fqn=target_fqn,
                 status=MonitorStatus.PASS,
+                value=float(len(current_columns)),
                 message=(
                     f"Schema baseline established with "
                     f"{len(current_columns)} columns."
@@ -351,6 +352,7 @@ class SchemaMonitor(BaseMonitor):
                 monitor_type=self.monitor_type,
                 target_fqn=target_fqn,
                 status=MonitorStatus.PASS,
+                value=float(len(current_columns)),
                 message="Schema matches baseline. No changes detected.",
                 details={
                     "column_count": len(current_columns),
@@ -411,6 +413,7 @@ class SchemaMonitor(BaseMonitor):
             monitor_type=self.monitor_type,
             target_fqn=target_fqn,
             status=status,
+            value=float(len(current_columns)),
             message=f"Schema changes detected: {', '.join(summary_parts)}. Max severity: {max_severity}.",
             details={
                 "changes": changes,
@@ -459,6 +462,7 @@ class SchemaMonitor(BaseMonitor):
                 monitor_type=monitor_type_label,
                 target_fqn=target_fqn,
                 status=MonitorStatus.PASS,
+                value=float(len(current_columns)),
                 message=(
                     f"Data type baseline established with "
                     f"{len(current_columns)} columns."
@@ -502,6 +506,7 @@ class SchemaMonitor(BaseMonitor):
                 monitor_type=monitor_type_label,
                 target_fqn=target_fqn,
                 status=MonitorStatus.PASS,
+                value=float(len(current_columns)),
                 message=(
                     f"Data type validation passed: all "
                     f"{len(self.expected_types)} column types match."
@@ -527,6 +532,7 @@ class SchemaMonitor(BaseMonitor):
             monitor_type=monitor_type_label,
             target_fqn=target_fqn,
             status=MonitorStatus.FAIL,
+            value=float(len(current_columns)),
             message=f"Data type validation failed: {'; '.join(issues)}.",
             details=details,
         )

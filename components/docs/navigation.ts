@@ -13,7 +13,7 @@ export const docsNavigation: NavSection[] = [
     title: 'User Guides',
     items: [
       { title: 'Getting Started', slug: 'getting-started' },
-      { title: 'AI Copilot (Scout)', slug: 'copilot' },
+      { title: 'AI Assistant', slug: 'copilot' },
       { title: 'Data Lineage', slug: 'lineage' },
       { title: 'Pipeline Builder', slug: 'pipeline-builder' },
       { title: 'Scheduled Monitoring', slug: 'scheduled-monitoring' },

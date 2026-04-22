@@ -5,17 +5,13 @@ import React from 'react';
 interface PipelineSLAModeToolbarProps {
   selectedCount: number;
   totalNodes: number;
-  onSaveAll: () => void;
   onExit: () => void;
-  saving?: boolean;
 }
 
 export function PipelineSLAModeToolbar({
   selectedCount,
   totalNodes,
-  onSaveAll,
   onExit,
-  saving,
 }: PipelineSLAModeToolbarProps) {
   return (
     <div className="flex items-center gap-4 mt-4 pt-4 border-t border-slate-500/20">
@@ -45,13 +41,6 @@ export function PipelineSLAModeToolbar({
         </span>
       </div>
 
-      <button
-        onClick={onSaveAll}
-        disabled={saving}
-        className="px-3 py-1.5 text-[12px] font-medium rounded-lg bg-[var(--accent)] text-white hover:bg-[var(--accent-2)] transition-all disabled:opacity-50"
-      >
-        {saving ? 'Saving...' : 'Save All'}
-      </button>
       <button
         onClick={onExit}
         className="px-3 py-1.5 text-[12px] font-medium rounded-lg text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-all flex items-center gap-1"

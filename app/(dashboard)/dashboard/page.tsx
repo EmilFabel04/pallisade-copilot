@@ -7,6 +7,7 @@ import { usePipeline } from '@/contexts/PipelineContext';
 import { cn } from '@/lib/utils';
 import { cachedFetch } from '@/lib/fetch-cache';
 import { SetupBanner } from '../../../components/dashboard/SetupBanner';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 import {
   MessageSquare,
   Database,
@@ -48,13 +49,6 @@ interface DashboardStats {
 }
 
 // --- Static data ---
-
-const integrationIcons: Record<string, React.ReactNode> = {
-  SNOWFLAKE: <Database className="w-4 h-4" />,
-  BIGQUERY: <Database className="w-4 h-4" />,
-  DBT_CLOUD: <Workflow className="w-4 h-4" />,
-  POSTGRES: <Database className="w-4 h-4" />,
-};
 
 const quickNavCards = [
   {
@@ -548,9 +542,11 @@ export default function DashboardPage() {
                   key={integration.id}
                   className="flex items-center gap-3 p-3 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-faint)]"
                 >
-                  <div className="w-8 h-8 rounded-lg bg-[var(--subtle-bg)] flex items-center justify-center text-[var(--text-tertiary)]">
-                    {integrationIcons[integration.type] || <Database className="w-4 h-4" />}
-                  </div>
+                  <ToolIcon
+                    toolType={integration.type}
+                    size={32}
+                    className="bg-[var(--subtle-bg)]"
+                  />
                   <div className="flex-1 min-w-0">
                     <p className="text-[13px] font-medium text-[var(--text)] truncate">{integration.name}</p>
                     <p className="text-[11px] text-[var(--muted)]">{integration.lastSync}</p>

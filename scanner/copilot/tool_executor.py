@@ -129,7 +129,7 @@ class ToolExecutor:
             logger.info("[Schema Fetch] Query is about non-warehouse integration (GitHub, etc.) - skipping schema fetch")
             return schema_info
 
-        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DATABRICKS"]
+        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DATABRICKS", "SQLSERVER", "AZURE_SQL"]
 
         # Step 1: Detect which warehouse(s) the user is asking about
         target_warehouses = self._detect_warehouses_from_query()
@@ -1787,24 +1787,73 @@ class ToolExecutor:
     async def _execute_get_table_stats(self, args: Dict[str, Any]) -> ToolResult:
         """Get table statistics."""
         table_name = args["table_name"]
-        
+
         # Find warehouse adapter
         warehouse_types = ["SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT"]
         adapter = None
+        adapter_type = None
         for wh_type in warehouse_types:
             if wh_type in self._adapters:
                 adapter = self._adapters[wh_type]
+                adapter_type = wh_type
                 break
-        
+
         if not adapter:
             return ToolResult(success=False, error="No warehouse connected")
-        
+
+        # Reconnect if the adapter was disconnected after a prior operation
+        # (e.g. schema pre-fetch). Without this the underlying metadata queries
+        # fail with "Not connected to database" and return empty stats.
+        if not adapter.is_connected:
+            connected = adapter.connect()
+            if not connected:
+                return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
+
         try:
-            stats = await adapter.get_table_stats(table_name)
+            import asyncio
+            stats = await asyncio.to_thread(adapter.get_table_stats, table_name)
             return ToolResult(success=True, data=stats)
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-    
+
+    async def _execute_get_table_stats_batch(self, args: Dict[str, Any]) -> ToolResult:
+        """Get stats for many tables in a single warehouse round-trip."""
+        import asyncio
+
+        table_names = args.get("table_names") or []
+        if not isinstance(table_names, list) or not table_names:
+            return ToolResult(success=False, error="table_names must be a non-empty list")
+
+        warehouse_types = ["SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT"]
+        adapter = None
+        adapter_type = None
+        for wh_type in warehouse_types:
+            if wh_type in self._adapters:
+                adapter = self._adapters[wh_type]
+                adapter_type = wh_type
+                break
+
+        if not adapter:
+            return ToolResult(success=False, error="No warehouse connected")
+
+        if not adapter.is_connected:
+            connected = adapter.connect()
+            if not connected:
+                return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
+
+        try:
+            batch_fn = getattr(adapter, "get_table_stats_batch", None)
+            if batch_fn is not None:
+                results = await asyncio.to_thread(batch_fn, table_names)
+            else:
+                # Fall back to running single-table lookups concurrently
+                results = await asyncio.gather(*[
+                    asyncio.to_thread(adapter.get_table_stats, t) for t in table_names
+                ])
+            return ToolResult(success=True, data={"tables": list(results)})
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     async def _execute_get_table_dependencies(self, args: Dict[str, Any]) -> ToolResult:
         """Get upstream and downstream dependencies for a table."""
         import asyncio
@@ -5005,8 +5054,10 @@ class ToolExecutor:
 
             # Determine where to store based on category
             context_field = "environmentContext"
-            if question.category == QuestionCategory.CONVENTIONS:
+            if question.category in (QuestionCategory.CONVENTIONS,):
                 context_field = "conventionsContext"
+            elif question.category in (QuestionCategory.BUSINESS, QuestionCategory.CRITICALITY, QuestionCategory.STAKEHOLDERS):
+                context_field = "environmentContext"
             elif question.integration_type:
                 context_field = "integrationContexts"
 

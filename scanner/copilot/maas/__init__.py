@@ -1,7 +1,7 @@
 """
 MAAS — Multi-Agent Architecture System for Pallisade Copilot.
 
-Delegates narrow tasks to RunPod-hosted specialist models (SQL, Logs, CodeFix),
+Delegates narrow tasks to RunPod-hosted specialist models (SQL, Logs),
 verifies their JSON output deterministically, and uses GPT-5 for tool execution
 and final narration.
 

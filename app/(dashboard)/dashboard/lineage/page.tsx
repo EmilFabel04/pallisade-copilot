@@ -1004,6 +1004,27 @@ function LineagePageInner() {
     return map;
   }, [lineageData?.allMonitors]);
 
+  // Merge integration + layer buckets so a tool card sees every monitor that
+  // belongs to it — even when some monitors have integrationId resolved and
+  // others fell through to layer-only matching.
+  const mergeMonitorBuckets = useCallback((
+    integrationId: string | null | undefined,
+    layer: string | undefined,
+  ) => {
+    const byIntegration = integrationId ? monitorsByKey.get(integrationId) : undefined;
+    const byLayer = layer ? monitorsByKey.get(`layer:${layer}`) : undefined;
+    if (!byIntegration && !byLayer) return undefined;
+    if (!byIntegration) return byLayer;
+    if (!byLayer) return byIntegration;
+    return {
+      total: byIntegration.total + byLayer.total,
+      passing: byIntegration.passing + byLayer.passing,
+      warning: byIntegration.warning + byLayer.warning,
+      failing: byIntegration.failing + byLayer.failing,
+      error: byIntegration.error + byLayer.error,
+    };
+  }, [monitorsByKey]);
+
   // Build React Flow nodes and edges
   // Uses pre-positioned rendered view when available, falls back to Dagre
   const { flowNodes, flowEdges } = useMemo(() => {
@@ -1063,8 +1084,6 @@ function LineagePageInner() {
             issues: unified?.issues,
             monitorStatus: unified?.monitorStatus,
             hasUpstreamFailure: unified?.hasUpstreamFailure,
-            freshnessStatus: unified?.freshnessStatus,
-            freshnessHours: unified?.freshnessHours,
             lastUpdated: unified?.lastUpdated,
             // Visual flags
             isInferred: vn.inferred,
@@ -1151,8 +1170,6 @@ function LineagePageInner() {
         downstreamCount: node.downstreamCount,
         // Health & freshness data
         lastUpdated: node.lastUpdated,
-        freshnessStatus: node.freshnessStatus,
-        freshnessHours: node.freshnessHours,
         issues: node.issues,
         monitorStatus: node.monitorStatus,
         hasUpstreamFailure: node.hasUpstreamFailure,
@@ -1234,10 +1251,7 @@ function LineagePageInner() {
             healthSummary: vn.metadata?.healthSummary,
             jobCount: vn.metadata?.jobCount,
             coverageGaps: vn.metadata?.coverageGaps,
-            monitorSummary: (() => {
-              const byIntegration = vn.metadata?.integrationId ? monitorsByKey.get(vn.metadata.integrationId) : undefined;
-              return byIntegration || monitorsByKey.get(`layer:${vn.layer}`) || undefined;
-            })(),
+            monitorSummary: mergeMonitorBuckets(vn.metadata?.integrationId, vn.layer),
             isControlPlane: true,
             domainColor: layerColor,
           },
@@ -1319,10 +1333,7 @@ function LineagePageInner() {
           toolType: vn.platform || vn.originalType,
           assetCount: vn.metadata?.assetCount,
           healthSummary: vn.metadata?.healthSummary,
-          monitorSummary: (() => {
-            const byIntegration = vn.metadata?.integrationId ? monitorsByKey.get(vn.metadata.integrationId) : undefined;
-            return byIntegration || monitorsByKey.get(`layer:${vn.layer}`) || undefined;
-          })(),
+          monitorSummary: mergeMonitorBuckets(vn.metadata?.integrationId, vn.layer),
           isControlPlane: true,
           domainColor: LAYER_COLORS[vn.layer as PipelineLayer] || '#6366F1',
         },
@@ -1381,15 +1392,12 @@ function LineagePageInner() {
         assetCount: n.assetCount,
         healthSummary: n.healthSummary,
         monitorSummary: (() => {
-          const byIntegration = n.integrationId ? monitorsByKey.get(n.integrationId) : undefined;
-          // Reverse lookup: platformDomain → layer for fallback
           const domainToLayer: Record<string, string> = {
             ingestion: 'INGESTION', warehouse: 'WAREHOUSE', transform: 'TRANSFORMATION',
             orchestration: 'ORCHESTRATION', bi: 'REPORTING', version_control: 'VERSION_CONTROL',
             infrastructure: 'INFRASTRUCTURE', storage: 'STORAGE',
           };
-          const layer = domainToLayer[n.platformDomain] || '';
-          return byIntegration || monitorsByKey.get(`layer:${layer}`) || undefined;
+          return mergeMonitorBuckets(n.integrationId, domainToLayer[n.platformDomain] || '');
         })(),
         isControlPlane: true,
         domainColor: LAYER_COLORS['WAREHOUSE'] || '#6366F1',
@@ -1705,10 +1713,6 @@ function LineagePageInner() {
           <SLAModeToolbar
             selectedCount={slaSelectedNodeIds.size}
             totalNodes={lineageData?.nodes?.length || 0}
-            saving={policySaving}
-            onSaveAll={() => {
-              // TODO: batch save all pending policies
-            }}
             onExit={() => {
               setSlaMode(false);
               setSlaSelectedNodeIds(new Set());
@@ -2683,10 +2687,21 @@ function LineagePageInner() {
         const displayName = viewNode?.name || unifiedNode?.name || selectedSlaNodeId;
         const policy = nodeSLAs.get(fqn);
         if (!policy) return null;
+        // Resolve the node's SLA domain from whichever source is available.
+        // unifiedNode.category is the canonical source; viewNode.originalType
+        // typically matches a category key; viewNode.platformDomain is a
+        // direct SLADomain when the category can't be resolved.
+        const nodeCategory = unifiedNode?.category
+          || (viewNode?.metadata?.category as string | undefined)
+          || viewNode?.originalType;
+        const nodeDomain = (nodeCategory ? categoryToSLADomain(nodeCategory) : null)
+          || (viewNode?.platformDomain ? categoryToSLADomain(viewNode.platformDomain) : null)
+          || null;
         return (
           <SlaProfileModal
             nodeId={selectedSlaNodeId}
             nodeName={displayName}
+            nodeDomain={nodeDomain}
             slaPolicy={policy}
             onClose={() => setSelectedSlaNodeId(null)}
             onEdit={(nodeId) => {

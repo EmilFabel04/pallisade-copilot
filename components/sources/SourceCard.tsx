@@ -1,10 +1,10 @@
 'use client';
 
-import { Clock, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { LAYER_COLORS, LAYER_LABELS, getToolById } from '@/components/pipeline/types';
 import { ControlPlaneSource, STATUS_CONFIG, EXTRACTION_STATUS_CONFIG } from './types';
-import { CAPABILITY_CONFIG } from './capabilities';
 import SourceActionsMenu from './SourceActionsMenu';
+import QuickLinkButton from './QuickLinkButton';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 
 function formatTimeAgo(iso: string): string {
@@ -91,34 +91,18 @@ export default function SourceCard({ source, onClick, onTestConnection, onDiscon
         </div>
       )}
 
-      {/* Extraction status badge */}
-      <div className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${extractCfg.bg} ${extractCfg.color}`}>
+      {/* Extraction status badge — shows "Healthy / Stale / Failed / Never"
+          with the last-extracted time in the tooltip. */}
+      <div
+        className={`shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${extractCfg.bg} ${extractCfg.color}`}
+        title={source.lastExtractedAt ? `Last extracted ${formatTimeAgo(source.lastExtractedAt)}` : 'Never extracted'}
+      >
         {extractCfg.label}
       </div>
 
-      {/* Last extracted */}
-      <div className="hidden md:flex items-center gap-1 text-xs text-[var(--text-faint)] shrink-0 w-20">
-        <Clock className="w-3 h-3" />
-        {source.lastExtractedAt ? formatTimeAgo(source.lastExtractedAt) : 'Never'}
-      </div>
-
-      {/* Capabilities */}
-      <div className="hidden xl:flex items-center gap-1 shrink-0">
-        {source.capabilities.map((cap) => {
-          const cfg = CAPABILITY_CONFIG[cap];
-          return (
-            <span
-              key={cap}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${cfg.bg} ${cfg.color}`}
-            >
-              {cfg.label}
-            </span>
-          );
-        })}
-      </div>
-
       {/* Actions */}
-      <div className="shrink-0">
+      <div className="shrink-0 flex items-center gap-0.5">
+        <QuickLinkButton links={source.quickLinks || []} sourceName={displayName} />
         <SourceActionsMenu
           source={source}
           onTestConnection={onTestConnection}

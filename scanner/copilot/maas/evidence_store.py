@@ -146,12 +146,12 @@ class EvidenceStore:
         """
         parts = []
 
-        # Schema slice for SQL and CodeFix specialists
-        if specialist in ("sql", "codefix", "orchestrator"):
+        # Schema slice for SQL specialist and orchestrator
+        if specialist in ("sql", "orchestrator"):
             parts.append(self.slice_schema(query))
 
-        # Lineage for CodeFix and Logs specialists
-        if specialist in ("codefix", "logs", "orchestrator"):
+        # Lineage for Logs specialist and orchestrator
+        if specialist in ("logs", "orchestrator"):
             if self._lineage_upstream or self._lineage_downstream:
                 parts.append(_format_lineage(
                     self._lineage_upstream, self._lineage_downstream

@@ -363,5 +363,9 @@ export function useSourcesData() {
 
   const summary = computeSummary(sources);
 
-  return { sources, summary, pipelineSLA, loading: loading || pipelineLoading, error, refresh };
+  const patchSource = useCallback((id: string, patch: Partial<ControlPlaneSource>) => {
+    setSources((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }, []);
+
+  return { sources, summary, pipelineSLA, loading: loading || pipelineLoading, error, refresh, patchSource };
 }

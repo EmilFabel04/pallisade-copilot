@@ -25,6 +25,18 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+# BigQuery __TABLES__.type encoding:
+#   1 = regular table, 2 = view, 4 = external, 5 = materialized view
+_BQ_TABLE_TYPE_LABELS = {1: "TABLE", 2: "VIEW", 4: "EXTERNAL", 5: "MATERIALIZED_VIEW"}
+
+
+def _bq_table_type_label(type_code: Any) -> str:
+    try:
+        return _BQ_TABLE_TYPE_LABELS.get(int(type_code), "UNKNOWN")
+    except (TypeError, ValueError):
+        return "UNKNOWN"
+
+
 class BigQueryAdapter(DatabaseAdapter):
     """
     Enterprise BigQuery adapter.
@@ -568,7 +580,214 @@ class BigQueryAdapter(DatabaseAdapter):
         }
         
         return {'error': 'Failed to get freshness', 'timestamp_column': ts_col}
-    
+
+    # =========================================================================
+    # FAST STATS (BigQuery-optimized)
+    # =========================================================================
+
+    def get_table_stats(self, table: str) -> Dict[str, Any]:
+        """BigQuery override: __TABLES__ gives row_count + last_modified in one query.
+
+        The base implementation fires three separate metadata queries (get_table_metadata,
+        get_table_freshness, get_row_count). On BigQuery these each do extra work we don't
+        need — INFORMATION_SCHEMA scans, DDL lookups, etc. One __TABLES__ query has
+        everything except columns, which we fetch once via get_columns.
+        """
+        try:
+            project, dataset, tbl = self._parse_table_parts(table)
+        except Exception as e:
+            logger.warning(f"get_table_stats({table}) parse failed: {e}")
+            return super().get_table_stats(table)
+
+        query = f"""
+            SELECT
+                table_id,
+                type,
+                row_count,
+                size_bytes,
+                TIMESTAMP_MILLIS(last_modified_time) AS last_modified,
+                TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), TIMESTAMP_MILLIS(last_modified_time), HOUR) AS hours_since_update
+            FROM `{project}.{dataset}.__TABLES__`
+            WHERE table_id = '{tbl}'
+        """
+
+        try:
+            rows = self.execute_query(query)
+        except Exception as e:
+            logger.warning(f"get_table_stats({table}) __TABLES__ query failed: {e}")
+            return super().get_table_stats(table)
+
+        if not rows:
+            return {
+                "table_name": table,
+                "row_count": None,
+                "freshness": None,
+                "columns": [],
+                "last_modified": None,
+            }
+
+        row = rows[0]
+        last_modified = row.get("last_modified")
+        row_count = row.get("row_count")
+        table_type = _bq_table_type_label(row.get("type"))
+
+        # __TABLES__ reports row_count=0 for views and external tables because
+        # nothing is materialized. Run a COUNT(*) to get the real number.
+        if table_type in ("VIEW", "EXTERNAL"):
+            try:
+                count_rows = self.execute_query(
+                    f"SELECT COUNT(*) AS row_count FROM `{project}.{dataset}.{tbl}`"
+                )
+                if count_rows:
+                    row_count = count_rows[0].get("row_count")
+            except Exception as e:
+                logger.warning(f"get_table_stats({table}) COUNT(*) for {table_type} failed: {e}")
+                row_count = None
+
+        try:
+            columns = [
+                {"name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
+                for c in self.get_columns(table)
+            ]
+        except Exception as e:
+            logger.warning(f"get_table_stats({table}) columns fetch failed: {e}")
+            columns = []
+
+        freshness = {
+            "last_updated": last_modified,
+            "hours_since_update": row.get("hours_since_update"),
+            "row_count": row_count,
+            "timestamp_column": "_METADATA",
+            "source": "table_metadata",
+        } if last_modified is not None else None
+
+        return {
+            "table_name": table,
+            "table_type": table_type,
+            "row_count": row_count,
+            "size_bytes": row.get("size_bytes"),
+            "freshness": freshness,
+            "columns": columns,
+            "last_modified": last_modified,
+        }
+
+    def get_table_stats_batch(self, tables: List[str]) -> List[Dict[str, Any]]:
+        """Fetch stats for many tables in a single BigQuery metadata query.
+
+        Groups tables by (project, dataset) and UNIONs the __TABLES__ lookups.
+        Columns are omitted to keep the payload small — callers can fetch
+        columns per-table with get_table_stats when needed.
+        """
+        if not tables:
+            return []
+
+        # Group by (project, dataset) so we can query each dataset's __TABLES__ once
+        by_dataset: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+        originals: Dict[Tuple[str, str, str], str] = {}
+        for table in tables:
+            try:
+                project, dataset, tbl = self._parse_table_parts(table)
+            except Exception as e:
+                logger.warning(f"get_table_stats_batch: skipping unparseable table {table}: {e}")
+                continue
+            by_dataset.setdefault((project, dataset), []).append((tbl, table))
+            originals[(project, dataset, tbl)] = table
+
+        if not by_dataset:
+            return []
+
+        subqueries = []
+        for (project, dataset), table_pairs in by_dataset.items():
+            # Escape single quotes defensively even though table ids don't contain them
+            ids = ", ".join("'" + t.replace("'", "\\'") + "'" for t, _ in table_pairs)
+            subqueries.append(
+                f"""
+                SELECT
+                    '{project}' AS project,
+                    '{dataset}' AS dataset,
+                    table_id,
+                    type,
+                    row_count,
+                    size_bytes,
+                    TIMESTAMP_MILLIS(last_modified_time) AS last_modified,
+                    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), TIMESTAMP_MILLIS(last_modified_time), HOUR) AS hours_since_update
+                FROM `{project}.{dataset}.__TABLES__`
+                WHERE table_id IN ({ids})
+                """.strip()
+            )
+
+        query = "\nUNION ALL\n".join(subqueries)
+
+        try:
+            rows = self.execute_query(query)
+        except Exception as e:
+            logger.warning(f"get_table_stats_batch: __TABLES__ union query failed ({e}); falling back to per-table lookups")
+            return [self.get_table_stats(t) for t in tables]
+
+        by_fqn: Dict[str, Dict[str, Any]] = {}
+        views_to_count: List[str] = []  # FQNs that need a COUNT(*) because __TABLES__ reports 0
+        for row in rows:
+            key = (row.get("project"), row.get("dataset"), row.get("table_id"))
+            original = originals.get(key)
+            if not original:
+                continue
+            last_modified = row.get("last_modified")
+            row_count = row.get("row_count")
+            table_type = _bq_table_type_label(row.get("type"))
+            if table_type in ("VIEW", "EXTERNAL"):
+                views_to_count.append(original)
+            by_fqn[original] = {
+                "table_name": original,
+                "table_type": table_type,
+                "row_count": row_count,
+                "size_bytes": row.get("size_bytes"),
+                "last_modified": last_modified,
+                "freshness": {
+                    "last_updated": last_modified,
+                    "hours_since_update": row.get("hours_since_update"),
+                    "row_count": row_count,
+                    "timestamp_column": "_METADATA",
+                    "source": "table_metadata",
+                } if last_modified is not None else None,
+                "columns": [],  # Omitted in batch mode; call get_table_stats for columns
+            }
+
+        # Views/external tables have row_count=0 in __TABLES__ because nothing
+        # is materialized. One UNION ALL of COUNT(*) gets real counts for all
+        # of them in a single round-trip.
+        if views_to_count:
+            count_subqueries = [
+                f"SELECT '{fqn}' AS fqn, COUNT(*) AS row_count FROM `{fqn}`"
+                for fqn in views_to_count
+            ]
+            try:
+                count_rows = self.execute_query("\nUNION ALL\n".join(count_subqueries))
+                counts_by_fqn = {r.get("fqn"): r.get("row_count") for r in count_rows}
+                for fqn, actual in counts_by_fqn.items():
+                    if fqn in by_fqn:
+                        by_fqn[fqn]["row_count"] = actual
+                        if by_fqn[fqn].get("freshness"):
+                            by_fqn[fqn]["freshness"]["row_count"] = actual
+            except Exception as e:
+                logger.warning(f"get_table_stats_batch: view COUNT(*) union failed ({e}); leaving view row counts as 0")
+
+        # Preserve input order; include a stub for any tables that weren't found
+        results: List[Dict[str, Any]] = []
+        for t in tables:
+            if t in by_fqn:
+                results.append(by_fqn[t])
+            else:
+                results.append({
+                    "table_name": t,
+                    "row_count": None,
+                    "size_bytes": None,
+                    "last_modified": None,
+                    "freshness": None,
+                    "columns": [],
+                    "note": "Table not found in __TABLES__",
+                })
+        return results
+
     # =========================================================================
     # DATA SAMPLING
     # =========================================================================

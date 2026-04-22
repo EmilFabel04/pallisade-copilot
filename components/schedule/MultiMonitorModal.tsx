@@ -1004,40 +1004,70 @@ export function MultiMonitorModal({
           }))
           .filter((g) => g.recommendations.length > 0);
 
-        // Add custom asset monitors (keys the user picked that weren't in preview).
-        // These come from the ASSET_MONITOR_TYPES union added in selectedNodesWithMonitors
-        // and are marked with family === 'custom' and groupIdx === -1.
-        const customAssetMonitors = selectedNodesWithMonitors.flatMap(({ meta, monitors }) =>
-          monitors
-            .filter((m) => m.family === 'custom' && m.groupIdx === -1 && monitorChecks[`${m.targetNodeId}::${m.key}`])
-            .map((m) => ({
-              monitor_key: m.key,
-              target_fqn: m.targetFqn || meta.fqn || '',
-              target_node_id: m.targetNodeId,
-              source: 'custom',
-              reason: 'User-selected data quality monitor',
-              priority: 1,
-              config_hints: monitorConfigs[`${m.targetNodeId}::${m.key}`] || {},
-              integration_type: '',
-              already_monitored: false,
-            })),
-        );
-        if (customAssetMonitors.length > 0) {
-          filteredGroups.push({
-            group_index: filteredGroups.length,
-            family: 'custom_asset',
-            watch_type: 'custom_watch',
-            anchor_id: '',
-            anchor_name: 'Custom Asset Monitors',
-            anchor_fqn: '',
-            anchor_node_type: '',
-            anchor_platform: '',
-            node_count: new Set(customAssetMonitors.map((m) => m.target_node_id)).size,
-            monitor_count: customAssetMonitors.length,
-            coverage_pct: 100,
-            shared_node_ids: [],
-            recommendations: customAssetMonitors,
-          } as any);
+        // Custom asset monitors: monitors the user manually picked for an asset
+        // that the preview didn't recommend (e.g. DATA_TYPE_VALIDATION).
+        // Marked with family === 'custom' and groupIdx === -1 in the monitor list.
+        //
+        // These must join the SAME group as the asset's other monitors — not a
+        // separate "Custom Asset Monitors" bucket. We fold each one into:
+        //   1) an existing group whose anchor_fqn matches the asset's fqn, or
+        //   2) an existing group that already contains a rec for this node, or
+        //   3) a new per-asset group (one per unique target).
+        type CustomRec = {
+          monitor_key: string;
+          target_fqn: string;
+          target_node_id: string;
+          source: string;
+          reason: string;
+          priority: number;
+          config_hints: Record<string, any>;
+          integration_type: string;
+          already_monitored: boolean;
+        };
+        const customAssetMonitors: Array<{ rec: CustomRec; meta: NodeMeta }> =
+          selectedNodesWithMonitors.flatMap(({ meta, monitors }) =>
+            monitors
+              .filter((m) => m.family === 'custom' && m.groupIdx === -1 && monitorChecks[`${m.targetNodeId}::${m.key}`])
+              .map((m) => ({
+                meta,
+                rec: {
+                  monitor_key: m.key,
+                  target_fqn: m.targetFqn || meta.fqn || '',
+                  target_node_id: m.targetNodeId,
+                  source: 'custom',
+                  reason: 'User-selected data quality monitor',
+                  priority: 1,
+                  config_hints: monitorConfigs[`${m.targetNodeId}::${m.key}`] || {},
+                  integration_type: '',
+                  already_monitored: false,
+                } as CustomRec,
+              })),
+          );
+        for (const { rec, meta } of customAssetMonitors) {
+          const existingGroup = filteredGroups.find((g) =>
+            (g.anchor_fqn && g.anchor_fqn === rec.target_fqn) ||
+            g.recommendations.some((r) => r.target_node_id === rec.target_node_id),
+          );
+          if (existingGroup) {
+            existingGroup.recommendations.push(rec as any);
+            existingGroup.monitor_count = existingGroup.recommendations.length;
+          } else {
+            filteredGroups.push({
+              group_index: filteredGroups.length,
+              family: 'custom',
+              watch_type: 'custom_watch',
+              anchor_id: rec.target_node_id,
+              anchor_name: meta.name || rec.target_fqn.split('.').pop() || rec.target_fqn,
+              anchor_fqn: rec.target_fqn,
+              anchor_node_type: '',
+              anchor_platform: meta.platform || '',
+              node_count: 1,
+              monitor_count: 1,
+              coverage_pct: 100,
+              shared_node_ids: [],
+              recommendations: [rec as any],
+            } as any);
+          }
         }
 
         // Add manual monitors as an extra group if any

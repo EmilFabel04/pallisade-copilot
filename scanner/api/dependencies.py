@@ -37,13 +37,40 @@ logger = structlog.get_logger()
 
 class Settings:
     """Application settings from environment variables."""
-    
+
+    DEV_SHARED_SECRET = "dev-insecure-secret-do-not-use-in-production"
+
     def __init__(self):
-        self.allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-        self.encryption_key = os.getenv("ENCRYPTION_KEY", "")
         self.environment = os.getenv("ENVIRONMENT", "development")
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.version = "2.0.0"
+        self.encryption_key = os.getenv("ENCRYPTION_KEY", "")
+
+        allowed_origins_raw = os.getenv("ALLOWED_ORIGINS", "")
+        self.allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+
+        shared_secret_env = os.getenv("SCANNER_SHARED_SECRET", "")
+
+        is_prod = self.environment == "production"
+
+        if is_prod:
+            if not shared_secret_env:
+                raise RuntimeError(
+                    "SCANNER_SHARED_SECRET must be set in production (min 32 bytes)"
+                )
+            if len(shared_secret_env) < 32:
+                raise RuntimeError(
+                    "SCANNER_SHARED_SECRET must be at least 32 bytes in production"
+                )
+            if not self.allowed_origins or self.allowed_origins == ["*"]:
+                raise RuntimeError(
+                    "ALLOWED_ORIGINS must be an explicit comma-separated list in production (not '*' or empty)"
+                )
+            self.shared_secret = shared_secret_env
+        else:
+            self.shared_secret = shared_secret_env or self.DEV_SHARED_SECRET
+            if not self.allowed_origins:
+                self.allowed_origins = ["*"]
 
 
 @lru_cache()

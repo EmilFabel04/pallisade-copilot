@@ -18,11 +18,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'anchorFqn is required' }, { status: 400 });
   }
 
-  const group = await prisma.monitorGroup.findFirst({
+  // Return any existing monitor group for this anchor so new asset-level
+  // monitors (e.g. DATA_TYPE_VALIDATION) merge into the same group rather than
+  // spawning a separate custom_watch. Standalone groups are preferred when
+  // both a standalone and a plan-backed group exist for the same anchor.
+  const groups = await prisma.monitorGroup.findMany({
     where: {
       organizationId: orgId,
       anchorFqn,
-      monitoringPlanId: null, // standalone groups only
     },
     include: {
       monitors: {
@@ -38,7 +41,11 @@ export async function GET(req: NextRequest) {
         orderBy: { createdAt: 'asc' },
       },
     },
+    orderBy: { createdAt: 'asc' },
   });
 
-  return NextResponse.json({ group: group || null });
+  const group =
+    groups.find((g) => g.monitoringPlanId === null) ?? groups[0] ?? null;
+
+  return NextResponse.json({ group });
 }

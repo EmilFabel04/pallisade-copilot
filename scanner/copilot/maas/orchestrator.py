@@ -6,7 +6,7 @@ text_delta, tool_call_start, tool_call_result, tool_confirmation_required,
 iteration_start, done, error.
 
 GPT-5 is the only tool-caller and final narrator.
-Specialists are called via RunPod for SQL, Logs, and CodeFix.
+Specialists are called via RunPod for SQL and Logs.
 """
 
 import hashlib
@@ -32,11 +32,9 @@ from .schemas import (
 )
 from .specialists.sql import SQLSpecialist
 from .specialists.logs import LogsSpecialist
-from .specialists.codefix import CodeFixSpecialist
 from .specialists.base import SpecialistError
 from .verifiers.sql_verifier import SQLVerifier
 from .verifiers.logs_verifier import LogsVerifier
-from .verifiers.patch_verifier import PatchVerifier
 from .budgets import build_orchestrator_prompt, get_budget
 
 logger = logging.getLogger(__name__)
@@ -65,7 +63,6 @@ class MAASOrchestrator:
         # Verifiers
         self.sql_verifier = SQLVerifier()
         self.logs_verifier = LogsVerifier()
-        self.patch_verifier = PatchVerifier()
 
     def _init_specialists(self):
         """Initialize RunPod clients and specialist wrappers (eagerly configured, lazily invoked)."""
@@ -88,16 +85,6 @@ class MAASOrchestrator:
             )
             self._clients["logs"] = client
             self._specialists["logs"] = LogsSpecialist(client)
-
-        if self.config.codefix_endpoint:
-            client = RunPodClient(
-                base_url=self.config.codefix_endpoint,
-                api_key=self.config.codefix_api_key or "",
-                model_name=self.config.codefix_model,
-                timeout=self.config.specialist_timeout,
-            )
-            self._clients["codefix"] = client
-            self._specialists["codefix"] = CodeFixSpecialist(client)
 
     def _resolve_target_warehouse(self, context: CopilotContext) -> Optional[str]:
         """Deterministic warehouse resolution — no inference from SQL syntax."""
@@ -688,14 +675,6 @@ class MAASOrchestrator:
             elif spec_name == "logs":
                 available = set(context.available_tools)
                 vr = self.logs_verifier.verify(result, available_tools=available)
-                return {
-                    "passed": vr.passed,
-                    "errors": vr.errors,
-                    "warnings": vr.warnings,
-                }
-
-            elif spec_name == "codefix":
-                vr = await self.patch_verifier.verify(result)
                 return {
                     "passed": vr.passed,
                     "errors": vr.errors,

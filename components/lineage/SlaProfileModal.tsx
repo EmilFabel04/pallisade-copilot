@@ -2,11 +2,13 @@
 
 import React from 'react';
 import { X } from 'lucide-react';
-import type { EffectiveSLAPolicy } from '@/types/sla';
+import type { EffectiveSLAPolicy, SLADomain } from '@/types/sla';
+import { DOMAIN_SLA_SECTIONS } from '@/types/sla';
 
 interface SlaProfileModalProps {
   nodeId: string;
   nodeName: string;
+  nodeDomain?: SLADomain | null;
   slaPolicy: EffectiveSLAPolicy;
   onClose: () => void;
   onEdit: (nodeId: string) => void;
@@ -45,8 +47,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function SlaProfileModal({ nodeId, nodeName, slaPolicy, onClose, onEdit }: SlaProfileModalProps) {
+export function SlaProfileModal({ nodeId, nodeName, nodeDomain, slaPolicy, onClose, onEdit }: SlaProfileModalProps) {
   const sourceInfo = SOURCE_LABELS[slaPolicy.source] || { label: slaPolicy.source, color: 'text-zinc-400', bg: 'bg-zinc-500/15' };
+
+  // Only render sections applicable to this node's domain. Falls back to
+  // showing all sections when the domain isn't provided.
+  const applicable = nodeDomain ? new Set(DOMAIN_SLA_SECTIONS[nodeDomain] ?? []) : null;
+
+  // A section is "active" when its config has at least one non-null,
+  // non-empty value. Hides sections that are pure profile defaults or
+  // absent from the resolved policy.
+  const hasValues = (config: any): boolean => {
+    if (!config || typeof config !== 'object') return false;
+    return Object.values(config).some(
+      (v) => v !== null && v !== undefined && v !== '',
+    );
+  };
+
+  const sectionConfig: Record<string, any> = {
+    freshness: slaPolicy.freshness,
+    volume: slaPolicy.volume,
+    quality: slaPolicy.quality,
+    schema: slaPolicy.schema,
+    anomaly: slaPolicy.anomaly,
+    ingestion: slaPolicy.ingestion,
+    bi: slaPolicy.bi,
+    orchestration: slaPolicy.orchestration,
+    transform: slaPolicy.transform,
+  };
+
+  const shows = (section: string) => {
+    if (applicable && !applicable.has(section)) return false;
+    return hasValues(sectionConfig[section]);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -83,59 +116,77 @@ export function SlaProfileModal({ nodeId, nodeName, slaPolicy, onClose, onEdit }
 
         {/* SLA categories */}
         <div className="px-5 py-4 max-h-[60vh] overflow-y-auto">
-          <Section title="Freshness">
-            <Row label="Enabled" value={slaPolicy.freshness?.enabled} />
-            <Row label="Max hours" value={slaPolicy.freshness?.maxHours} />
-            <Row label="Warning hours" value={slaPolicy.freshness?.warningHours} />
-          </Section>
+          {shows('freshness') && (
+            <Section title="Freshness">
+              <Row label="Enabled" value={slaPolicy.freshness?.enabled} />
+              <Row label="Max hours" value={slaPolicy.freshness?.maxHours} />
+              <Row label="Warning hours" value={slaPolicy.freshness?.warningHours} />
+            </Section>
+          )}
 
-          <Section title="Volume">
-            <Row label="Enabled" value={slaPolicy.volume?.enabled} />
-            <Row label="Min rows" value={slaPolicy.volume?.minRows} />
-            <Row label="Max rows" value={slaPolicy.volume?.maxRows} />
-            <Row label="Growth rate threshold" value={slaPolicy.volume?.growthRateThreshold} />
-          </Section>
+          {shows('volume') && (
+            <Section title="Volume">
+              <Row label="Enabled" value={slaPolicy.volume?.enabled} />
+              <Row label="Min rows" value={slaPolicy.volume?.minRows} />
+              <Row label="Max rows" value={slaPolicy.volume?.maxRows} />
+              <Row label="Growth rate threshold" value={slaPolicy.volume?.growthRateThreshold} />
+            </Section>
+          )}
 
-          <Section title="Quality">
-            <Row label="Enabled" value={slaPolicy.quality?.enabled} />
-            <Row label="Max null rate" value={slaPolicy.quality?.maxNullRate} />
-            <Row label="Max duplicate rate" value={slaPolicy.quality?.maxDuplicateRate} />
-          </Section>
+          {shows('quality') && (
+            <Section title="Quality">
+              <Row label="Enabled" value={slaPolicy.quality?.enabled} />
+              <Row label="Max null rate" value={slaPolicy.quality?.maxNullRate} />
+              <Row label="Max duplicate rate" value={slaPolicy.quality?.maxDuplicateRate} />
+            </Section>
+          )}
 
-          <Section title="Schema">
-            <Row label="Enabled" value={slaPolicy.schema?.enabled} />
-            <Row label="Strictness" value={slaPolicy.schema?.strictness} />
-            <Row label="Allow evolution" value={slaPolicy.schema?.allowEvolution} />
-          </Section>
+          {shows('schema') && (
+            <Section title="Schema">
+              <Row label="Enabled" value={slaPolicy.schema?.enabled} />
+              <Row label="Strictness" value={slaPolicy.schema?.strictness} />
+              <Row label="Allow evolution" value={slaPolicy.schema?.allowEvolution} />
+            </Section>
+          )}
 
-          <Section title="Anomaly">
-            <Row label="Enabled" value={slaPolicy.anomaly?.enabled} />
-            <Row label="Sensitivity" value={slaPolicy.anomaly?.sensitivity} />
-            <Row label="Lookback days" value={slaPolicy.anomaly?.lookbackDays} />
-          </Section>
+          {shows('anomaly') && (
+            <Section title="Anomaly">
+              <Row label="Enabled" value={slaPolicy.anomaly?.enabled} />
+              <Row label="Sensitivity" value={slaPolicy.anomaly?.sensitivity} />
+              <Row label="Lookback days" value={slaPolicy.anomaly?.lookbackDays} />
+            </Section>
+          )}
 
-          <Section title="Ingestion">
-            <Row label="Sync lag tolerance (min)" value={slaPolicy.ingestion?.syncLagToleranceMinutes} />
-            <Row label="Failure tolerance" value={slaPolicy.ingestion?.failureTolerance} />
-            <Row label="Schema drift strictness" value={slaPolicy.ingestion?.schemaDriftStrictness} />
-          </Section>
+          {shows('ingestion') && (
+            <Section title="Ingestion">
+              <Row label="Sync lag tolerance (min)" value={slaPolicy.ingestion?.syncLagToleranceMinutes} />
+              <Row label="Failure tolerance" value={slaPolicy.ingestion?.failureTolerance} />
+              <Row label="Schema drift strictness" value={slaPolicy.ingestion?.schemaDriftStrictness} />
+            </Section>
+          )}
 
-          <Section title="BI">
-            <Row label="Freshness hours" value={slaPolicy.bi?.freshnessHours} />
-            <Row label="Content health" value={slaPolicy.bi?.contentHealthEnabled} />
-            <Row label="Upstream break strictness" value={slaPolicy.bi?.upstreamBreakStrictness} />
-          </Section>
+          {shows('bi') && (
+            <Section title="BI">
+              <Row label="Freshness hours" value={slaPolicy.bi?.freshnessHours} />
+              <Row label="Content health" value={slaPolicy.bi?.contentHealthEnabled} />
+              <Row label="Upstream break strictness" value={slaPolicy.bi?.upstreamBreakStrictness} />
+            </Section>
+          )}
 
-          <Section title="Orchestration">
-            <Row label="Run latency (min)" value={slaPolicy.orchestration?.runLatencyMinutes} />
-            <Row label="Schedule lag (min)" value={slaPolicy.orchestration?.scheduleLagMinutes} />
-            <Row label="Failure tolerance" value={slaPolicy.orchestration?.failureTolerance} />
-          </Section>
+          {shows('orchestration') && (
+            <Section title="Orchestration">
+              <Row label="Run latency (min)" value={slaPolicy.orchestration?.runLatencyMinutes} />
+              <Row label="Schedule lag (min)" value={slaPolicy.orchestration?.scheduleLagMinutes} />
+              <Row label="Failure tolerance" value={slaPolicy.orchestration?.failureTolerance} />
+            </Section>
+          )}
 
-          <Section title="Transform">
-            <Row label="Test failure tolerance" value={slaPolicy.transform?.testFailureTolerance} />
-            <Row label="Model freshness hours" value={slaPolicy.transform?.modelFreshnessHours} />
-          </Section>
+          {shows('transform') && (
+            <Section title="Transform">
+              <Row label="Test failure tolerance" value={slaPolicy.transform?.testFailureTolerance} />
+              <Row label="Model freshness hours" value={slaPolicy.transform?.modelFreshnessHours} />
+            </Section>
+          )}
         </div>
 
         {/* Footer */}

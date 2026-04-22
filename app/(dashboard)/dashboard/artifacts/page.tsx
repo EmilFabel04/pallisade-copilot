@@ -79,17 +79,25 @@ export default function ArtifactsPage() {
   };
 
   const handleTogglePin = async (id: string, isPinned: boolean) => {
-    const response = await fetch(`/api/artifacts/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isPinned }),
-    });
-
-    if (!response.ok) throw new Error('Failed to update artifact');
-
+    // Optimistic update — flip the UI immediately so the click feels instant.
     setArtifacts((prev) =>
       prev.map((a) => (a.id === id ? { ...a, isPinned } : a))
     );
+
+    try {
+      const response = await fetch(`/api/artifacts/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isPinned }),
+      });
+      if (!response.ok) throw new Error('Failed to update artifact');
+    } catch (err) {
+      // Roll back on failure
+      setArtifacts((prev) =>
+        prev.map((a) => (a.id === id ? { ...a, isPinned: !isPinned } : a))
+      );
+      throw err;
+    }
   };
 
   const handleViewSource = (sessionId: string) => {

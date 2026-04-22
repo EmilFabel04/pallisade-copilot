@@ -47,7 +47,8 @@ function toOgPriority(s: Severity): 'P1' | 'P2' | 'P3' | 'P4' {
 
 export async function routeNotification(params: RouteParams): Promise<void> {
   try {
-    const route = await prisma.notificationRoute.findUnique({
+    // Try severity-specific route first, then fall back to ORG_DEFAULTS
+    let route = await prisma.notificationRoute.findUnique({
       where: {
         organizationId_severity: {
           organizationId: params.organizationId,
@@ -55,6 +56,17 @@ export async function routeNotification(params: RouteParams): Promise<void> {
         },
       },
     });
+
+    if (!route || !route.enabled) {
+      route = await prisma.notificationRoute.findUnique({
+        where: {
+          organizationId_severity: {
+            organizationId: params.organizationId,
+            severity: 'ORG_DEFAULTS',
+          },
+        },
+      });
+    }
 
     if (!route || !route.enabled) return;
     if (params.isRecovery && !route.notifyOnRecovery) return;

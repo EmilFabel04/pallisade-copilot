@@ -64,9 +64,10 @@ interface Props {
   source: ControlPlaneSource;
   onClose: () => void;
   onEditSLA?: (source: ControlPlaneSource) => void;
+  onQuickLinksChange?: (sourceId: string, links: QuickLink[]) => void;
 }
 
-export default function SourceDetailDrawer({ source, onClose }: Props) {
+export default function SourceDetailDrawer({ source, onClose, onQuickLinksChange }: Props) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<DrawerTab>('health');
   const tool = getToolById(source.toolType);
@@ -90,9 +91,14 @@ export default function SourceDetailDrawer({ source, onClose }: Props) {
   useEffect(() => {
     fetch(`/api/integrations/${source.id}/quick-links`)
       .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.quickLinks) setQuickLinks(data.quickLinks); })
+      .then(data => {
+        if (data?.quickLinks) {
+          setQuickLinks(data.quickLinks);
+          onQuickLinksChange?.(source.id, data.quickLinks);
+        }
+      })
       .catch(() => {});
-  }, [source.id]);
+  }, [source.id, onQuickLinksChange]);
 
   const saveLinks = useCallback(async (links: QuickLink[]) => {
     setSaving(true);
@@ -102,11 +108,14 @@ export default function SourceDetailDrawer({ source, onClose }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ quickLinks: links }),
       });
-      if (res.ok) setQuickLinks(links);
+      if (res.ok) {
+        setQuickLinks(links);
+        onQuickLinksChange?.(source.id, links);
+      }
     } catch {} finally {
       setSaving(false);
     }
-  }, [source.id]);
+  }, [source.id, onQuickLinksChange]);
 
   const handleAddLink = () => {
     if (!newLabel.trim() || !newUrl.trim()) return;

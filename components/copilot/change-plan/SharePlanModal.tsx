@@ -293,7 +293,7 @@ export function SharePlanModal({ plan, targetType, isOpen, onClose, onSuccess }:
                   }}
                 >
                   <div className="font-medium text-[var(--text-secondary)]">
-                    {targetType === 'jira' ? `[Scout] ${plan.title}` : `Change Plan: ${plan.title}`}
+                    {targetType === 'jira' ? `[Assistant] ${plan.title}` : `Change Plan: ${plan.title}`}
                   </div>
                   <div className="text-[var(--muted)] line-clamp-2">
                     {plan.description || plan.root_cause || 'A change plan has been created.'}

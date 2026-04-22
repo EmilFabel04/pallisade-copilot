@@ -983,6 +983,8 @@ class TaskExecutor:
                 "task_failure_rate": "Airflow",
                 "dbt_test_failures": "dbt Cloud", "dbt_model_freshness": "dbt Cloud",
                 "dbt_source_freshness": "dbt Cloud",
+                "dbt_core_source_validation": "dbt Core",
+                "dbt_core_ref_integrity": "dbt Core",
             }
             tool_name = tool_names.get(monitor_type, monitor_type)
             return {
@@ -996,7 +998,7 @@ class TaskExecutor:
             }
 
         try:
-            client = self._create_tool_client(monitor_type, integration_config)
+            client = self._create_tool_client(monitor_type, integration_config, task=task)
         except ValueError as e:
             # ValueError = configuration issue (e.g. GitHub mode, missing API key)
             logger.error(f"[Executor] Tool client config error: {e}")
@@ -1188,7 +1190,10 @@ class TaskExecutor:
         return None
 
     def _create_tool_client(
-        self, monitor_type: str, integration_config: Dict[str, Any]
+        self,
+        monitor_type: str,
+        integration_config: Dict[str, Any],
+        task: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Instantiate the appropriate integration client for a tool monitor."""
         tool_type = (integration_config.get("type") or "").lower()
@@ -1215,6 +1220,9 @@ class TaskExecutor:
 
             return AirflowIntegration(integration_config)
 
+        if monitor_type in ("dbt_core_source_validation", "dbt_core_ref_integrity"):
+            return self._create_dbt_core_validation_client(integration_config, task)
+
         if monitor_type in ("dbt_test_failures", "dbt_model_freshness", "dbt_source_freshness"):
             # dbt_core (upload/project/github) doesn't have a live API — monitors require dbt Cloud
             source_mode = integration_config.get("source_mode", "")
@@ -1237,7 +1245,195 @@ class TaskExecutor:
 
         raise ValueError(f"No client mapping for monitor type: {monitor_type}")
 
+    def _create_dbt_core_validation_client(
+        self,
+        integration_config: Dict[str, Any],
+        task: Optional[Dict[str, Any]],
+    ) -> Any:
+        """Build a DbtCoreValidationClient: parsed manifest + warehouse adapter.
+
+        Manifest resolution order:
+          1. integration_config["manifest"] (pre-parsed / uploaded).
+          2. source_mode=="project" with project_files → parse_dbt_project.
+          3. source_mode=="github" → fetch + parse.
+        """
+        from scanner.monitors.tools import DbtCoreValidationClient
+
+        manifest = integration_config.get("manifest")
+        if isinstance(manifest, str):
+            import json as _json
+            try:
+                manifest = _json.loads(manifest)
+            except Exception:
+                manifest = None
+
+        if not manifest:
+            source_mode = integration_config.get("source_mode", "")
+            warehouse_type = integration_config.get("warehouse_type", "bigquery")
+            try:
+                from scanner.lineage.dbt_project_parser import parse_dbt_project
+            except ImportError:
+                from lineage.dbt_project_parser import parse_dbt_project  # type: ignore
+
+            if source_mode == "project" and isinstance(integration_config.get("project_files"), dict):
+                try:
+                    manifest = parse_dbt_project(
+                        files=integration_config["project_files"],
+                        project_name=integration_config.get("project_name", ""),
+                        default_database=integration_config.get("database", ""),
+                        warehouse_type=warehouse_type,
+                    )
+                except Exception as e:
+                    raise ValueError(f"Failed to parse dbt project files: {e}")
+            elif source_mode == "github":
+                try:
+                    import asyncio
+                    try:
+                        from scanner.lineage.github_reader import fetch_dbt_project_files_with_fallback
+                    except ImportError:
+                        from lineage.github_reader import fetch_dbt_project_files_with_fallback  # type: ignore
+                    token = (integration_config.get("github") or {}).get("token") \
+                        or integration_config.get("github_token")
+                    repo = integration_config.get("github_repo")
+                    if not token or not repo:
+                        raise ValueError("dbt_core GitHub mode missing token or repo.")
+                    project_files, fallback = asyncio.get_event_loop().run_until_complete(
+                        fetch_dbt_project_files_with_fallback(
+                            repo=repo,
+                            token=token,
+                            branch=integration_config.get("github_branch", "main"),
+                            dbt_root=integration_config.get("dbt_project_path", ""),
+                        )
+                    )
+                    if project_files:
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=integration_config.get("project_name", ""),
+                            default_database=integration_config.get("database", ""),
+                            warehouse_type=warehouse_type,
+                        )
+                    elif fallback:
+                        manifest = fallback
+                except ValueError:
+                    raise
+                except Exception as e:
+                    raise ValueError(f"Failed to load dbt project from GitHub: {e}")
+
+        if not manifest:
+            raise ValueError(
+                "dbt_core integration has no manifest available. Re-upload the project "
+                "or manifest.json, or reconnect the GitHub source."
+            )
+
+        warehouse_adapter = self._resolve_warehouse_adapter_for_dbt(
+            integration_config, task
+        )
+        return DbtCoreValidationClient(manifest=manifest, warehouse_adapter=warehouse_adapter)
+
+    def _resolve_warehouse_adapter_for_dbt(
+        self,
+        dbt_config: Dict[str, Any],
+        task: Optional[Dict[str, Any]],
+    ) -> Any:
+        """Find a CONNECTED warehouse PipelineNode in the same pipeline and build its adapter."""
+        from scanner.scheduler.service import _get_connection
+
+        integration_id = (task or {}).get("integrationId")
+        tool_cfg = (task or {}).get("config") or {}
+        node_id = tool_cfg.get("toolNodeId") or tool_cfg.get("nodeId") if isinstance(tool_cfg, dict) else None
+
+        warehouse_types = ("bigquery", "snowflake", "postgres", "redshift")
+
+        try:
+            conn = _get_connection()
+            try:
+                with conn.cursor() as cur:
+                    # 1. Resolve dbt_core node's stackId.
+                    stack_id = None
+                    if integration_id:
+                        cur.execute(
+                            'SELECT "stackId" FROM "PipelineNode" WHERE "integrationId" = %s LIMIT 1',
+                            (integration_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            stack_id = row[0]
+                    if not stack_id and node_id:
+                        cur.execute(
+                            'SELECT "stackId" FROM "PipelineNode" WHERE id = %s',
+                            (node_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            stack_id = row[0]
+
+                    if not stack_id:
+                        logger.warning("[Executor] dbt_core monitor: no stackId resolved; skipping warehouse adapter")
+                        return None
+
+                    # 2. Find a CONNECTED warehouse node in the same stack.
+                    cur.execute(
+                        """
+                        SELECT pn."toolType", i.credentials AS int_creds, pn.config
+                        FROM "PipelineNode" pn
+                        LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                        WHERE pn."stackId" = %s
+                          AND pn."toolType" = ANY(%s)
+                          AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                        ORDER BY pn."updatedAt" DESC
+                        LIMIT 1
+                        """,
+                        (stack_id, list(warehouse_types)),
+                    )
+                    row = cur.fetchone()
+                    if not row:
+                        logger.warning("[Executor] dbt_core monitor: no warehouse sibling in stack %s", stack_id)
+                        return None
+
+                    warehouse_type, int_creds, node_cfg = row
+                    merged_cfg: Dict[str, Any] = {}
+                    if isinstance(node_cfg, dict):
+                        merged_cfg.update(node_cfg)
+                    if isinstance(int_creds, dict):
+                        merged_cfg.update(int_creds)
+                    # Map common alt field names adapters expect.
+                    if merged_cfg.get("username") and not merged_cfg.get("user"):
+                        merged_cfg["user"] = merged_cfg["username"]
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.warning(f"[Executor] Failed to resolve warehouse adapter for dbt_core: {e}")
+            return None
+
+        try:
+            try:
+                from adapters.bigquery import BigQueryAdapter
+                from adapters.snowflake import SnowflakeAdapter
+                from adapters.postgres import PostgresAdapter
+                from adapters.redshift import RedshiftAdapter
+            except ImportError:
+                from scanner.adapters.bigquery import BigQueryAdapter
+                from scanner.adapters.snowflake import SnowflakeAdapter
+                from scanner.adapters.postgres import PostgresAdapter
+                from scanner.adapters.redshift import RedshiftAdapter
+
+            adapters_map = {
+                "bigquery": BigQueryAdapter,
+                "snowflake": SnowflakeAdapter,
+                "postgres": PostgresAdapter,
+                "redshift": RedshiftAdapter,
+            }
+            cls = adapters_map.get(warehouse_type.lower())
+            if not cls:
+                return None
+            return cls(merged_cfg)
+        except Exception as e:
+            logger.warning(f"[Executor] Failed to build {warehouse_type} adapter: {e}")
+            return None
+
     # Mapping from tool monitor types to the PipelineNode toolType(s) that provide them.
+    # dbt Cloud monitors require a live API (job_id) and don't apply to dbt Core projects.
+    # dbt Core validation monitors run static checks against the parsed manifest.
     _TOOL_MONITOR_NODE_TYPES: Dict[str, list] = {
         "sync_lag": ["fivetran", "airbyte"],
         "failed_syncs": ["fivetran", "airbyte"],
@@ -1245,9 +1441,11 @@ class TaskExecutor:
         "dag_last_run": ["airflow", "dagster"],
         "dag_schedule_lag": ["airflow", "dagster"],
         "task_failure_rate": ["airflow", "dagster"],
-        "dbt_test_failures": ["dbt_cloud", "dbt_core"],
-        "dbt_model_freshness": ["dbt_cloud", "dbt_core"],
-        "dbt_source_freshness": ["dbt_cloud", "dbt_core"],
+        "dbt_test_failures": ["dbt_cloud"],
+        "dbt_model_freshness": ["dbt_cloud"],
+        "dbt_source_freshness": ["dbt_cloud"],
+        "dbt_core_source_validation": ["dbt_core"],
+        "dbt_core_ref_integrity": ["dbt_core"],
     }
 
     async def _get_tool_config(

@@ -56,6 +56,34 @@ function getApplicableSections(domains: Set<SLADomain>): string[] {
   return Array.from(sections);
 }
 
+/**
+ * Sections that carry meaningful configuration in a resolved policy.
+ * Used to narrow the editor to only what's actually tied to the node when
+ * viewing its existing SLA (vs. showing every domain-applicable section).
+ */
+function getConfiguredSections(policy: EffectiveSLAPolicy): Set<string> {
+  const configured = new Set<string>();
+  const sectionMap: Array<[string, any]> = [
+    ['freshness', policy.freshness],
+    ['schema', policy.schema],
+    ['volume', policy.volume],
+    ['anomaly', policy.anomaly],
+    ['quality', policy.quality],
+    ['uniqueness', (policy as any).uniqueness],
+    ['ingestion', policy.ingestion],
+    ['bi', policy.bi],
+    ['orchestration', policy.orchestration],
+    ['transform', policy.transform],
+    ['infrastructure', policy.infrastructure],
+  ];
+  for (const [name, cfg] of sectionMap) {
+    if (cfg && typeof cfg === 'object' && Object.values(cfg).some((v) => v !== null && v !== undefined && v !== '')) {
+      configured.add(name);
+    }
+  }
+  return configured;
+}
+
 function countDownstream(nodeIds: Set<string>, allEdges: UnifiedLineageEdge[]): number {
   const visited = new Set<string>(nodeIds);
   const queue = Array.from(nodeIds);
@@ -259,9 +287,24 @@ export function SLAEditorPanel({
   const applicableSections = useMemo(() => {
     if (isNonDataAsset) return [];
     const domainSections = getApplicableSections(domains);
-    if (domainSections.length > 0) return domainSections;
-    return ['freshness', 'schema', 'volume', 'quality'];
-  }, [domains, isNonDataAsset]);
+    const baseSections = domainSections.length > 0 ? domainSections : ['freshness', 'schema', 'volume', 'quality'];
+
+    // When a single node with an assigned policy is selected, narrow the
+    // editor to just the sections that actually carry configured values for
+    // that node. Keeps the panel from showing every domain section when most
+    // aren't tied to the clicked node.
+    if (selectedNodeIds.size === 1 && selectedNodes.length === 1) {
+      const fqn = selectedNodes[0].fullName || selectedNodes[0].name;
+      const policy = fqn ? nodeSLAs.get(fqn) : undefined;
+      if (policy && policy.status !== 'none') {
+        const configured = getConfiguredSections(policy);
+        if (configured.size > 0) {
+          return baseSections.filter((s) => configured.has(s));
+        }
+      }
+    }
+    return baseSections;
+  }, [domains, isNonDataAsset, selectedNodeIds, selectedNodes, nodeSLAs]);
 
   const downstreamCount = useMemo(
     () => countDownstream(selectedNodeIds, allEdges),
@@ -518,11 +561,14 @@ export function SLAEditorPanel({
                     {r.volume.currentRows != null && (
                       <p className="text-[10px] text-[var(--muted)]">Current: <span className="text-[var(--text)] font-medium">{Number(r.volume.currentRows).toLocaleString()} rows</span></p>
                     )}
+                    {r.volume.expectedDailyRows != null && (
+                      <p className="text-[10px] text-[var(--muted)]">Expected daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.expectedDailyRows).toLocaleString()}</span></p>
+                    )}
                     {r.volume.minRows != null && (
-                      <p className="text-[10px] text-[var(--muted)]">Min: <span className="text-[var(--text)] font-medium">{Number(r.volume.minRows).toLocaleString()}</span></p>
+                      <p className="text-[10px] text-[var(--muted)]">Min daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.minRows).toLocaleString()}</span></p>
                     )}
                     {r.volume.maxRows != null && (
-                      <p className="text-[10px] text-[var(--muted)]">Max: <span className="text-[var(--text)] font-medium">{Number(r.volume.maxRows).toLocaleString()}</span></p>
+                      <p className="text-[10px] text-[var(--muted)]">Max daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.maxRows).toLocaleString()}</span></p>
                     )}
                   </div>
                 )}
@@ -712,19 +758,27 @@ export function SLAEditorPanel({
                   Total rows now: <span className="text-[var(--text)] font-medium">{Number(getVal('volumeConfig', 'currentRows')).toLocaleString()}</span>
                 </p>
               )}
+              {getVal('volumeConfig', 'expectedDailyRows') != null && (
+                <p className="text-[11px] text-[var(--muted)]">
+                  Expected daily rows: <span className="text-[var(--text)] font-medium">{Number(getVal('volumeConfig', 'expectedDailyRows')).toLocaleString()}</span>
+                  {getVal('volumeConfig', 'dataPoints') != null && (
+                    <span className="text-[var(--text-faint)]"> · {getVal('volumeConfig', 'dataPoints')}d history</span>
+                  )}
+                </p>
+              )}
               <NumberInput
-                label="Min rows"
+                label="Min daily rows"
                 value={getVal('volumeConfig', 'minRows')}
                 onChange={(v) => setVal('volumeConfig', 'minRows', v)}
                 min={0}
-                placeholder="Set based on expected load"
+                placeholder="Expected low end of daily ingest"
               />
               <NumberInput
-                label="Max rows"
+                label="Max daily rows"
                 value={getVal('volumeConfig', 'maxRows')}
                 onChange={(v) => setVal('volumeConfig', 'maxRows', v)}
                 min={0}
-                placeholder="Set based on expected load"
+                placeholder="Expected high end of daily ingest"
               />
             </div>
           )}

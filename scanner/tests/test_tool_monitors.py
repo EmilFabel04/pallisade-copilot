@@ -147,18 +147,51 @@ class TestSyncLagMonitor:
 
         assert result.status == MonitorStatus.ERROR
 
-    def test_custom_max_lag(self):
+    def test_max_lag_as_grace_period_pass(self):
+        """max_lag_minutes is a grace period on top of sync_frequency, not an absolute ceiling."""
         integration = MagicMock()
+        # 6h sync freq, synced 5h14m ago → well within frequency → PASS
         integration.get_connector.return_value = _make_connector(
-            hours_since_success=1.0, sync_frequency=360
+            hours_since_success=313.7 / 60, sync_frequency=360
         )
 
-        # 1h = 60 min, max_lag_minutes=30 → fail_threshold=60 → exactly at threshold
-        monitor = SyncLagMonitor({"connector_id": "abc", "max_lag_minutes": 30})
+        monitor = SyncLagMonitor({"connector_id": "abc", "max_lag_minutes": 60})
         result = monitor.execute(integration)
 
-        # 60 min > 30 min warn threshold
-        assert result.status in (MonitorStatus.WARN, MonitorStatus.FAIL)
+        # fail_threshold = 360 + 60 = 420, warn_threshold = 360 + 30 = 390
+        # 313.7 is below both → PASS
+        assert result.status == MonitorStatus.PASS
+        assert result.details["fail_threshold_minutes"] == 420.0
+        assert result.details["warn_threshold_minutes"] == 390.0
+
+    def test_max_lag_as_grace_period_warn(self):
+        """Sync that's overdue by half the grace period should WARN."""
+        integration = MagicMock()
+        # freq=360, grace=60 → warn at 390, fail at 420. 395 min → WARN.
+        integration.get_connector.return_value = _make_connector(
+            hours_since_success=395 / 60, sync_frequency=360
+        )
+
+        monitor = SyncLagMonitor({"connector_id": "abc", "max_lag_minutes": 60})
+        result = monitor.execute(integration)
+
+        assert result.status == MonitorStatus.WARN
+
+    def test_max_lag_as_grace_period_fail(self):
+        """Sync that's overdue by more than the full grace period should FAIL."""
+        integration = MagicMock()
+        # freq=360, grace=60 → fail at 420. 450 min → FAIL.
+        integration.get_connector.return_value = _make_connector(
+            hours_since_success=450 / 60, sync_frequency=360
+        )
+
+        monitor = SyncLagMonitor({"connector_id": "abc", "max_lag_minutes": 60})
+        result = monitor.execute(integration)
+
+        assert result.status == MonitorStatus.FAIL
+        # Message should explain the breakdown of the threshold
+        assert "frequency" in result.message
+        assert "grace" in result.message
 
 
 # ---------------------------------------------------------------------------
@@ -166,13 +199,20 @@ class TestSyncLagMonitor:
 # ---------------------------------------------------------------------------
 
 
-def _make_dag_run(state, run_id="run1", execution_date=None, end_date=None, start_date=None):
+def _make_dag_run(
+    state, run_id="scheduled__run1", execution_date=None, end_date=None, start_date=None,
+    data_interval_end=None, external_trigger=False,
+):
     run = MagicMock()
     run.state = state
     run.run_id = run_id
     run.execution_date = execution_date or datetime.now(timezone.utc)
     run.end_date = end_date
     run.start_date = start_date or datetime.now(timezone.utc)
+    # Default to None so monitors using getattr(..., None) behave like prod
+    # (MagicMock would otherwise auto-create a child mock on attribute access).
+    run.data_interval_end = data_interval_end
+    run.external_trigger = external_trigger
     return run
 
 
@@ -241,35 +281,125 @@ class TestDagLastRunMonitor:
 
 
 class TestDagScheduleLagMonitor:
-    def test_pass_on_schedule(self):
+    def test_pass_uses_data_interval_end(self):
+        """Daily DAG triggered a few seconds after its interval end should PASS."""
+        from scanner.integrations.airflow import DAGState
+
+        now = datetime.now(timezone.utc)
+        integration = MagicMock()
+        run = _make_dag_run(DAGState.SUCCESS)
+        # Classic Airflow daily: execution_date is 24h behind data_interval_end
+        run.execution_date = now - timedelta(hours=24, seconds=10)
+        run.data_interval_end = now - timedelta(seconds=10)
+        run.start_date = now
+        integration.get_dag_runs.return_value = [run]
+
+        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 15})
+        result = monitor.execute(integration)
+
+        assert result.status == MonitorStatus.PASS
+        assert result.details["reference_field"] == "data_interval_end"
+        assert result.details["lag_minutes"] < 1  # ~10 seconds
+
+    def test_fail_when_started_late_relative_to_interval_end(self):
+        from scanner.integrations.airflow import DAGState
+
+        now = datetime.now(timezone.utc)
+        integration = MagicMock()
+        run = _make_dag_run(DAGState.SUCCESS)
+        run.execution_date = now - timedelta(hours=25)  # 1h late + 24h interval
+        run.data_interval_end = now - timedelta(hours=1)  # should have started 60min ago
+        run.start_date = now
+        integration.get_dag_runs.return_value = [run]
+
+        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 15})
+        result = monitor.execute(integration)
+
+        assert result.status == MonitorStatus.FAIL
+        assert result.details["lag_minutes"] == 60.0
+
+    def test_fallback_to_execution_date_when_interval_missing(self):
+        """Airflow <2.2 doesn't expose data_interval_end — fall back gracefully."""
         from scanner.integrations.airflow import DAGState
 
         now = datetime.now(timezone.utc)
         integration = MagicMock()
         run = _make_dag_run(DAGState.SUCCESS)
         run.execution_date = now - timedelta(minutes=5)
+        run.data_interval_end = None
         run.start_date = now
         integration.get_dag_runs.return_value = [run]
 
-        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 30})
+        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 15})
         result = monitor.execute(integration)
 
         assert result.status == MonitorStatus.PASS
+        assert result.details["reference_field"] == "execution_date"
 
-    def test_fail_behind_schedule(self):
+    def test_manual_runs_are_ignored(self):
+        """A manual trigger should not count as schedule lag, even if it's the latest run."""
+        from scanner.integrations.airflow import DAGState
+
+        now = datetime.now(timezone.utc)
+        integration = MagicMock()
+        manual = _make_dag_run(
+            DAGState.SUCCESS,
+            run_id="manual__2026-04-15T12:23:01",
+            external_trigger=True,
+        )
+        manual.data_interval_end = now - timedelta(hours=6)
+        manual.start_date = now
+        integration.get_dag_runs.return_value = [manual]
+
+        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 15})
+        result = monitor.execute(integration)
+
+        assert result.status == MonitorStatus.PASS
+        assert result.details["scheduled_runs"] == 0
+        assert "only manual runs" in result.message
+
+    def test_manual_run_skipped_scheduled_run_still_evaluated(self):
+        """Manual runs should be filtered out while the most recent scheduled run is evaluated."""
+        from scanner.integrations.airflow import DAGState
+
+        now = datetime.now(timezone.utc)
+        integration = MagicMock()
+        manual = _make_dag_run(
+            DAGState.SUCCESS,
+            run_id="manual__2026-04-15T12:23:01",
+            external_trigger=True,
+        )
+        manual.data_interval_end = now - timedelta(hours=6)
+        manual.start_date = now
+
+        scheduled = _make_dag_run(DAGState.SUCCESS, run_id="scheduled__2026-04-15")
+        scheduled.data_interval_end = now - timedelta(seconds=10)
+        scheduled.start_date = now
+
+        integration.get_dag_runs.return_value = [manual, scheduled]
+
+        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 15})
+        result = monitor.execute(integration)
+
+        assert result.status == MonitorStatus.PASS
+        assert result.details["run_id"] == "scheduled__2026-04-15"
+
+    def test_negative_lag_clamped_to_zero(self):
+        """Externally-triggered runs that start before data_interval_end shouldn't report negative lag."""
         from scanner.integrations.airflow import DAGState
 
         now = datetime.now(timezone.utc)
         integration = MagicMock()
         run = _make_dag_run(DAGState.SUCCESS)
-        run.execution_date = now - timedelta(minutes=60)
+        run.data_interval_end = now + timedelta(hours=1)  # future
         run.start_date = now
         integration.get_dag_runs.return_value = [run]
 
-        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 30})
+        monitor = DagScheduleLagMonitor({"dag_id": "my_dag", "max_lag_minutes": 15})
         result = monitor.execute(integration)
 
-        assert result.status == MonitorStatus.FAIL
+        assert result.status == MonitorStatus.PASS
+        assert result.details["lag_minutes"] == 0.0
 
 
 # ---------------------------------------------------------------------------

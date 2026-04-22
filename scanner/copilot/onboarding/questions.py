@@ -2,8 +2,8 @@
 Onboarding Question Registry
 
 Defines all questions the LLM should ask during onboarding to learn
-about the user's data pipeline setup. Questions are organized by
-integration type and priority.
+about the user's business context — things that can't be derived from
+the connected integrations, monitors, or lineage views.
 """
 
 from dataclasses import dataclass, field
@@ -13,12 +13,12 @@ from enum import Enum
 
 class QuestionCategory(str, Enum):
     """Categories of onboarding questions."""
-    DEPLOYMENT = "deployment"       # How things are deployed
-    CONFIGURATION = "configuration" # Config file locations, conventions
-    WORKFLOW = "workflow"           # CI/CD, review process
+    BUSINESS = "business"           # Company, industry, purpose
+    STAKEHOLDERS = "stakeholders"   # Who uses the data, who to escalate to
+    CRITICALITY = "criticality"     # SLAs, impact, compliance
     TEAM = "team"                   # Team structure, ownership
-    CONVENTIONS = "conventions"     # Naming, folder structure
-    ARCHITECTURE = "architecture"   # How components connect
+    WORKFLOW = "workflow"           # How work gets done day-to-day
+    CONVENTIONS = "conventions"     # Naming, terminology, domain language
 
 
 @dataclass
@@ -30,351 +30,312 @@ class OnboardingQuestion:
     integration_type: Optional[str] # None = general question
     priority: int = 5               # Higher = ask first (1-10)
     required: bool = False          # Must be answered
-    follow_up_keys: List[str] = field(default_factory=list)  # Questions triggered by this answer
-    example_answers: List[str] = field(default_factory=list)  # Help the LLM understand expected format
+    follow_up_keys: List[str] = field(default_factory=list)
+    example_answers: List[str] = field(default_factory=list)
 
 
 # ============================================
-# GENERAL QUESTIONS (apply to all pipelines)
+# GENERAL QUESTIONS (business context)
 # ============================================
 
 GENERAL_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
-        key="deployment_environments",
-        text="What environments do you have for your data pipeline? (e.g., dev/staging/prod, or just prod?)",
-        category=QuestionCategory.DEPLOYMENT,
+        key="company_industry",
+        text="What kind of company is this? What industry are you in?",
+        category=QuestionCategory.BUSINESS,
         integration_type=None,
         priority=10,
         required=True,
-        example_answers=["dev and prod", "dev, staging, prod", "just production"],
+        example_answers=["fintech startup", "e-commerce, B2C", "healthcare SaaS", "ad-tech"],
     ),
     OnboardingQuestion(
-        key="team_size",
-        text="How large is your data team? (Just you, 2-5, 5-10, or 10+?)",
+        key="pipeline_purpose",
+        text="What is this data pipeline for? What product, app, or business function does it serve?",
+        category=QuestionCategory.BUSINESS,
+        integration_type=None,
+        priority=10,
+        required=True,
+        example_answers=[
+            "powers our analytics dashboards for the finance team",
+            "feeds our recommendation engine",
+            "ETL for our customer-facing reporting product",
+            "internal BI — marketing and product analytics",
+        ],
+    ),
+    OnboardingQuestion(
+        key="pipeline_environment",
+        text="Is this a production pipeline, a dev/staging environment, or something else?",
+        category=QuestionCategory.BUSINESS,
+        integration_type=None,
+        priority=9,
+        required=True,
+        example_answers=["production", "dev and prod — this one is prod", "staging for now, going to prod soon"],
+    ),
+    OnboardingQuestion(
+        key="data_consumers",
+        text="Who are the main consumers of this data? (e.g., exec dashboards, product team, ML models, external customers)",
+        category=QuestionCategory.STAKEHOLDERS,
+        integration_type=None,
+        priority=9,
+        required=True,
+        example_answers=[
+            "CFO and finance team use Looker dashboards",
+            "product managers and data scientists",
+            "external clients via our API",
+            "marketing team for campaign targeting",
+        ],
+    ),
+    OnboardingQuestion(
+        key="business_impact",
+        text="What happens to the business when this pipeline breaks or data is late? Who feels the pain?",
+        category=QuestionCategory.CRITICALITY,
+        integration_type=None,
+        priority=9,
+        required=False,
+        example_answers=[
+            "customers see stale data in their dashboards — support tickets spike",
+            "finance can't close the books — CFO escalates",
+            "recommendation engine serves bad results — revenue drops",
+            "internal only, people just wait",
+        ],
+    ),
+    OnboardingQuestion(
+        key="key_metrics",
+        text="What are the key business metrics that depend on this pipeline? (e.g., revenue, conversion rate, churn)",
+        category=QuestionCategory.BUSINESS,
+        integration_type=None,
+        priority=8,
+        required=False,
+        example_answers=[
+            "MRR, churn rate, LTV",
+            "conversion funnel metrics — visitor to purchase",
+            "daily active users, feature adoption",
+            "GMV, take rate, seller metrics",
+        ],
+    ),
+    OnboardingQuestion(
+        key="data_freshness_expectations",
+        text="How fresh does the data need to be for your stakeholders? (real-time, hourly, daily, weekly?)",
+        category=QuestionCategory.CRITICALITY,
+        integration_type=None,
+        priority=8,
+        required=False,
+        example_answers=[
+            "dashboards need yesterday's data by 9am",
+            "near real-time for the product, daily for BI",
+            "weekly is fine for most reports",
+            "hourly for operational metrics, daily for everything else",
+        ],
+    ),
+    OnboardingQuestion(
+        key="team_structure",
+        text="How large is the data/engineering team working on this pipeline, and how is ownership split?",
         category=QuestionCategory.TEAM,
         integration_type=None,
         priority=7,
         required=False,
-        example_answers=["just me", "3 people", "about 8"],
+        example_answers=[
+            "3 data engineers, 2 analysts — engineers own the pipeline, analysts own the models",
+            "just me, I do everything",
+            "team of 8 — split by domain (finance, marketing, product)",
+            "5 people, but only 2 touch the pipeline regularly",
+        ],
     ),
     OnboardingQuestion(
-        key="code_review_process",
-        text="Do you have a code review process for data pipeline changes? If so, how does it work?",
-        category=QuestionCategory.WORKFLOW,
+        key="compliance_sensitivity",
+        text="Does this pipeline handle sensitive data? Any compliance requirements? (PII, GDPR, HIPAA, SOC2, etc.)",
+        category=QuestionCategory.CRITICALITY,
         integration_type=None,
-        priority=6,
-        required=False,
-        example_answers=["PR review required", "no formal process", "all changes go through lead"],
-    ),
-    OnboardingQuestion(
-        key="ci_cd_system",
-        text="Do you use CI/CD for your data pipeline? If so, which system? (GitHub Actions, GitLab CI, Jenkins, etc.)",
-        category=QuestionCategory.WORKFLOW,
-        integration_type=None,
-        priority=8,
-        required=False,
-        example_answers=["GitHub Actions", "no CI/CD", "Jenkins"],
-    ),
-]
-
-
-# ============================================
-# DBT QUESTIONS
-# ============================================
-
-DBT_QUESTIONS: List[OnboardingQuestion] = [
-    OnboardingQuestion(
-        key="dbt_deployment_method",
-        text="How do you run dbt in production? (dbt Cloud, GitHub Actions, Airflow, Dagster, manually, etc.)",
-        category=QuestionCategory.DEPLOYMENT,
-        integration_type="DBT_CORE",
-        priority=10,
-        required=True,
-        example_answers=["dbt Cloud", "GitHub Actions", "Airflow DAG", "manually via CLI"],
-    ),
-    OnboardingQuestion(
-        key="dbt_profiles_location",
-        text="Where does dbt get its database credentials? (profiles.yml file, environment variables, dbt Cloud connection)",
-        category=QuestionCategory.CONFIGURATION,
-        integration_type="DBT_CORE",
-        priority=10,
-        required=True,
-        example_answers=["profiles.yml in ~/.dbt", "environment variables", "dbt Cloud"],
-    ),
-    OnboardingQuestion(
-        key="dbt_target_dataset",
-        text="What is your production target dataset/schema where dbt writes models?",
-        category=QuestionCategory.CONFIGURATION,
-        integration_type="DBT_CORE",
-        priority=9,
-        required=True,
-        example_answers=["analytics", "prod_analytics", "dw_prod"],
-    ),
-    OnboardingQuestion(
-        key="dbt_dev_dataset",
-        text="Do you have a separate dev dataset? If so, what's it called?",
-        category=QuestionCategory.CONFIGURATION,
-        integration_type="DBT_CORE",
-        priority=8,
-        required=False,
-        example_answers=["dbt_dev", "analytics_dev", "same as prod with prefix"],
-    ),
-    OnboardingQuestion(
-        key="dbt_project_structure",
-        text="Is your dbt project in a monorepo with other code, or a dedicated repo?",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="DBT_CORE",
-        priority=6,
-        required=False,
-        example_answers=["dedicated dbt repo", "monorepo under /dbt folder", "same repo as our app"],
-    ),
-    OnboardingQuestion(
-        key="dbt_naming_convention",
-        text="Do you follow a naming convention for dbt models? (e.g., stg_*, int_*, fct_*, dim_*)",
-        category=QuestionCategory.CONVENTIONS,
-        integration_type="DBT_CORE",
         priority=7,
         required=False,
-        example_answers=["stg/int/fct/dim prefixes", "source_table naming", "no strict convention"],
+        example_answers=[
+            "yes, PII — we hash emails and phone numbers",
+            "HIPAA compliant — PHI in separate dataset with restricted access",
+            "SOC2 — audit logs required for all data access",
+            "no sensitive data, all internal analytics",
+        ],
+    ),
+    OnboardingQuestion(
+        key="incident_process",
+        text="When something breaks, how does your team find out and respond? (Slack alerts, PagerDuty, someone notices a dashboard is wrong?)",
+        category=QuestionCategory.WORKFLOW,
+        integration_type=None,
+        priority=6,
+        required=False,
+        example_answers=[
+            "alerts go to #data-alerts Slack channel, on-call engineer picks it up",
+            "usually someone notices a dashboard looks wrong and pings us",
+            "PagerDuty for critical pipelines, Slack for the rest",
+            "I check Airflow every morning",
+        ],
+    ),
+    OnboardingQuestion(
+        key="domain_terminology",
+        text="Any important domain-specific terms I should know? (e.g., what you call certain entities, business logic, or internal jargon)",
+        category=QuestionCategory.CONVENTIONS,
+        integration_type=None,
+        priority=5,
+        required=False,
+        example_answers=[
+            "'merchant' = seller on our platform, 'take rate' = our commission percentage",
+            "'activation' means a user completes their first transaction",
+            "we call our customers 'members', not 'users'",
+            "nothing special, standard e-commerce terms",
+        ],
     ),
 ]
 
 
 # ============================================
-# BIGQUERY QUESTIONS
+# WAREHOUSE QUESTIONS (business context only)
 # ============================================
 
 BIGQUERY_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
-        key="bq_project_structure",
-        text="Do you use one GCP project for everything, or separate projects for dev/prod?",
-        category=QuestionCategory.ARCHITECTURE,
+        key="bq_critical_datasets",
+        text="Which BigQuery datasets or tables are most business-critical? Which ones would cause the biggest problem if they went stale or had bad data?",
+        category=QuestionCategory.CRITICALITY,
         integration_type="BIGQUERY",
-        priority=9,
-        required=True,
-        example_answers=["one project", "separate dev and prod projects", "project per environment"],
-    ),
-    OnboardingQuestion(
-        key="bq_dataset_organization",
-        text="How do you organize your BigQuery datasets? (by source, by layer, by domain?)",
-        category=QuestionCategory.CONVENTIONS,
-        integration_type="BIGQUERY",
-        priority=7,
+        priority=8,
         required=False,
-        example_answers=["by layer (raw, staging, analytics)", "by source (salesforce, stripe)", "by domain (finance, marketing)"],
-    ),
-    OnboardingQuestion(
-        key="bq_service_account",
-        text="Do you use a shared service account for data pipelines, or individual accounts?",
-        category=QuestionCategory.CONFIGURATION,
-        integration_type="BIGQUERY",
-        priority=6,
-        required=False,
-        example_answers=["shared service account", "per-service accounts", "my personal account for dev"],
+        example_answers=[
+            "analytics.orders and analytics.revenue — executive dashboards read from these",
+            "the customer_360 table — our product depends on it",
+            "everything in the reporting dataset — that's what clients see",
+        ],
     ),
 ]
-
-
-# ============================================
-# SNOWFLAKE QUESTIONS
-# ============================================
 
 SNOWFLAKE_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
-        key="sf_role_strategy",
-        text="How do you manage Snowflake roles? (One role per user, roles per environment, functional roles?)",
-        category=QuestionCategory.CONFIGURATION,
+        key="sf_critical_datasets",
+        text="Which Snowflake databases or schemas are most business-critical? Which ones would cause the biggest problem if they went stale?",
+        category=QuestionCategory.CRITICALITY,
         integration_type="SNOWFLAKE",
         priority=8,
         required=False,
-        example_answers=["role per user", "DEV_ROLE and PROD_ROLE", "functional roles like ANALYST, LOADER"],
-    ),
-    OnboardingQuestion(
-        key="sf_warehouse_strategy",
-        text="Do you use dedicated warehouses per use case (ETL, BI, dev) or one shared warehouse?",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="SNOWFLAKE",
-        priority=8,
-        required=False,
-        example_answers=["dedicated per use case", "one shared warehouse", "size-based warehouses"],
-    ),
-    OnboardingQuestion(
-        key="sf_database_structure",
-        text="How do you organize Snowflake databases? (One per environment, one per domain?)",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="SNOWFLAKE",
-        priority=7,
-        required=False,
-        example_answers=["RAW, ANALYTICS, REPORTING databases", "DEV and PROD databases", "one database"],
+        example_answers=[
+            "ANALYTICS.CORE — powers all Looker dashboards",
+            "REPORTING database — client-facing",
+            "the FINANCE schema — month-end close depends on it",
+        ],
     ),
 ]
 
 
 # ============================================
-# AIRFLOW QUESTIONS
+# TRANSFORMATION QUESTIONS (business context)
+# ============================================
+
+DBT_QUESTIONS: List[OnboardingQuestion] = [
+    OnboardingQuestion(
+        key="dbt_important_models",
+        text="Which dbt models are the most important to your business? The ones stakeholders actually care about?",
+        category=QuestionCategory.CRITICALITY,
+        integration_type="DBT_CORE",
+        priority=8,
+        required=False,
+        example_answers=[
+            "fct_orders and dim_customers — everything downstream depends on these",
+            "the mart models — finance_summary, marketing_attribution",
+            "anything in the reporting/ folder",
+        ],
+    ),
+]
+
+
+# ============================================
+# ORCHESTRATION QUESTIONS (business context)
 # ============================================
 
 AIRFLOW_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
-        key="airflow_deployment",
-        text="How is your Airflow deployed? (Managed like Astronomer/MWAA/Cloud Composer, or self-hosted?)",
-        category=QuestionCategory.DEPLOYMENT,
-        integration_type="AIRFLOW",
-        priority=9,
-        required=True,
-        example_answers=["Cloud Composer", "Astronomer", "self-hosted on Kubernetes", "MWAA"],
-    ),
-    OnboardingQuestion(
-        key="airflow_dag_structure",
-        text="How are your DAGs organized? (One repo, multiple repos, monorepo?)",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="AIRFLOW",
-        priority=7,
-        required=False,
-        example_answers=["dedicated dags repo", "dags folder in dbt repo", "multiple repos"],
-    ),
-    OnboardingQuestion(
-        key="airflow_deploy_method",
-        text="How do you deploy DAG changes? (Git sync, CI/CD, manual copy?)",
-        category=QuestionCategory.WORKFLOW,
+        key="airflow_critical_dags",
+        text="Which Airflow DAGs are the most business-critical? Are there any with strict deadlines (e.g., must finish by 9am)?",
+        category=QuestionCategory.CRITICALITY,
         integration_type="AIRFLOW",
         priority=8,
         required=False,
-        example_answers=["git sync to bucket", "CI/CD pipeline", "manual upload"],
+        example_answers=[
+            "daily_etl must finish by 8am — finance team starts their day then",
+            "the hourly_metrics DAG — product dashboard goes stale if it fails",
+            "none have hard deadlines, but the nightly refresh should be done by morning",
+        ],
+    ),
+]
+
+DAGSTER_QUESTIONS: List[OnboardingQuestion] = [
+    OnboardingQuestion(
+        key="dagster_critical_jobs",
+        text="Which Dagster jobs or asset groups are most business-critical? Any strict timing requirements?",
+        category=QuestionCategory.CRITICALITY,
+        integration_type="DAGSTER",
+        priority=8,
+        required=False,
+        example_answers=[
+            "the reporting_assets group — client dashboards depend on it by 9am",
+            "the ML feature pipeline — model retraining fails without it",
+        ],
     ),
 ]
 
 
 # ============================================
-# FIVETRAN QUESTIONS
+# INGESTION QUESTIONS (business context)
 # ============================================
 
 FIVETRAN_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
-        key="fivetran_destination",
-        text="What is your Fivetran destination warehouse?",
-        category=QuestionCategory.ARCHITECTURE,
+        key="fivetran_critical_sources",
+        text="Which Fivetran connectors/sources are most critical to your business? Which ones would you want to know about immediately if they stopped syncing?",
+        category=QuestionCategory.CRITICALITY,
         integration_type="FIVETRAN",
-        priority=9,
-        required=True,
-        example_answers=["BigQuery", "Snowflake", "Redshift"],
-    ),
-    OnboardingQuestion(
-        key="fivetran_schema_prefix",
-        text="Do you use a prefix or convention for Fivetran schemas? (e.g., fivetran_*, raw_*)",
-        category=QuestionCategory.CONVENTIONS,
-        integration_type="FIVETRAN",
-        priority=7,
+        priority=8,
         required=False,
-        example_answers=["fivetran_ prefix", "raw_ prefix", "source name only"],
-    ),
-    OnboardingQuestion(
-        key="fivetran_sync_frequency",
-        text="What's your typical Fivetran sync frequency?",
-        category=QuestionCategory.CONFIGURATION,
-        integration_type="FIVETRAN",
-        priority=5,
-        required=False,
-        example_answers=["every 6 hours", "daily", "every 15 minutes"],
+        example_answers=[
+            "Stripe and Shopify — revenue data stops flowing",
+            "Salesforce — sales team can't see pipeline metrics",
+            "all of them honestly, but HubSpot is the most fragile",
+        ],
     ),
 ]
 
 
 # ============================================
-# GITHUB QUESTIONS
+# VERSION CONTROL QUESTIONS (business context)
 # ============================================
 
 GITHUB_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
-        key="github_default_branch",
-        text="What is the default branch for your data repositories? (e.g., main, master, develop)",
+        key="github_change_process",
+        text="How do data pipeline changes typically get made? (e.g., analyst opens PR, engineer reviews, auto-deploys on merge?)",
         category=QuestionCategory.WORKFLOW,
-        integration_type="GITHUB",
-        priority=9,
-        required=True,
-        example_answers=["main", "master", "develop"],
-    ),
-    OnboardingQuestion(
-        key="github_pr_review_required",
-        text="Are PR reviews required before merging data changes? If so, how many approvals?",
-        category=QuestionCategory.WORKFLOW,
-        integration_type="GITHUB",
-        priority=8,
-        required=False,
-        example_answers=["yes, 1 approval required", "no", "yes, 2 approvals"],
-    ),
-    OnboardingQuestion(
-        key="github_ci_cd_workflow",
-        text="What CI/CD workflows run on your data repos? (e.g., tests, linting, dbt run)",
-        category=QuestionCategory.WORKFLOW,
-        integration_type="GITHUB",
-        priority=8,
-        required=False,
-        example_answers=["dbt test on PR", "no CI/CD", "sqlfluff + dbt test + dbt build"],
-    ),
-    OnboardingQuestion(
-        key="github_data_repo_structure",
-        text="How is your data code organized in GitHub? (monorepo, separate repos for dbt/orchestration?)",
-        category=QuestionCategory.ARCHITECTURE,
         integration_type="GITHUB",
         priority=7,
         required=False,
-        example_answers=["monorepo", "separate repos", "dbt in data-warehouse repo"],
+        example_answers=[
+            "analyst writes SQL, engineer reviews, merges to main, auto-deploys",
+            "I push directly to main — no review process yet",
+            "PR required, CI runs dbt test, then manual deploy",
+        ],
     ),
 ]
-
-
-# ============================================
-# DAGSTER QUESTIONS
-# ============================================
-
-DAGSTER_QUESTIONS: List[OnboardingQuestion] = [
-    OnboardingQuestion(
-        key="dagster_deployment",
-        text="How is Dagster deployed? (Dagster Cloud, self-hosted on K8s, Docker, local?)",
-        category=QuestionCategory.DEPLOYMENT,
-        integration_type="DAGSTER",
-        priority=9,
-        required=True,
-        example_answers=["Dagster Cloud", "self-hosted on K8s", "Docker Compose", "local"],
-    ),
-    OnboardingQuestion(
-        key="dagster_assets_structure",
-        text="How do you organize your Dagster assets/jobs? (by domain, by source, single definitions file?)",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="DAGSTER",
-        priority=7,
-        required=False,
-        example_answers=["by domain", "by data source", "single definitions file"],
-    ),
-    OnboardingQuestion(
-        key="dagster_dbt_integration",
-        text="Do you use dagster-dbt? If so, how are dbt models exposed as assets?",
-        category=QuestionCategory.ARCHITECTURE,
-        integration_type="DAGSTER",
-        priority=6,
-        required=False,
-        example_answers=["yes, all models as assets", "no, separate dbt runs", "partial integration"],
-    ),
-]
-
 
 
 # ============================================
 # QUESTION LOOKUP FUNCTIONS
 # ============================================
 
-# Map integration types to their questions
 INTEGRATION_QUESTIONS: Dict[str, List[OnboardingQuestion]] = {
     "DBT_CORE": DBT_QUESTIONS,
-    "DBT_CLOUD": DBT_QUESTIONS,  # Same questions
+    "DBT_CLOUD": DBT_QUESTIONS,
     "BIGQUERY": BIGQUERY_QUESTIONS,
     "SNOWFLAKE": SNOWFLAKE_QUESTIONS,
     "AIRFLOW": AIRFLOW_QUESTIONS,
     "FIVETRAN": FIVETRAN_QUESTIONS,
     "GITHUB": GITHUB_QUESTIONS,
     "DAGSTER": DAGSTER_QUESTIONS,
-    "PREFECT": DAGSTER_QUESTIONS,  # Similar orchestration questions
+    "PREFECT": DAGSTER_QUESTIONS,
 }
 
 
@@ -397,7 +358,6 @@ def get_questions_for_integration(
     questions = INTEGRATION_QUESTIONS.get(integration_type.upper(), [])
     pending = [q for q in questions if q.key not in answered_keys]
 
-    # Sort by priority (highest first)
     return sorted(pending, key=lambda q: -q.priority)
 
 
@@ -434,18 +394,15 @@ def get_all_pending_questions(
                 all_questions.append(q)
                 seen_keys.add(q.key)
 
-    # Sort by priority
     return sorted(all_questions, key=lambda q: -q.priority)
 
 
 def get_question_by_key(key: str) -> Optional[OnboardingQuestion]:
     """Get a question by its key."""
-    # Check general questions
     for q in GENERAL_QUESTIONS:
         if q.key == key:
             return q
 
-    # Check all integration questions
     for questions in INTEGRATION_QUESTIONS.values():
         for q in questions:
             if q.key == key:

@@ -335,7 +335,7 @@ Never use source_guard or full_pipeline — they are internal-only.
 - **Airflow DAG lineage** ("what tables does my DAG produce?", "show the data flow"): Use `get_airflow_dag_lineage` for the DAG→task→table subgraph. If it returns "not found", use `search_lineage` with `*airflow*` or `*dag*` to find what Airflow nodes exist, then check `get_lineage_stats` for coverage info.
 - **Orchestration context** ("what produces this table?", "why is it stale?"): Use `get_asset_orchestration_context` with the table FQN. This finds the DAG/task that produces a table via cross-plane edges.
 - **Finding tables** ("do I have a users table?"): Check the schema section below first. Only use `search_lineage` or INFORMATION_SCHEMA if the table isn't listed.
-- **Table health** ("is my data fresh?", "how big is X?"): Use `get_table_stats`.
+- **Table health** ("is my data fresh?", "how big is X?"): Use `get_table_stats` for one table. For several tables at once, use `get_table_stats_batch` — it returns row counts + freshness for all of them in a single round-trip.
 - **Impact analysis** ("what breaks if I change X?"): Use `get_downstream` to find all dependents.
 - **Lineage coverage / completeness** ("is my lineage complete?"): Use `get_lineage_stats` to see node/edge counts, coverage percentages, and confidence distribution.
 - **Data health / anomalies / freshness / monitoring** ("is my data healthy?", "any anomalies?", "check freshness", "how's my coverage?", "what needs monitoring?"): **ALWAYS use coverage tools instead of writing raw SQL.** These tools run purpose-built monitors with statistical analysis:
@@ -407,13 +407,14 @@ Do NOT give up after one failed query - fix the issue and retry.
 
 Keep responses SHORT and SCANNABLE. The user should get the answer in the first sentence.
 
-- **Data answers**: Lead with the number and source — e.g. "42,581 rows (from `raw.orders`)"
+- **Data answers**: Lead with the number. Only mention the source table when the answer would otherwise be ambiguous (e.g. one number without context). For list/enumeration answers like "rows in each of my tables", just give `table: count` lines — the table name is already the source, don't repeat it as "(from …)" or tack on a "Source:" line.
 - **Lineage answers**: List nodes with types, no extra prose
 - **Debugging answers**: State the problem, cause, and fix. No preamble, no "let me investigate"
 - **Code/config answers**: Copy-paste ready code with REAL names. Call tools first to get current state
 
 Formatting rules:
 - Use plain text. Minimal bold — only for the key answer or section label
+- NO markdown headings (`#`, `##`, `###`, `####`) in responses. Write in flowing prose or short bullets. Headings belong in documentation, not conversational answers. If you need to separate ideas, use a short bolded lead-in like `**What happened:**` on its own line instead of `### What happened`.
 - No walls of text. Prefer 3-5 short bullet points over paragraphs
 - No nested bullets, no italic emphasis blocks, no confidence labels
 - Don't repeat information the user already provided back to them
@@ -568,12 +569,13 @@ You have multiple data warehouses connected. When calling `query_warehouse`, you
 
     def _build_onboarded_context(self, context: CopilotContext) -> str:
         """
-        Inject learned context from onboarding into system prompt.
+        Inject learned business context from onboarding into system prompt.
 
         This includes information the user provided during onboarding about:
-        - How they run dbt (dbt Cloud, GitHub Actions, etc.)
-        - Where credentials are stored (profiles.yml, env vars)
-        - Team workflows, naming conventions, etc.
+        - Company, industry, and pipeline purpose
+        - Data consumers, business criticality, and key metrics
+        - Team structure, compliance, and incident process
+        - Domain-specific terminology
         """
         # Check if context has pipeline_context attribute with onboarding data
         pipeline_context = getattr(context, 'pipeline_context', None)
@@ -588,8 +590,8 @@ You have multiple data warehouses connected. When calling `query_warehouse`, you
         if not any([environment_ctx, integration_ctx, conventions_ctx]):
             return ""
 
-        lines = ["\n## Your Environment (from Onboarding)\n"]
-        lines.append("I already know the following about your setup:\n")
+        lines = ["\n## Business Context (from Onboarding)\n"]
+        lines.append("I already know the following about this pipeline and business:\n")
 
         # Add environment context
         if environment_ctx and isinstance(environment_ctx, dict):
@@ -1337,7 +1339,16 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 })
                 return
 
-            # Max iterations reached
+            # Max iterations reached — emit a fallback message so the UI never
+            # renders a blank assistant turn when the LLM spent the whole budget
+            # on tool calls without reaching a summarization turn.
+            logger.warning(
+                f"[Stream/Anthropic] Max iterations ({max_tool_iterations}) reached "
+                f"without a final answer after {len(all_tool_calls)} tool calls"
+            )
+            yield StreamEvent("text_delta", {
+                "content": "\n\n*[Investigation exceeded the tool-call budget before producing a summary. Please ask a follow-up question for the analysis.]*"
+            })
             yield StreamEvent("done", {
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
@@ -1842,7 +1853,16 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 })
                 return
 
-            # Max iterations reached
+            # Max iterations reached — emit a fallback message so the UI never
+            # renders a blank assistant turn when the LLM spent the whole budget
+            # on tool calls without reaching a summarization turn.
+            logger.warning(
+                f"[Stream/OpenAI] Max iterations ({max_tool_iterations}) reached "
+                f"without a final answer after {len(all_tool_calls)} tool calls"
+            )
+            yield StreamEvent("text_delta", {
+                "content": "\n\n*[Investigation exceeded the tool-call budget before producing a summary. Please ask a follow-up question for the analysis.]*"
+            })
             yield StreamEvent("done", {
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,

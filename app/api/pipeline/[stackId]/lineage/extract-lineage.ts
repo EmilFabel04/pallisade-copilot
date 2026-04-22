@@ -473,14 +473,26 @@ export async function extractLineageForStack(
       console.warn('[LINEAGE] Failed to persist engine graph snapshot (non-fatal):', e);
     }
 
-    // Mark stack as extraction-enabled and record timestamp (resets 6h auto-timer)
-    await prisma.pipelineStack.update({
-      where: { id: stackId },
-      data: {
-        lineageExtractionEnabled: true,
-        lastLineageExtractedAt: new Date(),
-      },
-    });
+    // Mark stack as extraction-enabled and record timestamp (resets 6h auto-timer).
+    // Also stamp each integration attached to a node in this stack so the sources
+    // list shows a real extraction status instead of "Never".
+    const extractedAt = new Date();
+    await prisma.$transaction([
+      prisma.pipelineStack.update({
+        where: { id: stackId },
+        data: {
+          lineageExtractionEnabled: true,
+          lastLineageExtractedAt: extractedAt,
+        },
+      }),
+      prisma.integration.updateMany({
+        where: { pipelineNodes: { some: { stackId } } },
+        data: {
+          lastLineageExtractedAt: extractedAt,
+          lastExtractedAt: extractedAt,
+        },
+      }),
+    ]);
 
     // Build results summary from investigation tool profiles
     const results = Object.entries(investigationData.investigation?.tool_profiles || {}).map(

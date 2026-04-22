@@ -25,10 +25,6 @@ class MAASConfig:
     logs_api_key: str
     logs_model: str
 
-    codefix_endpoint: str
-    codefix_api_key: str
-    codefix_model: str
-
     # Timeouts (seconds)
     specialist_timeout: float
 
@@ -48,10 +44,6 @@ class MAASConfig:
             logs_endpoint=os.environ.get("MAAS_LOGS_ENDPOINT", ""),
             logs_api_key=os.environ.get("MAAS_LOGS_API_KEY", ""),
             logs_model=os.environ.get("MAAS_LOGS_MODEL", "specialist-logs"),
-
-            codefix_endpoint=os.environ.get("MAAS_CODEFIX_ENDPOINT", ""),
-            codefix_api_key=os.environ.get("MAAS_CODEFIX_API_KEY", ""),
-            codefix_model=os.environ.get("MAAS_CODEFIX_MODEL", "specialist-codefix"),
 
             specialist_timeout=float(os.environ.get("MAAS_SPECIALIST_TIMEOUT", "90")),
             orchestrator_model=os.environ.get("MAAS_ORCHESTRATOR_MODEL", "gpt-5.2"),

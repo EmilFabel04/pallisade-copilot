@@ -374,6 +374,19 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'schema', label: 'Schema', type: 'text', required: false, placeholder: 'default' },
       ],
     },
+    {
+      id: 'sqlserver',
+      name: 'SQL Server',
+      description: 'Microsoft SQL Server',
+      layer: 'WAREHOUSE',
+      configFields: [
+        { name: 'server', label: 'Server', type: 'text', required: true, placeholder: 'localhost' },
+        { name: 'port', label: 'Port', type: 'number', required: false, placeholder: '1433' },
+        { name: 'database', label: 'Database', type: 'text', required: true, placeholder: 'master' },
+        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'sa' },
+        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+      ],
+    },
   ],
   REPORTING: [
     { 
@@ -485,19 +498,6 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
     },
   ],
   INFRASTRUCTURE: [
-    {
-      id: 'sqlserver',
-      name: 'SQL Server',
-      description: 'Microsoft SQL Server',
-      layer: 'INFRASTRUCTURE',
-      configFields: [
-        { name: 'server', label: 'Server', type: 'text', required: true, placeholder: 'localhost' },
-        { name: 'port', label: 'Port', type: 'number', required: false, placeholder: '1433' },
-        { name: 'database', label: 'Database', type: 'text', required: true, placeholder: 'master' },
-        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'sa' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
-      ],
-    },
     {
       id: 'linux_server',
       name: 'Linux Server',

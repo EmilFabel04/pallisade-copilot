@@ -1279,6 +1279,7 @@ model BillingSubscription {
   tokenAllowance           Int
   storageAllowanceGb       Int
   memberAllowance          Int
+  pipelineAllowance        Int           @default(3)
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt
 

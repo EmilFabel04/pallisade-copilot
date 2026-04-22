@@ -80,7 +80,20 @@ export function sensitivityToZscore(sensitivity: number): number {
   return 4.0 + (0.80 - sensitivity) / (0.80 - 0.50) * 1.0;
 }
 
-/** Get the SLA value for a config field, converting sensitivity→zscore if needed */
+/** Tolerance enum → failure percentage. Mirrors scanner/monitors/policy_config.py. */
+const TOLERANCE_TO_FAILURE_PCT: Record<string, number> = {
+  strict: 5.0,
+  normal: 10.0,
+  relaxed: 25.0,
+};
+
+export function toleranceToFailurePct(tolerance: unknown): number {
+  return TOLERANCE_TO_FAILURE_PCT[String(tolerance).toLowerCase()] ?? 10.0;
+}
+
+/** Get the SLA value for a config field, applying type conversions where the
+ * policy field and config field have different value types (e.g. sensitivity
+ * → z-score, tolerance enum → failure pct). */
 export function getSLAValueForField(
   monitorType: string,
   configField: string,
@@ -97,8 +110,14 @@ export function getSLAValueForField(
   if (!sectionData || typeof sectionData !== 'object') return undefined;
 
   let raw = sectionData[policyField];
-  if (policyField === 'sensitivity' && raw !== undefined && raw !== null) {
+  if (raw === undefined || raw === null) return raw;
+
+  if (policyField === 'sensitivity') {
     raw = sensitivityToZscore(Number(raw));
+  } else if (configField === 'max_failure_pct' && typeof raw === 'string') {
+    // TASK_FAILURE_RATE maps a numeric config field to a tolerance enum policy
+    // field — convert "strict"/"normal"/"relaxed" to a percentage.
+    raw = toleranceToFailurePct(raw);
   }
   return raw;
 }

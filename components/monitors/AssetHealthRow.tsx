@@ -152,13 +152,21 @@ export function AssetHealthRow({ asset, expanded, onToggle, activeCategories, on
               const lineColor = SPARKLINE_COLORS[status] || '#34d399';
               const values = m.runs.map((r) => r.value);
               const catLabel = CATEGORY_LABELS[m.category] || m.category;
+              // Monitor names are built as "<type> — <asset>". Show the type
+              // so tiles within the same asset (all tagged with the same
+              // category e.g. "QUAL") are still distinguishable — previously
+              // we showed the asset name which is constant across every tile
+              // in this panel.
+              const monitorTypeLabel = m.name.includes('\u2014')
+                ? (m.name.split('\u2014')[0]?.trim() || m.name)
+                : m.name;
 
               return (
                 <div key={m.id} className="bg-[var(--overlay-bg)] rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5 min-w-0">
                       <span className="text-[9px] text-[var(--muted)] font-medium uppercase">{catLabel}</span>
-                      <span className="text-[11px] font-medium text-[var(--text)] truncate">{m.name.split('\u2014').pop()?.trim() || m.name}</span>
+                      <span className="text-[11px] font-medium text-[var(--text)] truncate capitalize">{monitorTypeLabel}</span>
                     </div>
                     <span className={cn(
                       'text-[9px] font-medium px-1.5 py-0.5 rounded shrink-0',

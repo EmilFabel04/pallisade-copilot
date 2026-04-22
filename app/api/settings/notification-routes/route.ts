@@ -2,27 +2,41 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 
-// GET /api/settings/notification-routes
-export async function GET(request: NextRequest) {
-  try {
-    const session = await auth();
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email! },
-      select: { id: true, organizationId: true },
-    });
-    if (!user?.organizationId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+async function getOrgId(): Promise<string | null> {
+  const session = await auth();
+  if (!session?.user) return null;
+  const user = await prisma.user.findUnique({
+    where: { email: session.user.email! },
+    select: { organizationId: true },
+  });
+  return user?.organizationId || null;
+}
 
+// GET /api/settings/notification-routes
+export async function GET() {
+  try {
+    const orgId = await getOrgId();
+    if (!orgId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    // Load legacy severity routes
     const routes = await prisma.notificationRoute.findMany({
-      where: { organizationId: user.organizationId },
+      where: { organizationId: orgId },
       orderBy: { severity: 'asc' },
     });
 
-    return NextResponse.json({ routes });
+    // Load org defaults (stored as a special "ORG_DEFAULTS" severity key)
+    const defaultsRow = routes.find((r) => r.severity === 'ORG_DEFAULTS');
+    const orgDefaults = defaultsRow
+      ? {
+          destinations: (defaultsRow.destinations as any) || [],
+          notifyOnRecovery: defaultsRow.notifyOnRecovery,
+        }
+      : null;
+
+    return NextResponse.json({
+      routes: routes.filter((r) => r.severity !== 'ORG_DEFAULTS'),
+      orgDefaults,
+    });
   } catch (error: any) {
     console.error('[NotificationRoutes] GET error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -32,26 +46,46 @@ export async function GET(request: NextRequest) {
 // PUT /api/settings/notification-routes
 export async function PUT(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email! },
-      select: { id: true, organizationId: true },
-    });
-    if (!user?.organizationId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const orgId = await getOrgId();
+    if (!orgId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+    const body = await request.json();
+
+    // New shape: { orgDefaults: { destinations, notifyOnRecovery } }
+    if (body.orgDefaults) {
+      const { destinations = [], notifyOnRecovery = false } = body.orgDefaults;
+
+      const result = await prisma.notificationRoute.upsert({
+        where: {
+          organizationId_severity: {
+            organizationId: orgId,
+            severity: 'ORG_DEFAULTS',
+          },
+        },
+        create: {
+          organizationId: orgId,
+          severity: 'ORG_DEFAULTS',
+          enabled: true,
+          notifyOnRecovery,
+          destinations,
+        },
+        update: {
+          enabled: true,
+          notifyOnRecovery,
+          destinations,
+        },
+      });
+
+      return NextResponse.json({ orgDefaults: result });
     }
 
-    const { routes } = await request.json();
+    // Legacy shape: { routes: [...] } (old severity-based routing)
+    const { routes } = body;
     if (!Array.isArray(routes)) {
-      return NextResponse.json({ error: 'routes must be an array' }, { status: 400 });
+      return NextResponse.json({ error: 'routes or orgDefaults required' }, { status: 400 });
     }
 
-    const orgId = user.organizationId;
     const validSeverities = ['INFO', 'WARN', 'ERROR', 'CRITICAL'];
-
     const upserted = await prisma.$transaction(
       routes
         .filter((r: any) => validSeverities.includes(r.severity))

@@ -120,7 +120,7 @@ export function ModeSelector({ selected, onSelect, compact = false }: ModeSelect
         <div className="absolute left-0 bottom-full mb-2 w-64 bg-[var(--surface)] border border-[var(--border-medium)] rounded-xl shadow-xl z-50 overflow-hidden">
           <div className="p-3 border-b border-[var(--subtle-border)]">
             <h4 className="text-sm font-medium">Select Mode</h4>
-            <p className="text-xs text-[var(--muted)] mt-0.5">Choose how Scout should respond</p>
+            <p className="text-xs text-[var(--muted)] mt-0.5">Choose how the assistant should respond</p>
           </div>
           <div className="max-h-64 overflow-y-auto">
             {MODES.map((mode) => (

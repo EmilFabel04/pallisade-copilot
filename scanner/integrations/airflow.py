@@ -87,6 +87,13 @@ class AirflowDAGRun:
     execution_date: Optional[datetime] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    # data_interval_end is when Airflow was supposed to trigger this run
+    # (i.e. the end of the scheduled interval). Available in Airflow 2.2+.
+    # execution_date/logical_date is the interval START, which is typically
+    # one full interval behind the trigger time — use data_interval_end for
+    # trigger-delay calculations.
+    data_interval_start: Optional[datetime] = None
+    data_interval_end: Optional[datetime] = None
     external_trigger: bool = False
     conf: Dict[str, Any] = field(default_factory=dict)
     
@@ -283,6 +290,8 @@ class AirflowIntegration:
                     execution_date=self._parse_datetime(run_data.get('execution_date')),
                     start_date=self._parse_datetime(run_data.get('start_date')),
                     end_date=self._parse_datetime(run_data.get('end_date')),
+                    data_interval_start=self._parse_datetime(run_data.get('data_interval_start')),
+                    data_interval_end=self._parse_datetime(run_data.get('data_interval_end')),
                     external_trigger=run_data.get('external_trigger', False),
                     conf=run_data.get('conf', {}),
                 ))

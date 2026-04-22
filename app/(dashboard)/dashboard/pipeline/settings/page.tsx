@@ -1,11 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
-import type { SlaTier, PipelineSLAData } from '@/components/contracts/types';
 
 interface PipelineDetails {
   id: string;
@@ -13,14 +11,10 @@ interface PipelineDetails {
   description: string | null;
   status: string;
   healthScore: number | null;
-  tokenLimitMonthly: number | null;
-  tokensUsedThisMonth: number;
-  tokenResetDate: string;
   createdAt: string;
   updatedAt: string;
   nodeCount: number;
   scanCount: number;
-  dataSLAsEnabled: boolean;
 }
 
 interface AccessEntry {
@@ -62,25 +56,10 @@ export default function PipelineSettingsPage() {
   // Form state
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [tokenLimit, setTokenLimit] = useState<number | null>(null);
-  
   // Delete confirmation
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   
-  // Data SLAs toggle
-  const [dataSLAsEnabled, setDataSLAsEnabled] = useState(false);
-
-  // Pipeline SLA state
-  const [slaForm, setSlaForm] = useState<PipelineSLAData>({
-    slaTier: null, expectedFreshnessMinutes: null,
-    expectedExtractionFrequencyMinutes: null, alertPolicyJson: null, notes: null,
-  });
-  const [slaSaving, setSlaSaving] = useState(false);
-  const [slaDirty, setSlaDirty] = useState(false);
-  const [applyingDefaults, setApplyingDefaults] = useState(false);
-  const [coverage, setCoverage] = useState<{ totalIntegrations: number; inherited: number; overridden: number; noContract: number } | null>(null);
-
   // Add user modal
   const [showAddUser, setShowAddUser] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState('');
@@ -112,9 +91,6 @@ export default function PipelineSettingsPage() {
         // Set form values
         setName(data.pipeline.name);
         setDescription(data.pipeline.description || '');
-        setTokenLimit(data.pipeline.tokenLimitMonthly);
-        setDataSLAsEnabled(Boolean(data.pipeline.dataSLAsEnabled));
-
         // Fetch access list if admin
         if (data.isOrgAdmin) {
           const accessRes = await fetch(`/api/pipeline/${selectedPipelineId}/access`);
@@ -148,7 +124,6 @@ export default function PipelineSettingsPage() {
         body: JSON.stringify({
           name,
           description: description || null,
-          ...(isOrgAdmin ? { tokenLimitMonthly: tokenLimit } : {}),
         }),
       });
 
@@ -272,101 +247,6 @@ export default function PipelineSettingsPage() {
       ));
     } catch (err) {
       setError('Failed to update access');
-    }
-  };
-
-  const handleToggleDataSLAs = async (enabled: boolean) => {
-    if (enabled) {
-      if (!confirm('Enabling data SLAs makes them the primary source of truth. SLA changes will no longer auto-update records. Continue?')) {
-        return;
-      }
-    }
-    try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/settings`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataSLAsEnabled: enabled }),
-      });
-      if (res.ok) {
-        setDataSLAsEnabled(enabled);
-        toast.success(enabled ? 'Data SLAs enabled' : 'Data SLAs disabled');
-      }
-    } catch {
-      toast.error('Failed to update setting');
-    }
-  };
-
-  // Fetch pipeline contract
-  const fetchContract = useCallback(async () => {
-    if (!selectedPipelineId) return;
-    try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/sla`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.contract) {
-          setSlaForm({
-            slaTier: data.contract.slaTier || null,
-            expectedFreshnessMinutes: data.contract.expectedFreshnessMinutes ?? null,
-            expectedExtractionFrequencyMinutes: data.contract.expectedExtractionFrequencyMinutes ?? null,
-            alertPolicyJson: data.contract.alertPolicyJson || null,
-            notes: data.contract.notes || null,
-          });
-        }
-        setCoverage(data.coverage || null);
-      }
-    } catch (err) {
-      console.error('Failed to fetch contract:', err);
-    }
-  }, [selectedPipelineId]);
-
-  useEffect(() => { fetchContract(); }, [fetchContract]);
-
-  const updateSLA = (key: keyof PipelineSLAData, value: any) => {
-    setSlaForm(f => ({ ...f, [key]: value || null }));
-    setSlaDirty(true);
-  };
-
-  const handleSaveContract = async () => {
-    if (!selectedPipelineId) return;
-    setSlaSaving(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/sla`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(slaForm),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save contract');
-      }
-      setSlaDirty(false);
-      await fetchContract();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSlaSaving(false);
-    }
-  };
-
-  const handleApplyDefaults = async () => {
-    if (!selectedPipelineId) return;
-    setApplyingDefaults(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/pipeline/${selectedPipelineId}/sla/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to apply defaults');
-      }
-      await fetchContract();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setApplyingDefaults(false);
     }
   };
 
@@ -495,184 +375,6 @@ export default function PipelineSettingsPage() {
           </div>
         )}
       </div>
-
-      {/* Pipeline Contract */}
-      {canEdit && (
-        <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-medium text-[var(--text)]">Pipeline Contract</h2>
-              <p className="text-sm text-[var(--muted)] mt-0.5">Default ownership, SLA, and expectations for all tools</p>
-            </div>
-            {coverage && (
-              <div className="flex items-center gap-3 text-xs">
-                {coverage.inherited > 0 && (
-                  <span className="px-2 py-1 rounded bg-blue-500/15 text-blue-400">{coverage.inherited} inherited</span>
-                )}
-                {coverage.overridden > 0 && (
-                  <span className="px-2 py-1 rounded bg-amber-500/15 text-amber-400">{coverage.overridden} overridden</span>
-                )}
-                {coverage.noContract > 0 && (
-                  <span className="px-2 py-1 rounded bg-zinc-500/15 text-zinc-400">{coverage.noContract} no contract</span>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">SLA Tier</label>
-              <select
-                value={slaForm.slaTier || ''}
-                onChange={(e) => updateSLA('slaTier', e.target.value)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] focus:outline-none focus:border-[var(--accent)]/50"
-              >
-                <option value="">None</option>
-                <option value="T0">T0 — Critical</option>
-                <option value="T1">T1 — High</option>
-                <option value="T2">T2 — Medium</option>
-                <option value="T3">T3 — Low</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Expected Freshness (minutes)</label>
-              <input
-                type="number"
-                min={0}
-                value={slaForm.expectedFreshnessMinutes ?? ''}
-                onChange={(e) => updateSLA('expectedFreshnessMinutes', e.target.value ? Number(e.target.value) : null)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
-                placeholder="e.g. 60"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Extraction Frequency (minutes)</label>
-              <input
-                type="number"
-                min={0}
-                value={slaForm.expectedExtractionFrequencyMinutes ?? ''}
-                onChange={(e) => updateSLA('expectedExtractionFrequencyMinutes', e.target.value ? Number(e.target.value) : null)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
-                placeholder="e.g. 360"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Notes</label>
-            <textarea
-              value={slaForm.notes || ''}
-              onChange={(e) => updateSLA('notes', e.target.value)}
-              rows={2}
-              className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50 resize-none"
-              placeholder="Additional notes..."
-            />
-          </div>
-
-          {/* Data SLAs Toggle */}
-          <div className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)]">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-medium text-[var(--foreground)]">Data SLAs</h4>
-                <p className="text-xs text-[var(--muted)] mt-1">
-                  When enabled, data SLAs become the primary source of truth for data asset compliance.
-                  SLA changes will show as overrides or violations against the data SLA.
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={dataSLAsEnabled}
-                onClick={() => handleToggleDataSLAs(!dataSLAsEnabled)}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  dataSLAsEnabled ? 'bg-emerald-500' : 'bg-zinc-600'
-                }`}
-              >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  dataSLAsEnabled ? 'translate-x-6' : 'translate-x-1'
-                }`} />
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 pt-4 border-t border-[var(--subtle-border)]">
-            <button
-              onClick={handleSaveContract}
-              disabled={slaSaving || !slaDirty}
-              className="px-6 py-2.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
-            >
-              {slaSaving ? 'Saving...' : 'Save Contract'}
-            </button>
-            <button
-              onClick={handleApplyDefaults}
-              disabled={applyingDefaults}
-              className="px-4 py-2.5 bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] text-[var(--text)] text-sm rounded-lg transition-colors disabled:opacity-50"
-            >
-              {applyingDefaults ? 'Applying...' : 'Apply to All Tools'}
-            </button>
-            {coverage && coverage.noContract === 0 && coverage.totalIntegrations > 0 && (
-              <span className="text-xs text-emerald-400 ml-2">All tools covered</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Token Usage (Admin Only) */}
-      {isOrgAdmin && (
-        <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 space-y-6">
-          <h2 className="text-lg font-medium text-[var(--text)]">Token Usage</h2>
-
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Monthly Token Limit</label>
-              <input
-                type="number"
-                value={tokenLimit ?? ''}
-                onChange={(e) => setTokenLimit(e.target.value ? parseInt(e.target.value) : null)}
-                className="w-full px-4 py-2.5 bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg text-[var(--text)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--accent)]/50"
-                placeholder="Unlimited"
-              />
-              <p className="text-xs text-[var(--muted)] mt-1">Leave empty for unlimited</p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-[var(--text-tertiary)] mb-2">Tokens Used This Month</label>
-              <div className="px-4 py-2.5 bg-[var(--overlay-faint)] border border-[var(--border-faint)] rounded-lg text-[var(--text)]">
-                {pipeline.tokensUsedThisMonth.toLocaleString()}
-                {tokenLimit && (
-                  <span className="text-[var(--muted)]"> / {tokenLimit.toLocaleString()}</span>
-                )}
-              </div>
-              <p className="text-xs text-[var(--muted)] mt-1">
-                Resets: {new Date(pipeline.tokenResetDate).toLocaleDateString()}
-              </p>
-            </div>
-          </div>
-
-          {/* Usage by user */}
-          {accessList.length > 0 && (
-            <div className="pt-4">
-              <h3 className="text-sm font-medium text-[var(--text-tertiary)] mb-3">Usage by User</h3>
-              <div className="space-y-2">
-                {accessList.map((access) => (
-                  <div key={access.id} className="flex items-center justify-between py-2 px-3 bg-[var(--overlay-faint)] rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-[var(--overlay-medium)] flex items-center justify-center text-sm">
-                        {access.user?.name?.[0] || access.user?.email?.[0] || '?'}
-                      </div>
-                      <span className="text-sm text-[var(--text)]">{access.user?.name || access.user?.email}</span>
-                    </div>
-                    <span className="text-sm text-[var(--muted)]">{access.tokensUsed.toLocaleString()} tokens</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Access Control (Admin Only) */}
       {isOrgAdmin && (

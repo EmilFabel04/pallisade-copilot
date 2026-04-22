@@ -8,7 +8,6 @@ import { MentionDropdown, type MentionItem } from '@/components/copilot/MentionD
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { ChangePlanToolResult, isChangePlanTool, SharePlanModal } from '@/components/copilot/change-plan';
@@ -654,6 +653,8 @@ function AssistantPageInner() {
   };
 
   const loadSession = async (id: string) => {
+    // Optimistic stubs aren't persisted yet — clicking one is a no-op.
+    if (id.startsWith('optimistic-')) return;
     try {
       setIsLoading(true);
       const response = await fetch(`/api/copilot/sessions/${id}`);
@@ -686,6 +687,14 @@ function AssistantPageInner() {
   const deleteSession = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm('Delete this chat?')) return;
+
+    // Optimistic stubs only live client-side — remove locally without hitting the API.
+    if (id.startsWith('optimistic-')) {
+      setSessions(prev => prev.filter(s => s.id !== id));
+      setSessionId(prev => (prev === id ? null : prev));
+      setMessages([]);
+      return;
+    }
 
     try {
       const response = await fetch(`/api/copilot/sessions/${id}`, {
@@ -778,11 +787,38 @@ function AssistantPageInner() {
     if (!customMessage) setInput('');
     setIsLoading(true);
 
+    // Optimistically add the new chat to history as soon as it starts, so the
+    // user sees it in the sidebar before the first response arrives. The real
+    // server-assigned id replaces this stub once the stream returns.
+    const isNewChat = !sessionId;
+    const optimisticId = isNewChat ? `optimistic-${Date.now()}` : null;
+    if (isNewChat && optimisticId) {
+      const now = new Date().toISOString();
+      const draftTitle = userMessage.content.slice(0, 60) || 'New chat';
+      setSessions(prev => [
+        {
+          id: optimisticId,
+          title: draftTitle,
+          createdAt: now,
+          updatedAt: now,
+          lastMessage: userMessage.content,
+          pipelineStackId: selectedPipelineId || undefined,
+        },
+        ...prev,
+      ]);
+      setSessionId(optimisticId);
+    }
+
     try {
       const { nodeIds: mentionNodeIds, entities: mentionEntities } = parseMentions(messageText);
 
+      // Don't send the placeholder id to the server — let it create a real session.
+      const outboundSessionId = sessionId && !sessionId.startsWith('optimistic-')
+        ? sessionId
+        : undefined;
+
       const result = await sendStreamingMessage(messageText, {
-        sessionId: sessionId || undefined,
+        sessionId: outboundSessionId,
         pipelineStackId: selectedPipelineId || undefined,
         model: selectedModel,
         mode: modeToUse,
@@ -790,12 +826,18 @@ function AssistantPageInner() {
         referencedEntities: mentionEntities.length > 0 ? mentionEntities : undefined,
       });
 
-      if (result.sessionId && result.sessionId !== sessionId) {
+      if (result.sessionId && result.sessionId !== outboundSessionId) {
         setSessionId(result.sessionId);
         const sessionsRes = await fetch('/api/copilot/sessions?limit=50');
         if (sessionsRes.ok) {
           const sessionsData = await sessionsRes.json();
-          setSessions(sessionsData.sessions || []);
+          // Drop any optimistic stubs so they don't duplicate real sessions.
+          const real = (sessionsData.sessions || []).filter((s: ChatSession) => !s.id.startsWith('optimistic-'));
+          setSessions(real);
+        } else if (optimisticId) {
+          // API fetch failed — swap the optimistic id for the real one so the
+          // stub in history remains clickable.
+          setSessions(prev => prev.map(s => s.id === optimisticId ? { ...s, id: result.sessionId! } : s));
         }
       }
     } catch (error) {
@@ -1373,13 +1415,6 @@ function AssistantPageInner() {
               <div className="space-y-3 pb-36">
                 {messages.map((message) => (
                   <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
-                    {message.role === 'assistant' && (
-                      <div className="w-6 h-6 flex-shrink-0 mt-0.5 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
-                        <svg className="w-3.5 h-3.5 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                        </svg>
-                      </div>
-                    )}
                     <div className={cn(
                       'max-w-[85%] min-w-0',
                       message.role === 'user' ? '' : 'space-y-2'
@@ -1491,13 +1526,6 @@ function AssistantPageInner() {
                         />
                       )}
                     </div>
-                    {message.role === 'user' && (
-                      <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                        <AvatarFallback className="bg-gradient-to-br from-violet-500 to-purple-600 text-white text-[10px]">
-                          {session?.user?.name?.[0] || 'U'}
-                        </AvatarFallback>
-                      </Avatar>
-                    )}
                   </div>
                 ))}
 
@@ -2240,8 +2268,28 @@ function TextBlock({ content }: { content: string }) {
   );
 }
 
+// Domains that should NOT be rendered as warehouse FQNs even though they
+// technically match the dotted-identifier pattern.
+const NON_FQN_TLDS = /\.(com|io|ai|dev|org|net|gov|edu|co|me|xyz|app|cloud)$/i;
+const CODE_CHIP_EMERALD = 'px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[11px] font-mono text-emerald-300';
+
+function wrapPlainFqns(html: string): string {
+  // Leave any already-tagged <code>...</code> spans untouched; only scan plain text.
+  return html.split(/(<code[^>]*>[^<]*<\/code>)/g).map((part) => {
+    if (part.startsWith('<code')) return part;
+    // 3+ part warehouse identifier: project.dataset.table (BigQuery, Snowflake, etc.)
+    return part.replace(
+      /\b([a-zA-Z][\w-]*(?:\.[\w-]+){2,})\b/g,
+      (fqn) => {
+        if (NON_FQN_TLDS.test(fqn)) return fqn;
+        return `<code class="${CODE_CHIP_EMERALD}">${fqn}</code>`;
+      },
+    );
+  }).join('');
+}
+
 function formatInline(text: string): string {
-  return text
+  const withInlineMarkup = text
     // Bold - make it white for emphasis
     .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold" style="color:var(--text)">$1</strong>')
     // Italic - subtle emphasis with opacity
@@ -2253,14 +2301,17 @@ function formatInline(text: string): string {
         return `<code class="px-1.5 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[11px] font-mono text-blue-400">${code}</code>`;
       }
       // Table/schema names (uppercase, snake_case with data prefixes, or schema.table pattern)
-      if (/^[A-Z][A-Z0-9_]+$/.test(code) || /^\w+\.\w+$/.test(code) || /^(stg_|fct_|dim_|raw_|int_|src_)/.test(code)) {
+      if (/^[A-Z][A-Z0-9_]+$/.test(code) || /^[\w-]+\.[\w-]+$/.test(code) || /^(stg_|fct_|dim_|raw_|int_|src_)/.test(code)) {
         return `<code class="px-1.5 py-0.5 bg-purple-500/10 border border-purple-500/20 rounded text-[11px] font-mono text-purple-300">${code}</code>`;
       }
       // Default code styling (data/values) - emerald
-      return `<code class="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[11px] font-mono text-emerald-300">${code}</code>`;
+      return `<code class="${CODE_CHIP_EMERALD}">${code}</code>`;
     })
     // Links
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank" rel="noopener">$1</a>');
+  // Finally, auto-wrap plain warehouse FQNs (project.dataset.table) that weren't
+  // already in backticks.
+  return wrapPlainFqns(withInlineMarkup);
 }
 
 export default function AssistantPage() {

@@ -32,13 +32,13 @@ INTENT_BUDGETS: Dict[Intent, IntentBudget] = {
         max_tool_calls=8,
         max_specialist_calls=2,
         max_revisions=1,
-        description="Investigation: evidence → Logs specialist → triage → optional CodeFix → narrate",
+        description="Investigation: evidence → Logs specialist → triage → GPT-5 narrates",
     ),
     Intent.FIX: IntentBudget(
         max_tool_calls=6,
         max_specialist_calls=2,
         max_revisions=1,
-        description="Fix: evidence → Logs + CodeFix → create_change_plan → validate → narrate",
+        description="Fix: evidence → Logs triage → GPT-5 create_change_plan → validate → narrate",
     ),
     Intent.PR: IntentBudget(
         max_tool_calls=6,
@@ -50,7 +50,7 @@ INTENT_BUDGETS: Dict[Intent, IntentBudget] = {
         max_tool_calls=6,
         max_specialist_calls=1,
         max_revisions=1,
-        description="Plan: upstream/downstream → CodeFix for draft → GPT-5 plan contract",
+        description="Plan: upstream/downstream evidence → GPT-5 plan contract",
     ),
     Intent.EXPLAIN: IntentBudget(
         max_tool_calls=3,

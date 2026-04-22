@@ -18,6 +18,7 @@ export interface BillingState {
     tokenAllowance: number;
     storageAllowanceGb: number;
     memberAllowance: number;
+    pipelineAllowance: number;
   } | null;
   usage: {
     tokensUsed: number;
@@ -69,6 +70,7 @@ export async function getBillingState(orgId: string): Promise<BillingState> {
           tokenAllowance: sub.tokenAllowance,
           storageAllowanceGb: sub.storageAllowanceGb,
           memberAllowance: sub.memberAllowance,
+          pipelineAllowance: sub.pipelineAllowance,
         }
       : null,
     usage: {

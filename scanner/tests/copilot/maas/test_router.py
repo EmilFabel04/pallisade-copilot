@@ -100,23 +100,23 @@ class TestRouteIntent:
             secondary=Intent.FIX,
         )
         route = route_intent(intent, ctx)
-        assert "logs" in route.specialists
-        assert "codefix" in route.specialists
-        assert "codefix" in route.optional_specialists
+        assert route.specialists == ["logs"]
+        assert route.required_specialists == ["logs"]
 
-    def test_fix_has_logs_and_codefix(self):
+    def test_fix_has_logs_only(self):
         ctx = make_context(query="fix the dbt model")
         intent = make_intent_result(primary=Intent.FIX)
         route = route_intent(intent, ctx)
-        assert "logs" in route.specialists
-        assert "codefix" in route.specialists
+        assert route.specialists == ["logs"]
+        assert route.required_specialists == ["logs"]
 
-    def test_plan_has_codefix(self):
+    def test_plan_has_no_specialists(self):
         ctx = make_context(query="plan the migration")
         intent = make_intent_result(primary=Intent.PLAN)
         route = route_intent(intent, ctx)
-        assert "codefix" in route.specialists
-        assert "codefix" in route.optional_specialists
+        assert route.specialists == []
+        assert "get_upstream" in route.evidence_tools
+        assert "get_downstream" in route.evidence_tools
 
     def test_explain_has_no_specialists(self):
         ctx = make_context(query="explain what lineage means")

@@ -91,8 +91,12 @@ function NodeInspector({
     return allMonitors.filter(m => {
       // Match by integrationId
       if (integrationId && m.integrationId === integrationId) return true;
-      // Match by layer for monitors without integrationId
-      if (!m.integrationId && m.monitorType) {
+      // Match by layer via monitorType. Include whether or not the monitor
+      // has an integrationId: DAG_*/SYNC_*/DBT_* types are intrinsically
+      // scoped to a single tool layer, so the layer match is enough to
+      // associate them with this tool card even when integrationId
+      // resolution upstream missed.
+      if (m.monitorType) {
         const monLayer = MONITOR_TYPE_TO_LAYER[m.monitorType];
         if (monLayer && monLayer === node.layer) return true;
       }

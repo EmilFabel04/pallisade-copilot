@@ -89,9 +89,11 @@ export const notifyEvents = {
       actorUserId: actorId,
       eventType: 'monitor.failed',
       severity: 'ERROR',
+      // Include a short hash of the error so a NEW failure (different cause)
+      // doesn't get suppressed by a stale 15-min dedupe row.
+      dedupeKey: `monitor:${taskId}:${(errorMsg || '').slice(0, 40).replace(/\s+/g, '_')}`,
       title: `Monitor failed: ${taskName}`,
       message: errorMsg.slice(0, 500),
-      dedupeKey: `monitor:${taskId}`,
       entityType: 'MONITOR',
       entityId: taskId,
       actionUrl: `/dashboard/schedule?task=${taskId}`,
@@ -140,6 +142,11 @@ export const notifyEvents = {
     if (summary.fail > 0) parts.push(`${summary.fail} fail`);
     if (summary.error > 0) parts.push(`${summary.error} error`);
 
+    // Dedupe across identical outcomes within 15 min (prevents spam from
+    // repeated runs that produce the same result) but let a *changed*
+    // outcome through — otherwise the bell only updates once per group per
+    // 15 min even if the user has been fixing things and re-running.
+    const outcomeKey = `${summary.pass}-${summary.warn}-${summary.fail}-${summary.error}`;
     return notify({
       organizationId: orgId,
       pipelineStackId: pipelineId,
@@ -148,7 +155,7 @@ export const notifyEvents = {
       severity,
       title: `Multi-monitor ${groupName} ran: ${parts.join(', ')}`,
       message: `${groupName}: ${parts.join(', ')} (${summary.total} monitors)`,
-      dedupeKey: `monitor-group:${groupId}`,
+      dedupeKey: `monitor-group:${groupId}:${outcomeKey}`,
       entityType: 'MONITOR',
       entityId: groupId,
       actionUrl: `/dashboard/schedule?group=${groupId}`,

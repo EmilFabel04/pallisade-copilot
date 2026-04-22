@@ -21,6 +21,8 @@ import SourceDetailDrawer from '@/components/sources/SourceDetailDrawer';
 // SLA editing removed — SLAs are defined in lineage, viewed read-only here
 
 const ALL_LAYERS: PipelineLayer[] = ['INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
+// Layers that don't participate in the data pipeline graph (alerting/ticketing destinations).
+const NON_PIPELINE_LAYERS = new Set<PipelineLayer>(['NOTIFICATIONS']);
 const ALL_STATUSES: SourceStatus[] = ['healthy', 'degraded', 'disconnected', 'expiring_soon', 'pending'];
 const ALL_EXTRACTION_STATUSES: ExtractionStatus[] = ['ok', 'stale', 'failed', 'never'];
 const SORT_OPTIONS: { field: SortField; label: string }[] = [
@@ -32,13 +34,21 @@ const SORT_OPTIONS: { field: SortField; label: string }[] = [
 ];
 
 export default function SourcesPage() {
-  const { sources, summary, pipelineSLA, loading, error, refresh } = useSourcesData();
+  const { sources, summary, pipelineSLA, loading, error, refresh, patchSource } = useSourcesData();
   const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
   const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [showLayerFilter, setShowLayerFilter] = useState(false);
   const [showExtractionFilter, setShowExtractionFilter] = useState(false);
   const filtered = useMemo(() => filterAndSort(sources, filters), [sources, filters]);
+  const { pipelineSources, nonPipelineSources } = useMemo(() => {
+    const pipe: ControlPlaneSource[] = [];
+    const nonPipe: ControlPlaneSource[] = [];
+    for (const s of filtered) {
+      (NON_PIPELINE_LAYERS.has(s.layer) ? nonPipe : pipe).push(s);
+    }
+    return { pipelineSources: pipe, nonPipelineSources: nonPipe };
+  }, [filtered]);
 
   const updateSearch = useCallback((search: string) => {
     setFilters(f => ({ ...f, search }));
@@ -303,23 +313,28 @@ export default function SourcesPage() {
         </div>
       )}
 
-      {/* Source list */}
-      <div className="space-y-2">
-        {filtered.map((source) => (
-          <div key={source.id} className="relative">
-            <SourceCard
-              source={source}
-              onClick={setSelectedSource}
-              onTestConnection={handleTestConnection}
-              onDisconnect={handleDisconnect}
-            />
-            {testingId === source.id && (
-              <div className="absolute inset-0 rounded-lg bg-[var(--surface)]/60 flex items-center justify-center">
-                <div className="w-5 h-5 border-2 border-[var(--overlay-strong)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
-              </div>
-            )}
-          </div>
-        ))}
+      {/* Source list — split into pipeline vs non-pipeline (alerting/ticketing) */}
+      <div className="space-y-6">
+        <SourceSection
+          title="Pipeline tools"
+          description="Tools that move, store, or transform data in your pipeline"
+          sources={pipelineSources}
+          testingId={testingId}
+          onSelect={setSelectedSource}
+          onTestConnection={handleTestConnection}
+          onDisconnect={handleDisconnect}
+        />
+        {nonPipelineSources.length > 0 && (
+          <SourceSection
+            title="Non-pipeline tools"
+            description="Alerting, ticketing, and other destinations that react to pipeline events"
+            sources={nonPipelineSources}
+            testingId={testingId}
+            onSelect={setSelectedSource}
+            onTestConnection={handleTestConnection}
+            onDisconnect={handleDisconnect}
+          />
+        )}
         {filtered.length === 0 && sources.length > 0 && (
           <div className="text-center py-12">
             <p className="text-sm text-[var(--text-faint)]">No sources match your filters</p>
@@ -335,9 +350,78 @@ export default function SourcesPage() {
         <SourceDetailDrawer
           source={selectedSource}
           onClose={() => setSelectedSource(null)}
+          onQuickLinksChange={(id, links) => {
+            patchSource(id, { quickLinks: links });
+            setSelectedSource((cur) => (cur && cur.id === id ? { ...cur, quickLinks: links } : cur));
+          }}
         />
       )}
 
+    </div>
+  );
+}
+
+// ─── Source section (groups cards under a heading) ────────────────
+
+function SourceSection({
+  title,
+  description,
+  sources,
+  testingId,
+  onSelect,
+  onTestConnection,
+  onDisconnect,
+}: {
+  title: string;
+  description: string;
+  sources: ControlPlaneSource[];
+  testingId: string | null;
+  onSelect: (s: ControlPlaneSource) => void;
+  onTestConnection: (s: ControlPlaneSource) => void;
+  onDisconnect: (s: ControlPlaneSource) => void;
+}) {
+  if (sources.length === 0) {
+    return (
+      <div>
+        <SectionHeader title={title} description={description} count={0} />
+        <p className="text-xs text-[var(--text-faint)] px-1">No tools in this group.</p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <SectionHeader title={title} description={description} count={sources.length} />
+      <div className="space-y-2">
+        {sources.map((source) => (
+          <div key={source.id} className="relative">
+            <SourceCard
+              source={source}
+              onClick={onSelect}
+              onTestConnection={onTestConnection}
+              onDisconnect={onDisconnect}
+            />
+            {testingId === source.id && (
+              <div className="absolute inset-0 rounded-lg bg-[var(--surface)]/60 flex items-center justify-center">
+                <div className="w-5 h-5 border-2 border-[var(--overlay-strong)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SectionHeader({ title, description, count }: { title: string; description: string; count: number }) {
+  return (
+    <div className="flex items-baseline justify-between mb-2 px-1">
+      <div>
+        <h3 className="text-[13px] font-semibold text-[var(--text)] uppercase tracking-wide">
+          {title}
+          <span className="ml-2 text-[11px] font-medium text-[var(--text-faint)]">{count}</span>
+        </h3>
+        <p className="text-[11px] text-[var(--text-faint)] mt-0.5">{description}</p>
+      </div>
     </div>
   );
 }

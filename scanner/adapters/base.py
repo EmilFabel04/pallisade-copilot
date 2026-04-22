@@ -638,23 +638,28 @@ class DatabaseAdapter(ABC):
                 - columns: list (from get_table_metadata)
                 - last_modified: datetime or None
         """
+        errors = []
+
         try:
             metadata = self.get_table_metadata(table)
         except Exception as e:
-            logger.warning(f"Failed to get table metadata for {table}: {e}")
+            errors.append(f"metadata: {e}")
             metadata = None
 
         try:
             freshness = self.get_table_freshness(table)
         except Exception as e:
-            logger.warning(f"Failed to get freshness for {table}: {e}")
+            errors.append(f"freshness: {e}")
             freshness = None
 
         try:
             row_count = self.get_row_count(table)
         except Exception as e:
-            logger.warning(f"Failed to get row count for {table}: {e}")
+            errors.append(f"row_count: {e}")
             row_count = None
+
+        if errors:
+            logger.warning(f"get_table_stats({table}) — {'; '.join(errors)}")
 
         return {
             "table_name": table,

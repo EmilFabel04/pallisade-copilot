@@ -47,6 +47,9 @@ _PLATFORM_CASE_HINTS = {
     "snowflake": "upper",
     "postgres": "lower",
     "redshift": "lower",
+    "sqlserver": "lower",
+    "azure_sql": "lower",
+    "azure_synapse": "lower",
 }
 
 

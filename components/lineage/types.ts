@@ -190,8 +190,6 @@ export interface UnifiedLineageNode {
 
   // Data asset health & issues
   lastUpdated?: string;           // When the table was last updated
-  freshnessStatus?: 'fresh' | 'stale' | 'unknown';  // Computed freshness
-  freshnessHours?: number;        // Hours since last update
   issues?: DataAssetIssues;       // Issue summary
   monitorStatus?: MonitorStatusSummary;  // Aggregate monitor health
   hasUpstreamFailure?: boolean;          // An ancestor has FAIL/ERROR monitors

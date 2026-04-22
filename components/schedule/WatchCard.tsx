@@ -192,19 +192,24 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); onToggleEnabled(!watch.enabled); }}
-              className={cn(
-                'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
-                watch.enabled ? 'bg-blue-500' : 'bg-[var(--overlay-strong)]'
-              )}
-              title={watch.enabled ? 'Disable' : 'Enable'}
-            >
-              <span className={cn(
-                'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transition-transform',
-                watch.enabled ? 'translate-x-4' : 'translate-x-0'
-              )} />
-            </button>
+            {/* Tool-health ("external") watches don't expose an enable/disable
+                toggle — they're driven by the upstream tool status, not by the
+                user flipping the watch on or off. */}
+            {watch.watchType !== 'tool_health' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleEnabled(!watch.enabled); }}
+                className={cn(
+                  'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors',
+                  watch.enabled ? 'bg-blue-500' : 'bg-[var(--overlay-strong)]'
+                )}
+                title={watch.enabled ? 'Disable' : 'Enable'}
+              >
+                <span className={cn(
+                  'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-lg transition-transform',
+                  watch.enabled ? 'translate-x-4' : 'translate-x-0'
+                )} />
+              </button>
+            )}
           </div>
         </div>
 

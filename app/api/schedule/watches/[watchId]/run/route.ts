@@ -181,7 +181,7 @@ export async function POST(
 
     for (const monitor of group.monitors) {
       try {
-        const runRes = await fetch(`${baseUrl}/api/schedule/tasks/${monitor.id}/run`, {
+        const runRes = await fetch(`${baseUrl}/api/schedule/tasks/${monitor.id}/run?grouped=true`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: cookie },
         });
@@ -271,6 +271,28 @@ export async function POST(
     // ── Notifications & routing (fire-and-forget) ──────────────
     const errorCount = signals.filter((r) => r.status === 'ERROR').length;
     const summaryObj = { total: signals.length, pass: passCount, fail: failCount, warn: warnCount, error: errorCount };
+
+    // Per-monitor alert dispatch — manual runs now honour the same
+    // destination routing as scheduled runs. Fires one POST per monitor
+    // that produced a non-PASS/SKIPPED signal. The /api/schedule/alert
+    // route resolves the monitor's alertConfig.destinations internally.
+    const alertSignals = signals.filter((s) => s.status === 'FAIL' || s.status === 'ERROR' || s.status === 'WARN');
+    if (alertSignals.length > 0) {
+      const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      for (const sig of alertSignals) {
+        fetch(`${baseUrl}/api/schedule/alert`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            taskId: sig.monitorId,
+            taskName: sig.monitorName,
+            status: sig.status,
+            message: sig.message,
+            organizationId: group.organizationId,
+          }),
+        }).catch(() => {});
+      }
+    }
 
     // Previous health score (from before this run's update)
     const previousHealthScore = group.healthScore ?? 100;

@@ -71,6 +71,9 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
   const healthColor = HEALTH_COLORS[health];
   const [showAllMonitors, setShowAllMonitors] = useState(false);
   const MONITOR_VISIBLE_LIMIT = 5;
+  // Version control tools have no runtime monitors — hide health/coverage sections entirely.
+  const isVcs = details.category === 'version_control'
+    || ['github', 'gitlab', 'bitbucket'].includes((details.platform || '').toLowerCase());
 
   const passing = monitors?.filter(m => m.lastStatus === 'PASS').length || 0;
   const warning = monitors?.filter(m => m.lastStatus === 'WARN').length || 0;
@@ -179,7 +182,7 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
       )}
 
       {/* Monitor Health & Coverage */}
-      {scoring && scoring.healthScore != null && (
+      {!isVcs && scoring && scoring.healthScore != null && (
         <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)] space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Monitor Health</span>
@@ -251,7 +254,7 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
       )}
 
       {/* Monitors */}
-      {monitors && monitors.length > 0 && (
+      {!isVcs && monitors && monitors.length > 0 && (
         <Section title="Monitors" count={monitors.length} defaultOpen>
           <div className="space-y-1.5">
             {/* Status summary badges */}
@@ -327,7 +330,7 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
       )}
 
       {/* Health — monitor-based when monitors exist, graph-based fallback */}
-      {scoring ? (
+      {isVcs ? null : scoring ? (
         <Section title="Health Summary" defaultOpen>
           {scoring.healthScore != null ? (
             <div className="flex items-center gap-2">
@@ -383,7 +386,7 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
       )}
 
       {/* Coverage — monitor-based when scoring available, lineage-gap fallback */}
-      <Section title="Coverage" defaultOpen>
+      {!isVcs && <Section title="Coverage" defaultOpen>
         {scoring ? (
           scoring.coveragePct > 0 ? (
             <div className="space-y-2">
@@ -432,7 +435,7 @@ function OverviewTab({ details, monitors }: { details: ToolDetailsResponse; moni
             <CoverageGapsList gaps={summary.coverageGaps} />
           )
         )}
-      </Section>
+      </Section>}
     </div>
   );
 }

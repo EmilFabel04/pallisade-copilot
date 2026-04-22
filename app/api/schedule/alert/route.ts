@@ -6,150 +6,310 @@ import { TeamsClient } from '@/lib/integrations/teams';
 import { OpsgenieClient } from '@/lib/integrations/opsgenie';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
+import { notify } from '@/lib/notifications';
 
-// POST /api/schedule/alert - Dispatch alert notifications
+/**
+ * Dispatch alert notifications for a monitor run.
+ *
+ * Routing precedence (first match wins):
+ *   1. Monitor.alertConfig.destinations — per-destination integration IDs,
+ *      each with its own triggerOn states and optional config overrides.
+ *   2. MonitorGroup.alertConfig.destinations — inherited group defaults.
+ *   3. Monitor.alertChannels / Group.alertChannels — legacy channel-type fanout
+ *      (picks the first ACTIVE integration of each type in the org).
+ *
+ * A destination only fires if the run status is in its triggerOn set. The
+ * special "RECOVERED" state fires when `recovered === true` in the request
+ * body (set by the alert engine when a monitor transitions back to PASS).
+ */
+
+interface DestinationSpec {
+  integrationId: string;
+  channelType: string;
+  triggerOn: string[];
+  config?: Record<string, any>;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
-      taskId,
+      taskId, // Monitor.id — used to resolve per-monitor destinations
       taskName,
       status,
       message,
-      channels,
-      config: alertConfig,
+      channels, // legacy: array of channel-type strings (e.g. ["slack", "email"])
+      config: legacyAlertConfig, // legacy: { slack: {...}, email: {...} }
       organizationId,
+      recovered, // optional: set by alert engine when monitor transitions back to PASS
     } = body;
 
-    if (!channels || channels.length === 0) {
-      return NextResponse.json({ message: 'No channels configured' });
-    }
+    // --- Resolve destinations ------------------------------------------------
+    let destinations: DestinationSpec[] = [];
 
-    // Fetch alert integration configs from the org
-    // Channels come as lowercase (e.g. "slack") but Prisma IntegrationType is uppercase
-    const channelTypesUpper = (channels as string[]).map((c: string) => c.toUpperCase());
-    const integrations = await prisma.integration.findMany({
-      where: {
-        organizationId,
-        type: { in: channelTypesUpper as any },
-        status: 'ACTIVE',
-      },
-    });
+    if (taskId) {
+      // Try Monitor first, then fall back to MonitorGroup (group summary alerts
+      // from the scanner send the MonitorGroup.id as taskId).
+      const monitor = await prisma.monitor.findUnique({
+        where: { id: taskId },
+        include: { monitorGroup: true },
+      });
 
-    const slackSeverity = (status === 'FAIL' ? 'critical' : status === 'WARN' ? 'high' : 'medium') as 'critical' | 'high' | 'medium' | 'low';
-    const pdSeverity = (status === 'FAIL' ? 'critical' : status === 'WARN' ? 'warning' : 'info') as 'critical' | 'error' | 'warning' | 'info';
-    const results: Array<{ channel: string; success: boolean; error?: string }> = [];
-
-    for (const channel of channels as string[]) {
-      const integration = integrations.find((i) => i.type.toLowerCase() === channel.toLowerCase());
-      const channelConfig = alertConfig?.[channel] || {};
-
-      try {
-        if (channel === 'slack') {
-          let botToken = '';
-          if (integration?.accessToken) {
-            try { botToken = decrypt(integration.accessToken); } catch {}
-          }
-          const creds = integration?.credentials
-            ? (typeof integration.credentials === 'string' ? JSON.parse(integration.credentials) : integration.credentials) as Record<string, any>
-            : {};
-          const slackChannel = channelConfig.channel || creds.channel;
-
-          if (botToken) {
-            const client = new SlackClient({ bot_token: botToken, channel: slackChannel });
-            await client.sendMessage({
-              title: `Task Alert: ${taskName}`,
-              text: message || `Task "${taskName}" completed with status: ${status}`,
-              severity: slackSeverity,
-              fields: [
-                { label: 'Status', value: status },
-                { label: 'Task', value: taskName },
-              ],
-            });
-            results.push({ channel: 'slack', success: true });
-          } else {
-            results.push({ channel: 'slack', success: false, error: 'No bot token configured' });
-          }
-        } else if (channel === 'email') {
-          const recipients =
-            channelConfig.recipients ||
-            (integration?.config as any)?.recipients;
-          if (recipients) {
-            const client = new EmailClient({
-              recipients,
-              smtp_host: channelConfig.smtp_host || (integration?.config as any)?.smtp_host,
-              smtp_port: channelConfig.smtp_port || (integration?.config as any)?.smtp_port,
-            });
-            const alertText = message || `Task "${taskName}" completed with status: ${status}`;
-            await client.sendEmail({
-              subject: `Task Alert: ${taskName} — ${status}`,
-              text: alertText,
-              html: `<p><strong>${taskName}</strong> completed with status: <strong>${status}</strong></p><p>${alertText}</p>`,
-              severity: slackSeverity,
-            });
-            results.push({ channel: 'email', success: true });
-          } else {
-            results.push({ channel: 'email', success: false, error: 'No recipients' });
-          }
-        } else if (channel === 'pagerduty') {
-          const routingKey =
-            channelConfig.routing_key ||
-            (integration?.config as any)?.routing_key;
-          if (routingKey) {
-            const client = new PagerDutyClient({
-              api_key: (integration?.config as any)?.api_key || '',
-              service_id: (integration?.config as any)?.service_id || '',
-              routing_key: routingKey,
-            });
-            await client.createIncident({
-              title: `Task Alert: ${taskName}`,
-              description: message || `Task "${taskName}" completed with status: ${status}`,
-              severity: pdSeverity,
-            });
-            results.push({ channel: 'pagerduty', success: true });
-          } else {
-            results.push({ channel: 'pagerduty', success: false, error: 'No routing key' });
-          }
-        } else if (channel === 'teams') {
-          const webhookUrl =
-            channelConfig.webhook_url ||
-            (integration?.config as any)?.webhook_url;
-          if (webhookUrl) {
-            const client = new TeamsClient({ webhook_url: webhookUrl });
-            await client.sendMessage({
-              title: `Task Alert: ${taskName}`,
-              text: message || `Task "${taskName}" completed with status: ${status}`,
-              severity: slackSeverity,
-            });
-            results.push({ channel: 'teams', success: true });
-          } else {
-            results.push({ channel: 'teams', success: false, error: 'No webhook URL' });
-          }
-        } else if (channel === 'opsgenie') {
-          const apiKey =
-            channelConfig.api_key ||
-            (integration?.config as any)?.api_key;
-          if (apiKey) {
-            const ogPriority = (status === 'FAIL' ? 'P1' : status === 'WARN' ? 'P2' : 'P3') as 'P1' | 'P2' | 'P3' | 'P4' | 'P5';
-            const client = new OpsgenieClient({ api_key: apiKey });
-            await client.createAlert({
-              message: `Task Alert: ${taskName}`,
-              description: message || `Task "${taskName}" completed with status: ${status}`,
-              priority: ogPriority,
-              tags: ['pallisade', 'scheduled-task'],
-            });
-            results.push({ channel: 'opsgenie', success: true });
-          } else {
-            results.push({ channel: 'opsgenie', success: false, error: 'No API key' });
-          }
+      if (monitor) {
+        const monitorDest = (monitor.alertConfig as any)?.destinations;
+        const groupDest = (monitor.monitorGroup?.alertConfig as any)?.destinations;
+        if (Array.isArray(monitorDest) && monitorDest.length > 0) {
+          destinations = monitorDest;
+        } else if (Array.isArray(groupDest) && groupDest.length > 0) {
+          destinations = groupDest;
         }
-      } catch (err: any) {
-        console.error(`[Alert] Failed to send to ${channel}:`, err);
-        results.push({ channel, success: false, error: err.message });
+      } else {
+        // taskId might be a MonitorGroup.id (scanner group summary alerts)
+        const group = await prisma.monitorGroup.findUnique({
+          where: { id: taskId },
+        });
+        const groupDest = (group?.alertConfig as any)?.destinations;
+        if (Array.isArray(groupDest) && groupDest.length > 0) {
+          destinations = groupDest;
+        }
       }
     }
 
-    return NextResponse.json({ results });
+    // Org-wide defaults fallback: read from NotificationRoute.ORG_DEFAULTS
+    if (destinations.length === 0 && organizationId) {
+      const orgRoute = await prisma.notificationRoute.findUnique({
+        where: {
+          organizationId_severity: {
+            organizationId,
+            severity: 'ORG_DEFAULTS',
+          },
+        },
+      });
+      const orgDest = (orgRoute?.destinations as any);
+      if (orgRoute?.enabled && Array.isArray(orgDest) && orgDest.length > 0) {
+        destinations = orgDest;
+      }
+    }
+
+    // Legacy fallback: build destinations from the old channels array by
+    // picking the first active integration of each requested channel type.
+    if (destinations.length === 0 && Array.isArray(channels) && channels.length > 0) {
+      const channelTypesUpper = (channels as string[]).map((c: string) => c.toUpperCase());
+      const integrations = await prisma.integration.findMany({
+        where: {
+          organizationId,
+          type: { in: channelTypesUpper as any },
+          status: 'ACTIVE',
+        },
+      });
+      destinations = integrations.map((i) => ({
+        integrationId: i.id,
+        channelType: i.type.toLowerCase(),
+        triggerOn: ['FAIL', 'WARN', 'ERROR'],
+        config: legacyAlertConfig?.[i.type.toLowerCase()] || {},
+      }));
+    }
+
+    // --- In-app notification (always, independent of external destinations) --
+    // The Python scheduler / alert engine hits this endpoint when a scheduled
+    // monitor run produces FAIL / WARN / ERROR / RECOVERED. We want those to
+    // appear in the bell dropdown regardless of whether Slack / PagerDuty /
+    // etc. are configured. Must run BEFORE the `destinations.length === 0`
+    // early return so orgs with no external channels still get the bell alert.
+    if (organizationId) {
+      const inAppState: string = recovered ? 'RECOVERED' : (status || 'INFO');
+      const severity: 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL' =
+        inAppState === 'FAIL' ? 'ERROR'
+        : inAppState === 'ERROR' ? 'ERROR'
+        : inAppState === 'WARN' ? 'WARN'
+        : 'INFO';
+      const title = recovered
+        ? `Recovered: ${taskName || 'Monitor'}`
+        : `${taskName || 'Monitor'}: ${inAppState}`;
+      const inAppMessage = message || `Monitor "${taskName || 'unknown'}" is now in state ${inAppState}`;
+      notify({
+        organizationId,
+        eventType: recovered ? 'monitor.recovered' : 'monitor.alert',
+        severity,
+        title,
+        message: inAppMessage,
+        entityType: 'monitor',
+        entityId: taskId || undefined,
+        // Dedupe identical alerts within the 15-min window so the bell doesn't
+        // get spammed by back-to-back retries.
+        dedupeKey: taskId ? `monitor.alert:${taskId}:${inAppState}` : undefined,
+        actionUrl: taskId ? `/dashboard/monitors?monitorId=${taskId}` : undefined,
+      }).catch(() => {});
+    }
+
+    if (destinations.length === 0) {
+      return NextResponse.json({ message: 'No destinations configured' });
+    }
+
+    // --- Filter by triggerOn -------------------------------------------------
+    const triggerState = recovered ? 'RECOVERED' : status;
+    const firing = destinations.filter((d) => {
+      const triggers = Array.isArray(d.triggerOn) && d.triggerOn.length > 0
+        ? d.triggerOn
+        : ['FAIL', 'ERROR'];
+      return triggers.includes(triggerState);
+    });
+
+    if (firing.length === 0) {
+      return NextResponse.json({
+        message: `No destinations listen for state ${triggerState}`,
+        skipped: destinations.length,
+      });
+    }
+
+    // --- Load the exact integration rows for firing destinations -------------
+    const integrationIds = firing.map((d) => d.integrationId);
+    const integrations = await prisma.integration.findMany({
+      where: { id: { in: integrationIds }, organizationId, status: 'ACTIVE' },
+    });
+    const integrationMap = new Map(integrations.map((i) => [i.id, i]));
+
+    const slackSeverity = (triggerState === 'FAIL' ? 'critical'
+      : triggerState === 'WARN' ? 'high'
+      : triggerState === 'RECOVERED' ? 'low'
+      : 'medium') as 'critical' | 'high' | 'medium' | 'low';
+    const pdSeverity = (triggerState === 'FAIL' ? 'critical'
+      : triggerState === 'WARN' ? 'warning'
+      : 'info') as 'critical' | 'error' | 'warning' | 'info';
+
+    const results: Array<{ integrationId: string; channel: string; success: boolean; error?: string }> = [];
+
+    for (const dest of firing) {
+      const integration = integrationMap.get(dest.integrationId);
+      if (!integration) {
+        results.push({
+          integrationId: dest.integrationId,
+          channel: dest.channelType,
+          success: false,
+          error: 'Integration not found or inactive',
+        });
+        continue;
+      }
+
+      const channelType = (dest.channelType || integration.type).toLowerCase();
+      const cfg = dest.config || {};
+      const title = recovered ? `Recovered: ${taskName}` : `Task Alert: ${taskName}`;
+      const text = message || `Monitor "${taskName}" is now in state ${triggerState}`;
+
+      try {
+        if (channelType === 'slack') {
+          let botToken = '';
+          if (integration.accessToken) {
+            try { botToken = decrypt(integration.accessToken); } catch {}
+          }
+          const creds = integration.credentials
+            ? (typeof integration.credentials === 'string'
+              ? JSON.parse(integration.credentials)
+              : integration.credentials) as Record<string, any>
+            : {};
+          const slackChannel = cfg.channel || creds.channel;
+          if (!botToken) {
+            results.push({ integrationId: dest.integrationId, channel: 'slack', success: false, error: 'No bot token configured' });
+            continue;
+          }
+          const client = new SlackClient({ bot_token: botToken, channel: slackChannel });
+          await client.sendMessage({
+            title,
+            text,
+            severity: slackSeverity,
+            fields: [
+              { label: 'Status', value: triggerState },
+              { label: 'Monitor', value: taskName },
+            ],
+          });
+          results.push({ integrationId: dest.integrationId, channel: 'slack', success: true });
+        } else if (channelType === 'email') {
+          const recipients =
+            cfg.to ||
+            cfg.recipients ||
+            (integration.config as any)?.recipients;
+          if (!recipients) {
+            results.push({ integrationId: dest.integrationId, channel: 'email', success: false, error: 'No recipients' });
+            continue;
+          }
+          const client = new EmailClient({
+            recipients,
+            smtp_host: cfg.smtp_host || (integration.config as any)?.smtp_host,
+            smtp_port: cfg.smtp_port || (integration.config as any)?.smtp_port,
+          });
+          await client.sendEmail({
+            subject: `${title} — ${triggerState}`,
+            text,
+            html: `<p><strong>${taskName}</strong> is in state <strong>${triggerState}</strong></p><p>${text}</p>`,
+            severity: slackSeverity,
+          });
+          results.push({ integrationId: dest.integrationId, channel: 'email', success: true });
+        } else if (channelType === 'pagerduty') {
+          const routingKey =
+            cfg.routingKey ||
+            cfg.routing_key ||
+            (integration.config as any)?.routing_key;
+          if (!routingKey) {
+            results.push({ integrationId: dest.integrationId, channel: 'pagerduty', success: false, error: 'No routing key' });
+            continue;
+          }
+          const client = new PagerDutyClient({
+            api_key: (integration.config as any)?.api_key || '',
+            service_id: (integration.config as any)?.service_id || '',
+            routing_key: routingKey,
+          });
+          await client.createIncident({
+            title,
+            description: text,
+            severity: pdSeverity,
+          });
+          results.push({ integrationId: dest.integrationId, channel: 'pagerduty', success: true });
+        } else if (channelType === 'teams') {
+          const webhookUrl =
+            cfg.webhookUrl ||
+            cfg.webhook_url ||
+            (integration.config as any)?.webhook_url;
+          if (!webhookUrl) {
+            results.push({ integrationId: dest.integrationId, channel: 'teams', success: false, error: 'No webhook URL' });
+            continue;
+          }
+          const client = new TeamsClient({ webhook_url: webhookUrl });
+          await client.sendMessage({ title, text, severity: slackSeverity });
+          results.push({ integrationId: dest.integrationId, channel: 'teams', success: true });
+        } else if (channelType === 'opsgenie') {
+          const apiKey =
+            cfg.apiKey ||
+            cfg.api_key ||
+            (integration.config as any)?.api_key;
+          if (!apiKey) {
+            results.push({ integrationId: dest.integrationId, channel: 'opsgenie', success: false, error: 'No API key' });
+            continue;
+          }
+          const ogPriority = (cfg.priority ||
+            (triggerState === 'FAIL' ? 'P1' : triggerState === 'WARN' ? 'P2' : 'P3')) as 'P1' | 'P2' | 'P3' | 'P4' | 'P5';
+          const client = new OpsgenieClient({ api_key: apiKey });
+          await client.createAlert({
+            message: title,
+            description: text,
+            priority: ogPriority,
+            tags: ['pallisade', 'monitor', ...(cfg.team ? [`team:${cfg.team}`] : [])],
+          });
+          results.push({ integrationId: dest.integrationId, channel: 'opsgenie', success: true });
+        } else {
+          results.push({
+            integrationId: dest.integrationId,
+            channel: channelType,
+            success: false,
+            error: `Unsupported channel type: ${channelType}`,
+          });
+        }
+      } catch (err: any) {
+        console.error(`[Alert] Failed to send to ${channelType} (${dest.integrationId}):`, err);
+        results.push({ integrationId: dest.integrationId, channel: channelType, success: false, error: err.message });
+      }
+    }
+
+    return NextResponse.json({ results, dispatched: firing.length });
   } catch (error: any) {
     console.error('[Alert] Dispatch error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

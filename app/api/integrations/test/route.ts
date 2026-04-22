@@ -46,6 +46,10 @@ async function testConnection(
       return testPostgres(credentials);
     case 'MYSQL':
       return testMysql(credentials);
+    case 'BIGQUERY':
+      return testBigQuery(credentials);
+    case 'REDSHIFT':
+      return testRedshift(credentials);
     case 'GITHUB':
       return testGitHub(credentials);
     case 'DBT_CLOUD':
@@ -768,18 +772,160 @@ async function testMysql(credentials: any): Promise<{ success: boolean; error?: 
     } else {
       const errorData = await testResponse.json().catch(() => ({}));
       return { 
-        success: false, 
-        error: errorData.detail || errorData.error || 'Failed to connect to MySQL' 
+        success: false,
+        error: errorData.detail || errorData.error || 'Failed to connect to MySQL'
       };
     }
   } catch (error: any) {
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: 'Credentials look valid (could not verify connection)',
-      metadata: { 
+      metadata: {
         host: credentials.host,
         database: credentials.database,
-      } 
+      }
+    };
+  }
+}
+
+// BigQuery connection test
+async function testBigQuery(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+  if (!credentials?.project_id) {
+    return { success: false, error: 'Missing required: project_id' };
+  }
+  const credsJson = credentials?.credentials_json || credentials?.credentials;
+  if (!credsJson) {
+    return { success: false, error: 'Missing required: service account key (credentials)' };
+  }
+
+  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+
+  try {
+    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!healthCheck.ok) {
+      return {
+        success: true,
+        message: 'Credentials validated (backend offline - full test skipped)',
+        metadata: { project_id: credentials.project_id },
+      };
+    }
+
+    const testResponse = await fetch(`${SCANNER_API_URL}/api/v1/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection_type: 'bigquery',
+        connection_config: {
+          project_id: credentials.project_id,
+          credentials: credsJson,
+          location: credentials.location,
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (testResponse.ok) {
+      const result = await testResponse.json();
+      if (result.success) {
+        return {
+          success: true,
+          message: result.message || 'Successfully connected to BigQuery!',
+          metadata: {
+            project_id: credentials.project_id,
+            location: credentials.location,
+          },
+        };
+      }
+      return { success: false, error: result.message || 'Failed to connect to BigQuery' };
+    }
+
+    const errorData = await testResponse.json().catch(() => ({}));
+    return { success: false, error: errorData.detail || errorData.error || 'Failed to connect to BigQuery' };
+  } catch (error: any) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return { success: false, error: 'Connection test timed out. Check your project and credentials.' };
+    }
+    return {
+      success: true,
+      message: 'Credentials look valid (could not verify connection)',
+      metadata: { project_id: credentials.project_id },
+    };
+  }
+}
+
+// Redshift connection test
+async function testRedshift(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+  if (!credentials?.host) {
+    return { success: false, error: 'Missing required: cluster endpoint (host)' };
+  }
+  if (!credentials?.database) {
+    return { success: false, error: 'Missing required: database' };
+  }
+  if (!credentials?.user) {
+    return { success: false, error: 'Missing required: username' };
+  }
+  if (!credentials?.password) {
+    return { success: false, error: 'Missing required: password' };
+  }
+
+  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+
+  try {
+    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!healthCheck.ok) {
+      return {
+        success: true,
+        message: 'Credentials validated (backend offline - full test skipped)',
+        metadata: { host: credentials.host, database: credentials.database },
+      };
+    }
+
+    const testResponse = await fetch(`${SCANNER_API_URL}/api/v1/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection_type: 'redshift',
+        connection_config: {
+          host: credentials.host,
+          port: credentials.port || 5439,
+          user: credentials.user,
+          password: credentials.password,
+          database: credentials.database,
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (testResponse.ok) {
+      const result = await testResponse.json();
+      if (result.success) {
+        return {
+          success: true,
+          message: result.message || 'Successfully connected to Redshift!',
+          metadata: { host: credentials.host, database: credentials.database },
+        };
+      }
+      return { success: false, error: result.message || 'Failed to connect to Redshift' };
+    }
+
+    const errorData = await testResponse.json().catch(() => ({}));
+    return { success: false, error: errorData.detail || errorData.error || 'Failed to connect to Redshift' };
+  } catch (error: any) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return { success: false, error: 'Connection test timed out. Check your cluster endpoint and network.' };
+    }
+    return {
+      success: true,
+      message: 'Credentials look valid (could not verify connection)',
+      metadata: { host: credentials.host, database: credentials.database },
     };
   }
 }

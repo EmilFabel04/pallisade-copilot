@@ -247,12 +247,13 @@ export function SaveArtifactModal({
           {/* Type */}
           <div>
             <label className="block text-[12px] font-medium text-[var(--muted)] mb-1.5">Type</label>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="flex gap-2">
               {typeOptions.map((option) => (
                 <button
                   key={option.value}
                   onClick={() => setType(option.value)}
-                  className={`flex flex-col items-center gap-1.5 p-2.5 rounded-lg border transition-all ${
+                  style={{ flex: '1 1 0', minWidth: 0 }}
+                  className={`box-border h-16 flex flex-col items-center justify-center gap-1.5 px-2 rounded-lg border transition-all overflow-hidden ${
                     type === option.value
                       ? typeColors[option.value]
                       : 'border-[var(--subtle-border)] text-[var(--muted)] hover:border-[var(--overlay-strong)] hover:text-[var(--text-tertiary)]'
@@ -260,7 +261,7 @@ export function SaveArtifactModal({
                   title={option.description}
                 >
                   {option.icon}
-                  <span className="text-[10px] font-medium">{option.label}</span>
+                  <span className="text-[10px] font-medium truncate max-w-full">{option.label}</span>
                 </button>
               ))}
             </div>

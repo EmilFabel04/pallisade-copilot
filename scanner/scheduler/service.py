@@ -67,6 +67,77 @@ def _compute_next_run(cron_expr: str, tz_name: str = "UTC") -> Optional[datetime
         return None
 
 
+# Watch-level health scoring — MUST stay in sync with lib/watch-health.ts.
+# Weighted average: PASS=1.0, WARN=0.5, FAIL/ERROR=0.0. Direct (depth 0)
+# signals weigh more than upstream; P1 monitors more than P3.
+_WATCH_STATUS_SCORE = {
+    "PASS": 1.0, "WARN": 0.5, "FAIL": 0.0, "ERROR": 0.0,
+    "SKIPPED": 0.8, "RUNNING": 0.8,
+}
+_WATCH_DEPTH_MULTIPLIER = {0: 2.0, 1: 1.5}
+_WATCH_PRIORITY_WEIGHT = {1: 3.0, 2: 2.0, 3: 1.0}
+
+
+def _recompute_watch_health_score(conn, group_id: str) -> None:
+    """Recompute and persist MonitorGroup.healthScore from its monitors' lastStatus.
+
+    Uses the same weighted formula as lib/watch-health.ts / the Next.js
+    watch-run endpoint so the cached score matches a full watch re-run.
+    Monitors with a null lastStatus (never run yet) are excluded from the
+    denominator rather than being counted as 0.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            'SELECT "anchorFqn" FROM "MonitorGroup" WHERE id = %s',
+            (group_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return
+        anchor_fqn = row[0]
+
+        cur.execute(
+            """
+            SELECT "targetFqn", "lastStatus", config
+            FROM "Monitor"
+            WHERE "monitorGroupId" = %s AND enabled = TRUE
+            """,
+            (group_id,),
+        )
+        rows = cur.fetchall()
+
+    total_weighted_value = 0.0
+    total_weight = 0.0
+    for target_fqn, last_status, config in rows:
+        if not last_status:
+            continue  # never-run monitor — exclude from denominator
+        cfg = config or {}
+        if isinstance(cfg, str):
+            try:
+                cfg = json.loads(cfg)
+            except Exception:
+                cfg = {}
+        depth = cfg.get("_watchDepth")
+        if depth is None:
+            depth = 0 if target_fqn == anchor_fqn else 1
+        priority = cfg.get("_watchPriority", 2)
+        status_val = _WATCH_STATUS_SCORE.get(str(last_status).upper(), 0.0)
+        weight = _WATCH_PRIORITY_WEIGHT.get(priority, 0.5) * _WATCH_DEPTH_MULTIPLIER.get(depth, 1.0)
+        total_weighted_value += weight * status_val
+        total_weight += weight
+
+    if total_weight == 0:
+        return  # nothing to score against — leave previous value untouched
+
+    score = round((total_weighted_value / total_weight) * 1000) / 10
+    with conn.cursor() as cur:
+        cur.execute(
+            'UPDATE "MonitorGroup" SET "healthScore" = %s, "lastHealthAt" = %s WHERE id = %s',
+            (score, datetime.now(timezone.utc), group_id),
+        )
+    conn.commit()
+
+
 class SchedulerService:
     """Background scheduler that executes due monitor tasks."""
 
@@ -507,6 +578,17 @@ class SchedulerService:
                     )
 
                 conn.commit()
+
+                # Keep the parent watch's cached healthScore in sync. Without
+                # this, MonitorGroup.healthScore only updates when the whole
+                # watch is re-run (via the Next.js watches/[id]/run endpoint),
+                # so dashboards stay stuck on a stale score.
+                group_id = task.get("monitorGroupId")
+                if group_id:
+                    try:
+                        _recompute_watch_health_score(conn, group_id)
+                    except Exception as watch_err:
+                        logger.debug(f"[Scheduler] Watch healthScore recompute skipped: {watch_err}")
 
             # Record metric observations in the time-series baseline table
             try:

@@ -27,9 +27,6 @@ def _mock_config():
     config.logs_endpoint = "http://logs:8000"
     config.logs_api_key = "key"
     config.logs_model = "logs-model"
-    config.codefix_endpoint = "http://codefix:8000"
-    config.codefix_api_key = "key"
-    config.codefix_model = "codefix-model"
     config.specialist_timeout = 30
     config.orchestrator_model = "gpt-5.2"
     return config
@@ -49,19 +46,16 @@ class TestMAASOrchestrator:
         orch = MAASOrchestrator()
         assert "sql" in orch._specialists
         assert "logs" in orch._specialists
-        assert "codefix" in orch._specialists
 
     @patch("copilot.maas.orchestrator.get_maas_config")
     async def test_init_without_endpoints(self, mock_config_fn):
         config = _mock_config()
         config.sql_endpoint = ""
         config.logs_endpoint = ""
-        config.codefix_endpoint = ""
         mock_config_fn.return_value = config
         orch = MAASOrchestrator()
         assert "sql" not in orch._specialists
         assert "logs" not in orch._specialists
-        assert "codefix" not in orch._specialists
 
 
 @pytest.mark.asyncio

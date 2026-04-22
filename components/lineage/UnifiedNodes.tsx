@@ -99,8 +99,6 @@ interface DataAssetNodeData {
   downstreamCount?: number;
   // Health & freshness
   lastUpdated?: string;
-  freshnessStatus?: 'fresh' | 'stale' | 'unknown';
-  freshnessHours?: number;
   issues?: DataAssetIssues;
   owner?: string;
   tags?: string[];
@@ -234,6 +232,8 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
     const health = data.healthSummary;
     const total = health ? health.healthy + health.degraded + health.failing + health.unknown : 0;
     const healthPct = total > 0 && health ? Math.round((health.healthy / total) * 100) : 0;
+    // Version control tools have no runtime monitors — suppress health rail.
+    const isVcsTool = ['github', 'gitlab', 'bitbucket'].includes((data.toolType || '').toLowerCase());
 
     return (
       <div
@@ -329,7 +329,7 @@ export function ToolNode({ data }: { data: ToolNodeData }) {
         })()}
 
         {/* Health bar — derived from monitors when available, unknown otherwise */}
-        {(() => {
+        {!isVcsTool && (() => {
           const ms = data.monitorSummary;
           const hasMonitors = ms && ms.total > 0;
 
@@ -548,7 +548,6 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   const hasIssues = data.issues && data.issues.total > 0;
   const hasCritical = data.issues && data.issues.critical > 0;
   const hasHigh = data.issues && data.issues.high > 0;
-  const isStale = data.freshnessStatus === 'stale';
   const monitorFailing = data.monitorStatus?.worstStatus === 'FAIL' || data.monitorStatus?.worstStatus === 'ERROR';
   const monitorWarning = data.monitorStatus?.worstStatus === 'WARN';
 
@@ -556,7 +555,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
   let borderColor = primaryColor;
   if (hasCritical || monitorFailing) {
     borderColor = '#EF4444'; // red
-  } else if (hasHigh || isStale || monitorWarning) {
+  } else if (hasHigh || monitorWarning) {
     borderColor = '#F59E0B'; // amber
   }
 
@@ -638,14 +637,6 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
 
         {/* Status indicators row */}
         <div className="flex items-center gap-1 mb-1">
-          {data.freshnessStatus === 'fresh' && (
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" title="Fresh" />
-          )}
-          {isStale && (
-            <div className="flex items-center" title={`Stale (${data.freshnessHours}h ago)`}>
-              <Clock className="w-3 h-3 text-amber-400" />
-            </div>
-          )}
           {hasCritical && (
             <div className="flex items-center" title={`${data.issues?.critical} critical issues`}>
               <AlertCircle className="w-3 h-3 text-red-400" />
@@ -656,7 +647,7 @@ export function DataAssetNode({ data }: { data: DataAssetNodeData }) {
               <AlertCircle className="w-3 h-3 text-amber-400" />
             </div>
           )}
-          {!hasIssues && !isStale && !data.monitorStatus && data.freshnessStatus !== 'unknown' && (
+          {!hasIssues && !data.monitorStatus && (
             <CheckCircle className="w-3 h-3 text-emerald-400" />
           )}
           {/* Monitor status dot */}

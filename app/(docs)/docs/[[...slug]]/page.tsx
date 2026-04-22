@@ -38,7 +38,7 @@ export async function generateMetadata({ params }: Props) {
 
 const sectionDescriptions: Record<string, string> = {
   'User Guides':
-    'Learn how to set up your pipeline, use Scout AI, visualize lineage, and monitor data quality.',
+    'Learn how to set up your pipeline, use the AI assistant, visualize lineage, and monitor data quality.',
   Integrations:
     'Step-by-step guides for connecting your warehouses, transformation tools, orchestrators, and BI platforms.',
   'Technical Reference':

@@ -82,43 +82,12 @@ class LogsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# CodeFix Specialist
-# ---------------------------------------------------------------------------
-
-class UnifiedDiffPatch(BaseModel):
-    """A single file patch in unified diff format."""
-    file_path: str
-    patch_type: str = Field(
-        description="One of: sql_model, yaml_config, python_script, orchestration, text_file"
-    )
-    diff: str = Field(default="", description="Unified diff content")
-    new_content: str = Field(description="Complete new file content")
-    original_content: Optional[str] = None
-    rationale: str
-
-
-class CodeFixValidation(BaseModel):
-    """Validation steps for the proposed fix."""
-    static_checks: List[str] = Field(default_factory=list)
-    ci_checks: List[str] = Field(default_factory=list)
-    rollback_steps: List[str] = Field(default_factory=list)
-
-
-class CodeFixResponse(BaseModel):
-    """Response from the CodeFix specialist."""
-    patches: List[UnifiedDiffPatch]
-    validation: CodeFixValidation
-    impact_summary: str = Field(description="What downstream objects are affected")
-    root_cause_summary: str = Field(description="One-sentence root cause")
-
-
-# ---------------------------------------------------------------------------
 # Observability
 # ---------------------------------------------------------------------------
 
 class SpecialistInvocation(BaseModel):
     """Record of a single specialist call."""
-    specialist: str  # "sql", "logs", "codefix"
+    specialist: str  # "sql", "logs"
     latency_ms: int
     success: bool
     retry_count: int = 0
@@ -135,7 +104,7 @@ class ToolCallRecord(BaseModel):
 
 class MAASTrace(BaseModel):
     """Full request trace for observability and debugging."""
-    route: str  # e.g. "INFO/sql" or "DEBUG/logs+codefix"
+    route: str  # e.g. "INFO/sql" or "DEBUG/logs"
     specialists: List[SpecialistInvocation] = Field(default_factory=list)
     verifier_results: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     tool_calls: List[ToolCallRecord] = Field(default_factory=list)

@@ -4,10 +4,43 @@ import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { computeNextRun } from '@/lib/cron';
 import { notifyEvents } from '@/lib/notifications';
+import {
+  computeWatchHealthScore,
+  watchHealthStatusFromScore,
+  signalsFromMonitors,
+} from '@/lib/watch-health';
 
 const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
 
 const WAREHOUSE_TOOL_TYPES = ['bigquery', 'snowflake', 'postgres', 'redshift'];
+
+/**
+ * Persist a run + update the parent monitor's cached status for early-error paths
+ * (e.g. airflow in github-only mode, dbt in static mode). Without this, `lastStatus`
+ * stays stale and UI aggregations (pipeline overview tool cards, lineage nodes)
+ * never reflect the error.
+ */
+async function persistEarlyErrorRun(
+  monitorId: string,
+  message: string,
+  schedule: string | null,
+  timezone: string | null,
+) {
+  const now = new Date();
+  await prisma.monitorRun.create({
+    data: {
+      status: 'ERROR',
+      message,
+      startedAt: now,
+      completedAt: now,
+      durationMs: 0,
+      monitorId,
+    },
+  });
+  const updateData: Record<string, any> = { lastRunAt: now, lastStatus: 'ERROR' };
+  if (schedule) updateData.nextRunAt = computeNextRun(schedule, timezone || 'UTC');
+  await prisma.monitor.update({ where: { id: monitorId }, data: updateData });
+}
 
 /**
  * Resolve warehouse connection config from a PipelineNode.
@@ -86,6 +119,7 @@ export async function POST(
       'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
       'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
       'DBT_TEST_FAILURES', 'DBT_MODEL_FRESHNESS', 'DBT_SOURCE_FRESHNESS',
+      'DBT_CORE_SOURCE_VALIDATION', 'DBT_CORE_REF_INTEGRITY',
     ];
     const isInfra = INFRA_MONITOR_TYPES.includes(task.monitorType || '');
     const isTool = TOOL_MONITOR_TYPES_LIST.includes(task.monitorType || '');
@@ -234,9 +268,11 @@ export async function POST(
       DAG_LAST_RUN: ['airflow', 'dagster'],
       DAG_SCHEDULE_LAG: ['airflow', 'dagster'],
       TASK_FAILURE_RATE: ['airflow', 'dagster'],
-      DBT_TEST_FAILURES: ['dbt_cloud', 'dbt_core'],
-      DBT_MODEL_FRESHNESS: ['dbt_cloud', 'dbt_core'],
-      DBT_SOURCE_FRESHNESS: ['dbt_cloud', 'dbt_core'],
+      DBT_TEST_FAILURES: ['dbt_cloud'],
+      DBT_MODEL_FRESHNESS: ['dbt_cloud'],
+      DBT_SOURCE_FRESHNESS: ['dbt_cloud'],
+      DBT_CORE_SOURCE_VALIDATION: ['dbt_core'],
+      DBT_CORE_REF_INTEGRITY: ['dbt_core'],
     };
 
     if (isTool) {
@@ -292,14 +328,13 @@ export async function POST(
         const sourceMode = integrationConfig.source_mode;
         const hasHost = !!(integrationConfig.host || integrationConfig.base_url);
         if (sourceMode === 'github' || (!hasHost && integrationConfig.github_repo)) {
+          const message = `Airflow integration "${rawToolNode?.name || 'unknown'}" is connected in GitHub DAG-file mode (static project files only). `
+            + 'Airflow monitors require a live Airflow instance connection to check DAG run status. '
+            + 'Go to the Pipeline page and switch the Airflow integration to API mode with a host URL (e.g. https://your-airflow.example.com).';
+          await persistEarlyErrorRun(task.id, message, task.schedule, task.timezone);
           return NextResponse.json({
             run: null,
-            result: {
-              status: 'ERROR',
-              message: `Airflow integration "${rawToolNode?.name || 'unknown'}" is connected in GitHub DAG-file mode (static project files only). `
-                + 'Airflow monitors require a live Airflow instance connection to check DAG run status. '
-                + 'Go to the Pipeline page and switch the Airflow integration to API mode with a host URL (e.g. https://your-airflow.example.com).',
-            },
+            result: { status: 'ERROR', message },
           });
         }
       }
@@ -310,14 +345,13 @@ export async function POST(
         const sourceMode = integrationConfig.source_mode;
         const hasApiKey = !!(integrationConfig.api_key || integrationConfig.token);
         if (!hasApiKey && ['upload', 'project', 'github'].includes(sourceMode)) {
+          const message = `dbt integration "${rawToolNode?.name || 'unknown'}" is connected in ${sourceMode} mode (static project files only). `
+            + 'dbt monitors require a live dbt Cloud API connection to check job runs and test results. '
+            + 'Go to the Pipeline page and switch to a dbt Cloud integration with an API key.';
+          await persistEarlyErrorRun(task.id, message, task.schedule, task.timezone);
           return NextResponse.json({
             run: null,
-            result: {
-              status: 'ERROR',
-              message: `dbt integration "${rawToolNode?.name || 'unknown'}" is connected in ${sourceMode} mode (static project files only). `
-                + 'dbt monitors require a live dbt Cloud API connection to check job runs and test results. '
-                + 'Go to the Pipeline page and switch to a dbt Cloud integration with an API key.',
-            },
+            result: { status: 'ERROR', message },
           });
         }
       }
@@ -344,6 +378,7 @@ export async function POST(
         SYNC_LAG: 'ingestion', FAILED_SYNCS: 'ingestion', CONNECTOR_SCHEMA_DRIFT: 'ingestion',
         DAG_LAST_RUN: 'orchestration', DAG_SCHEDULE_LAG: 'orchestration', TASK_FAILURE_RATE: 'orchestration',
         DBT_TEST_FAILURES: 'transform', DBT_MODEL_FRESHNESS: 'transform', DBT_SOURCE_FRESHNESS: 'transform',
+        DBT_CORE_SOURCE_VALIDATION: 'transform', DBT_CORE_REF_INTEGRITY: 'transform',
         BI_FRESHNESS_PROXY: 'bi', BI_UPSTREAM_BREAK_RISK: 'bi', BI_CONTENT_HEALTH: 'bi', BI_REFRESH_FAILURE: 'bi',
         QUERY_PERFORMANCE: 'warehouse', COST_ANOMALY: 'warehouse', STORAGE_GROWTH: 'warehouse',
       };
@@ -461,10 +496,45 @@ export async function POST(
       data: updateData,
     });
 
+    // Keep the parent watch's cached healthScore in sync. Without this,
+    // MonitorGroup.healthScore only updates on full watch runs, so individual
+    // monitor runs leave dashboards showing a stale score.
+    // Skip for grouped runs — the watch-level endpoint recomputes at the end.
+    const isGroupedRun = request.nextUrl.searchParams.get('grouped') === 'true';
+    if (!isGroupedRun && task.monitorGroupId) {
+      try {
+        const group = await prisma.monitorGroup.findUnique({
+          where: { id: task.monitorGroupId },
+          select: {
+            id: true,
+            anchorFqn: true,
+            monitors: {
+              where: { enabled: true },
+              select: { targetFqn: true, lastStatus: true, config: true },
+            },
+          },
+        });
+        if (group) {
+          const signals = signalsFromMonitors(group.monitors, group.anchorFqn);
+          if (signals.length > 0) {
+            const newScore = computeWatchHealthScore(signals);
+            await prisma.monitorGroup.update({
+              where: { id: group.id },
+              data: {
+                healthScore: newScore,
+                lastHealthAt: new Date(),
+              },
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[Schedule] Failed to recompute watch healthScore:', e);
+      }
+    }
+
     // Fire-and-forget notification (skip when running as part of a group —
     // the bundle endpoint sends one collective notification instead)
-    const isGrouped = request.nextUrl.searchParams.get('grouped') === 'true';
-    if (!isGrouped) {
+    if (!isGroupedRun) {
       const pipelineStack = await prisma.pipelineStack.findFirst({
         where: { organizationId },
         select: { id: true },

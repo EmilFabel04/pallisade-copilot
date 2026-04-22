@@ -71,7 +71,7 @@ function sortDetailKeys(keys: string[]): string[] {
 
 function navigateToScout(
   router: ReturnType<typeof useRouter>,
-  promptType: 'explain' | 'verify' | 'investigate',
+  promptType: 'explain' | 'verify' | 'investigate' | 'fix',
   run: TaskRun,
   taskName?: string,
   monitorType?: string,
@@ -95,6 +95,10 @@ function navigateToScout(
     case 'investigate':
       prompt = `/debug Using the monitor run data provided below, investigate the root cause of the ${run.status} result on ${target}. Focus on the specific values, thresholds, and any anomalies in the details. You may query the warehouse to compare current vs historical data if needed.`;
       display = `Investigate the ${run.status} result on ${target} from the ${type} monitor`;
+      break;
+    case 'fix':
+      prompt = `/fix The ${type} monitor on ${target} returned ${run.status}. Using the monitor run data provided below, identify the root cause and propose a concrete fix. Trace the lineage upstream if the issue is in source data or a transformation. If code changes are needed (dbt model, DAG, SQL), inspect the current code with the appropriate tool, then create a change plan with the exact patch. If the fix is a config/threshold change instead, state precisely what to change and why.`;
+      display = `Fix the ${run.status} result on ${target} from the ${type} monitor`;
       break;
   }
 
@@ -320,7 +324,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                             </div>
                           )}
 
-                          {/* Ask Scout */}
+                          {/* Ask AI */}
                           <div className="flex items-center gap-2 pt-1">
                             <button
                               onClick={(e) => {
@@ -332,7 +336,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                               </svg>
-                              Ask Scout
+                              Ask AI
                             </button>
 
                             <div className="flex items-center gap-1.5 ml-1">
@@ -340,6 +344,7 @@ export function RunHistoryTable({ runs, loading, taskName, monitorType, targetFq
                                 { label: 'Explain this', type: 'explain' as const },
                                 { label: 'Double check', type: 'verify' as const },
                                 { label: 'Investigate', type: 'investigate' as const },
+                                { label: 'Fix it', type: 'fix' as const },
                               ].map((chip) => (
                                 <button
                                   key={chip.type}

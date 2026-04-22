@@ -136,43 +136,48 @@ export default function BillingSettings() {
   if (!sub) {
     return (
       <div className="space-y-6">
-        <div className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-xl p-6">
-          <h2 className="text-[15px] font-semibold text-[var(--text)] mb-4 flex items-center gap-2">
-            <CreditCard size={16} className="text-[var(--muted)]" /> Choose a Plan
+        <div>
+          <h2 className="text-[18px] font-semibold text-[var(--text)] mb-2 flex items-center gap-2">
+            <CreditCard size={18} className="text-[var(--muted)]" /> Choose a Plan
           </h2>
-          <p className="text-[13px] text-[var(--muted)] mb-6">Select a plan to activate billing and unlock the full platform.</p>
+          <p className="text-[13px] text-[var(--muted)] mb-8">Select a plan to activate billing and unlock the full platform.</p>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-8 max-w-2xl mx-auto">
             {/* Growth */}
-            <div className="p-5 rounded-xl border border-[var(--subtle-border)] bg-[var(--overlay-faint)] space-y-3">
+            <div className="p-8 rounded-xl border-2 border-[var(--subtle-border)] space-y-5">
               <div>
-                <p className="text-[16px] font-semibold text-[var(--text)]">Growth</p>
-                <p className="text-[24px] font-bold text-[var(--text)] mt-1">$1,500<span className="text-[14px] font-normal text-[var(--muted)]">/mo</span></p>
+                <p className="text-[14px] font-medium text-[var(--muted)] uppercase tracking-wide">Growth</p>
+                <p className="text-[28px] font-bold text-[var(--text)] mt-2">R38,999<span className="text-[14px] font-normal text-[var(--muted)]">/mo</span></p>
+                <p className="text-[12px] text-[var(--muted)] mt-1">For small data teams</p>
               </div>
-              <ul className="text-[13px] text-[var(--muted)] space-y-1">
-                <li>5M tokens / month</li>
-                <li>100 GB storage</li>
-                <li>5 team members</li>
+              <ul className="text-[13px] text-[var(--muted)] space-y-2">
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--muted)] shrink-0" />5M tokens / month</li>
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--muted)] shrink-0" />100 GB storage</li>
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--muted)] shrink-0" />5 team members</li>
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--muted)] shrink-0" />3 pipeline profiles</li>
               </ul>
               <button
                 onClick={() => handleCheckout('GROWTH')}
                 disabled={!!actionLoading}
-                className="w-full py-2.5 bg-[var(--accent)] hover:bg-[var(--accent)]/90 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                className="w-full py-2.5 border border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
               >
                 {actionLoading === 'GROWTH' ? 'Redirecting...' : 'Get Started'}
               </button>
             </div>
 
             {/* Business */}
-            <div className="p-5 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 space-y-3">
+            <div className="p-8 rounded-xl border-2 border-[var(--accent)] relative space-y-5">
+              <span className="absolute -top-3 left-4 px-2 py-0.5 bg-[var(--accent)] text-white text-[11px] font-medium rounded-full">Recommended</span>
               <div>
-                <p className="text-[16px] font-semibold text-[var(--text)]">Business</p>
-                <p className="text-[24px] font-bold text-[var(--text)] mt-1">$3,000<span className="text-[14px] font-normal text-[var(--muted)]">/mo</span></p>
+                <p className="text-[14px] font-medium text-[var(--accent)] uppercase tracking-wide">Business</p>
+                <p className="text-[28px] font-bold text-[var(--text)] mt-2">R64,899<span className="text-[14px] font-normal text-[var(--muted)]">/mo</span></p>
+                <p className="text-[12px] text-[var(--muted)] mt-1">For mid-size teams</p>
               </div>
-              <ul className="text-[13px] text-[var(--muted)] space-y-1">
-                <li>20M tokens / month</li>
-                <li>500 GB storage</li>
-                <li>15 team members</li>
+              <ul className="text-[13px] text-[var(--muted)] space-y-2">
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--accent)] shrink-0" />20M tokens / month</li>
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--accent)] shrink-0" />500 GB storage</li>
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--accent)] shrink-0" />15 team members</li>
+                <li className="flex items-center gap-2"><span className="w-1 h-1 rounded-full bg-[var(--accent)] shrink-0" />6 pipeline profiles</li>
               </ul>
               <button
                 onClick={() => handleCheckout('BUSINESS')}
@@ -256,14 +261,14 @@ export default function BillingSettings() {
             disabled={!!actionLoading}
             className="px-4 py-2 text-sm bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] text-[var(--text)] rounded-lg transition-colors disabled:opacity-50"
           >
-            {actionLoading === 'credit-5M' ? 'Redirecting...' : 'Buy 5M tokens — $100'}
+            {actionLoading === 'credit-5M' ? 'Redirecting...' : 'Buy 5M tokens — R1,800'}
           </button>
           <button
             onClick={() => handleCreditPurchase('20M')}
             disabled={!!actionLoading}
             className="px-4 py-2 text-sm bg-[var(--hover-bg)] hover:bg-[var(--overlay-medium)] text-[var(--text)] rounded-lg transition-colors disabled:opacity-50"
           >
-            {actionLoading === 'credit-20M' ? 'Redirecting...' : 'Buy 20M tokens — $350'}
+            {actionLoading === 'credit-20M' ? 'Redirecting...' : 'Buy 20M tokens — R6,300'}
           </button>
         </div>
 
@@ -275,7 +280,7 @@ export default function BillingSettings() {
                 <div key={p.id} className="flex items-center justify-between py-2 px-3 rounded-lg bg-[var(--overlay-faint)] text-[13px]">
                   <span className="text-[var(--text)]">{formatTokens(p.tokensAmount)} tokens</span>
                   <div className="flex items-center gap-4">
-                    <span className="text-[var(--muted)]">${(p.pricePaid / 100).toFixed(2)}</span>
+                    <span className="text-[var(--muted)]">R{(p.pricePaid / 100).toFixed(2)}</span>
                     <span className="text-[var(--text-faint)]">{new Date(p.createdAt).toLocaleDateString()}</span>
                   </div>
                 </div>

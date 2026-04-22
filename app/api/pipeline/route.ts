@@ -324,6 +324,19 @@ export async function POST(request: NextRequest) {
     const isNew = !id || id === 'new';
 
     if (isNew) {
+      // Pipeline profile limit enforcement
+      const { getBillingState } = await import('@/lib/billing');
+      const billingState = await getBillingState(organizationId);
+      if (billingState.subscription) {
+        const currentCount = await prisma.pipelineStack.count({ where: { organizationId } });
+        if (currentCount >= billingState.subscription.pipelineAllowance) {
+          return NextResponse.json(
+            { error: `Pipeline profile limit reached (${billingState.subscription.pipelineAllowance}). Upgrade your plan to add more.` },
+            { status: 402 },
+          );
+        }
+      }
+
       // Create new stack
       const stack = await prisma.pipelineStack.create({
         data: {

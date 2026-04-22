@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { X, Loader2 } from 'lucide-react';
 import { ScheduleInput } from './ScheduleInput';
-import { AlertChannelPicker } from './AlertChannelPicker';
+import { AlertDestinationPicker, type AlertDestination } from './AlertDestinationPicker';
 import { getMonitorDefinition, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
 
 interface MonitorGroupSettingsModalProps {
@@ -23,6 +23,7 @@ interface WatchDetail {
   timezone: string | null;
   alertChannels: string[];
   alertOnStatus: string[];
+  alertConfig: Record<string, any> | null;
   enabled: boolean;
   monitors: Array<{
     id: string;
@@ -49,6 +50,7 @@ export function MonitorGroupSettingsModal({
   const [timezone, setTimezone] = useState('UTC');
   const [alertChannels, setAlertChannels] = useState<string[]>([]);
   const [alertOnStatus, setAlertOnStatus] = useState<string[]>([]);
+  const [alertDestinations, setAlertDestinations] = useState<AlertDestination[]>([]);
   const [activeTypes, setActiveTypes] = useState<Set<string>>(new Set());
 
   // Track original state for dirty detection
@@ -67,6 +69,10 @@ export function MonitorGroupSettingsModal({
       setTimezone(w.timezone || 'UTC');
       setAlertChannels(w.alertChannels || []);
       setAlertOnStatus(w.alertOnStatus || []);
+      const existingDests = Array.isArray((w.alertConfig as any)?.destinations)
+        ? ((w.alertConfig as any).destinations as AlertDestination[])
+        : [];
+      setAlertDestinations(existingDests);
       const types = new Set<string>(w.monitors?.map((m: any) => m.monitorType) || []);
       setActiveTypes(types);
       setOriginalTypes(new Set(types));
@@ -111,8 +117,13 @@ export function MonitorGroupSettingsModal({
         body: JSON.stringify({
           schedule: schedule || undefined,
           timezone: timezone || undefined,
-          alertChannels,
-          alertOnStatus,
+          alertChannels: alertDestinations.length > 0
+            ? Array.from(new Set(alertDestinations.map((d) => d.channelType)))
+            : alertChannels,
+          alertOnStatus: alertDestinations.length > 0
+            ? Array.from(new Set(alertDestinations.flatMap((d) => d.triggerOn)))
+            : alertOnStatus,
+          alertConfig: alertDestinations.length > 0 ? { destinations: alertDestinations } : null,
           ...(addMonitorTypes.length > 0 && { addMonitorTypes }),
           ...(removeMonitorIds.length > 0 && { removeMonitorIds }),
         }),
@@ -175,16 +186,18 @@ export function MonitorGroupSettingsModal({
               <ScheduleInput value={schedule} onChange={setSchedule} />
             </div>
 
-            {/* Alert Section */}
+            {/* Alert Destinations */}
             <div className="bg-[var(--surface-inset)] rounded-lg p-4">
               <h3 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-3">
-                Alert Platform
+                Alert Destinations
               </h3>
-              <AlertChannelPicker
-                channels={alertChannels}
-                onChannelsChange={setAlertChannels}
-                alertOnStatus={alertOnStatus}
-                onAlertOnStatusChange={setAlertOnStatus}
+              <p className="text-[11px] text-[var(--muted)] mb-3">
+                Default destinations for every monitor in this group. Individual monitors can override these.
+              </p>
+              <AlertDestinationPicker
+                destinations={alertDestinations}
+                onChange={setAlertDestinations}
+                defaultTriggerOn={alertOnStatus.length > 0 ? alertOnStatus : ['FAIL', 'ERROR']}
                 integrations={integrations}
               />
             </div>

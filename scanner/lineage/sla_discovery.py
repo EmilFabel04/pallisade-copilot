@@ -166,6 +166,7 @@ def _get_table_metadata(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]
       - Snowflake:  INFORMATION_SCHEMA.TABLES (instant)
       - Postgres:   pg_stat_user_tables + pg_class (instant)
       - Redshift:   SVV_TABLE_INFO (instant)
+      - SQL Server / Azure SQL: sys.dm_db_partition_stats + sys.tables (instant)
 
     Falls back to adapter.get_table_freshness() for unknown dialects.
     """
@@ -260,6 +261,32 @@ def _get_table_metadata(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]
                 }
         except Exception as e:
             logger.warning("[SLA Discovery] %s: Redshift SVV_TABLE_INFO failed: %s", table_fqn, e)
+
+    # ── SQL Server / Azure SQL (tsql) ─────────────────────────────────
+    elif dialect == "tsql":
+        try:
+            rows = adapter.execute_query(f"""
+                SELECT SUM(p.rows) AS row_count,
+                       MAX(o.modify_date) AS last_modified,
+                       DATEDIFF(HOUR, MAX(o.modify_date), SYSUTCDATETIME()) AS hours_ago
+                FROM sys.tables t
+                JOIN sys.schemas s ON t.schema_id = s.schema_id
+                JOIN sys.objects o ON t.object_id = o.object_id
+                JOIN sys.partitions p ON t.object_id = p.object_id
+                WHERE t.name = '{tbl}'
+                  AND s.name = '{schema or "dbo"}'
+                  AND p.index_id IN (0, 1)
+            """)
+            if rows and rows[0].get("row_count") is not None:
+                r = rows[0]
+                hours_ago = r.get("hours_ago")
+                return {
+                    "row_count": max(0, int(r["row_count"])),
+                    "hours_since_update": float(hours_ago) if hours_ago is not None else 0,
+                    "last_updated": r.get("last_modified"),
+                }
+        except Exception as e:
+            logger.warning("[SLA Discovery] %s: SQL Server sys.tables failed: %s", table_fqn, e)
 
     # ── Fallback: adapter.get_table_freshness() ───────────────────────
     try:
@@ -552,22 +579,136 @@ def _compute_freshness(adapter: Any, table_fqn: str, metadata: Optional[Dict[str
     }
 
 
-def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Report current row count as context for user-defined thresholds.
+def _get_daily_row_counts(adapter: Any, table_fqn: str, days: int = 30) -> Optional[List[int]]:
+    """Return row counts per day for the most recent `days` days.
 
-    We can't derive meaningful min/max from a single snapshot — the user
-    knows their expected load pattern.  We provide currentRows so they
-    have a baseline to work from.
+    Picks a timestamp column (preferring ingest/update patterns over created),
+    then asks the warehouse to bucket rows by day. Skips the current day to
+    avoid biasing min/max with a partial day.
+    """
+    try:
+        columns = adapter.get_columns(table_fqn)
+    except Exception:
+        return None
+    if not columns:
+        return None
+
+    ts_candidates = []
+    for c in columns:
+        dtype = getattr(c, "data_type", "").lower()
+        if any(t in dtype for t in ("timestamp", "datetime", "date")):
+            ts_candidates.append(c.name)
+    if not ts_candidates:
+        return None
+
+    preferred = [c for c in ts_candidates if any(k in c.lower() for k in ("loaded", "ingested", "updated", "modified"))]
+    if not preferred:
+        preferred = [c for c in ts_candidates if "created" in c.lower()]
+    if not preferred:
+        preferred = ts_candidates
+    ts_col = preferred[0]
+
+    dialect = getattr(adapter, "dialect", "").lower()
+    db, schema, tbl = _parse_fqn(adapter, table_fqn)
+
+    if dialect == "bigquery":
+        q = lambda c: f"`{c}`"
+        quoted_table = f"`{db}`.`{schema}`.`{tbl}`"
+        date_expr = f"DATE({q(ts_col)})"
+        lookback = f"{q(ts_col)} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days + 1} DAY)"
+        today_excl = f"{date_expr} < CURRENT_DATE()"
+    elif dialect == "snowflake":
+        q = lambda c: f'"{c}"'
+        quoted_table = f'{db}.{schema}."{tbl}"'
+        date_expr = f"CAST({q(ts_col)} AS DATE)"
+        lookback = f"{q(ts_col)} >= DATEADD(day, -{days + 1}, CURRENT_TIMESTAMP())"
+        today_excl = f"{date_expr} < CURRENT_DATE()"
+    else:
+        q = lambda c: f'"{c}"'
+        quoted_table = f'"{schema}"."{tbl}"' if schema else f'"{tbl}"'
+        date_expr = f"CAST({q(ts_col)} AS DATE)"
+        lookback = f"{q(ts_col)} >= CURRENT_TIMESTAMP - INTERVAL '{days + 1} days'"
+        today_excl = f"{date_expr} < CURRENT_DATE"
+
+    query = f"""
+        SELECT {date_expr} AS day, COUNT(*) AS row_count
+        FROM {quoted_table}
+        WHERE {lookback} AND {today_excl}
+        GROUP BY day
+        ORDER BY day DESC
+        LIMIT {days}
+    """
+
+    try:
+        rows = adapter.execute_query(query)
+    except Exception as e:
+        logger.debug("[SLA Discovery] %s: daily-volume scan failed: %s", table_fqn, e)
+        return None
+
+    counts: List[int] = []
+    for r in rows or []:
+        val = r.get("row_count") if isinstance(r, dict) else None
+        if val is None:
+            continue
+        try:
+            counts.append(int(val))
+        except (TypeError, ValueError):
+            continue
+    return counts or None
+
+
+def _round_volume(n: float, *, down: bool) -> int:
+    """Round a row count to a human-friendly number of significant figures."""
+    if n <= 0:
+        return 0
+    magnitude = 10 ** max(0, int(math.log10(n)) - 1)
+    if down:
+        return max(0, int(math.floor(n / magnitude) * magnitude))
+    return int(math.ceil(n / magnitude) * magnitude)
+
+
+def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Derive expected daily volume thresholds from historical row counts.
+
+    Queries row counts per day for the last ~30 days via a timestamp column,
+    then emits minRows/maxRows as `avg ± 2·stddev` (clamped and rounded) so
+    the user sees expected daily ingest, not a static snapshot of total rows.
+    Falls back to just currentRows when no timestamp column is usable.
     """
     count = metadata.get("row_count") if metadata else None
-
     if not count or count <= 0:
         return None
 
-    return {
+    result: Dict[str, Any] = {
         "enabled": True,
         "currentRows": int(count),
     }
+
+    daily = _get_daily_row_counts(adapter, table_fqn)
+    if not daily or len(daily) < 3:
+        return result
+
+    n = len(daily)
+    avg = sum(daily) / n
+    variance = sum((x - avg) ** 2 for x in daily) / (n - 1)
+    stddev = math.sqrt(variance)
+
+    # ±2σ window, clamped and rounded to human-friendly numbers.
+    min_rows = _round_volume(max(0.0, avg - 2 * stddev), down=True)
+    max_rows = _round_volume(avg + 2 * stddev, down=False)
+
+    # Guarantee a non-degenerate window even on very stable tables.
+    if max_rows <= min_rows:
+        max_rows = _round_volume(avg * 1.5 + 1, down=False)
+        min_rows = _round_volume(avg * 0.5, down=True)
+
+    result.update({
+        "expectedDailyRows": int(round(avg)),
+        "minRows": int(min_rows),
+        "maxRows": int(max_rows),
+        "dataPoints": n,
+    })
+    return result
 
 
 def _compute_quality(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:

@@ -10,9 +10,6 @@ from copilot.maas.schemas import (
     LogsResponse,
     ErrorSignature,
     EvidenceRequest,
-    CodeFixResponse,
-    UnifiedDiffPatch,
-    CodeFixValidation,
     SpecialistInvocation,
     ToolCallRecord,
     MAASTrace,
@@ -102,41 +99,6 @@ class TestLogsResponse:
         assert resp.owner == "infra"
 
 
-class TestCodeFixResponse:
-    def test_valid_codefix_response(self):
-        resp = CodeFixResponse(
-            patches=[
-                UnifiedDiffPatch(
-                    file_path="models/orders.sql",
-                    patch_type="sql_model",
-                    new_content="SELECT * FROM orders",
-                    rationale="Fixed column reference.",
-                )
-            ],
-            validation=CodeFixValidation(
-                rollback_steps=["Revert to previous version"],
-            ),
-            impact_summary="Downstream dashboard affected.",
-            root_cause_summary="Wrong column name.",
-        )
-        assert len(resp.patches) == 1
-        assert resp.patches[0].patch_type == "sql_model"
-
-    def test_empty_patches(self):
-        # patches is required but can be empty list
-        resp = CodeFixResponse(
-            patches=[],
-            validation=CodeFixValidation(),
-            impact_summary="none",
-            root_cause_summary="none",
-        )
-        assert resp.patches == []
-
-    def test_missing_required_fields(self):
-        with pytest.raises(ValidationError):
-            CodeFixResponse()
-
-
 class TestObservability:
     def test_specialist_invocation(self):
         inv = SpecialistInvocation(
@@ -167,10 +129,10 @@ class TestObservability:
 
     def test_maas_trace_full(self):
         trace = MAASTrace(
-            route="DEBUG/logs+codefix",
+            route="DEBUG/logs",
             specialists=[
                 SpecialistInvocation(specialist="logs", latency_ms=300, success=True),
-                SpecialistInvocation(specialist="codefix", latency_ms=500, success=False, error="timeout"),
+                SpecialistInvocation(specialist="sql", latency_ms=500, success=False, error="timeout"),
             ],
             verifier_results={"logs": {"passed": True}},
             tool_calls=[

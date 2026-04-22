@@ -120,6 +120,7 @@ export async function GET(
         timezone: group.timezone,
         alertChannels: group.alertChannels,
         alertOnStatus: group.alertOnStatus,
+        alertConfig: group.alertConfig,
         lastStatus: group.lastStatus,
         lastRunAt: group.lastRunAt?.toISOString() ?? null,
         healthScore: group.healthScore,
@@ -170,6 +171,7 @@ export async function PATCH(
       timezone,
       alertChannels,
       alertOnStatus,
+      alertConfig,
       scopeConfig,
       removeMonitorIds,
     } = body;
@@ -182,6 +184,7 @@ export async function PATCH(
     if (timezone !== undefined) updateData.timezone = timezone;
     if (alertChannels !== undefined) updateData.alertChannels = alertChannels;
     if (alertOnStatus !== undefined) updateData.alertOnStatus = alertOnStatus;
+    if (alertConfig !== undefined) updateData.alertConfig = alertConfig;
     if (scopeConfig !== undefined) updateData.scopeConfig = scopeConfig;
 
     // Propagate schedule/alert changes to member monitors
@@ -196,6 +199,7 @@ export async function PATCH(
     if (enabled !== undefined) monitorUpdate.enabled = enabled;
     if (alertChannels !== undefined) monitorUpdate.alertChannels = alertChannels;
     if (alertOnStatus !== undefined) monitorUpdate.alertOnStatus = alertOnStatus;
+    if (alertConfig !== undefined) monitorUpdate.alertConfig = alertConfig;
 
     await prisma.$transaction(async (tx) => {
       // Remove monitors from this watch if requested

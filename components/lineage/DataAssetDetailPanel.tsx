@@ -18,7 +18,6 @@ import {
   ShieldCheck,
   Plus,
   Sparkles,
-  Loader2,
 } from 'lucide-react';
 import type { AssetPrefill } from '@/types/monitor-catalog';
 import {
@@ -399,29 +398,6 @@ export function DataAssetDetailPanel({
   const [recommendations, setRecommendations] = useState<MonitorRecommendation[] | null>(null);
   const [recsLoading, setRecsLoading] = useState(false);
 
-  // Asset monitors (by-anchor)
-  const [assetMonitors, setAssetMonitors] = useState<Array<{
-    id: string;
-    name: string;
-    monitorType: string;
-    enabled: boolean;
-    lastStatus: string | null;
-  }>>([]);
-  const [assetMonitorsLoading, setAssetMonitorsLoading] = useState(false);
-
-  useEffect(() => {
-    const fqn = node.fullName || node.name;
-    if (!fqn) return;
-    setAssetMonitorsLoading(true);
-    fetch(`/api/schedule/watches/by-anchor?anchorFqn=${encodeURIComponent(fqn)}`)
-      .then((res) => res.ok ? res.json() : { group: null })
-      .then((data) => {
-        setAssetMonitors(data.group?.monitors || []);
-      })
-      .catch(() => setAssetMonitors([]))
-      .finally(() => setAssetMonitorsLoading(false));
-  }, [node.fullName, node.name]);
-
   // SLA discovery state
   const [discoveryState, setDiscoveryState] = useState<'idle' | 'loading' | 'confirm' | 'unsupported'>('idle');
   const [discoveryResult, setDiscoveryResult] = useState<{
@@ -501,7 +477,6 @@ export function DataAssetDetailPanel({
 
   const hasIssues = node.issues && node.issues.total > 0;
   const hasCritical = node.issues && node.issues.critical > 0;
-  const isStale = node.freshnessStatus === 'stale';
 
   return (
     <div className="w-80 border-l border-[var(--subtle-border)] bg-[var(--surface-inset)] p-4 overflow-y-auto">
@@ -566,25 +541,11 @@ export function DataAssetDetailPanel({
                 {Math.round(node.monitorStatus.healthScore)}% {node.monitorStatus.healthStatus?.replace('_', ' ')}
               </span>
             ) : (
-              <>
-                {node.freshnessStatus === 'fresh' && (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-medium">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                    Fresh
-                  </span>
-                )}
-                {isStale && (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-medium">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                    Stale
-                  </span>
-                )}
-                {node.freshnessStatus === 'unknown' && !node.monitorStatus?.total && (
-                  <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--overlay-medium)] text-[var(--muted)] text-[10px] font-medium">
-                    Unmonitored
-                  </span>
-                )}
-              </>
+              !node.monitorStatus?.total && (
+                <span className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--overlay-medium)] text-[var(--muted)] text-[10px] font-medium">
+                  Unmonitored
+                </span>
+              )
             )}
           </div>
           <div className="flex items-start gap-6 text-[12px]">
@@ -592,13 +553,7 @@ export function DataAssetDetailPanel({
               <span className="text-[var(--muted)]">Last Updated</span>
               <p className="text-[var(--text)] mt-0.5">
                 {node.lastUpdated
-                  ? node.freshnessHours !== undefined
-                    ? node.freshnessHours < 1
-                      ? 'Just now'
-                      : node.freshnessHours < 24
-                      ? `${node.freshnessHours}h ago`
-                      : `${Math.round(node.freshnessHours / 24)}d ago`
-                    : new Date(node.lastUpdated.endsWith('Z') || node.lastUpdated.includes('+') ? node.lastUpdated : node.lastUpdated + 'Z').toLocaleDateString()
+                  ? new Date(node.lastUpdated.endsWith('Z') || node.lastUpdated.includes('+') ? node.lastUpdated : node.lastUpdated + 'Z').toLocaleDateString()
                   : 'Unknown'}
               </p>
             </div>
@@ -803,68 +758,21 @@ export function DataAssetDetailPanel({
           </div>
         )}
 
-        {/* ─── Monitors ────────────────────────────── */}
-        <Section title="Monitors" count={assetMonitors.length} defaultOpen>
-          {assetMonitorsLoading ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="w-4 h-4 animate-spin text-[var(--muted)]" />
-            </div>
-          ) : (
-            <div className="space-y-2 mt-2">
-              {assetMonitors.length > 0 ? (
-                <div className="space-y-1">
-                  {assetMonitors.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--overlay-light)]"
-                    >
-                      <span
-                        className={`w-2 h-2 rounded-full ${
-                          m.lastStatus === 'PASS'
-                            ? 'bg-emerald-400'
-                            : m.lastStatus === 'WARN'
-                              ? 'bg-amber-400'
-                              : m.lastStatus === 'FAIL'
-                                ? 'bg-red-400'
-                                : 'bg-[var(--overlay-strong)]'
-                        }`}
-                      />
-                      <span className="text-xs text-[var(--text)] flex-1">{m.name}</span>
-                      <span className={`text-[10px] ${
-                        m.lastStatus === 'PASS'
-                          ? 'text-emerald-400'
-                          : m.lastStatus === 'WARN'
-                            ? 'text-amber-400'
-                            : m.lastStatus === 'FAIL'
-                              ? 'text-red-400'
-                              : 'text-[var(--muted)]'
-                      }`}>
-                        {m.lastStatus || 'Pending'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-[var(--muted)]">No monitors configured</p>
-              )}
-
-              {onCreateAssetMonitor && (
-                <button
-                  onClick={() => {
-                    const fqn = node.fullName || node.name;
-                    const engineId = node.id.replace(/^lineage-/, '');
-                    const name = node.name.split('.').pop() || node.name;
-                    onCreateAssetMonitor(fqn, engineId, name);
-                  }}
-                  className="flex items-center gap-1 px-2 py-1.5 text-xs text-blue-400 hover:text-blue-300 rounded-md hover:bg-blue-500/10 w-full"
-                >
-                  <Plus className="w-3 h-3" />
-                  Create Monitor
-                </button>
-              )}
-            </div>
-          )}
-        </Section>
+        {/* Create Monitor action */}
+        {onCreateAssetMonitor && (
+          <button
+            onClick={() => {
+              const fqn = node.fullName || node.name;
+              const engineId = node.id.replace(/^lineage-/, '');
+              const name = node.name.split('.').pop() || node.name;
+              onCreateAssetMonitor(fqn, engineId, name);
+            }}
+            className="flex items-center justify-center gap-1 px-2 py-1.5 text-xs text-blue-400 hover:text-blue-300 rounded-md hover:bg-blue-500/10 w-full"
+          >
+            <Plus className="w-3 h-3" />
+            Create Monitor
+          </button>
+        )}
 
         {/* ─── Recommended Monitors ────────────────────────── */}
         {onCreateSingleMonitor && (() => {
@@ -1343,31 +1251,13 @@ export function DataAssetDetailPanel({
           </div>
         )}
 
-        {/* Criticality & Owner */}
-        <div className="grid grid-cols-2 gap-3">
-          {node.criticality && (
-            <div>
-              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Criticality</label>
-              <p
-                className={`text-[13px] mt-1 font-medium ${
-                  node.criticality === 'HIGH' || node.criticality === 'CRITICAL'
-                    ? 'text-red-400'
-                    : node.criticality === 'MEDIUM'
-                    ? 'text-amber-400'
-                    : 'text-[var(--text-tertiary)]'
-                }`}
-              >
-                {node.criticality}
-              </p>
-            </div>
-          )}
-          {node.owner && (
-            <div>
-              <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Owner</label>
-              <p className="text-[13px] text-[var(--text)] mt-1">{node.owner}</p>
-            </div>
-          )}
-        </div>
+        {/* Owner */}
+        {node.owner && (
+          <div>
+            <label className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Owner</label>
+            <p className="text-[13px] text-[var(--text)] mt-1">{node.owner}</p>
+          </div>
+        )}
 
         {/* ─── Data SLA ────────────────────────────── */}
         <div className="border-t border-[var(--subtle-border)] pt-3">

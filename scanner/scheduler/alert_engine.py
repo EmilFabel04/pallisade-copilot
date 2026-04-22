@@ -87,19 +87,28 @@ class AlertEngine:
         status = (result.get("status", "ERROR")).upper()
         alert_on = task.get("alertOnStatus") or []
         alert_channels = task.get("alertChannels") or []
+        alert_config = task.get("alertConfig") or {}
+        has_destinations = bool(
+            isinstance(alert_config, dict)
+            and alert_config.get("destinations")
+        )
 
-        # Check if status matches alert configuration
-        if status not in alert_on:
+        # Status filter: when per-destination routing is configured, the
+        # dispatch route handles per-destination triggerOn filtering, so we
+        # skip the alertOnStatus check here. Otherwise, fall back to the
+        # legacy per-monitor alertOnStatus list.
+        if not has_destinations and alert_on and status not in alert_on:
             return AlertDecision(
                 should_alert=False,
                 reason=f"Status '{status}' not in alertOnStatus {alert_on}",
             )
 
-        if not alert_channels:
-            return AlertDecision(
-                should_alert=False,
-                reason="No alert channels configured",
-            )
+        # Channel/destination gating removed: the dispatch route
+        # (/api/schedule/alert) does Monitor → Group → legacy fallback
+        # resolution. Monitors whose group has destinations but monitor
+        # itself doesn't will be resolved there. Only skip if we're
+        # certain nothing is configured at any level.
+        # (We can't check group-level config here; let the route handle it.)
 
         # Min-history check: don't alert during baseline building
         if run_count > 0 and run_count <= self.min_history_runs:

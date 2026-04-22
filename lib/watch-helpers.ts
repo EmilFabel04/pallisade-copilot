@@ -32,6 +32,7 @@ export interface CreateWatchParams {
   timezone?: string;
   alertChannels?: string[];
   alertOnStatus?: string[];
+  alertConfig?: Record<string, any> | null;
   integrationId?: string;
   monitoringPlanId?: string;
   presetGroupId?: string;
@@ -43,6 +44,9 @@ export interface CreateWatchParams {
     config?: Record<string, any>;
     depth?: number;
     priority?: number;
+    alertChannels?: string[];
+    alertOnStatus?: string[];
+    alertConfig?: Record<string, any> | null;
   }>;
   organizationId: string;
   userId: string;
@@ -74,6 +78,7 @@ export async function createWatchInTransaction(
     timezone = 'UTC',
     alertChannels = [],
     alertOnStatus = ['FAIL', 'WARN', 'ERROR'],
+    alertConfig,
     integrationId,
     monitoringPlanId,
     presetGroupId,
@@ -128,6 +133,7 @@ export async function createWatchInTransaction(
         timezone,
         alertChannels,
         alertOnStatus,
+        alertConfig: alertConfig ?? undefined,
         organizationId,
         createdBy: userId,
       },
@@ -209,8 +215,9 @@ export async function createWatchInTransaction(
             schedule: schedule || null,
             timezone,
             enabled: true,
-            alertChannels,
-            alertOnStatus,
+            alertChannels: mon.alertChannels ?? alertChannels,
+            alertOnStatus: mon.alertOnStatus ?? alertOnStatus,
+            alertConfig: (mon.alertConfig ?? alertConfig) ?? undefined,
             nextRunAt,
             createdBy: userId,
             source: 'pallisade',

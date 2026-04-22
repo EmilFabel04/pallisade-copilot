@@ -104,7 +104,7 @@ export async function GET(request: NextRequest) {
           for (const m of mons) {
             if (m.lastStatus === 'PASS') gPass++;
             else if (m.lastStatus === 'WARN') gWarn++;
-            else if (m.lastStatus === 'FAIL') gFail++;
+            else if (m.lastStatus === 'FAIL' || m.lastStatus === 'ERROR') gFail++;
           }
           return {
             id: g.id,
@@ -180,6 +180,7 @@ export async function POST(request: NextRequest) {
       timezone = 'UTC',
       alertChannels = [],
       alertOnStatus = ['FAIL', 'WARN', 'ERROR'],
+      alertDestinations = [], // New per-integration destination routing
       groups, // Array of group specs from the preview
       stackId, // Pipeline stack ID for contract-aware resolution
     } = body;
@@ -291,6 +292,21 @@ export async function POST(request: NextRequest) {
       let totalMonitors = 0;
       const allTargetFqns = new Set<string>();
 
+      // Per-destination routing: build alertConfig.destinations from the
+      // top-level alertDestinations array and also derive per-monitor channel
+      // types / triggerOn defaults so legacy consumers keep working.
+      const destinations = Array.isArray(alertDestinations) ? alertDestinations : [];
+      const derivedChannelTypes = Array.from(
+        new Set(destinations.map((d: any) => d.channelType).filter(Boolean)),
+      );
+      const derivedTriggerOn = Array.from(
+        new Set(destinations.flatMap((d: any) => d.triggerOn || [])),
+      );
+      const effectiveAlertChannels = destinations.length > 0 ? derivedChannelTypes : alertChannels;
+      const effectiveAlertOnStatus = destinations.length > 0 && derivedTriggerOn.length > 0
+        ? derivedTriggerOn
+        : alertOnStatus;
+
       for (const group of groups || []) {
         const monitors = (group.recommendations || []).map((rec: any) => ({
           name: `${(rec.monitor_key || '').replace(/_/g, ' ')} — ${(rec.target_fqn || 'monitor').split('.').pop()}`,
@@ -299,6 +315,9 @@ export async function POST(request: NextRequest) {
           config: rec.config_hints || {},
           depth: rec.depth || 0,
           priority: rec.priority || 2,
+          alertChannels: effectiveAlertChannels,
+          alertOnStatus: effectiveAlertOnStatus,
+          alertConfig: destinations.length > 0 ? { destinations } : undefined,
         }));
 
         const watchResult = await createWatchInTransaction(tx, {
@@ -311,8 +330,9 @@ export async function POST(request: NextRequest) {
           anchorPlatform: group.anchor_platform,
           schedule,
           timezone,
-          alertChannels,
-          alertOnStatus,
+          alertChannels: effectiveAlertChannels,
+          alertOnStatus: effectiveAlertOnStatus,
+          alertConfig: destinations.length > 0 ? { destinations } : undefined,
           monitoringPlanId: plan.id,
           monitors,
           organizationId,

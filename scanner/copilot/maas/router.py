@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SpecialistRoute:
     """Defines which specialists to call and in what order for an intent."""
-    specialists: List[str]       # ordered: ["sql"], ["logs", "codefix"], etc.
+    specialists: List[str]       # ordered: ["sql"], ["logs"], etc.
     evidence_tools: List[str]    # tools to call BEFORE specialists
     budget: IntentBudget
     required_specialists: List[str]   # must be available, else full fallback
@@ -92,7 +92,6 @@ def route_intent(
     and the budget constraints.
     """
     primary = intent_result.primary.intent
-    secondary = intent_result.secondary.intent if intent_result.secondary else None
     budget = get_budget(primary)
 
     # --- INFO: SQL specialist only if it's a data query ---
@@ -115,41 +114,36 @@ def route_intent(
                 optional_specialists=[],
             )
 
-    # --- DEBUG: Logs specialist, optional CodeFix ---
+    # --- DEBUG: Logs specialist ---
     if primary == Intent.DEBUG:
         evidence_tools = _debug_evidence_tools(intent_result)
-        specialists = ["logs"]
-        optional = []
-        if secondary in (Intent.FIX, Intent.PR):
-            specialists.append("codefix")
-            optional.append("codefix")
         return SpecialistRoute(
-            specialists=specialists,
+            specialists=["logs"],
             evidence_tools=evidence_tools,
             budget=budget,
             required_specialists=["logs"],
-            optional_specialists=optional,
+            optional_specialists=[],
         )
 
-    # --- FIX/PR: Logs triage + CodeFix ---
+    # --- FIX/PR: Logs triage; GPT-5 orchestrator produces the fix ---
     if primary in (Intent.FIX, Intent.PR):
         evidence_tools = _fix_evidence_tools(intent_result)
         return SpecialistRoute(
-            specialists=["logs", "codefix"],
+            specialists=["logs"],
             evidence_tools=evidence_tools,
             budget=budget,
             required_specialists=["logs"],
-            optional_specialists=["codefix"],
+            optional_specialists=[],
         )
 
-    # --- PLAN: upstream/downstream + CodeFix draft ---
+    # --- PLAN: upstream/downstream evidence, GPT-5 orchestrator drafts the plan ---
     if primary == Intent.PLAN:
         return SpecialistRoute(
-            specialists=["codefix"],
+            specialists=[],
             evidence_tools=["get_upstream", "get_downstream"],
             budget=budget,
             required_specialists=[],
-            optional_specialists=["codefix"],
+            optional_specialists=[],
         )
 
     # --- EXPLAIN: no specialist, GPT-5 only ---

@@ -11,13 +11,13 @@ const PLAN_CODE_MAP: Record<string, string | undefined> = {
 };
 
 const CREDIT_AMOUNT_MAP: Record<string, number> = {
-  '5M': 10000,   // amount in smallest currency unit — set to match your PayStack plan currency
-  '20M': 35000,
+  '5M': 180000,   // R1,800 in kobo (~$100)
+  '20M': 630000,  // R6,300 in kobo (~$350)
 };
 
-const PLAN_DEFAULTS: Record<string, { tokenAllowance: number; storageAllowanceGb: number; memberAllowance: number }> = {
-  GROWTH: { tokenAllowance: 5_000_000, storageAllowanceGb: 100, memberAllowance: 5 },
-  BUSINESS: { tokenAllowance: 20_000_000, storageAllowanceGb: 500, memberAllowance: 15 },
+const PLAN_DEFAULTS: Record<string, { tokenAllowance: number; storageAllowanceGb: number; memberAllowance: number; pipelineAllowance: number }> = {
+  GROWTH: { tokenAllowance: 5_000_000, storageAllowanceGb: 100, memberAllowance: 5, pipelineAllowance: 3 },
+  BUSINESS: { tokenAllowance: 20_000_000, storageAllowanceGb: 500, memberAllowance: 15, pipelineAllowance: 6 },
 };
 
 export async function POST(request: NextRequest) {
