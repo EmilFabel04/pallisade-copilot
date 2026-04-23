@@ -5,7 +5,7 @@ API endpoints for the data pipeline co-pilot.
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Header, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
@@ -18,6 +18,7 @@ from copilot.llm import CopilotLLM, Message, CopilotResponse, StreamEvent
 from copilot.openlineage_consumer import OpenLineageConsumer
 from copilot.modes import get_mode_config, parse_slash_command, get_available_modes, mode_from_intent
 from copilot.intent import classify_intent
+from scanner.api.auth import ActingPrincipal, require_principal
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ class OpenLineageEventRequest(BaseModel):
 async def chat(
     request: ChatRequest,
     raw_request: Request,
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Send a message to the co-pilot.
@@ -195,7 +196,7 @@ async def chat(
         # Build context with mode and intent
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
-            org_id=x_organization_id,
+            org_id=principal.organization_id,
             query=message,
             pipeline_stack_id=request.pipeline_stack_id,
             node_ids=request.node_ids,
@@ -253,7 +254,7 @@ async def chat(
 async def chat_stream(
     request: ChatStreamRequest,
     raw_request: Request,
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Stream a chat response via Server-Sent Events (SSE).
@@ -316,7 +317,7 @@ async def chat_stream(
 
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
-            org_id=x_organization_id,
+            org_id=principal.organization_id,
             query=message,
             pipeline_stack_id=request.pipeline_stack_id,
             node_ids=request.node_ids,
@@ -437,19 +438,19 @@ async def chat_stream(
 
 @router.get("/context", response_model=ContextResponse)
 async def get_context(
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    principal: ActingPrincipal = Depends(require_principal),
     pipeline_stack_id: Optional[str] = None,
 ):
     """
     Get the current co-pilot context.
-    
+
     Returns information about connected integrations,
     available tools, and lineage statistics.
     """
     try:
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
-            org_id=x_organization_id,
+            org_id=principal.organization_id,
             pipeline_stack_id=pipeline_stack_id,
         )
         
@@ -475,7 +476,7 @@ async def get_context(
             }
         
         return ContextResponse(
-            org_id=x_organization_id,
+            org_id=principal.organization_id,
             integrations=integrations,
             available_tools=context.available_tools,
             lineage_stats=lineage_stats,
@@ -488,18 +489,18 @@ async def get_context(
 
 @router.get("/tools", response_model=ToolsResponse)
 async def get_available_tools(
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Get tools available for the user's integrations.
-    
+
     Tools are dynamically filtered based on what integrations
     are connected.
     """
     try:
         # Get user's integrations
         context_builder = CopilotContextBuilder()
-        context = await context_builder.build_context(org_id=x_organization_id)
+        context = await context_builder.build_context(org_id=principal.organization_id)
         
         # Get available tools
         registry = get_tool_registry()
@@ -543,7 +544,6 @@ class ApplyPlanRequest(BaseModel):
 @router.post("/apply-plan")
 async def apply_plan(
     request: ApplyPlanRequest,
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
 ):
     """
     Apply a change plan by creating a GitHub PR — directly, no LLM.
@@ -669,18 +669,18 @@ async def get_modes():
 @router.post("/openlineage/events")
 async def receive_openlineage_event(
     event: OpenLineageEventRequest,
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Receive OpenLineage events from Airflow, Dagster, Spark, etc.
-    
+
     These events are used to build real-time lineage.
     """
     try:
         consumer = OpenLineageConsumer()
         success = await consumer.process_event(
             event_data=event.dict(),
-            org_id=x_organization_id,
+            org_id=principal.organization_id,
         )
         
         if success:
@@ -695,7 +695,6 @@ async def receive_openlineage_event(
 
 @router.get("/sessions")
 async def get_sessions(
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
     limit: int = 20,
 ):
     """
@@ -711,7 +710,6 @@ async def get_sessions(
 @router.get("/sessions/{session_id}")
 async def get_session(
     session_id: str,
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
 ):
     """
     Get a specific co-pilot session with messages.
@@ -725,7 +723,6 @@ async def get_session(
 
 @router.post("/debug/start")
 async def start_debug_session(
-    x_organization_id: str = Header(..., alias="X-Organization-Id"),
     issue_type: str = "pipeline_failure",
     title: str = "Debug Session",
     symptom_node_id: Optional[str] = None,
