@@ -28,7 +28,7 @@
     "bcryptjs": "^2.4.3",
     "dagre": "^0.8.5",
     "framer-motion": "^12.23.26",
-    "next": "15.5.3",
+    "next": "15.5.15",
     "next-auth": "^5.0.0-beta.30",
     "next-mdx-remote": "^5.0.0",
     "react": "19.1.0",
