@@ -57,18 +57,18 @@ export function ImpactAnalysisBadge({ impact, showDetails = false }: ImpactAnaly
         <div
           className="mt-2 p-3 rounded-lg text-xs space-y-2"
           style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.02)',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
+            backgroundColor: 'var(--overlay-faint)',
+            border: '1px solid var(--subtle-border)',
           }}
         >
           {impact.affected_tables.length > 0 && (
             <div>
-              <span className="text-white/50 block mb-1">Affected Tables:</span>
+              <span className="text-[var(--muted)] block mb-1">Affected Tables:</span>
               <div className="flex flex-wrap gap-1">
                 {impact.affected_tables.map((table) => (
                   <span
                     key={table}
-                    className="px-1.5 py-0.5 rounded bg-white/[0.06] text-white/80 font-mono"
+                    className="px-1.5 py-0.5 rounded bg-[var(--hover-bg)] text-[var(--text-secondary)] font-mono"
                   >
                     {table}
                   </span>
@@ -79,12 +79,12 @@ export function ImpactAnalysisBadge({ impact, showDetails = false }: ImpactAnaly
 
           {impact.downstream_dependencies.length > 0 && (
             <div>
-              <span className="text-white/50 block mb-1">Downstream:</span>
+              <span className="text-[var(--muted)] block mb-1">Downstream:</span>
               <div className="flex flex-wrap gap-1">
                 {impact.downstream_dependencies.map((dep) => (
                   <span
                     key={dep}
-                    className="px-1.5 py-0.5 rounded bg-white/[0.06] text-white/80 font-mono"
+                    className="px-1.5 py-0.5 rounded bg-[var(--hover-bg)] text-[var(--text-secondary)] font-mono"
                   >
                     {dep}
                   </span>
@@ -95,8 +95,8 @@ export function ImpactAnalysisBadge({ impact, showDetails = false }: ImpactAnaly
 
           {impact.expected_data_changes && (
             <div>
-              <span className="text-white/50 block mb-1">Expected Changes:</span>
-              <p className="text-white/70">{impact.expected_data_changes}</p>
+              <span className="text-[var(--muted)] block mb-1">Expected Changes:</span>
+              <p className="text-[var(--text-tertiary)]">{impact.expected_data_changes}</p>
             </div>
           )}
         </div>

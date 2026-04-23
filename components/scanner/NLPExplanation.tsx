@@ -169,11 +169,11 @@ ${explanation.fixSteps.join('\n')}
           <svg className="w-4 h-4 text-[var(--accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
           </svg>
-          <span className="text-sm font-medium text-white">Explanation</span>
+          <span className="text-sm font-medium text-[var(--text)]">Explanation</span>
         </div>
 
         {/* Audience tabs */}
-        <div className="flex items-center gap-1 bg-black/20 rounded-lg p-0.5">
+        <div className="flex items-center gap-1 bg-[var(--overlay-faint)] rounded-lg p-0.5">
           {(Object.keys(audienceLabels) as AudienceType[]).map((key) => (
             <button
               key={key}
@@ -181,7 +181,7 @@ ${explanation.fixSteps.join('\n')}
               className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
                 audience === key
                   ? `bg-[var(--card-bg)] ${audienceLabels[key].color}`
-                  : 'text-[var(--muted)] hover:text-white'
+                  : 'text-[var(--muted)] hover:text-[var(--text)]'
               }`}
               title={audienceLabels[key].label}
             >
@@ -196,7 +196,7 @@ ${explanation.fixSteps.join('\n')}
       <div className="p-4 space-y-4">
         {/* Summary */}
         <div>
-          <h4 className="text-sm font-medium text-white mb-1">{explanation.summary}</h4>
+          <h4 className="text-sm font-medium text-[var(--text)] mb-1">{explanation.summary}</h4>
           <p className="text-sm text-[var(--muted)]">{explanation.description}</p>
         </div>
 
@@ -208,7 +208,7 @@ ${explanation.fixSteps.join('\n')}
             </svg>
             <span className="text-xs font-medium text-amber-400 uppercase tracking-wider">Business Impact</span>
           </div>
-          <p className="text-sm text-white">{explanation.businessImpact}</p>
+          <p className="text-sm text-[var(--text)]">{explanation.businessImpact}</p>
         </div>
 
         {/* Fix Steps */}
@@ -217,7 +217,7 @@ ${explanation.fixSteps.join('\n')}
             <span className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider">How to Fix</span>
             <button
               onClick={handleCopy}
-              className="text-xs text-[var(--accent)] hover:text-white transition-colors flex items-center gap-1"
+              className="text-xs text-[var(--accent)] hover:text-[var(--text)] transition-colors flex items-center gap-1"
             >
               {copied ? (
                 <>
@@ -248,7 +248,7 @@ ${explanation.fixSteps.join('\n')}
         {/* Priority */}
         <div className="pt-3 border-t border-[var(--border-dim)]">
           <p className="text-xs text-[var(--muted)]">
-            <span className="font-medium text-white">Priority: </span>
+            <span className="font-medium text-[var(--text)]">Priority: </span>
             {explanation.priorityReason}
           </p>
         </div>

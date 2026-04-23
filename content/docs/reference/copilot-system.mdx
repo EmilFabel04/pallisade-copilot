@@ -1,0 +1,240 @@
+---
+title: "Copilot System"
+description: "Reference for the AI copilot: LLM integration, tool calling, context building, interaction modes, and streaming architecture."
+section: "reference"
+order: 5
+---
+
+## Overview
+
+Scout is Pallisade's AI copilot for data engineering. It connects to warehouses, transformation layers, and orchestration tools to answer questions with real data. The copilot is implemented in `scanner/copilot/` with four core files:
+
+| File | Responsibility |
+|------|----------------|
+| `llm.py` | LLM integration (Anthropic Claude, OpenAI GPT), streaming, tool-calling loop |
+| `context_builder.py` | Builds per-request context: schema pre-fetch, query relevance scoring, lineage graph |
+| `tool_executor.py` | Routes tool calls to the appropriate adapter, handles multi-warehouse dispatch |
+| `tools.py` | Tool registry with 30+ tools organized into 13 categories |
+| `modes.py` | Interaction mode definitions with specialized system prompts |
+
+---
+
+## LLM Integration
+
+**File:** `scanner/copilot/llm.py`
+
+The `CopilotLLM` class supports both Anthropic and OpenAI with automatic provider routing based on model name:
+
+| Model Name | Provider | Model ID |
+|------------|----------|----------|
+| `gpt-5.2` | OpenAI | `gpt-5.2` |
+| `gpt-5.2-mini` | OpenAI | `gpt-5.2-mini` |
+| `o3-mini` | OpenAI | `o3-mini` |
+| `claude-sonnet` | Anthropic | `claude-sonnet-4-20250514` |
+| `claude-opus` | Anthropic | `claude-opus-4-20250514` |
+| `claude-haiku` | Anthropic | `claude-haiku-4-20250514` |
+
+The default model is `gpt-5.2` (OpenAI) for higher rate limits.
+
+### Chat Flow
+
+1. `CopilotLLM.chat()` or `chat_stream()` receives messages and context.
+2. `ToolExecutor.fetch_warehouse_schema()` pre-fetches column metadata from connected warehouses.
+3. The system prompt is built with schema context, lineage data, and mode-specific instructions.
+4. The LLM is called with tools formatted for the provider (Anthropic `input_schema` or OpenAI `function` format).
+5. If the LLM requests a tool call, the executor runs it and loops back to the LLM with the result.
+6. If a tool requires confirmation, the stream pauses and emits a `tool_confirmation_required` event.
+7. The loop continues until the LLM produces a final text response.
+
+---
+
+## Streaming SSE
+
+The `/copilot/chat/stream` endpoint returns Server-Sent Events with these event types:
+
+```
+event: text_delta
+data: {"text": "The table "}
+
+event: tool_call_start
+data: {"tool_use_id": "abc123", "tool_name": "query_warehouse", "arguments": {...}}
+
+event: tool_call_result
+data: {"tool_use_id": "abc123", "result": {...}, "success": true}
+
+event: tool_confirmation_required
+data: {"tool_use_id": "def456", "tool_name": "create_github_pr", "arguments": {...}}
+
+event: iteration_start
+data: {"iteration": 2}
+
+event: done
+data: {"input_tokens": 1500, "output_tokens": 800, "tool_calls": [...]}
+
+event: error
+data: {"message": "Connection timeout"}
+```
+
+The `StreamEvent` class formats each event as standard SSE wire format: `event: {type}\ndata: {json}\n\n`.
+
+---
+
+## Context Building
+
+**File:** `scanner/copilot/context_builder.py`
+
+The `CopilotContextBuilder` assembles per-request context that includes:
+
+- **Integration info** -- Connected tools with type, layer, and status.
+- **Available tools** -- Filtered by which integrations the user has connected.
+- **Warehouse schema** -- Tables and columns pre-fetched from connected warehouses.
+- **Lineage graph** -- The in-process engine graph (if available) for richer context.
+- **Mode config** -- Mode-specific system prompt sections and tool preferences.
+
+### Query-Relevance Scoring
+
+Not all warehouse tables are included in context. The builder scores each table's relevance to the user's query:
+
+| Signal | Score |
+|--------|-------|
+| Exact table name in query | +10 |
+| Table name partially matches a query token | +5 |
+| Query token matches a column name | +3 |
+| Dataset name in query | +2 |
+| Query token is substring of table name | +1 |
+
+Stop words (`what`, `which`, `how`, `show`, `the`, etc.) are stripped before scoring. Only the top-scoring tables are included in the system prompt to stay within context limits.
+
+### Schema Pre-Fetch
+
+Before building the system prompt, `ToolExecutor.fetch_warehouse_schema()`:
+
+1. Skips fetch if the query is about non-warehouse integrations (GitHub, etc.).
+2. Detects which warehouse(s) the user is asking about from query keywords.
+3. Fetches schema only from those specific warehouses.
+4. Falls back to all connected warehouses if detection fails.
+
+Schema keys use compound format (`BIGQUERY:raw`, `SNOWFLAKE:PUBLIC`) to handle multi-warehouse pipelines.
+
+<Callout>
+If `fetch_warehouse_schema()` fails silently, the LLM gets no column info and will hallucinate table/column names. The system logs with the `[Schema Fetch]` prefix and falls back to a prompt explaining the schema is unavailable.
+</Callout>
+
+---
+
+## Interaction Modes
+
+**File:** `scanner/copilot/modes.py`
+
+Scout supports 8 primary interaction modes, each with a specialized system prompt, preferred tools, and output format:
+
+| Mode | Purpose | Key Behavior |
+|------|---------|-------------|
+| **Ask** | General questions | Direct answers, bullet points, code snippets |
+| **Debug** | Root cause analysis | Structured Problem / Cause / Fix output, runs multiple queries |
+| **Plan** | Migration and refactoring | Mandatory impact analysis first, lineage checks, rollback strategy |
+| **Create** | Generate SQL, dbt models, tests | Production-ready code with validation |
+| **Explain** | Deep-dive explanations | Detailed breakdown of tables, models, or pipeline behavior |
+| **Suggest** | Improvement recommendations | Performance, quality, or structural suggestions |
+| **Fix** | Apply validated changes | Creates GitHub PRs via change plans |
+| **Bundle** | Package deliverables | Reports, migration bundles, handoff docs |
+
+Mode detection works three ways:
+1. **Slash commands** -- `/debug why did orders fail` parses as Debug mode.
+2. **Auto-detection** -- Pattern matching on the message text (`why`, `broke`, `failed` -> Debug).
+3. **Explicit selection** -- The `mode` parameter in the request.
+
+---
+
+## Tool Categories
+
+**File:** `scanner/copilot/tools.py`
+
+Tools are organized into 13 categories. Each tool declares which integrations it requires and whether it needs user confirmation.
+
+| Category | Tools | Requires |
+|----------|-------|----------|
+| **Lineage** | `get_upstream`, `get_downstream`, `get_node_details`, `search_lineage`, `get_column_lineage`, `analyze_change_impact`, `explain_edge`, `get_lineage_stats` | Any warehouse or BI tool |
+| **Warehouse** | `query_warehouse`, `get_table_stats` | Any warehouse |
+| **dbt** | dbt model and test tools | DBT_CLOUD or DBT_CORE |
+| **Orchestration** | DAG and task tools | AIRFLOW, DAGSTER, or PREFECT |
+| **Ingestion** | Connector status tools | FIVETRAN, AIRBYTE, or STITCH |
+| **Reporting** | Dashboard and report tools | TABLEAU, LOOKER, POWERBI, or METABASE |
+| **Storage** | Cloud storage tools | AMAZON_S3, GCS, or ADLS |
+| **Knowledge** | Context and documentation tools | Always available |
+| **Observability** | Monitor execution tools | Any warehouse |
+| **Coverage** | Coverage analysis tools | Any warehouse |
+| **Change Plan** | Plan creation and PR tools | GITHUB |
+| **Onboarding** | Pipeline context tools | Always available |
+| **Infrastructure** | Server health and cert tools | LINUX_SERVER |
+
+### Tool Availability
+
+Each tool has `required_integrations` (all must be present) and `alternative_integrations` (any one suffices). The `ToolRegistry.get_available_tools()` method filters tools based on the user's connected integration types.
+
+### Tool Confirmation
+
+Tools marked with `requires_confirmation: true` pause the streaming loop. The frontend shows a confirmation dialog with the tool name and arguments. The user can approve (sending `confirmed_tool_ids` in the next request) or reject (which cancels the tool call).
+
+---
+
+## Tool Execution
+
+**File:** `scanner/copilot/tool_executor.py`
+
+The `ToolExecutor` routes each tool call to the appropriate adapter:
+
+- **Lineage tools** query the in-process `engine_store` for filtered graph traversal.
+- **Warehouse tools** dispatch to the appropriate adapter based on the `warehouse` parameter or SQL dialect inference.
+- **Monitor tools** instantiate the correct `MonitorExecutor` and run against the target table.
+- **Change plan tools** use the `ChangePlanApplier` to create GitHub PRs.
+
+The executor maintains per-session state including anomaly baselines cached from previous tool calls in the conversation.
+
+### Multi-Warehouse Dispatch
+
+When multiple warehouses are connected, the `query_warehouse` tool requires a `warehouse` parameter (`bigquery`, `snowflake`, etc.). If not provided, the executor attempts to infer the target from SQL syntax (backtick identifiers suggest BigQuery, uppercase suggests Snowflake). Schema keys use the compound format for disambiguation.
+
+---
+
+## Data Structures
+
+### CopilotContext
+
+```python
+@dataclass
+class CopilotContext:
+    org_id: str
+    integrations: List[IntegrationInfo]
+    integration_types: Set[str]
+    available_tools: List[str]
+    graph: Optional[LineageGraph]
+    warehouse_schema: Dict[str, List[TableSchema]]
+    mode: str
+    mode_config: ModeConfig
+```
+
+### StreamEvent
+
+```python
+@dataclass
+class StreamEvent:
+    event_type: str   # text_delta, tool_call_start, tool_call_result, etc.
+    data: Dict[str, Any]
+
+    def to_sse(self) -> str:
+        return f"event: {self.event_type}\ndata: {json.dumps(self.data)}\n\n"
+```
+
+### CopilotResponse
+
+```python
+@dataclass
+class CopilotResponse:
+    content: str
+    tool_calls: List[Dict[str, Any]]
+    input_tokens: int
+    output_tokens: int
+    model: str
+    stop_reason: str
+```

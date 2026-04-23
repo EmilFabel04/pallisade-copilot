@@ -1,0 +1,203 @@
+---
+title: "API Reference"
+description: "Complete reference for all FastAPI backend endpoints grouped by domain."
+section: "reference"
+order: 2
+---
+
+## Overview
+
+The Pallisade backend is a FastAPI application running in the `scanner/` directory. All endpoints are prefixed with `/api/v1/` when accessed through the Next.js proxy layer.
+
+<Callout>
+All endpoints that require organization context expect an `X-Organization-Id` header.
+</Callout>
+
+---
+
+## Copilot
+
+**Router:** `scanner/api/routers/copilot.py` -- Prefix: `/copilot`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/copilot/chat` | Send a message and receive a complete response. Accepts `message`, `model`, `mode`, `integrations`, `lineage`, conversation `messages`, and `referenced_entities`. Returns `ChatResponse` with content, tool calls, and token counts. |
+| POST | `/copilot/chat/stream` | Stream a chat response via SSE. Same inputs as `/chat` plus `confirmed_tool_ids` and `pending_tool_call` for the confirmation flow. Returns `text/event-stream`. |
+| GET | `/copilot/context` | Get the current copilot context: connected integrations, available tools, and lineage statistics. Params: `pipeline_stack_id`. |
+| GET | `/copilot/tools` | List all tools available for the user's connected integrations. Returns tool name, description, category, and parameters. |
+| POST | `/copilot/apply-plan` | Apply a validated change plan by creating a GitHub PR. Requires `plan_id`, optional `repo_owner`, `repo_name`, `base_branch`, and `integrations` (for GitHub token). |
+| GET | `/copilot/modes` | List available interaction modes (ask, debug, plan, create, explain, suggest, fix, bundle, onboard). |
+| POST | `/copilot/openlineage/events` | Ingest an OpenLineage RunEvent for real-time lineage. |
+| GET | `/copilot/sessions` | List recent copilot sessions. Params: `limit` (default 20). |
+| GET | `/copilot/sessions/{session_id}` | Get a specific session with its messages. |
+| POST | `/copilot/debug/start` | Start a new debug session for MTTR tracking. Params: `issue_type`, `title`, `symptom_node_id`. |
+
+---
+
+## Lineage
+
+**Router:** `scanner/api/routers/lineage.py` -- Prefix: `/lineage` -- 34 endpoints
+
+### Extraction
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/lineage/extract` | Extract lineage from a single warehouse or tool. |
+| POST | `/lineage/extract-unified` | Extract cross-tool lineage from all integrations in a pipeline. |
+| POST | `/lineage/extract-tool` | Extract from any registered adapter by type name. |
+| POST | `/lineage/investigate` | Run the full investigation pipeline across all tools in data-flow order. |
+| POST | `/lineage/investigate-llm` | LLM-enhanced investigation with planner and reconciler. |
+
+### Query
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/lineage/engine/upstream/{asset_id}` | Upstream lineage. Params: `depth`, `level`, `min_confidence`, `system`, `domain`, `kind`, `plane`. |
+| GET | `/lineage/engine/downstream/{asset_id}` | Downstream lineage with the same filter params. |
+| GET | `/lineage/engine/blast-radius/{asset_id}` | Impact analysis: total downstream assets grouped by domain and kind. |
+| GET | `/lineage/engine/explain-edge/{edge_id}` | Evidence chain and confidence calculation for a specific edge. |
+| GET | `/lineage/engine/graph` | Full engine graph. Optional `plane` filter. |
+| GET | `/lineage/node/{node_id}` | Lineage subgraph for a specific node with `depth` control. |
+
+### Pre-Computed Views
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/lineage/engine/views/pipeline-overview` | Tool-sequence view (Fivetran -> Snowflake -> dbt -> Looker). |
+| GET | `/lineage/engine/views/data-plane` | Dataset-to-dataset derivation chains. |
+| GET | `/lineage/engine/views/lane-pipeline-overview` | Five-lane layout with orchestrator overlays. |
+
+### Run Management
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/lineage/runs/current` | Current published `run_id` and status. |
+| GET | `/lineage/runs/{run_id}/status` | Lightweight polling endpoint for extraction progress. |
+| GET | `/lineage/runs/{run_id}/views/{view_type}` | Retrieve a specific view from a historical run. |
+| GET | `/lineage/runs` | List recent runs (default `limit=5`). |
+
+### Control Plane
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/lineage/engine/control-plane` | Full orchestration subgraph (DAGs, tasks, flows). |
+| GET | `/lineage/engine/control-plane/{dag_id}` | Subgraph for a specific DAG. |
+| GET | `/lineage/engine/control-plane-overview` | High-level tool-sequence view for orchestration. |
+| GET | `/lineage/engine/cross-links/{asset_id}` | Cross-plane edges linking data assets to orchestration. |
+| GET | `/lineage/engine/run-history/{dag_id}` | Recent execution history for a DAG. |
+
+### LLM Reconciliation
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/lineage/engine/reconcile/diagnostics` | Graph structural diagnostics (no LLM call). |
+| POST | `/lineage/engine/reconcile` | Run LLM reconciliation to patch structural issues. |
+| POST | `/lineage/engine/reconcile/apply` | Apply a reviewed reconciliation patch. |
+
+### Persistence and Export
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/lineage/engine/snapshot` | Serialize current graph for database storage. |
+| POST | `/lineage/engine/restore` | Restore graph from a saved snapshot. |
+| GET | `/lineage/engine/export` | Export as JSON, GraphML, or DOT format. |
+| GET | `/lineage/engine/stats` | Coverage statistics (nodes, edges, confidence distribution). |
+| POST | `/lineage/engine/clear-cache` | Reset the engine's in-memory cache. |
+
+### OpenLineage
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/lineage/openlineage/event` | Ingest a single OpenLineage RunEvent. |
+| POST | `/lineage/openlineage/events` | Ingest a batch of OpenLineage events. |
+
+### Common Query Parameters
+
+Most lineage query endpoints accept these filters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `level` | string | `tool`, `table`, or `column` |
+| `system` | string | Filter by platform name (e.g., `bigquery`, `dbt`) |
+| `domain` | string | Filter by platform domain |
+| `kind` | string | Filter by asset kind |
+| `min_confidence` | float | Minimum confidence threshold (0.0--1.0) |
+| `depth` | int | Traversal depth (1--50, default 3) |
+| `plane` | string | `data`, `control`, `cross`, or `all` |
+
+---
+
+## Database
+
+**Router:** `scanner/api/routers/database.py` -- No prefix
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/tables` | Fetch tables from a database connection. Supports BigQuery, Snowflake, PostgreSQL, Redshift, SQL Server. Returns table name, schema, database, column count, row count, and type. |
+| POST | `/test-connection` | Test a database connection and return success/failure with a message. |
+| POST | `/schemas` | List available schemas or datasets for a connection. Filters out internal schemas (`information_schema`, `pg_catalog`). |
+
+All three endpoints accept a `ConnectionConfig` body with `connection_type` and `connection_config`.
+
+---
+
+## Coverage
+
+**Router:** `scanner/api/routers/coverage.py` -- Prefix: `/coverage`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/coverage/analyze` | Run coverage analysis on a lineage graph. Returns overall score, category scores, gap counts, and recommendation count. |
+| POST | `/coverage/analyze/detailed` | Full analysis with node-level detail, all gaps, and all recommendations. |
+| POST | `/coverage/gaps` | Get coverage gaps sorted by severity. Params: `severity`, `category`, `limit`. |
+| POST | `/coverage/recommendations` | Get monitor recommendations to close gaps. Params: `monitor_type`, `limit`. |
+| POST | `/coverage/node/{node_id}` | Detailed coverage for a single node. |
+
+All endpoints accept a `CoverageRequest` body containing `graph_data` (serialized `LineageGraph`) and optional `monitors`, `contracts`, and `observability_checks`.
+
+---
+
+## dbt
+
+**Router:** `scanner/api/routers/dbt.py` -- No prefix
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/dbt/models` | Fetch models from a dbt project. Supports dbt Core (via `manifest.json`) and dbt Cloud (via API). Returns models, tests, and sources. |
+| POST | `/dbt/test-connection` | Test connection to a dbt project or dbt Cloud account. |
+
+---
+
+## Schedule
+
+**Router:** `scanner/api/routers/schedule.py` -- Prefix: `/schedule`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/schedule/execute` | Execute a single scheduled task. Called by the "Run Now" button and the background scheduler. Returns `status`, `value`, `threshold`, `message`, `details`, and `sql_executed`. |
+
+The request body includes `task_id`, `name`, `task_mode` (`prompt` or `structured`), `monitor_type`, `target_fqn`, `config`, `integration_id`, and `integration_config`.
+
+---
+
+## Server (Infrastructure)
+
+**Router:** `scanner/api/routers/server.py` -- No prefix
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/server/test-connection` | Test SSH connection to a remote Linux server. Returns hostname, OS, and uptime. |
+| POST | `/server/check-certificates` | Check TLS/SSL certificates on a server. Returns certificate details including subject, issuer, expiry, and client cert status. |
+| POST | `/server/discover-logs` | Discover log files on a remote server. |
+| POST | `/server/health` | Get system health metrics: CPU, memory, disk, load averages, and uptime. |
+
+---
+
+## Health
+
+**Router:** `scanner/api/routers/health.py` -- No prefix
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Liveness check. Returns `status`, `version`, `service`, and `timestamp`. |
+| GET | `/` | Root endpoint with API info and links to docs. |

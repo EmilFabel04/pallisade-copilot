@@ -1,0 +1,295 @@
+{
+  "metadata": {
+    "system": "postgres",
+    "namespace": "acme-prod",
+    "case_hint": "lower"
+  },
+  "tables": [
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "customers",
+      "type": "table",
+      "row_count": 50000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "integer", "nullable": false},
+        {"name": "name", "type": "varchar(255)", "nullable": false},
+        {"name": "email", "type": "varchar(255)", "nullable": true},
+        {"name": "created_at", "type": "timestamp", "nullable": false},
+        {"name": "country", "type": "varchar(100)", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "orders",
+      "type": "table",
+      "row_count": 250000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "integer", "nullable": false},
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "amount", "type": "numeric(12,2)", "nullable": false},
+        {"name": "status", "type": "varchar(50)", "nullable": false},
+        {"name": "created_at", "type": "timestamp", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "payments",
+      "type": "table",
+      "row_count": 300000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "integer", "nullable": false},
+        {"name": "order_id", "type": "integer", "nullable": false},
+        {"name": "amount", "type": "numeric(12,2)", "nullable": false},
+        {"name": "method", "type": "varchar(50)", "nullable": false},
+        {"name": "created_at", "type": "timestamp", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "products",
+      "type": "table",
+      "row_count": 1200,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "integer", "nullable": false},
+        {"name": "name", "type": "varchar(255)", "nullable": false},
+        {"name": "category", "type": "varchar(100)", "nullable": true},
+        {"name": "price", "type": "numeric(10,2)", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "order_items",
+      "type": "table",
+      "row_count": 600000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "integer", "nullable": false},
+        {"name": "order_id", "type": "integer", "nullable": false},
+        {"name": "product_id", "type": "integer", "nullable": false},
+        {"name": "quantity", "type": "integer", "nullable": false},
+        {"name": "unit_price", "type": "numeric(10,2)", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "staging",
+      "name": "stg_customers",
+      "type": "view",
+      "view_definition": "SELECT id AS customer_id, name AS customer_name, email, created_at AS signup_date, country FROM raw.customers",
+      "columns": [
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "customer_name", "type": "varchar(255)", "nullable": false},
+        {"name": "email", "type": "varchar(255)", "nullable": true},
+        {"name": "signup_date", "type": "timestamp", "nullable": false},
+        {"name": "country", "type": "varchar(100)", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "staging",
+      "name": "stg_orders",
+      "type": "view",
+      "view_definition": "SELECT id AS order_id, customer_id, amount AS order_amount, status AS order_status, created_at AS ordered_at FROM raw.orders",
+      "columns": [
+        {"name": "order_id", "type": "integer", "nullable": false},
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "order_amount", "type": "numeric(12,2)", "nullable": false},
+        {"name": "order_status", "type": "varchar(50)", "nullable": false},
+        {"name": "ordered_at", "type": "timestamp", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "staging",
+      "name": "stg_payments",
+      "type": "view",
+      "view_definition": "SELECT id AS payment_id, order_id, amount AS payment_amount, method AS payment_method FROM raw.payments",
+      "columns": [
+        {"name": "payment_id", "type": "integer", "nullable": false},
+        {"name": "order_id", "type": "integer", "nullable": false},
+        {"name": "payment_amount", "type": "numeric(12,2)", "nullable": false},
+        {"name": "payment_method", "type": "varchar(50)", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "analytics",
+      "name": "dim_customers",
+      "type": "table",
+      "row_count": 50000,
+      "owner": "analytics_service",
+      "columns": [
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "customer_name", "type": "varchar(255)", "nullable": false},
+        {"name": "email", "type": "varchar(255)", "nullable": true},
+        {"name": "signup_date", "type": "timestamp", "nullable": false},
+        {"name": "country", "type": "varchar(100)", "nullable": true},
+        {"name": "total_orders", "type": "integer", "nullable": true},
+        {"name": "first_order_date", "type": "timestamp", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "analytics",
+      "name": "fct_orders",
+      "type": "table",
+      "row_count": 250000,
+      "owner": "analytics_service",
+      "columns": [
+        {"name": "order_id", "type": "integer", "nullable": false},
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "order_amount", "type": "numeric(12,2)", "nullable": false},
+        {"name": "payment_amount", "type": "numeric(12,2)", "nullable": true},
+        {"name": "item_count", "type": "integer", "nullable": true},
+        {"name": "ordered_at", "type": "timestamp", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "analytics",
+      "name": "fct_revenue",
+      "type": "table",
+      "row_count": 730,
+      "owner": "analytics_service",
+      "columns": [
+        {"name": "order_date", "type": "date", "nullable": false},
+        {"name": "total_revenue", "type": "numeric(14,2)", "nullable": false},
+        {"name": "total_payments", "type": "numeric(14,2)", "nullable": false},
+        {"name": "order_count", "type": "integer", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "analytics",
+      "name": "dim_products",
+      "type": "table",
+      "row_count": 1200,
+      "owner": "analytics_service",
+      "columns": [
+        {"name": "product_id", "type": "integer", "nullable": false},
+        {"name": "product_name", "type": "varchar(255)", "nullable": false},
+        {"name": "category", "type": "varchar(100)", "nullable": true},
+        {"name": "price", "type": "numeric(10,2)", "nullable": false},
+        {"name": "total_sold", "type": "integer", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "reporting",
+      "name": "rpt_customer_ltv",
+      "type": "table",
+      "row_count": 50000,
+      "owner": "reporting_service",
+      "columns": [
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "customer_name", "type": "varchar(255)", "nullable": false},
+        {"name": "lifetime_value", "type": "numeric(14,2)", "nullable": false},
+        {"name": "order_count", "type": "integer", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "reporting",
+      "name": "rpt_daily_sales",
+      "type": "view",
+      "view_definition": "SELECT o.ordered_at::date AS sale_date, COUNT(o.order_id) AS num_orders, SUM(o.order_amount) AS total_amount FROM analytics.fct_orders o GROUP BY 1",
+      "columns": [
+        {"name": "sale_date", "type": "date", "nullable": false},
+        {"name": "num_orders", "type": "integer", "nullable": false},
+        {"name": "total_amount", "type": "numeric(14,2)", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "reporting",
+      "name": "rpt_top_products",
+      "type": "view",
+      "view_definition": "SELECT p.product_id, p.product_name, p.category, p.total_sold, p.price * p.total_sold AS total_revenue FROM analytics.dim_products p WHERE p.total_sold > 0 ORDER BY total_revenue DESC",
+      "columns": [
+        {"name": "product_id", "type": "integer", "nullable": false},
+        {"name": "product_name", "type": "varchar(255)", "nullable": false},
+        {"name": "category", "type": "varchar(100)", "nullable": true},
+        {"name": "total_sold", "type": "integer", "nullable": false},
+        {"name": "total_revenue", "type": "numeric(14,2)", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "events",
+      "type": "table",
+      "row_count": 5000000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "bigint", "nullable": false},
+        {"name": "user_id", "type": "integer", "nullable": true},
+        {"name": "event_type", "type": "varchar(100)", "nullable": false},
+        {"name": "properties", "type": "jsonb", "nullable": true},
+        {"name": "created_at", "type": "timestamp", "nullable": false}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "sessions",
+      "type": "table",
+      "row_count": 2000000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "id", "type": "bigint", "nullable": false},
+        {"name": "user_id", "type": "integer", "nullable": true},
+        {"name": "started_at", "type": "timestamp", "nullable": false},
+        {"name": "ended_at", "type": "timestamp", "nullable": true},
+        {"name": "device", "type": "varchar(100)", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "analytics",
+      "name": "user_activity_summary",
+      "type": "view",
+      "view_definition": "SELECT c.customer_id, c.customer_name, COUNT(DISTINCT e.id) AS event_count, COUNT(DISTINCT s.id) AS session_count FROM analytics.dim_customers c LEFT JOIN raw.events e ON c.customer_id = e.user_id LEFT JOIN raw.sessions s ON c.customer_id = s.user_id GROUP BY 1, 2",
+      "columns": [
+        {"name": "customer_id", "type": "integer", "nullable": false},
+        {"name": "customer_name", "type": "varchar(255)", "nullable": false},
+        {"name": "event_count", "type": "bigint", "nullable": true},
+        {"name": "session_count", "type": "bigint", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "analytics",
+      "name": "order_funnel",
+      "type": "view",
+      "view_definition": "SELECT c.country, COUNT(DISTINCT c.customer_id) AS customers, COUNT(DISTINCT o.order_id) AS orders, SUM(o.order_amount) AS revenue FROM analytics.dim_customers c LEFT JOIN analytics.fct_orders o ON c.customer_id = o.customer_id GROUP BY 1",
+      "columns": [
+        {"name": "country", "type": "varchar(100)", "nullable": true},
+        {"name": "customers", "type": "bigint", "nullable": true},
+        {"name": "orders", "type": "bigint", "nullable": true},
+        {"name": "revenue", "type": "numeric(14,2)", "nullable": true}
+      ]
+    },
+    {
+      "database": "warehouse",
+      "schema": "raw",
+      "name": "exchange_rates",
+      "type": "table",
+      "row_count": 10000,
+      "owner": "etl_service",
+      "columns": [
+        {"name": "date", "type": "date", "nullable": false},
+        {"name": "currency", "type": "varchar(3)", "nullable": false},
+        {"name": "rate_to_usd", "type": "numeric(10,6)", "nullable": false}
+      ]
+    }
+  ]
+}

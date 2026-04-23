@@ -6,9 +6,10 @@ Supports multiple node types and relationship semantics.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional, Any
+from typing import Dict, List, Set, Optional, Any, Tuple
 from enum import Enum
 from datetime import datetime
+import hashlib
 import json
 
 
@@ -19,29 +20,39 @@ class NodeType(Enum):
     TABLE = "table"             # Database table
     VIEW = "view"               # Database view
     MATERIALIZED_VIEW = "materialized_view"
-    
+
     # Transformation layer
     MODEL = "model"             # dbt model
     SNAPSHOT = "snapshot"       # dbt snapshot
     SEED = "seed"               # dbt seed
     MACRO = "macro"             # dbt macro
-    
+
     # Pipeline/orchestration
     TASK = "task"               # Airflow/Prefect task
     DAG = "dag"                 # Airflow DAG
     FLOW = "flow"               # Prefect flow
     PIPELINE = "pipeline"       # Generic pipeline
-    
+    WORKFLOW = "workflow"        # n8n workflow
+    NOTEBOOK = "notebook"       # Databricks notebook
+
     # BI/Analytics
     DASHBOARD = "dashboard"     # BI dashboard
     REPORT = "report"           # BI report
     DATASET = "dataset"         # Power BI dataset
     EXPLORE = "explore"         # Looker explore
-    
+    WORKBOOK = "workbook"       # Tableau workbook
+    QUESTION = "question"       # Metabase question/card
+
+    # Ingestion
+    CONNECTOR = "connector"     # Fivetran/Airbyte connector
+
+    # Quality/Observability
+    MONITOR = "monitor"         # Elementary monitor/test suite
+
     # ML
     FEATURE = "feature"         # ML feature
     MODEL_ARTIFACT = "model_artifact"  # ML model
-    
+
     # Unknown
     UNKNOWN = "unknown"
 
@@ -59,6 +70,26 @@ class EdgeType(Enum):
     WRITES_TO = "writes_to"             # Pipeline writes to target
     TESTS = "tests"                     # dbt test on model
 
+    # Cross-plane (asset ↔ orchestration)
+    PRODUCED_BY = "produced_by"         # Asset produced by a task/DAG
+    MATERIALIZES = "materializes"       # Task materializes an asset
+
+    # Ingestion
+    SYNCS_TO = "syncs_to"               # Fivetran/Airbyte syncs data to warehouse
+
+    # BI
+    QUERIES = "queries"                 # BI tool queries warehouse
+
+    # Quality/Observability
+    MONITORS = "monitors"               # Elementary monitors a table
+
+
+class LinePlane(Enum):
+    """Which lineage plane an edge belongs to."""
+    DATA = "data"           # Asset dependency graph (tables, models, views)
+    CONTROL = "control"     # Orchestration graph (DAGs, tasks, runs)
+    CROSS = "cross"         # Links between data-plane and control-plane
+
 
 class HealthStatus(Enum):
     """Health status of a node."""
@@ -67,6 +98,148 @@ class HealthStatus(Enum):
     FAILING = "failing"
     UNKNOWN = "unknown"
     STALE = "stale"
+
+
+class PlatformDomain(Enum):
+    """High-level domain of a platform/tool."""
+    WAREHOUSE = "warehouse"
+    TRANSFORM = "transform"
+    ORCHESTRATION = "orchestration"
+    BI = "bi"
+    INGESTION = "ingestion"
+    CATALOG = "catalog"
+    APP = "app"
+    OTHER = "other"
+
+
+class AssetKind(Enum):
+    """Kind of data asset (tool-agnostic)."""
+    TABLE = "table"
+    VIEW = "view"
+    MODEL = "model"
+    DATASET = "dataset"
+    DASHBOARD = "dashboard"
+    JOB = "job"
+    TASK = "task"
+    FILE = "file"
+    TOPIC = "topic"
+    STREAM = "stream"
+    API = "api"
+    CONNECTOR = "connector"     # Fivetran/Airbyte connector
+    WORKBOOK = "workbook"       # Tableau workbook
+    NOTEBOOK = "notebook"       # Databricks notebook
+    REPORT = "report"           # BI report
+    EXPLORE = "explore"         # Looker explore
+    QUESTION = "question"       # Metabase question/card
+    MONITOR = "monitor"         # Elementary monitor/test
+    WORKFLOW = "workflow"        # n8n workflow
+    UNKNOWN = "unknown"
+
+
+class LineageLevel(Enum):
+    """Granularity level of a lineage edge."""
+    TOOL = "tool"
+    TABLE = "table"
+    COLUMN = "column"
+
+
+@dataclass
+class Evidence:
+    """Provenance record for a lineage edge."""
+    adapter_id: str
+    source_ref: str  # file path, api endpoint, run id, query id
+    observed_at: Optional[datetime] = None
+    snippet: Optional[str] = None  # <=200 chars
+    payload: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "adapter_id": self.adapter_id,
+            "source_ref": self.source_ref,
+            "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+            "snippet": self.snippet,
+            "payload": self.payload,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Evidence':
+        observed = data.get("observed_at")
+        return cls(
+            adapter_id=data["adapter_id"],
+            source_ref=data["source_ref"],
+            observed_at=datetime.fromisoformat(observed) if observed else None,
+            snippet=data.get("snippet"),
+            payload=data.get("payload"),
+        )
+
+
+@dataclass
+class ColumnMapping:
+    """A single column-to-column derivation."""
+    from_column: str
+    to_column: str
+    transform_expr: Optional[str] = None
+    confidence: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "from_column": self.from_column,
+            "to_column": self.to_column,
+            "transform_expr": self.transform_expr,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ColumnMapping':
+        return cls(
+            from_column=data["from_column"],
+            to_column=data["to_column"],
+            transform_expr=data.get("transform_expr"),
+            confidence=data.get("confidence", 1.0),
+        )
+
+
+@dataclass
+class TimeWindow:
+    """Time range for observed lineage."""
+    start: datetime
+    end: datetime
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "start": self.start.isoformat(),
+            "end": self.end.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TimeWindow':
+        return cls(
+            start=datetime.fromisoformat(data["start"]),
+            end=datetime.fromisoformat(data["end"]),
+        )
+
+
+def generate_stable_id(
+    platform_domain: str, namespace: str,
+    container: str, name: str,
+    environment_scope: str = "",
+) -> str:
+    """Generate a deterministic stable ID from physical identity components.
+
+    Uses platform_domain (not system/platform) so that the same physical
+    asset discovered by different adapters (e.g. postgres vs dbt) gets the
+    same stable_id for deduplication.
+
+    The key ALWAYS has 5 pipe-delimited fields:
+        platform_domain | environment_scope | namespace | container | name
+
+    When *environment_scope* is empty the field is still present as an
+    empty segment between pipes, ensuring a single consistent formula.
+    This disambiguates the same (namespace, container, name) across
+    environments/instances (e.g. dev vs prod, two BigQuery projects).
+    """
+    key = f"{platform_domain}|{environment_scope}|{namespace}|{container}|{name}".lower()
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -119,7 +292,34 @@ class LineageNode:
     
     # Raw data from source
     raw_metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
+    # Engine extensions (backward-compatible defaults)
+    platform_domain: PlatformDomain = PlatformDomain.OTHER
+    platform_native_domain: Optional[str] = None  # Platform's own domain from registry (vs node's domain)
+    asset_kind: AssetKind = AssetKind.UNKNOWN
+    namespace: Optional[str] = None  # account/project/env
+    environment_scope: Optional[str] = None  # disambiguates same asset across envs/instances
+    observed_at: Optional[datetime] = None
+    sources: List[str] = field(default_factory=list)  # adapter ids
+
+    # Canonical / v2 extensions (backward-compatible defaults)
+    canonical_type: Optional[str] = None  # system, service, job, dataset, semantic
+    urn: Optional[str] = None  # urn:pallisade:{type}:{platform}:{namespace}:{name}
+    inferred: bool = False  # True if this node was bridge-inferred
+    evidence: List['Evidence'] = field(default_factory=list)  # node-level evidence
+
+    @property
+    def stable_id(self) -> str:
+        """Deterministic ID from physical identity (no system/platform)."""
+        container = f"{self.database or ''}.{self.schema or ''}"
+        return generate_stable_id(
+            self.platform_domain.value,
+            self.namespace or "",
+            container,
+            self.name,
+            self.environment_scope or "",
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -144,6 +344,19 @@ class LineageNode:
             "depth": self.depth,
             "upstream_count": self.upstream_count,
             "downstream_count": self.downstream_count,
+            "platform_domain": self.platform_domain.value,
+            "platform_native_domain": self.platform_native_domain,
+            "asset_kind": self.asset_kind.value,
+            "namespace": self.namespace,
+            "environment_scope": self.environment_scope,
+            "observed_at": self.observed_at.isoformat() if self.observed_at else None,
+            "sources": self.sources,
+            "integration_id": self.integration_id,
+            "raw_metadata": self.raw_metadata,
+            "canonical_type": self.canonical_type,
+            "urn": self.urn,
+            "inferred": self.inferred,
+            "node_evidence": [e.to_dict() for e in self.evidence],
         }
 
 
@@ -164,7 +377,18 @@ class LineageEdge:
     # Source of this edge
     discovered_from: Optional[str] = None  # query_history, dbt_manifest, fk, manual
     discovered_at: Optional[datetime] = None
-    
+
+    # Engine extensions (backward-compatible defaults)
+    lineage_level: LineageLevel = LineageLevel.TABLE
+    evidence: List[Evidence] = field(default_factory=list)
+    column_mappings: List[ColumnMapping] = field(default_factory=list)
+    time_window: Optional[TimeWindow] = None
+    plane: LinePlane = LinePlane.DATA
+
+    # Canonical / v2 extensions (backward-compatible defaults)
+    canonical_edge_type: Optional[str] = None  # hosts, runs, reads, writes, derives, serves
+    inferred: bool = False  # True if this edge was bridge-inferred
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -176,6 +400,14 @@ class LineageEdge:
             "transformation": self.transformation,
             "confidence": self.confidence,
             "discovered_from": self.discovered_from,
+            "discovered_at": self.discovered_at.isoformat() if self.discovered_at else None,
+            "lineage_level": self.lineage_level.value,
+            "evidence": [e.to_dict() for e in self.evidence],
+            "column_mappings": [m.to_dict() for m in self.column_mappings],
+            "time_window": self.time_window.to_dict() if self.time_window else None,
+            "plane": self.plane.value,
+            "canonical_edge_type": self.canonical_edge_type,
+            "inferred": self.inferred,
         }
 
 
@@ -203,7 +435,21 @@ class LineageGraph:
         self._by_platform: Dict[str, Set[str]] = {}
         self._by_type: Dict[NodeType, Set[str]] = {}
         self._by_database: Dict[str, Set[str]] = {}
-        
+
+        # Engine indexes
+        self._by_lineage_level: Dict[LineageLevel, Set[str]] = {}  # edge_id sets
+        self._by_asset_kind: Dict[AssetKind, Set[str]] = {}  # node_id sets
+        self._by_confidence_bucket: Dict[str, Set[str]] = {
+            "low": set(),    # < 0.5
+            "medium": set(), # 0.5 - 0.8
+            "high": set(),   # > 0.8
+        }
+        self._by_plane: Dict[LinePlane, Set[str]] = {}  # edge_id sets by plane
+
+        # Per-plane adjacency for plane-scoped BFS (e.g. DATA-only upstream traversal)
+        self._upstream_by_plane: Dict[LinePlane, Dict[str, Set[str]]] = {}
+        self._downstream_by_plane: Dict[LinePlane, Dict[str, Set[str]]] = {}
+
         # Metadata
         self.built_at: Optional[datetime] = None
         self.source_counts: Dict[str, int] = {}  # How many edges from each source
@@ -233,6 +479,11 @@ class LineageGraph:
             if db_key not in self._by_database:
                 self._by_database[db_key] = set()
             self._by_database[db_key].add(node.id)
+
+        # Engine index: asset kind
+        if node.asset_kind not in self._by_asset_kind:
+            self._by_asset_kind[node.asset_kind] = set()
+        self._by_asset_kind[node.asset_kind].add(node.id)
     
     def add_edge(self, edge: LineageEdge) -> None:
         """Add an edge to the graph."""
@@ -257,75 +508,164 @@ class LineageGraph:
         # Track source counts
         source = edge.discovered_from or "unknown"
         self.source_counts[source] = self.source_counts.get(source, 0) + 1
+
+        # Engine indexes
+        if edge.lineage_level not in self._by_lineage_level:
+            self._by_lineage_level[edge.lineage_level] = set()
+        self._by_lineage_level[edge.lineage_level].add(edge.id)
+
+        if edge.confidence < 0.5:
+            self._by_confidence_bucket["low"].add(edge.id)
+        elif edge.confidence <= 0.8:
+            self._by_confidence_bucket["medium"].add(edge.id)
+        else:
+            self._by_confidence_bucket["high"].add(edge.id)
+
+        # Plane index
+        if edge.plane not in self._by_plane:
+            self._by_plane[edge.plane] = set()
+        self._by_plane[edge.plane].add(edge.id)
+
+        # Per-plane adjacency for plane-scoped BFS
+        self._upstream_by_plane.setdefault(edge.plane, {}).setdefault(edge.target_id, set()).add(edge.source_id)
+        self._downstream_by_plane.setdefault(edge.plane, {}).setdefault(edge.source_id, set()).add(edge.target_id)
     
-    def get_upstream(self, node_id: str, depth: int = -1) -> List[LineageNode]:
+    def _get_plane_scoped_upstream(self, node_id: str, planes: Set[LinePlane]) -> Set[str]:
+        """Return upstream neighbor IDs reachable via edges in the given planes."""
+        result: Set[str] = set()
+        for plane in planes:
+            plane_adj = self._upstream_by_plane.get(plane, {})
+            result.update(plane_adj.get(node_id, set()))
+        return result
+
+    def _get_plane_scoped_downstream(self, node_id: str, planes: Set[LinePlane]) -> Set[str]:
+        """Return downstream neighbor IDs reachable via edges in the given planes."""
+        result: Set[str] = set()
+        for plane in planes:
+            plane_adj = self._downstream_by_plane.get(plane, {})
+            result.update(plane_adj.get(node_id, set()))
+        return result
+
+    def get_upstream(self, node_id: str, depth: int = -1, planes: Optional[Set[LinePlane]] = None) -> List[LineageNode]:
         """
         Get all upstream nodes (dependencies).
-        
+
         Args:
             node_id: The node to find upstream for
             depth: How many levels deep (-1 for all)
-        
+            planes: If provided, only traverse edges in these planes.
+                    None means traverse all edges (backward compatible).
+
         Returns:
             List of upstream nodes
         """
         if node_id not in self.nodes:
             return []
-        
+
         result = []
         visited = set()
         queue = [(node_id, 0)]
-        
+
         while queue:
             current_id, current_depth = queue.pop(0)
-            
+
             if current_id in visited:
                 continue
             visited.add(current_id)
-            
+
             if current_id != node_id:
                 result.append(self.nodes[current_id])
-            
+
             if depth == -1 or current_depth < depth:
-                for upstream_id in self._upstream.get(current_id, set()):
+                if planes is not None:
+                    neighbors = self._get_plane_scoped_upstream(current_id, planes)
+                else:
+                    neighbors = self._upstream.get(current_id, set())
+                for upstream_id in neighbors:
                     if upstream_id not in visited:
                         queue.append((upstream_id, current_depth + 1))
-        
+
         return result
-    
-    def get_downstream(self, node_id: str, depth: int = -1) -> List[LineageNode]:
+
+    def get_upstream_with_depth(
+        self,
+        node_id: str,
+        depth: int = -1,
+        planes: Optional[Set[LinePlane]] = None,
+    ) -> List[Tuple["LineageNode", int]]:
+        """
+        Get all upstream nodes with their depth from the anchor.
+
+        Same BFS as get_upstream(), but returns (node, depth) tuples
+        so callers can use depth for priority scoring and weighting.
+        """
+        if node_id not in self.nodes:
+            return []
+
+        result: List[Tuple["LineageNode", int]] = []
+        visited = set()
+        queue = [(node_id, 0)]
+
+        while queue:
+            current_id, current_depth = queue.pop(0)
+
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+
+            if current_id != node_id:
+                result.append((self.nodes[current_id], current_depth))
+
+            if depth == -1 or current_depth < depth:
+                if planes is not None:
+                    neighbors = self._get_plane_scoped_upstream(current_id, planes)
+                else:
+                    neighbors = self._upstream.get(current_id, set())
+                for upstream_id in neighbors:
+                    if upstream_id not in visited:
+                        queue.append((upstream_id, current_depth + 1))
+
+        return result
+
+    def get_downstream(self, node_id: str, depth: int = -1, planes: Optional[Set[LinePlane]] = None) -> List[LineageNode]:
         """
         Get all downstream nodes (dependents).
-        
+
         Args:
             node_id: The node to find downstream for
             depth: How many levels deep (-1 for all)
-        
+            planes: If provided, only traverse edges in these planes.
+                    None means traverse all edges (backward compatible).
+
         Returns:
             List of downstream nodes
         """
         if node_id not in self.nodes:
             return []
-        
+
         result = []
         visited = set()
         queue = [(node_id, 0)]
-        
+
         while queue:
             current_id, current_depth = queue.pop(0)
-            
+
             if current_id in visited:
                 continue
             visited.add(current_id)
-            
+
             if current_id != node_id:
                 result.append(self.nodes[current_id])
-            
+
             if depth == -1 or current_depth < depth:
-                for downstream_id in self._downstream.get(current_id, set()):
+                if planes is not None:
+                    neighbors = self._get_plane_scoped_downstream(current_id, planes)
+                else:
+                    neighbors = self._downstream.get(current_id, set())
+                for downstream_id in neighbors:
                     if downstream_id not in visited:
                         queue.append((downstream_id, current_depth + 1))
-        
+
         return result
     
     def get_direct_upstream(self, node_id: str) -> List[LineageNode]:
@@ -479,6 +819,8 @@ class LineageGraph:
         
         # Add nodes first
         for node_data in data.get("nodes", []):
+            observed_at = node_data.get("observed_at")
+            last_updated = node_data.get("last_updated")
             node = LineageNode(
                 id=node_data["id"],
                 name=node_data["name"],
@@ -493,12 +835,32 @@ class LineageGraph:
                 tags=node_data.get("tags", []),
                 domain=node_data.get("domain"),
                 criticality=node_data.get("criticality", "medium"),
+                columns=node_data.get("columns", []),
+                row_count=node_data.get("row_count"),
+                last_updated=datetime.fromisoformat(last_updated) if last_updated else None,
                 health_status=HealthStatus(node_data.get("health_status", "unknown")),
+                active_findings=node_data.get("active_findings", []),
+                depth=node_data.get("depth", 0),
+                upstream_count=node_data.get("upstream_count", 0),
+                downstream_count=node_data.get("downstream_count", 0),
+                platform_domain=PlatformDomain(node_data.get("platform_domain", "other")),
+                asset_kind=AssetKind(node_data.get("asset_kind", "unknown")),
+                namespace=node_data.get("namespace"),
+                environment_scope=node_data.get("environment_scope"),
+                observed_at=datetime.fromisoformat(observed_at) if observed_at else None,
+                sources=node_data.get("sources", []),
+                integration_id=node_data.get("integration_id"),
+                raw_metadata=node_data.get("raw_metadata", {}),
+                canonical_type=node_data.get("canonical_type"),
+                urn=node_data.get("urn"),
+                inferred=node_data.get("inferred", False),
+                evidence=[Evidence.from_dict(e) for e in node_data.get("node_evidence", [])],
             )
             graph.add_node(node)
-        
+
         # Add edges
         for edge_data in data.get("edges", []):
+            tw_data = edge_data.get("time_window")
             edge = LineageEdge(
                 id=edge_data["id"],
                 source_id=edge_data["source_id"],
@@ -508,7 +870,14 @@ class LineageGraph:
                 transformation=edge_data.get("transformation"),
                 confidence=edge_data.get("confidence", 1.0),
                 discovered_from=edge_data.get("discovered_from"),
+                lineage_level=LineageLevel(edge_data.get("lineage_level", "table")),
+                evidence=[Evidence.from_dict(e) for e in edge_data.get("evidence", [])],
+                column_mappings=[ColumnMapping.from_dict(m) for m in edge_data.get("column_mappings", [])],
+                time_window=TimeWindow.from_dict(tw_data) if tw_data else None,
+                plane=LinePlane(edge_data.get("plane", "data")),
+                canonical_edge_type=edge_data.get("canonical_edge_type"),
+                inferred=edge_data.get("inferred", False),
             )
             graph.add_edge(edge)
-        
+
         return graph

@@ -1,24 +1,33 @@
 /**
- * Slack Integration
- * 
- * Send rich notifications using Block Kit
+ * Slack Integration — Bot Token + Web API
+ *
+ * Uses chat.postMessage (not webhooks) for rich Block Kit notifications.
+ * Requires a Bot Token (xoxb-...) with scopes: chat:write, channels:read, groups:read
  */
 
-interface SlackConfig {
-  webhook_url: string;
+const SLACK_API = 'https://slack.com/api';
+
+export interface SlackConfig {
+  bot_token: string;
   channel?: string;
 }
 
-interface SlackMessage {
+export interface SlackMessage {
   title: string;
   text: string;
   severity?: 'critical' | 'high' | 'medium' | 'low';
   fields?: Array<{ label: string; value: string }>;
   actions?: Array<{ text: string; url: string }>;
   footer?: string;
+  channel?: string;
 }
 
-// Severity to emoji mapping
+export interface SlackChannel {
+  id: string;
+  name: string;
+  is_private: boolean;
+}
+
 const SEVERITY_EMOJI = {
   critical: '🔴',
   high: '🟠',
@@ -26,48 +35,54 @@ const SEVERITY_EMOJI = {
   low: '🟢',
 } as const;
 
-// Severity to color mapping (for attachments fallback)
-const SEVERITY_COLORS = {
-  critical: '#dc2626',
-  high: '#f59e0b',
-  medium: '#3b82f6',
-  low: '#10b981',
-} as const;
-
 export class SlackClient {
-  private config: SlackConfig;
+  private token: string;
+  private defaultChannel?: string;
 
   constructor(config: SlackConfig) {
-    this.config = config;
+    this.token = config.bot_token;
+    this.defaultChannel = config.channel;
+  }
+
+  private async api(method: string, body?: Record<string, any>): Promise<any> {
+    const res = await fetch(`${SLACK_API}/${method}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    const data = await res.json();
+    if (!data.ok) {
+      throw new Error(`Slack API error (${method}): ${data.error || 'unknown'}`);
+    }
+    return data;
   }
 
   /**
-   * Send a message using Block Kit
+   * Send a message using Block Kit via chat.postMessage
    */
   async sendMessage(message: SlackMessage): Promise<void> {
+    const channel = message.channel || this.defaultChannel;
+    if (!channel) {
+      throw new Error('No Slack channel specified');
+    }
+
     const emoji = SEVERITY_EMOJI[message.severity || 'medium'];
-    
+
     const blocks: any[] = [
-      // Header
       {
         type: 'header',
-        text: {
-          type: 'plain_text',
-          text: `${emoji} ${message.title}`,
-          emoji: true,
-        },
+        text: { type: 'plain_text', text: `${emoji} ${message.title}`, emoji: true },
       },
-      // Main text
       {
         type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: message.text,
-        },
+        text: { type: 'mrkdwn', text: message.text },
       },
     ];
 
-    // Add fields if provided
     if (message.fields && message.fields.length > 0) {
       blocks.push({
         type: 'section',
@@ -78,56 +93,63 @@ export class SlackClient {
       });
     }
 
-    // Add divider before actions
     if (message.actions && message.actions.length > 0) {
       blocks.push({ type: 'divider' });
       blocks.push({
         type: 'actions',
         elements: message.actions.map(action => ({
           type: 'button',
-          text: {
-            type: 'plain_text',
-            text: action.text,
-            emoji: true,
-          },
+          text: { type: 'plain_text', text: action.text, emoji: true },
           url: action.url,
         })),
       });
     }
 
-    // Add footer if provided
     if (message.footer) {
       blocks.push({
         type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: message.footer,
-          },
-        ],
+        elements: [{ type: 'mrkdwn', text: message.footer }],
       });
     }
 
-    const payload: any = {
+    await this.api('chat.postMessage', {
+      channel,
       blocks,
-      // Fallback for notifications
       text: `${emoji} ${message.title}: ${message.text}`,
-    };
-
-    if (this.config.channel) {
-      payload.channel = this.config.channel;
-    }
-
-    const response = await fetch(this.config.webhook_url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
     });
+  }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Slack webhook error: ${response.status} - ${errorText}`);
-    }
+  /**
+   * List channels the bot can post to
+   */
+  async listChannels(): Promise<SlackChannel[]> {
+    const channels: SlackChannel[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const params: Record<string, any> = {
+        types: 'public_channel,private_channel',
+        exclude_archived: true,
+        limit: 200,
+      };
+      if (cursor) params.cursor = cursor;
+
+      const data = await this.api('conversations.list', params);
+      for (const ch of data.channels || []) {
+        channels.push({ id: ch.id, name: ch.name, is_private: ch.is_private });
+      }
+      cursor = data.response_metadata?.next_cursor || undefined;
+    } while (cursor);
+
+    return channels.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Test authentication — returns workspace + bot user info
+   */
+  async testAuth(): Promise<{ ok: boolean; team: string; user: string; teamId: string }> {
+    const data = await this.api('auth.test');
+    return { ok: true, team: data.team, user: data.user, teamId: data.team_id };
   }
 
   /**
@@ -142,12 +164,12 @@ export class SlackClient {
     reportUrl?: string;
     tables?: string[];
   }): Promise<void> {
-    const severity = results.criticalCount > 0 ? 'critical' : 
+    const severity = results.criticalCount > 0 ? 'critical' :
                      results.score < 60 ? 'high' :
                      results.score < 80 ? 'medium' : 'low';
 
     const scoreEmoji = results.score >= 80 ? '✅' : results.score >= 60 ? '⚠️' : '❌';
-    
+
     await this.sendMessage({
       title: results.title,
       text: `Scan completed with score *${results.score}/100* ${scoreEmoji}`,
@@ -190,52 +212,14 @@ export class SlackClient {
   }
 
   /**
-   * Test the connection
+   * Test the connection by calling auth.test
    */
   async testConnection(): Promise<{ success: boolean; message: string }> {
     try {
-      await this.sendMessage({
-        title: 'Pallisade Connected',
-        text: 'Your Slack integration is working! 🎉',
-        severity: 'low',
-        footer: 'This is a test message from Pallisade',
-      });
-      return {
-        success: true,
-        message: 'Test message sent successfully',
-      };
+      const info = await this.testAuth();
+      return { success: true, message: `Connected to workspace "${info.team}" as @${info.user}` };
     } catch (error: any) {
-      return {
-        success: false,
-        message: error.message,
-      };
+      return { success: false, message: error.message };
     }
   }
 }
-
-// Convenience function (backwards compatible with existing code)
-export async function sendSlackAlert(
-  webhookUrl: string,
-  message: {
-    title: string;
-    text?: string;
-    severity?: string;
-    score?: number;
-    reportUrl?: string;
-    table?: string;
-  }
-): Promise<void> {
-  const client = new SlackClient({ webhook_url: webhookUrl });
-  
-  await client.sendMessage({
-    title: message.title,
-    text: message.text || '',
-    severity: message.severity as any,
-    fields: [
-      ...(message.score !== undefined ? [{ label: 'Score', value: String(message.score) }] : []),
-      ...(message.table ? [{ label: 'Table', value: message.table }] : []),
-    ],
-    actions: message.reportUrl ? [{ text: 'View Report', url: message.reportUrl }] : undefined,
-  });
-}
-

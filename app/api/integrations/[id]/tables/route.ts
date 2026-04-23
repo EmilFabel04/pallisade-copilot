@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
+import { scannerClient } from '@/lib/scanner-client';
 
 // GET /api/integrations/[id]/tables - Discover tables from connected warehouse
 export async function GET(
@@ -12,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -83,7 +81,7 @@ export async function GET(
     let useBackend = false;
 
     try {
-      const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+      const healthCheck = await scannerClient.fetch(session, '/health', {
         method: 'GET',
         signal: AbortSignal.timeout(3000),
       });
@@ -94,7 +92,7 @@ export async function GET(
 
     if (useBackend) {
       try {
-        const response = await fetch(`${SCANNER_API_URL}/api/tables`, {
+        const response = await scannerClient.fetch(session, '/api/tables', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

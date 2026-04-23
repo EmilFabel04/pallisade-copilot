@@ -1,0 +1,144 @@
+---
+title: Artifacts Library
+description: Save, tag, search, and share Scout responses as persistent artifacts for your team.
+section: guides
+order: 8
+---
+
+# Artifacts Library
+
+The Artifacts Library lets you save any Scout response as a persistent, searchable artifact. Use artifacts to build a knowledge base of useful queries, fixes, insights, and documentation that your whole team can access.
+
+## Saving an Artifact
+
+Any response from Scout can be saved as an artifact:
+
+1. In the chat, hover over the Scout response you want to save.
+2. Click **Save as Artifact**.
+3. Give the artifact a descriptive title (e.g., "Monthly revenue query", "Root cause: order duplication bug").
+4. Select a category tag.
+5. Click **Save**.
+
+The artifact is saved with a link back to the original chat session, so you can revisit the full conversation for context.
+
+<Callout type="tip">
+Save artifacts for responses you expect to reference again: complex queries, investigation results, migration plans, or generated dbt models. This builds a team knowledge base over time.
+</Callout>
+
+## Categories
+
+Artifacts are organized into categories to make them easy to find:
+
+| Category | Use For |
+|----------|---------|
+| **Queries** | SQL queries, data exploration results, ad-hoc analysis |
+| **Fixes** | Bug fix details, change plans, patches |
+| **Insights** | Investigation findings, root cause analyses, anomaly explanations |
+| **Documentation** | Table explanations, pipeline overviews, onboarding notes |
+
+You can assign one category to each artifact. Choose the category that best matches the primary purpose of the response.
+
+## Browsing Artifacts
+
+Open the **Artifacts** page from the dashboard sidebar. The artifacts list shows:
+
+| Field | Description |
+|-------|-------------|
+| **Title** | The name you gave the artifact |
+| **Category** | The assigned category tag |
+| **Created by** | The team member who saved the artifact |
+| **Created at** | When the artifact was saved |
+| **Pinned** | Whether the artifact is pinned for quick access |
+
+### Sorting and Filtering
+
+- **Sort by** date (newest first) or alphabetically by title
+- **Filter by category** to show only queries, fixes, insights, or documentation
+- **Filter by author** to see artifacts from a specific team member
+
+## Searching Artifacts
+
+The search bar at the top of the Artifacts page provides full-text search across artifact titles and content. Use it to find:
+
+- A query you wrote last week
+- The root cause analysis from a past incident
+- A dbt model template someone on your team created
+
+Search matches against the full Scout response text, so you can search for table names, column names, SQL keywords, or any phrase that appeared in the original response.
+
+## Pinning Favorites
+
+Pin frequently used artifacts for quick access:
+
+1. Open the artifact or find it in the list.
+2. Click the **Pin** icon.
+3. Pinned artifacts appear at the top of the Artifacts page.
+
+Use pins for artifacts you reference daily, like a common data quality query or a key pipeline diagram.
+
+## Viewing an Artifact
+
+Click an artifact to view its full content. The detail view shows:
+
+- **Title and category** at the top
+- **Full Scout response** rendered with formatting, tables, and code blocks
+- **Source link** to the original chat session
+- **Metadata** including who saved it and when
+
+### Linking Back to Chat
+
+Every artifact retains a link to the chat session where it originated. Click **View Source Chat** to open the full conversation, including your original question and any follow-up messages.
+
+This is useful when you need the full context around a fix or investigation, not just the final response.
+
+## Sharing Artifacts
+
+Artifacts are visible to all team members in the same organization. When you save an artifact, everyone on your team can find it through search or browsing.
+
+To share a specific artifact with someone:
+
+1. Open the artifact.
+2. Copy the artifact URL from your browser.
+3. Share the URL via Slack, email, or your team's communication tool.
+
+Anyone on your team with access to the pipeline can view the artifact directly.
+
+<Callout type="info">
+Artifacts respect your organization's access control. Viewers can read artifacts but cannot edit or delete them. See [Team & Access Control](/docs/team-access) for role details.
+</Callout>
+
+## Editing and Deleting Artifacts
+
+### Editing
+
+You can update an artifact's title and category after saving:
+
+1. Open the artifact.
+2. Click **Edit**.
+3. Update the title or category.
+4. Click **Save**.
+
+The response content itself is not editable -- it preserves the exact output from Scout.
+
+### Deleting
+
+To delete an artifact:
+
+1. Open the artifact.
+2. Click **Delete**.
+3. Confirm the deletion.
+
+Deleted artifacts cannot be recovered. The original chat session is not affected.
+
+## Best Practices
+
+1. **Save investigations, not just answers.** When Scout debugs an issue, save the full response including the root cause and fix. Your team will thank you when the same issue comes up again.
+2. **Use consistent naming.** Title your artifacts with enough detail to find them later: "Revenue discrepancy - missing Stripe refunds (Jan 2026)" is better than "Revenue bug".
+3. **Pin your team's common queries.** If everyone runs the same data quality check, save it once and pin it.
+4. **Review artifacts periodically.** Unpin or delete artifacts that are no longer relevant to keep the library useful.
+
+## Next Steps
+
+- [AI Copilot (Scout)](/docs/copilot) -- Generate responses worth saving
+- [Change Plans](/docs/change-plans) -- Save fix plans as artifacts for your records
+- [Team & Access Control](/docs/team-access) -- Manage who can view and manage artifacts

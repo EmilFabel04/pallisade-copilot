@@ -8,7 +8,7 @@ export function DashboardMain({ children }: { children: React.ReactNode }) {
   return (
     <div 
       className={`
-        flex flex-col min-h-screen
+        flex flex-col h-full
         transition-all duration-300 ease-in-out
         ${isCollapsed ? 'ml-[68px]' : 'ml-[240px]'}
       `}

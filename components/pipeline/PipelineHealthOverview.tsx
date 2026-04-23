@@ -61,14 +61,14 @@ interface PipelineHealthOverviewProps {
   onViewDetails?: () => void;
 }
 
-const LAYER_ICONS: Record<PipelineLayer, React.ReactNode> = {
+const LAYER_ICONS: Partial<Record<PipelineLayer, React.ReactNode>> = {
   INGESTION: <ArrowDownToLine className="w-5 h-5" />,
   TRANSFORMATION: <Wand2 className="w-5 h-5" />,
   WAREHOUSE: <Database className="w-5 h-5" />,
   REPORTING: <BarChart3 className="w-5 h-5" />,
 };
 
-const LAYER_NAMES: Record<PipelineLayer, string> = {
+const LAYER_NAMES: Partial<Record<PipelineLayer, string>> = {
   INGESTION: 'Ingestion',
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
@@ -84,7 +84,7 @@ function StatusIcon({ status }: { status: string }) {
     case 'critical':
       return <XCircle className="w-5 h-5 text-red-400" />;
     default:
-      return <Minus className="w-5 h-5 text-gray-400" />;
+      return <Minus className="w-5 h-5 text-[var(--muted)]" />;
   }
 }
 
@@ -95,7 +95,7 @@ function TrendIcon({ trend }: { trend?: string }) {
     case 'down':
       return <TrendingDown className="w-4 h-4 text-red-400" />;
     default:
-      return <Minus className="w-4 h-4 text-gray-400" />;
+      return <Minus className="w-4 h-4 text-[var(--muted)]" />;
   }
 }
 
@@ -116,7 +116,7 @@ function HealthScoreRing({ score, size = 80 }: { score: number; size?: number })
           cy={size / 2}
           r={radius}
           fill="none"
-          stroke="rgba(255,255,255,0.1)"
+          stroke="var(--border-medium)"
           strokeWidth="4"
         />
         <circle
@@ -187,7 +187,7 @@ export default function PipelineHealthOverview({
             <button
               key={layer.layer}
               onClick={() => onLayerClick?.(layer.layer)}
-              className="relative group p-4 rounded-lg border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] transition-all cursor-pointer"
+              className="relative group p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] transition-all cursor-pointer"
             >
               {/* Colored accent line */}
               <div 
@@ -207,7 +207,7 @@ export default function PipelineHealthOverview({
                 <StatusIcon status={layer.status} />
               </div>
               
-              <h3 className="font-medium text-white">
+              <h3 className="font-medium text-[var(--text)]">
                 {LAYER_NAMES[layer.layer]}
               </h3>
               
@@ -240,7 +240,7 @@ export default function PipelineHealthOverview({
               )}
               
               {/* Hover effect */}
-              <div className="absolute inset-0 rounded-lg ring-1 ring-inset ring-white/0 group-hover:ring-white/10 transition-all" />
+              <div className="absolute inset-0 rounded-lg ring-1 ring-inset ring-transparent group-hover:ring-[var(--border-medium)] transition-all" />
             </button>
           ))}
         </div>
@@ -263,7 +263,7 @@ export default function PipelineHealthOverview({
             {correlations.map((corr) => (
               <div
                 key={corr.id}
-                className="p-4 rounded-lg border border-white/5 bg-white/[0.02]"
+                className="p-4 rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-faint)]"
               >
                 <button
                   onClick={() => setExpandedCorrelation(
@@ -293,7 +293,7 @@ export default function PipelineHealthOverview({
                 </button>
                 
                 {expandedCorrelation === corr.id && (
-                  <div className="mt-4 pt-4 border-t border-white/5 space-y-3">
+                  <div className="mt-4 pt-4 border-t border-[var(--subtle-border)] space-y-3">
                     <p className="text-sm text-[var(--muted)]">{corr.description}</p>
                     
                     <div className="grid grid-cols-2 gap-4">
@@ -342,7 +342,7 @@ export default function PipelineHealthOverview({
                     layer.status === 'healthy' ? 'text-emerald-400' :
                     layer.status === 'warning' ? 'text-amber-400' :
                     layer.status === 'critical' ? 'text-red-400' :
-                    'text-gray-400'
+                    'text-[var(--muted)]'
                   }`}>
                     {layer.healthScore}% healthy
                   </div>
@@ -352,9 +352,9 @@ export default function PipelineHealthOverview({
               {/* Arrow between nodes */}
               {index < layerHealth.length - 1 && (
                 <div className="flex-1 mx-4 flex items-center">
-                  <div className="flex-1 h-0.5 bg-gradient-to-r from-white/20 to-white/10" />
-                  <ChevronRight className="w-5 h-5 text-white/30 mx-1" />
-                  <div className="flex-1 h-0.5 bg-gradient-to-r from-white/10 to-white/20" />
+                  <div className="flex-1 h-0.5 bg-gradient-to-r from-[var(--overlay-strong)] to-[var(--overlay-medium)]" />
+                  <ChevronRight className="w-5 h-5 text-[var(--text-faint)] mx-1" />
+                  <div className="flex-1 h-0.5 bg-gradient-to-r from-[var(--overlay-medium)] to-[var(--overlay-strong)]" />
                 </div>
               )}
             </div>

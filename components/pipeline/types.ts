@@ -5,10 +5,10 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'VERSION_CONTROL';
+export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'NOTIFICATIONS' | 'UNCATEGORIZED';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
-export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING' | 'OBSERVABILITY';
+export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING';
 
 // Node status
 export type PipelineNodeStatus = 'PENDING' | 'CONNECTED' | 'TESTING' | 'ERROR' | 'ACTIVE';
@@ -19,14 +19,17 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   TRANSFORMATION: '#F59E0B', // Amber
   WAREHOUSE: '#6366F1',      // Indigo
   REPORTING: '#06B6D4',      // Cyan
+  STORAGE: '#A855F7',        // Purple-500
   VERSION_CONTROL: '#8B5CF6', // Purple
+  ORCHESTRATION: '#F97316',  // Orange
+  INFRASTRUCTURE: '#94A3B8', // Slate
+  UNCATEGORIZED: '#78716C',  // Stone — neutral for unknown platforms
 };
 
 // Integration type colors
 export const INTEGRATION_COLORS: Record<IntegrationType, string> = {
   NOTIFICATIONS: '#EC4899',  // Pink
   TICKETING: '#F97316',      // Orange
-  OBSERVABILITY: '#14B8A6',  // Teal
 };
 
 // Status colors
@@ -44,14 +47,17 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',
+  STORAGE: 'Storage',
   VERSION_CONTROL: 'Version Control',
+  ORCHESTRATION: 'Orchestration',
+  INFRASTRUCTURE: 'Infrastructure',
+  UNCATEGORIZED: 'Uncategorized',
 };
 
 // Integration type labels
 export const INTEGRATION_LABELS: Record<IntegrationType, string> = {
   NOTIFICATIONS: 'Notifications',
   TICKETING: 'Ticketing',
-  OBSERVABILITY: 'Observability',
 };
 
 // Get tools by layer
@@ -63,7 +69,7 @@ export function getToolsByLayer(layer: PipelineLayer): ToolDefinition[] {
 export interface ConfigField {
   name: string;
   label: string;
-  type: 'text' | 'password' | 'select' | 'file' | 'textarea' | 'number' | 'multi-select';
+  type: 'text' | 'password' | 'select' | 'file' | 'folder' | 'textarea' | 'number' | 'multi-select';
   required: boolean;
   placeholder?: string;
   helperText?: string;
@@ -72,15 +78,58 @@ export interface ConfigField {
   dynamicOptions?: boolean;
   // API endpoint to fetch options (relative path, e.g., 'datasets')
   optionsEndpoint?: string;
+  // Conditional visibility: only show this field when another field has a specific value
+  showWhen?: { field: string; value: string };
 }
 
 // Tool definition
+export type GraphDomain = 'DATA_PLANE' | 'CONTROL_PLANE' | 'NONE';
+
 export interface ToolDefinition {
   id: string;
   name: string;
   description: string;
   layer: PipelineLayer;
   configFields: ConfigField[];
+  // Complementary integrations — IDs of tools that unlock extra capabilities when paired
+  recommendedWith?: string[];
+  recommendedReason?: string;
+  // DATA_PLANE tools create lineage nodes/edges; CONTROL_PLANE tools do not
+  graphDomain?: GraphDomain;
+  // Multi-role: additional layers this tool can serve beyond its primary layer.
+  // Detected at connection time via observed_capabilities() on the backend.
+  additionalLayers?: PipelineLayer[];
+}
+
+// Multi-role display configuration
+export interface RoleInfo {
+  layer: PipelineLayer;
+  label: string;
+  color: string;
+  description: string;
+}
+
+// Which tools support multiple roles and what those roles look like
+export const MULTI_ROLE_TOOLS: Record<string, RoleInfo[]> = {
+  databricks: [
+    { layer: 'WAREHOUSE', label: 'Warehouse', color: '#6366F1', description: 'Unity Catalog tables & SQL queries' },
+    { layer: 'ORCHESTRATION', label: 'Orchestration', color: '#F97316', description: 'Databricks Jobs & Workflows' },
+    { layer: 'TRANSFORMATION', label: 'Transformation', color: '#F59E0B', description: 'Notebooks & Spark jobs' },
+  ],
+  snowflake: [
+    { layer: 'WAREHOUSE', label: 'Warehouse', color: '#6366F1', description: 'Tables, views & SQL queries' },
+    { layer: 'TRANSFORMATION', label: 'Transformation', color: '#F59E0B', description: 'Snowflake Tasks & Streams' },
+  ],
+};
+
+/** Check if a tool supports multiple roles. */
+export function isMultiRoleTool(toolId: string): boolean {
+  return toolId in MULTI_ROLE_TOOLS;
+}
+
+/** Get the role info for a multi-role tool. Returns undefined for single-role tools. */
+export function getMultiRoleInfo(toolId: string): RoleInfo[] | undefined {
+  return MULTI_ROLE_TOOLS[toolId];
 }
 
 // All available tools organized by layer with their config fields
@@ -103,9 +152,12 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       description: 'Open-source data integration', 
       layer: 'INGESTION',
       configFields: [
-        { name: 'host', label: 'Airbyte Host URL', type: 'text', required: true, placeholder: 'https://your-airbyte-instance.com' },
-        { name: 'api_key', label: 'API Key', type: 'password', required: false, placeholder: 'API key (if authentication enabled)' },
+        { name: 'host', label: 'Airbyte Host URL', type: 'text', required: true, placeholder: 'https://api.airbyte.com (Cloud) or http://localhost:8000 (OSS)' },
+        { name: 'client_id', label: 'Client ID', type: 'text', required: false, placeholder: 'Cloud: Settings → Applications → Client ID' },
+        { name: 'client_secret', label: 'Client Secret', type: 'password', required: false, placeholder: 'Cloud: Settings → Applications → Client Secret' },
         { name: 'workspace_id', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Workspace ID' },
+        { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'OSS only: basic auth username' },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'OSS only: basic auth password' },
       ],
     },
     { 
@@ -120,11 +172,13 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
     },
   ],
   TRANSFORMATION: [
-    { 
-      id: 'dbt_cloud', 
-      name: 'dbt Cloud', 
-      description: 'dbt Cloud (hosted)', 
+    {
+      id: 'dbt_cloud',
+      name: 'dbt Cloud',
+      description: 'dbt Cloud (hosted)',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for dbt model fixes',
       configFields: [
         { name: 'api_mode', label: 'API Mode', type: 'select', required: true, options: [
           { value: 'admin', label: 'Admin API (Full Access) - Requires "Job Viewer" token' },
@@ -136,46 +190,85 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'project_id', label: 'Project ID', type: 'text', required: false, placeholder: 'Optional: filter to specific project' },
       ],
     },
-    { 
-      id: 'dbt_core', 
-      name: 'dbt Core', 
-      description: 'dbt Core (manifest upload)', 
+    {
+      id: 'dbt_core',
+      name: 'dbt Core',
+      description: 'dbt Core (upload, project, or GitHub)',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for dbt model fixes',
       configFields: [
-        { name: 'manifest', label: 'Manifest File', type: 'file', required: true, helperText: 'Upload your manifest.json from target/ folder' },
+        { name: 'source_mode', label: 'Source', type: 'select', required: true, options: [
+          { value: 'upload', label: 'Upload manifest.json' },
+          { value: 'project', label: 'Upload dbt project (zip)' },
+          { value: 'github', label: 'Connect GitHub repo' },
+        ], helperText: 'Choose how to provide your dbt project' },
+        // Upload manifest mode
+        { name: 'manifest', label: 'Manifest File', type: 'file', required: false, helperText: 'Upload your manifest.json from target/ folder', showWhen: { field: 'source_mode', value: 'upload' } },
+        // Upload project folder mode
+        { name: 'project_files', label: 'dbt Project Folder', type: 'folder', required: false, helperText: 'Select your dbt project folder (models/, dbt_project.yml, etc.)', showWhen: { field: 'source_mode', value: 'project' } },
+        // GitHub repo mode
+        { name: 'github_repo', label: 'Repository', type: 'select', required: false, dynamicOptions: true, optionsEndpoint: 'github-repos', helperText: 'Select from repositories configured in your GitHub connector', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'dbt_project_path', label: 'dbt Project Path', type: 'text', required: false, placeholder: '/ (repo root)', helperText: 'Path to dbt project within the repo (leave empty for root)', showWhen: { field: 'source_mode', value: 'github' } },
+        // Common fields
+        { name: 'warehouse_type', label: 'Target Warehouse', type: 'select', required: false, options: [
+          { value: 'bigquery', label: 'BigQuery' },
+          { value: 'snowflake', label: 'Snowflake' },
+          { value: 'postgres', label: 'Postgres' },
+          { value: 'redshift', label: 'Redshift' },
+        ], helperText: 'The warehouse your dbt project targets' },
         { name: 'project_name', label: 'Project Name', type: 'text', required: false, placeholder: 'Name to identify this dbt project' },
       ],
     },
-    { 
-      id: 'airflow', 
-      name: 'Airflow', 
-      description: 'Apache Airflow orchestration', 
+    {
+      id: 'airflow',
+      name: 'Airflow',
+      description: 'Apache Airflow orchestration',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for DAG fixes and code suggestions',
       configFields: [
-        { name: 'host', label: 'Airflow Host', type: 'text', required: true, placeholder: 'https://your-airflow.com' },
-        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'Airflow username' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Airflow password' },
+        { name: 'source_mode', label: 'Connection Mode', type: 'select', required: false, options: [
+          { value: 'api', label: 'Airflow API' },
+          { value: 'github', label: 'GitHub DAG Files' },
+        ], helperText: 'Connect via Airflow REST API or parse DAG files from a GitHub repo' },
+        // API mode fields
+        { name: 'host', label: 'Airflow Host', type: 'text', required: false, placeholder: 'https://your-airflow.com', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'username', label: 'Username', type: 'text', required: false, placeholder: 'Airflow username', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'Airflow password', showWhen: { field: 'source_mode', value: 'api' } },
+        { name: 'code_repo', label: 'Code Repository', type: 'select', required: false, dynamicOptions: true, optionsEndpoint: 'github-repos', helperText: 'Select from repositories configured in your GitHub connector', showWhen: { field: 'source_mode', value: 'api' } },
+        // GitHub mode fields
+        { name: 'github_repo', label: 'Repository', type: 'select', required: false, dynamicOptions: true, optionsEndpoint: 'github-repos', helperText: 'Select from repositories configured in your GitHub connector', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'github_branch', label: 'Branch', type: 'text', required: false, placeholder: 'main', showWhen: { field: 'source_mode', value: 'github' } },
+        { name: 'dag_directory', label: 'DAG Directory', type: 'text', required: false, placeholder: 'dags', helperText: 'Path to DAGs folder in the repo (default: dags)', showWhen: { field: 'source_mode', value: 'github' } },
       ],
     },
-    { 
-      id: 'dagster', 
-      name: 'Dagster', 
-      description: 'Dagster orchestration', 
+    {
+      id: 'dagster',
+      name: 'Dagster',
+      description: 'Dagster orchestration',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for pipeline fixes',
       configFields: [
         { name: 'host', label: 'Dagster Host', type: 'text', required: true, placeholder: 'https://your-dagster.com' },
         { name: 'api_token', label: 'API Token', type: 'password', required: false, placeholder: 'Dagster Cloud token' },
+        { name: 'code_repo', label: 'Code Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repo where your pipeline code lives (optional)' },
       ],
     },
-    { 
-      id: 'prefect', 
-      name: 'Prefect', 
-      description: 'Prefect workflow orchestration', 
+    {
+      id: 'prefect',
+      name: 'Prefect',
+      description: 'Prefect workflow orchestration',
       layer: 'TRANSFORMATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for flow fixes',
       configFields: [
         { name: 'api_url', label: 'Prefect API URL', type: 'text', required: true, placeholder: 'https://api.prefect.cloud/api' },
         { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your Prefect API key' },
         { name: 'workspace_id', label: 'Workspace ID', type: 'text', required: false, placeholder: 'Prefect Cloud workspace ID' },
+        { name: 'code_repo', label: 'Code Repository', type: 'text', required: false, placeholder: 'owner/repo', helperText: 'GitHub repo where your flow code lives (optional)' },
       ],
     },
   ],
@@ -185,6 +278,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       name: 'Snowflake',
       description: 'Snowflake Data Cloud',
       layer: 'WAREHOUSE',
+      additionalLayers: ['TRANSFORMATION'],
       configFields: [
         { name: 'account', label: 'Account Identifier', type: 'text', required: true, placeholder: 'xy12345.us-east-1' },
         { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'Your Snowflake username' },
@@ -254,28 +348,42 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
       ],
     },
-    { 
-      id: 'sqlserver', 
-      name: 'SQL Server', 
-      description: 'Microsoft SQL Server', 
+    {
+      id: 'azure_sql',
+      name: 'Azure SQL',
+      description: 'Azure SQL Database',
+      layer: 'WAREHOUSE',
+      configFields: [
+        { name: 'server', label: 'Server', type: 'text', required: true, placeholder: 'yourserver.database.windows.net' },
+        { name: 'database', label: 'Database', type: 'text', required: true, placeholder: 'yourdb' },
+        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@yourserver' },
+        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+      ],
+    },
+    {
+      id: 'databricks',
+      name: 'Databricks',
+      description: 'Databricks Lakehouse',
+      layer: 'WAREHOUSE',
+      additionalLayers: ['ORCHESTRATION', 'TRANSFORMATION'],
+      configFields: [
+        { name: 'host', label: 'Workspace URL', type: 'text', required: true, placeholder: 'https://adb-xxxx.azuredatabricks.net', helperText: 'Your Databricks workspace URL' },
+        { name: 'token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'dapi...' },
+        { name: 'http_path', label: 'SQL Warehouse HTTP Path', type: 'text', required: true, placeholder: '/sql/1.0/warehouses/xxxx', helperText: 'Found in SQL Warehouse connection details' },
+        { name: 'catalog', label: 'Unity Catalog', type: 'text', required: false, placeholder: 'main', helperText: 'Leave empty for hive_metastore' },
+        { name: 'schema', label: 'Schema', type: 'text', required: false, placeholder: 'default' },
+      ],
+    },
+    {
+      id: 'sqlserver',
+      name: 'SQL Server',
+      description: 'Microsoft SQL Server',
       layer: 'WAREHOUSE',
       configFields: [
         { name: 'server', label: 'Server', type: 'text', required: true, placeholder: 'localhost' },
         { name: 'port', label: 'Port', type: 'number', required: false, placeholder: '1433' },
         { name: 'database', label: 'Database', type: 'text', required: true, placeholder: 'master' },
         { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'sa' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
-      ],
-    },
-    { 
-      id: 'azure_sql', 
-      name: 'Azure SQL', 
-      description: 'Azure SQL Database', 
-      layer: 'WAREHOUSE',
-      configFields: [
-        { name: 'server', label: 'Server', type: 'text', required: true, placeholder: 'yourserver.database.windows.net' },
-        { name: 'database', label: 'Database', type: 'text', required: true, placeholder: 'yourdb' },
-        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@yourserver' },
         { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
       ],
     },
@@ -323,8 +431,89 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       layer: 'REPORTING',
       configFields: [
         { name: 'host', label: 'Metabase URL', type: 'text', required: true, placeholder: 'https://your-metabase.com' },
-        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'admin@example.com' },
-        { name: 'password', label: 'Password', type: 'password', required: true, placeholder: 'Password' },
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'mb_...', helperText: 'Generate from Admin > Settings > Authentication > API Keys (Metabase v0.49+)' },
+      ],
+    },
+  ],
+  STORAGE: [
+    {
+      id: 'amazon_s3',
+      name: 'Amazon S3',
+      description: 'AWS object storage',
+      layer: 'STORAGE',
+      configFields: [
+        { name: 'access_key_id', label: 'Access Key ID', type: 'text', required: true, placeholder: 'AKIAIOSFODNN7EXAMPLE' },
+        { name: 'secret_access_key', label: 'Secret Access Key', type: 'password', required: true, placeholder: 'Your AWS secret key' },
+        { name: 'region', label: 'Region', type: 'select', required: true, options: [
+          { value: 'us-east-1', label: 'US East (N. Virginia)' },
+          { value: 'us-east-2', label: 'US East (Ohio)' },
+          { value: 'us-west-1', label: 'US West (N. California)' },
+          { value: 'us-west-2', label: 'US West (Oregon)' },
+          { value: 'eu-west-1', label: 'EU (Ireland)' },
+          { value: 'eu-west-2', label: 'EU (London)' },
+          { value: 'eu-central-1', label: 'EU (Frankfurt)' },
+          { value: 'ap-southeast-1', label: 'Asia Pacific (Singapore)' },
+          { value: 'ap-southeast-2', label: 'Asia Pacific (Sydney)' },
+          { value: 'ap-northeast-1', label: 'Asia Pacific (Tokyo)' },
+        ]},
+        { name: 'bucket', label: 'Bucket Name', type: 'text', required: false, placeholder: 'Optional: specific bucket' },
+      ],
+    },
+    {
+      id: 'gcs',
+      name: 'Google Cloud Storage',
+      description: 'GCP object storage',
+      layer: 'STORAGE',
+      configFields: [
+        { name: 'project_id', label: 'Project ID', type: 'text', required: true, placeholder: 'your-gcp-project-id' },
+        { name: 'credentials', label: 'Service Account Key', type: 'file', required: true, helperText: 'Upload your service account JSON key file' },
+        { name: 'bucket', label: 'Bucket Name', type: 'text', required: false, placeholder: 'Optional: specific bucket' },
+      ],
+    },
+    {
+      id: 'adls',
+      name: 'Azure Data Lake Storage',
+      description: 'Azure ADLS Gen2',
+      layer: 'STORAGE',
+      configFields: [
+        { name: 'account_name', label: 'Storage Account Name', type: 'text', required: true, placeholder: 'yourstorageaccount' },
+        { name: 'account_key', label: 'Account Key', type: 'password', required: false, helperText: 'Use either Account Key or SAS Token' },
+        { name: 'sas_token', label: 'SAS Token', type: 'password', required: false, helperText: 'Shared Access Signature token' },
+        { name: 'container', label: 'Container Name', type: 'text', required: false, placeholder: 'Optional: specific container' },
+      ],
+    },
+  ],
+  ORCHESTRATION: [
+    {
+      id: 'n8n',
+      name: 'n8n',
+      description: 'n8n workflow automation',
+      layer: 'ORCHESTRATION',
+      recommendedWith: ['github'],
+      recommendedReason: 'Connect GitHub to enable PR creation for workflow fixes',
+      configFields: [
+        { name: 'host', label: 'n8n Instance URL', type: 'text', required: true, placeholder: 'https://your-n8n.example.com', helperText: 'Base URL of your n8n instance (self-hosted or cloud)' },
+        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Your n8n API key', helperText: 'Generate from Settings > API in your n8n instance' },
+      ],
+    },
+  ],
+  INFRASTRUCTURE: [
+    {
+      id: 'linux_server',
+      name: 'Linux Server',
+      description: 'SSH-based server monitoring (certificates, health, logs)',
+      layer: 'INFRASTRUCTURE',
+      configFields: [
+        { name: 'host', label: 'Host / IP', type: 'text', required: true, placeholder: '10.0.1.50 or server.example.com' },
+        { name: 'port', label: 'SSH Port', type: 'number', required: false, placeholder: '22' },
+        { name: 'username', label: 'Username', type: 'text', required: true, placeholder: 'deploy' },
+        { name: 'auth_method', label: 'Auth Method', type: 'select', required: true, options: [
+          { value: 'key', label: 'SSH Private Key' },
+          { value: 'password', label: 'Password' },
+        ]},
+        { name: 'private_key', label: 'Private Key', type: 'textarea', required: false, placeholder: '-----BEGIN RSA PRIVATE KEY-----', helperText: 'Paste your SSH private key (for key-based auth)', showWhen: { field: 'auth_method', value: 'key' } },
+        { name: 'passphrase', label: 'Key Passphrase', type: 'password', required: false, placeholder: 'Passphrase for encrypted key', helperText: 'Leave empty if your key is not passphrase-protected', showWhen: { field: 'auth_method', value: 'key' } },
+        { name: 'password', label: 'Password', type: 'password', required: false, placeholder: 'SSH password', helperText: 'For password-based auth', showWhen: { field: 'auth_method', value: 'password' } },
       ],
     },
   ],
@@ -335,9 +524,9 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       description: 'GitHub repositories & PRs',
       layer: 'VERSION_CONTROL',
       configFields: [
-        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx', helperText: 'Token needs repo access scope' },
+        { name: 'access_token', label: 'Personal Access Token', type: 'password', required: true, placeholder: 'ghp_xxxxxxxxxxxx', helperText: 'Token needs repo access scope. For PR creation, also needs write access.' },
         { name: 'owner', label: 'Repository Owner', type: 'text', required: true, placeholder: 'organization or username' },
-        { name: 'repo', label: 'Repository Name', type: 'text', required: false, placeholder: 'Leave empty for all repos' },
+        { name: 'repos', label: 'Repositories', type: 'multi-select', required: false, dynamicOptions: true, optionsEndpoint: 'repos', helperText: 'Select repositories to make visible. Other tools (dbt, Airflow) can pick from these.' },
       ],
     },
     {
@@ -363,6 +552,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       ],
     },
   ],
+  UNCATEGORIZED: [],
 };
 
 // Integration definitions (non-pipeline tools for notifications, ticketing, observability)
@@ -382,7 +572,7 @@ export const INTEGRATIONS: Record<IntegrationType, IntegrationDefinition[]> = {
       description: 'Send alerts to Slack channels',
       category: 'NOTIFICATIONS',
       configFields: [
-        { name: 'webhook_url', label: 'Webhook URL', type: 'text', required: true, placeholder: 'https://hooks.slack.com/services/...' },
+        { name: 'bot_token', label: 'Bot Token', type: 'password', required: true, placeholder: 'xoxb-...', helperText: 'Create a Slack App, add bot scopes (chat:write, channels:read, groups:read), then paste the Bot Token' },
         { name: 'channel', label: 'Default Channel', type: 'text', required: false, placeholder: '#data-alerts' },
       ],
     },
@@ -462,47 +652,6 @@ export const INTEGRATIONS: Record<IntegrationType, IntegrationDefinition[]> = {
       ],
     },
   ],
-  OBSERVABILITY: [
-    {
-      id: 'monte_carlo',
-      name: 'Monte Carlo',
-      description: 'Data observability platform',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key_id', label: 'API Key ID', type: 'text', required: true, placeholder: 'Monte Carlo key ID' },
-        { name: 'api_key_secret', label: 'API Key Secret', type: 'password', required: true, placeholder: 'Monte Carlo key secret' },
-      ],
-    },
-    {
-      id: 'bigeye',
-      name: 'Bigeye',
-      description: 'Data quality monitoring',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Bigeye API key' },
-        { name: 'base_url', label: 'Base URL', type: 'text', required: false, placeholder: 'https://app.bigeye.com' },
-      ],
-    },
-    {
-      id: 'soda',
-      name: 'Soda',
-      description: 'Data quality testing',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key_id', label: 'API Key ID', type: 'text', required: true, placeholder: 'Soda Cloud key ID' },
-        { name: 'api_key_secret', label: 'API Key Secret', type: 'password', required: true, placeholder: 'Soda Cloud key secret' },
-      ],
-    },
-    {
-      id: 'elementary',
-      name: 'Elementary',
-      description: 'dbt-native data observability',
-      category: 'OBSERVABILITY',
-      configFields: [
-        { name: 'api_key', label: 'API Key', type: 'password', required: true, placeholder: 'Elementary Cloud API key' },
-      ],
-    },
-  ],
 };
 
 // Get tool by ID
@@ -546,4 +695,74 @@ export interface PipelineStack {
   status: 'DRAFT' | 'ACTIVE' | 'PAUSED';
   nodes: PipelineNode[];
   edges: PipelineEdge[];
+}
+
+// ─── Graph Domain Map ────────────────────────────────────────────────
+// Maps tool IDs to their graph domain. DATA_PLANE tools produce lineage
+// nodes/edges; CONTROL_PLANE tools are operational only.
+
+export const GRAPH_DOMAIN_MAP: Record<string, GraphDomain> = {
+  // Warehouses — DATA_PLANE
+  bigquery: 'DATA_PLANE',
+  snowflake: 'DATA_PLANE',
+  postgres: 'DATA_PLANE',
+  redshift: 'DATA_PLANE',
+  databricks: 'DATA_PLANE',
+  sqlserver: 'DATA_PLANE',
+  azure_sql: 'DATA_PLANE',
+  azure_synapse: 'DATA_PLANE',
+  mysql: 'DATA_PLANE',
+  // Ingestion — DATA_PLANE
+  fivetran: 'DATA_PLANE',
+  airbyte: 'DATA_PLANE',
+  stitch: 'DATA_PLANE',
+  // Transformation / Orchestration — DATA_PLANE
+  dbt_cloud: 'DATA_PLANE',
+  dbt_core: 'DATA_PLANE',
+  airflow: 'DATA_PLANE',
+  dagster: 'DATA_PLANE',
+  prefect: 'DATA_PLANE',
+  n8n: 'DATA_PLANE',
+  // Reporting / BI — DATA_PLANE
+  looker: 'DATA_PLANE',
+  tableau: 'DATA_PLANE',
+  metabase: 'DATA_PLANE',
+  powerbi: 'DATA_PLANE',
+  // Storage — DATA_PLANE
+  amazon_s3: 'DATA_PLANE',
+  gcs: 'DATA_PLANE',
+  adls: 'DATA_PLANE',
+  // Version Control — CONTROL_PLANE
+  github: 'CONTROL_PLANE',
+  github_issues: 'CONTROL_PLANE',
+  gitlab: 'CONTROL_PLANE',
+  bitbucket: 'CONTROL_PLANE',
+  // Notifications — CONTROL_PLANE
+  slack: 'CONTROL_PLANE',
+  teams: 'CONTROL_PLANE',
+  pagerduty: 'CONTROL_PLANE',
+  opsgenie: 'CONTROL_PLANE',
+  // Project Management — CONTROL_PLANE
+  jira: 'CONTROL_PLANE',
+  linear: 'CONTROL_PLANE',
+  asana: 'CONTROL_PLANE',
+  // Infrastructure — CONTROL_PLANE
+  linux_server: 'CONTROL_PLANE',
+  // Other — CONTROL_PLANE
+  custom_webhook: 'CONTROL_PLANE',
+};
+
+/** Look up graph domain for a tool, defaulting to DATA_PLANE. */
+export function getGraphDomain(toolId: string): GraphDomain {
+  return GRAPH_DOMAIN_MAP[toolId] ?? 'DATA_PLANE';
+}
+
+/** Check if a tool is on the data plane (produces lineage). */
+export function isDataPlane(toolId: string): boolean {
+  return getGraphDomain(toolId) === 'DATA_PLANE';
+}
+
+/** Check if a tool is on the control plane (no lineage). */
+export function isControlPlane(toolId: string): boolean {
+  return getGraphDomain(toolId) === 'CONTROL_PLANE';
 }

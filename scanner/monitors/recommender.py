@@ -1,0 +1,554 @@
+"""
+Node-aware monitor recommendation engine.
+
+Given a lineage node and its upstream context, recommends appropriate monitors
+based on node type, platform domain, criticality, and upstream relationships.
+"""
+
+from dataclasses import dataclass, field, asdict
+from typing import Dict, List, Optional, Set, Any
+
+from ..lineage.graph import LineageNode, PlatformDomain, AssetKind, NodeType
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MonitorRecommendation:
+    """A single recommended monitor for a lineage node."""
+    monitor_key: str           # e.g. "FRESHNESS", "SYNC_LAG"
+    target_fqn: str            # prefilled FQN for the monitor target
+    target_node_id: str        # engine node ID
+    source: str                # "direct" | "upstream" | "bundle"
+    reason: str                # human-readable explanation
+    priority: int              # 1=critical, 2=high, 3=medium
+    config_hints: Dict[str, Any] = field(default_factory=dict)
+    integration_type: str = ""  # "bigquery", "fivetran", etc.
+    already_monitored: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MonitorBundle:
+    """A named set of monitor recommendations."""
+    bundle_key: str            # "asset_stability", "upstream_stability", "reporting_health"
+    label: str
+    description: str
+    recommendations: List[MonitorRecommendation] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "bundle_key": self.bundle_key,
+            "label": self.label,
+            "description": self.description,
+            "recommendations": [r.to_dict() for r in self.recommendations],
+        }
+
+
+# ---------------------------------------------------------------------------
+# Constants — monitor keys (match types/monitor-catalog.ts)
+# ---------------------------------------------------------------------------
+
+# Warehouse SQL monitors — canonical set
+FRESHNESS = "FRESHNESS"
+VOLUME = "VOLUME"
+SCHEMA_CHANGE = "SCHEMA_CHANGE"
+NULL_CHECK = "NULL_CHECK"
+UNIQUENESS_CHECK = "UNIQUENESS_CHECK"
+REFERENTIAL = "REFERENTIAL"
+RANGE_VALIDATION = "RANGE_VALIDATION"
+ACCEPTED_VALUES = "ACCEPTED_VALUES"
+DATE_CONSISTENCY = "DATE_CONSISTENCY"
+DATA_TYPE_VALIDATION = "DATA_TYPE_VALIDATION"
+OUTLIER_DETECTION = "OUTLIER_DETECTION"
+
+# Legacy aliases — kept for backward compat in dedup/existing code
+NULL_RATE = "NULL_RATE"
+ANOMALY = "ANOMALY"
+
+# Ingestion monitors
+SYNC_LAG = "SYNC_LAG"
+FAILED_SYNCS = "FAILED_SYNCS"
+CONNECTOR_SCHEMA_DRIFT = "CONNECTOR_SCHEMA_DRIFT"
+
+# Orchestration monitors
+DAG_LAST_RUN = "DAG_LAST_RUN"
+DAG_SCHEDULE_LAG = "DAG_SCHEDULE_LAG"
+TASK_FAILURE_RATE = "TASK_FAILURE_RATE"
+
+# Transformation monitors
+DBT_TEST_FAILURES = "DBT_TEST_FAILURES"
+DBT_MODEL_FRESHNESS = "DBT_MODEL_FRESHNESS"
+DBT_SOURCE_FRESHNESS = "DBT_SOURCE_FRESHNESS"
+
+# BI / Reporting monitors
+BI_FRESHNESS_PROXY = "BI_FRESHNESS_PROXY"
+BI_UPSTREAM_BREAK_RISK = "BI_UPSTREAM_BREAK_RISK"
+BI_CONTENT_HEALTH = "BI_CONTENT_HEALTH"
+BI_REFRESH_FAILURE = "BI_REFRESH_FAILURE"
+
+# Warehouse ops monitors
+QUERY_PERFORMANCE = "QUERY_PERFORMANCE"
+COST_ANOMALY = "COST_ANOMALY"
+STORAGE_GROWTH = "STORAGE_GROWTH"
+
+# Infrastructure monitors
+SERVER_HEALTH = "SERVER_HEALTH"
+CERTIFICATE = "CERTIFICATE"
+LOG_ANALYSIS = "LOG_ANALYSIS"
+
+# BI node types — use string values to avoid enum identity issues across import paths
+_BI_NODE_TYPES = {"dashboard", "report", "workbook", "question", "explore"}
+_BI_ASSET_KINDS = {"dashboard", "report", "workbook", "question", "explore"}
+
+# Max recommendations per bundle
+BUNDLE_CAP = 8
+
+
+# ---------------------------------------------------------------------------
+# Config hint helpers
+# ---------------------------------------------------------------------------
+
+def _guess_timestamp_column(node: LineageNode) -> Optional[str]:
+    """Pick the best timestamp column from a node's columns list."""
+    ts_keywords = {"timestamp", "datetime", "date"}
+    name_hints = {"updated_at", "created_at", "loaded_at", "_loaded_at", "ingested_at", "updated", "modified_at"}
+
+    # First pass: column name is a known timestamp field
+    for col in node.columns:
+        col_name = (col.get("name") or "").lower()
+        if col_name in name_hints:
+            return col.get("name")
+
+    # Second pass: column type contains timestamp/datetime/date
+    for col in node.columns:
+        col_type = (col.get("type") or "").lower()
+        if any(kw in col_type for kw in ts_keywords):
+            return col.get("name")
+
+    return None
+
+
+from scanner.monitors.policy_config import (
+    sensitivity_to_zscore as _sensitivity_to_zscore,
+    POLICY_TO_MONITOR_CONFIG,
+)
+
+
+def _build_config_hints(node: LineageNode, monitor_key: str, policy: Any = None) -> Dict[str, Any]:
+    """Build prefilled config hints based on node metadata, monitor type, and optional policy.
+
+    When a policy (EffectivePolicy) is provided, its values take precedence over
+    hardcoded defaults. Uses the shared POLICY_TO_MONITOR_CONFIG mapping to
+    translate policy fields to monitor config fields.
+    """
+    hints: Dict[str, Any] = {}
+
+    # --- Policy-driven overrides via shared mapping ---
+    if policy:
+        mapping = POLICY_TO_MONITOR_CONFIG.get(monitor_key.upper(), {})
+        # Also check aliases (NULL_RATE → NULL_CHECK, etc.)
+        if not mapping and monitor_key == "NULL_RATE":
+            mapping = POLICY_TO_MONITOR_CONFIG.get("NULL_CHECK", {})
+        if not mapping and monitor_key == "DATA_TYPE_VALIDATION":
+            mapping = POLICY_TO_MONITOR_CONFIG.get("SCHEMA_CHANGE", {})
+
+        for policy_field, target in mapping.items():
+            policy_val = getattr(policy, policy_field, None)
+            if policy_val is None:
+                continue
+            if isinstance(target, tuple):
+                config_field, converter = target
+                hints[config_field] = converter(policy_val)
+            else:
+                hints[target] = policy_val
+
+    if monitor_key in (FRESHNESS, VOLUME, OUTLIER_DETECTION):
+        ts_col = _guess_timestamp_column(node)
+        if ts_col:
+            hints["timestamp_column"] = ts_col
+
+    if monitor_key in (SYNC_LAG, FAILED_SYNCS, CONNECTOR_SCHEMA_DRIFT):
+        # Prefer the real connector ID from raw_metadata (e.g. Fivetran's "speak_strongly")
+        # over integration_id which is the Pallisade DB record ID.
+        raw_connector = (node.raw_metadata or {}).get("connector_id")
+        if raw_connector:
+            hints["connector_id"] = raw_connector
+        elif node.integration_id:
+            hints["connector_id"] = node.integration_id
+
+    if monitor_key in (DAG_LAST_RUN, DAG_SCHEDULE_LAG, TASK_FAILURE_RATE):
+        hints["dag_id"] = node.name
+
+    if monitor_key in (QUERY_PERFORMANCE, COST_ANOMALY, STORAGE_GROWTH):
+        if monitor_key == QUERY_PERFORMANCE:
+            hints["query_time_threshold_seconds"] = 300
+            hints["lookback_hours"] = 24
+        elif monitor_key == COST_ANOMALY:
+            hints["cost_spike_multiplier"] = 1.5
+            hints["lookback_days"] = 7
+        elif monitor_key == STORAGE_GROWTH:
+            hints["growth_rate_multiplier"] = 2.0
+            hints["lookback_days"] = 30
+
+    if monitor_key in (DBT_TEST_FAILURES, DBT_MODEL_FRESHNESS, DBT_SOURCE_FRESHNESS):
+        if node.integration_id:
+            hints["dbt_job_id"] = node.integration_id
+
+    if monitor_key in (SERVER_HEALTH, CERTIFICATE, LOG_ANALYSIS):
+        if monitor_key == SERVER_HEALTH:
+            hints["cpu_threshold_pct"] = 90
+            hints["memory_threshold_pct"] = 85
+            hints["disk_threshold_pct"] = 90
+        elif monitor_key == CERTIFICATE:
+            hints["expiry_warning_days"] = 30
+        elif monitor_key == LOG_ANALYSIS:
+            hints["error_rate_threshold"] = 5.0
+            hints["lookback_hours"] = 24
+
+    return hints
+
+
+def is_bi_node(node: LineageNode) -> bool:
+    """Check if a node is a BI/reporting asset."""
+    return (
+        node.platform_domain.value == "bi"
+        or node.node_type.value in _BI_NODE_TYPES
+        or node.asset_kind.value in _BI_ASSET_KINDS
+    )
+
+
+def _is_high_criticality(node: LineageNode) -> bool:
+    return node.criticality in ("critical", "high")
+
+
+# ---------------------------------------------------------------------------
+# Direct monitor recommendations
+# ---------------------------------------------------------------------------
+
+def _recommend_direct(node: LineageNode, policy: Any = None) -> List[MonitorRecommendation]:
+    """Recommend monitors directly applicable to this node."""
+    recs: List[MonitorRecommendation] = []
+
+    def _add(key: str, priority: int, reason: str):
+        recs.append(MonitorRecommendation(
+            monitor_key=key,
+            target_fqn=node.fqn,
+            target_node_id=node.id,
+            source="direct",
+            reason=reason,
+            priority=priority,
+            config_hints=_build_config_hints(node, key, policy=policy),
+            integration_type=node.platform or "",
+        ))
+
+    _d = node.platform_domain.value
+    _k = node.asset_kind.value
+    _p = node.platform or ""
+    _DATA_ASSET_KINDS = {"table", "view", "model", "dataset"}
+    _DATA_DOMAINS = {"warehouse", "ingestion", "transform"}
+
+    # --- Data assets (tables/views/models from any data-producing domain) ---
+    # Fivetran-discovered tables have domain=ingestion + kind=table and are
+    # real data assets that should get the same SQL monitors as warehouse tables.
+    if _k in _DATA_ASSET_KINDS and _d in _DATA_DOMAINS:
+        _add(FRESHNESS, 1, "Core data quality — detect stale data in this asset")
+        _add(VOLUME, 2, "Core data quality — detect unexpected row count changes")
+        _add(SCHEMA_CHANGE, 2, "Core data quality — detect column additions or removals")
+        _add(DATA_TYPE_VALIDATION, 3, "Data quality — detect column type mismatches")
+        _add(NULL_CHECK, 2, "Data quality — monitor null spikes in key columns")
+        _add(UNIQUENESS_CHECK, 2, "Data quality — detect duplicate values in key columns")
+
+        if _is_high_criticality(node):
+            _add(OUTLIER_DETECTION, 3, "Critical asset — column-level statistical anomaly detection")
+
+    # --- Ingestion connectors (tool-level only, not synced tables) ---
+    elif _d == "ingestion" and _k in ("connector", "job", "stream"):
+        _add(SYNC_LAG, 1, "Track ingestion connector sync lag")
+        _add(FAILED_SYNCS, 1, "Detect failed syncs on this connector")
+        if node.columns:
+            _add(CONNECTOR_SCHEMA_DRIFT, 2, "Detect schema changes at the ingestion source")
+
+    # --- Orchestration DAGs/jobs (NOT individual tasks) ---
+    elif _d == "orchestration" and _k in ("job", "dag", "pipeline"):
+        _add(DAG_LAST_RUN, 1, "Ensure scheduled orchestration runs succeed")
+        _add(DAG_SCHEDULE_LAG, 2, "Detect when runs fall behind schedule")
+        _add(TASK_FAILURE_RATE, 2, "Track task failure rate across DAG runs")
+
+    # --- Transformation models (dbt) ---
+    elif _d == "transform" and _k in ("model", "job", "task"):
+        _add(DBT_TEST_FAILURES, 1, "Watch for dbt test regressions on this model")
+        _add(DBT_MODEL_FRESHNESS, 2, "Detect when this model build becomes stale")
+        _add(DBT_SOURCE_FRESHNESS, 2, "Detect when dbt sources become stale")
+
+    # --- Warehouse ops (tool-level, not data tables) ---
+    elif _d == "warehouse" and _k not in ("table", "view", "model", "dataset"):
+        _add(QUERY_PERFORMANCE, 1, "Monitor warehouse query performance and timeouts")
+        _add(COST_ANOMALY, 1, "Detect abnormal warehouse cost spikes")
+        _add(STORAGE_GROWTH, 2, "Track warehouse storage growth rate")
+
+    # --- BI / Reporting nodes ---
+    elif is_bi_node(node):
+        _add(BI_FRESHNESS_PROXY, 1, "Track dashboard/report freshness via upstream lineage")
+        _add(BI_CONTENT_HEALTH, 2, "Verify BI asset exists and deliveries are not failing")
+        _add(BI_UPSTREAM_BREAK_RISK, 2, "Count failing monitors on upstream warehouse tables")
+
+    # --- Infrastructure / Linux servers ---
+    # Exclude VCS platforms (GitHub, GitLab, etc.) which share domain=OTHER
+    # but are not servers and have no applicable monitors.
+    elif _d in ("infrastructure", "other") and _p not in ("github", "gitlab", "bitbucket"):
+        _add(SERVER_HEALTH, 1, "Monitor server CPU, memory, and disk usage")
+        _add(CERTIFICATE, 1, "Track SSL/TLS certificate expiry dates")
+        _add(LOG_ANALYSIS, 2, "Detect error spikes and anomalies in server logs")
+
+    return recs
+
+
+# ---------------------------------------------------------------------------
+# Upstream monitor recommendations
+# ---------------------------------------------------------------------------
+
+def _recommend_upstream(
+    target_node: LineageNode,
+    upstream_nodes: List[LineageNode],
+    policy_map: Optional[Dict[str, Any]] = None,
+) -> List[MonitorRecommendation]:
+    """Recommend monitors on upstream dependencies of target_node."""
+    recs: List[MonitorRecommendation] = []
+    seen: Set[str] = set()  # (monitor_key, target_fqn) dedup
+    _pm = policy_map or {}
+
+    for up in upstream_nodes:
+        def _add(key: str, priority: int, reason: str):
+            dedup_key = f"{key}:{up.fqn}"
+            if dedup_key in seen:
+                return
+            seen.add(dedup_key)
+            recs.append(MonitorRecommendation(
+                monitor_key=key,
+                target_fqn=up.fqn,
+                target_node_id=up.id,
+                source="upstream",
+                reason=reason,
+                priority=priority,
+                config_hints=_build_config_hints(up, key, policy=_pm.get(up.fqn)),
+                integration_type=up.platform or "",
+            ))
+
+        up_d = up.platform_domain.value
+        up_k = up.asset_kind.value
+
+        # Upstream warehouse tables
+        if up_d == "warehouse" and up_k in ("table", "view", "model", "dataset"):
+            _add(FRESHNESS, 2,
+                 f"Upstream dependency — stale data in {up.name} impacts {target_node.name}")
+            _add(SCHEMA_CHANGE, 3,
+                 f"Upstream schema change in {up.name} could break {target_node.name}")
+
+        # Upstream ingestion connectors
+        elif up_d == "ingestion" and up_k in ("connector", "job", "stream"):
+            _add(SYNC_LAG, 2,
+                 f"Upstream connector {up.name} — sync lag impacts {target_node.name}")
+
+        # Upstream orchestration DAGs
+        elif up_d == "orchestration" and up_k in ("job", "dag", "task", "pipeline"):
+            _add(DAG_LAST_RUN, 2,
+                 f"Upstream DAG {up.name} — run failures impact {target_node.name}")
+
+        # Upstream dbt models
+        elif up_d == "transform" and up_k in ("model", "table", "view"):
+            _add(DBT_TEST_FAILURES, 2,
+                 f"Upstream model {up.name} — test failures impact {target_node.name}")
+
+    return recs
+
+
+# ---------------------------------------------------------------------------
+# Dedup marking
+# ---------------------------------------------------------------------------
+
+def _mark_existing(
+    recs: List[MonitorRecommendation],
+    existing_monitor_fqns: Set[str],
+) -> None:
+    """Mark recommendations whose target is already monitored."""
+    for r in recs:
+        # Check if a monitor of the same type already targets this FQN
+        # Format: "MONITOR_KEY:target_fqn" or just "target_fqn" for any coverage
+        key_fqn = f"{r.monitor_key}:{r.target_fqn}"
+        if key_fqn in existing_monitor_fqns or r.target_fqn in existing_monitor_fqns:
+            r.already_monitored = True
+
+
+# ---------------------------------------------------------------------------
+# Public API — recommend_for_node
+# ---------------------------------------------------------------------------
+
+def recommend_for_node(
+    node: LineageNode,
+    upstream_nodes: Optional[List[LineageNode]] = None,
+    existing_monitor_fqns: Optional[Set[str]] = None,
+    policy: Any = None,
+    policy_map: Optional[Dict[str, Any]] = None,
+) -> List[MonitorRecommendation]:
+    """Return all monitor recommendations for a node and its upstream context.
+
+    Args:
+        node: The lineage node to recommend monitors for.
+        upstream_nodes: Upstream dependency nodes (depth 1-3 typically).
+        existing_monitor_fqns: Set of "MONITOR_KEY:target_fqn" strings for dedup.
+        policy: EffectivePolicy for this node (used for direct recommendations).
+        policy_map: Dict[fqn, EffectivePolicy] for upstream node lookups.
+
+    Returns:
+        List of MonitorRecommendation sorted by priority (1=highest).
+    """
+    upstream_nodes = upstream_nodes or []
+    existing_monitor_fqns = existing_monitor_fqns or set()
+
+    # Direct recommendations for this node
+    direct = _recommend_direct(node, policy=policy)
+
+    # Upstream recommendations
+    upstream = _recommend_upstream(node, upstream_nodes, policy_map=policy_map)
+
+    all_recs = direct + upstream
+
+    # Deduplicate: no two recs with same (monitor_key, target_fqn)
+    seen: Set[str] = set()
+    deduped: List[MonitorRecommendation] = []
+    for r in all_recs:
+        key = f"{r.monitor_key}:{r.target_fqn}"
+        if key not in seen:
+            seen.add(key)
+            deduped.append(r)
+
+    # Mark existing
+    _mark_existing(deduped, existing_monitor_fqns)
+
+    # Sort by priority
+    deduped.sort(key=lambda r: r.priority)
+
+    return deduped
+
+
+# ---------------------------------------------------------------------------
+# Public API — get_bundles
+# ---------------------------------------------------------------------------
+
+def get_bundles(
+    node: LineageNode,
+    upstream_nodes: Optional[List[LineageNode]] = None,
+    existing_monitor_fqns: Optional[Set[str]] = None,
+    policy: Any = None,
+    policy_map: Optional[Dict[str, Any]] = None,
+) -> List[MonitorBundle]:
+    """Return applicable monitor bundles for a node.
+
+    Bundles are pre-composed sets of monitors. Each bundle is capped at
+    BUNDLE_CAP recommendations.
+    """
+    upstream_nodes = upstream_nodes or []
+    existing_monitor_fqns = existing_monitor_fqns or set()
+    _pm = policy_map or {}
+    bundles: List[MonitorBundle] = []
+
+    # --- Asset Stability: direct monitors for this node ---
+    direct = _recommend_direct(node, policy=policy)
+    if direct:
+        for r in direct:
+            r.source = "bundle"
+        _mark_existing(direct, existing_monitor_fqns)
+        bundles.append(MonitorBundle(
+            bundle_key="asset_stability",
+            label="Asset Stability",
+            description=f"Core quality monitors for {node.name}",
+            recommendations=sorted(direct, key=lambda r: r.priority)[:BUNDLE_CAP],
+        ))
+
+    # --- Upstream Stability: monitors on upstream deps ---
+    if upstream_nodes:
+        upstream = _recommend_upstream(node, upstream_nodes, policy_map=_pm)
+        if upstream:
+            for r in upstream:
+                r.source = "bundle"
+            _mark_existing(upstream, existing_monitor_fqns)
+            bundles.append(MonitorBundle(
+                bundle_key="upstream_stability",
+                label="Upstream Stability",
+                description=f"Monitor upstream dependencies of {node.name}",
+                recommendations=sorted(upstream, key=lambda r: r.priority)[:BUNDLE_CAP],
+            ))
+
+    # --- Reporting Health: BI nodes only ---
+    if is_bi_node(node) and upstream_nodes:
+        reporting_recs: List[MonitorRecommendation] = []
+        seen: Set[str] = set()
+
+        for up in upstream_nodes:
+            up_d = up.platform_domain.value
+            up_k = up.asset_kind.value
+
+            if up_d == "warehouse" and up_k in ("table", "view", "model", "dataset"):
+                for key, reason_tpl in [
+                    (FRESHNESS, f"Reporting dependency — stale {up.name} breaks this dashboard/report"),
+                    (SCHEMA_CHANGE, f"Reporting dependency — schema change in {up.name} could break queries"),
+                ]:
+                    dedup_key = f"{key}:{up.fqn}"
+                    if dedup_key not in seen:
+                        seen.add(dedup_key)
+                        reporting_recs.append(MonitorRecommendation(
+                            monitor_key=key,
+                            target_fqn=up.fqn,
+                            target_node_id=up.id,
+                            source="bundle",
+                            reason=reason_tpl,
+                            priority=1,
+                            config_hints=_build_config_hints(up, key, policy=_pm.get(up.fqn)),
+                            integration_type=up.platform or "",
+                        ))
+
+            elif up_d == "ingestion" and up_k in ("connector", "job", "stream"):
+                dedup_key = f"{SYNC_LAG}:{up.fqn}"
+                if dedup_key not in seen:
+                    seen.add(dedup_key)
+                    reporting_recs.append(MonitorRecommendation(
+                        monitor_key=SYNC_LAG,
+                        target_fqn=up.fqn,
+                        target_node_id=up.id,
+                        source="bundle",
+                        reason=f"Reporting dependency — ingestion lag in {up.name} delays this dashboard/report",
+                        priority=2,
+                        config_hints=_build_config_hints(up, SYNC_LAG, policy=_pm.get(up.fqn)),
+                        integration_type=up.platform or "",
+                    ))
+
+            elif up_d == "transform" and up_k in ("model", "table", "view"):
+                dedup_key = f"{DBT_MODEL_FRESHNESS}:{up.fqn}"
+                if dedup_key not in seen:
+                    seen.add(dedup_key)
+                    reporting_recs.append(MonitorRecommendation(
+                        monitor_key=DBT_MODEL_FRESHNESS,
+                        target_fqn=up.fqn,
+                        target_node_id=up.id,
+                        source="bundle",
+                        reason=f"Reporting dependency — stale transform {up.name} delays this dashboard/report",
+                        priority=2,
+                        config_hints=_build_config_hints(up, DBT_MODEL_FRESHNESS, policy=_pm.get(up.fqn)),
+                        integration_type=up.platform or "",
+                    ))
+
+        if reporting_recs:
+            _mark_existing(reporting_recs, existing_monitor_fqns)
+            bundles.append(MonitorBundle(
+                bundle_key="reporting_health",
+                label="Reporting Health",
+                description=f"End-to-end monitoring for {node.name} and its data sources",
+                recommendations=sorted(reporting_recs, key=lambda r: r.priority)[:BUNDLE_CAP],
+            ))
+
+    return bundles

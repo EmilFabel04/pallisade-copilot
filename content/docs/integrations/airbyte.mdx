@@ -1,0 +1,78 @@
+---
+title: Airbyte
+description: Connect Airbyte to Pallisade for connection health monitoring, sync failure detection, source/destination status, and data volume tracking.
+section: integrations
+order: 13
+---
+
+# Airbyte
+
+## Overview
+
+The Airbyte integration connects Pallisade to your Airbyte instance -- either Airbyte OSS (self-hosted) or Airbyte Cloud. Pallisade monitors connection sync health, detects consecutive failures, tracks stale connections, identifies long-running syncs, and verifies source/destination connectivity.
+
+Key capabilities:
+
+- **Connection health** -- sync status, consecutive failure counts, staleness detection
+- **Source connectivity** -- verify source connectors can still reach their origin systems
+- **Destination status** -- track destination connector availability
+- **Sync failure analysis** -- error messages, failure severity, and pattern detection
+- **Data volume tracking** -- bytes and records synced per job
+- **Long-running sync alerts** -- detect syncs exceeding expected duration
+- **Health scoring** -- composite score across all connections
+
+## Prerequisites
+
+For **Airbyte OSS** (self-hosted):
+- Airbyte instance accessible via HTTP (default: `http://localhost:8000`)
+- (Optional) Basic auth credentials if authentication is enabled
+
+For **Airbyte Cloud**:
+- Airbyte Cloud API key
+- Workspace ID
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Airbyte** from the Ingestion layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Airbyte API host (e.g., `https://your-airbyte-instance.com` or `https://api.airbyte.com`) |
+| `api_key` | No | API key (required for Airbyte Cloud, optional for OSS) |
+| `workspace_id` | No | Workspace ID to scan |
+
+3. Click **Test Connection**. Pallisade checks the health endpoint (OSS) or lists workspaces (Cloud).
+
+<Callout type="tip">
+For Airbyte Cloud, use `https://api.airbyte.com` as the host. For self-hosted Airbyte, use your instance URL (e.g., `http://airbyte.internal:8000`). The adapter auto-detects Cloud vs OSS based on the hostname.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Connections** | ID, name, source/destination IDs, schedule type, status (active/inactive), stream count |
+| **Sync jobs** | Job ID, status (succeeded/failed/running), created/started/ended timestamps, bytes synced, records synced |
+| **Sources** | Source ID, name, type (postgres, salesforce, etc.), workspace, status |
+| **Destinations** | Destination ID, name, type (snowflake, bigquery, etc.), workspace, status |
+| **Failure analysis** | Consecutive failure count, failure reason, error messages |
+| **Staleness** | Hours since last sync, compared against schedule (basic/cron) |
+| **Health score** | Composite score: 100 - (critical * 25) - (high * 10) - (medium * 3) |
+
+## Troubleshooting
+
+**Connection refused on self-hosted**
+Ensure the Airbyte instance is running and the API port is accessible. The default API endpoint for OSS is `http://localhost:8000/api/v1`.
+
+**"401 Unauthorized" on Airbyte Cloud**
+Your API key is invalid or expired. Generate a new one in the Airbyte Cloud dashboard under **Settings > API Keys**.
+
+**Source connection check fails**
+A failing source connection check means the source system (e.g., your database or SaaS API) is unreachable from Airbyte. Check the source's credentials and network access in the Airbyte UI.
+
+**All connections show as stale**
+If `workspace_id` is not set and multiple workspaces exist, some connections may not be scanned. Set the workspace_id to target a specific workspace.
+
+**Long-running sync detected**
+Syncs exceeding 120 minutes (default threshold) are flagged. This may be normal for initial historical syncs. Check if the connection is performing an initial full sync vs incremental.

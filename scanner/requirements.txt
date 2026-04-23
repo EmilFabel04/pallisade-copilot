@@ -62,6 +62,9 @@ google-auth==2.25.0
 # Git operations
 GitPython==3.1.40
 
+# SSH connectivity (for server/infrastructure monitoring)
+paramiko>=3.4.0
+
 # Structured logging
 structlog==23.2.0
 
@@ -69,5 +72,13 @@ structlog==23.2.0
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
+
+# MCP (Model Context Protocol) for dynamic tool access
+mcp>=1.0.0
+
+# External MCP servers (installed as packages, spawned as subprocesses)
+mcp-server-bigquery>=0.3.0       # LucasHild/mcp-server-bigquery
+postgres-mcp>=1.0.0              # crystaldba/postgres-mcp
+dbt-mcp>=1.9.0                   # dbt-labs/dbt-mcp
 
 # ggshield is installed separately in Dockerfile for latest version

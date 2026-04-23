@@ -1,0 +1,4 @@
+# TODO
+
+## Monitor → Tool Card Matching
+- [ ] **Require `integrationId` on infra/tool monitors at creation time**: Currently, monitors like `SERVER_HEALTH`, `DAG_LAST_RUN`, `FAILED_SYNCS` store the pipeline node ID in `config.serverNodeId`/`config.toolNodeId` instead of setting the `integrationId` FK. Infrastructure pipeline nodes (e.g., "linux") don't have an `Integration` record at all, so there's nothing to link to. When a pipeline has multiple tools in the same layer (e.g., two orchestration tools — Airflow + Dagster), monitors without an `integrationId` fall back to layer-based matching and show on **both** tool cards instead of just the correct one. Fix: either create `Integration` records for infrastructure nodes, or add a `pipelineNodeId` FK directly on the `Monitor` model so monitors always link to their specific tool node.

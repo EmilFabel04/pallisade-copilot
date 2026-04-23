@@ -5,13 +5,23 @@ Executes tools against the appropriate integration adapters.
 Routes tool calls to the correct backend based on user's integrations.
 """
 
-from typing import Dict, List, Optional, Any, Set
+from typing import Dict, List, Optional, Any, Set, Union
 import logging
 import json
 import asyncio
 
 from .tools import Tool, ToolResult, get_tool_registry
 from .context_builder import CopilotContext, IntegrationInfo, TableSchema
+from lineage.engine.store import Filters
+from lineage.graph import LineageLevel, LinePlane, PlatformDomain, AssetKind
+
+# Driver imports (lazy — may not be loaded if loader hasn't run yet)
+try:
+    from scanner.drivers.registry import DriverRegistry
+    from scanner.drivers.base import IntegrationDriver as _DriverBase
+except ImportError:
+    DriverRegistry = None  # type: ignore
+    _DriverBase = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +43,12 @@ class ToolExecutor:
         """
         self.context = context
         self._adapters: Dict[str, Any] = {}
+        self._drivers: Dict[str, Any] = {}  # integration_type -> IntegrationDriver instance
+        # In-session cache of anomaly metric values.
+        # Key: "table_fqn.column.metric" → list of floats collected across runs.
+        self._anomaly_baselines: Dict[str, List[float]] = {}
         self._initialize_adapters()
+        self._initialize_drivers()
     
     def _initialize_adapters(self):
         """Initialize adapters for connected integrations."""
@@ -42,12 +57,59 @@ class ToolExecutor:
                 continue
             
             try:
+                if integration.type in self._adapters:
+                    logger.info(f"Skipping duplicate adapter for {integration.type}")
+                    continue
                 adapter = self._create_adapter(integration)
                 if adapter:
                     self._adapters[integration.type] = adapter
             except Exception as e:
                 logger.warning(f"Failed to initialize adapter for {integration.type}: {e}")
     
+    def _initialize_drivers(self):
+        """Initialize IntegrationDriver instances for connected integrations."""
+        if DriverRegistry is None:
+            return
+        for integration in self.context.integrations:
+            if not integration.is_active:
+                continue
+            itype = integration.type.upper()
+            if itype in self._drivers:
+                continue
+            driver_cls = DriverRegistry.get(itype)
+            if driver_cls is not None:
+                try:
+                    self._drivers[itype] = driver_cls()
+                except Exception as e:
+                    logger.debug("Failed to create driver for %s: %s", itype, e)
+
+    def get_driver(self, integration_type: str) -> Optional[Any]:
+        """Look up a loaded IntegrationDriver by type."""
+        return self._drivers.get(integration_type.upper())
+
+    async def execute_driver_health_check(self, integration_type: str) -> ToolResult:
+        """Run health_check via the driver for a given integration."""
+        driver = self.get_driver(integration_type)
+        if not driver:
+            return ToolResult(success=False, error=f"No driver for {integration_type}")
+        # Find config from context
+        for integ in self.context.integrations:
+            if integ.type.upper() == integration_type.upper():
+                result = driver.health_check(integ.config)
+                return ToolResult(success=result.ok, data=result.to_dict(), error=None if result.ok else result.message)
+        return ToolResult(success=False, error=f"Integration {integration_type} not connected")
+
+    async def execute_driver_metadata(self, integration_type: str) -> ToolResult:
+        """Run extract_metadata via the driver for a given integration."""
+        driver = self.get_driver(integration_type)
+        if not driver:
+            return ToolResult(success=False, error=f"No driver for {integration_type}")
+        for integ in self.context.integrations:
+            if integ.type.upper() == integration_type.upper():
+                summaries = driver.extract_metadata(integ.config)
+                return ToolResult(success=True, data=[s.to_dict() for s in summaries])
+        return ToolResult(success=False, error=f"Integration {integration_type} not connected")
+
     async def fetch_warehouse_schema(self) -> Dict[str, List[TableSchema]]:
         """
         Fetch schema information from warehouses relevant to the user's query.
@@ -67,7 +129,7 @@ class ToolExecutor:
             logger.info("[Schema Fetch] Query is about non-warehouse integration (GitHub, etc.) - skipping schema fetch")
             return schema_info
 
-        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
+        all_warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT", "DATABRICKS", "SQLSERVER", "AZURE_SQL"]
 
         # Step 1: Detect which warehouse(s) the user is asking about
         target_warehouses = self._detect_warehouses_from_query()
@@ -140,6 +202,7 @@ class ToolExecutor:
             "BIGQUERY": ["bigquery", "big query", "bq", "google bigquery"],
             "POSTGRES": ["postgres", "postgresql", "pg", "psql"],
             "REDSHIFT": ["redshift", "red shift", "aws redshift"],
+            "DATABRICKS": ["databricks", "unity catalog", "delta lake", "lakehouse"],
         }
 
         for wh_type, patterns in warehouse_patterns.items():
@@ -397,6 +460,17 @@ class ToolExecutor:
             except Exception as e:
                 logger.error(f"[Schema Fetch] PostgreSQL schema discovery failed: {e}")
 
+        elif adapter_type == "DATABRICKS":
+            logger.info("[Schema Fetch] Auto-discovering Databricks schemas")
+            try:
+                result = await asyncio.to_thread(
+                    adapter.execute_query,
+                    "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema') LIMIT 10"
+                )
+                return [row['schema_name'] for row in result]
+            except Exception as e:
+                logger.error(f"[Schema Fetch] Databricks schema discovery failed: {e}")
+
         return []
     
     async def _fetch_dataset_schema(
@@ -440,16 +514,18 @@ class ToolExecutor:
                     'type': row['data_type']
                 })
             
-            # Build TableSchema objects
+            # Build TableSchema objects with project for full BigQuery path
             for row in table_rows:
                 tbl_name = row['table_name']
                 tables.append(TableSchema(
                     name=tbl_name,
                     dataset=dataset,
-                    columns=table_columns.get(tbl_name, [])
+                    columns=table_columns.get(tbl_name, []),
+                    project=project,
+                    warehouse_type="BIGQUERY"
                 ))
-            
-            logger.info(f"BigQuery schema for {dataset}: {len(tables)} tables, columns: {sum(len(t.columns) for t in tables)}")
+
+            logger.info(f"BigQuery schema for {project}.{dataset}: {len(tables)} tables, columns: {sum(len(t.columns) for t in tables)}")
         
         elif adapter_type == "SNOWFLAKE":
             # Get tables
@@ -488,9 +564,10 @@ class ToolExecutor:
                 tables.append(TableSchema(
                     name=tbl_name,
                     dataset=dataset,
-                    columns=table_columns.get(tbl_name, [])
+                    columns=table_columns.get(tbl_name, []),
+                    warehouse_type="SNOWFLAKE"
                 ))
-        
+
         elif adapter_type == "POSTGRES":
             # Get tables
             tables_query = f"""
@@ -528,9 +605,10 @@ class ToolExecutor:
                 tables.append(TableSchema(
                     name=tbl_name,
                     dataset=dataset,
-                    columns=table_columns.get(tbl_name, [])
+                    columns=table_columns.get(tbl_name, []),
+                    warehouse_type="POSTGRES"
                 ))
-        
+
         return tables
     
     def _create_adapter(self, integration: IntegrationInfo) -> Optional[Any]:
@@ -585,8 +663,8 @@ class ToolExecutor:
                     from integrations.airflow import AirflowIntegration
                 except ImportError:
                     from scanner.integrations.airflow import AirflowIntegration
-                return AirflowIntegration(integration.config)
-            
+                return AirflowIntegration(config=integration.config)
+
             elif integration_type == "DAGSTER":
                 try:
                     from integrations.dagster import DagsterIntegration
@@ -600,7 +678,14 @@ class ToolExecutor:
                 except ImportError:
                     from scanner.integrations.prefect import PrefectIntegration
                 return PrefectIntegration(integration.config)
-            
+
+            elif integration_type == "N8N":
+                try:
+                    from integrations.n8n import N8nIntegration
+                except ImportError:
+                    from scanner.integrations.n8n import N8nIntegration
+                return N8nIntegration(integration.config)
+
             elif integration_type == "FIVETRAN":
                 try:
                     from integrations.fivetran import FivetranIntegration
@@ -620,14 +705,96 @@ class ToolExecutor:
                     from integrations.looker import LookerClient
                 except ImportError:
                     from scanner.integrations.looker import LookerClient
-                return LookerClient(integration.config)
+                config = integration.config
+                return LookerClient(
+                    host=config.get("host", config.get("base_url", "")),
+                    client_id=config.get("client_id", ""),
+                    client_secret=config.get("client_secret", ""),
+                    port=config.get("port", 19999),
+                    verify_ssl=config.get("verify_ssl", True),
+                )
+
+            elif integration_type == "REDSHIFT":
+                try:
+                    from adapters.redshift import RedshiftAdapter
+                except ImportError:
+                    from scanner.adapters.redshift import RedshiftAdapter
+                return RedshiftAdapter(integration.config)
+
+            elif integration_type == "DATABRICKS":
+                try:
+                    from adapters.databricks import DatabricksAdapter
+                except ImportError:
+                    from scanner.adapters.databricks import DatabricksAdapter
+                return DatabricksAdapter(integration.config)
+
+            elif integration_type == "TABLEAU":
+                try:
+                    from integrations.tableau import TableauClient
+                except ImportError:
+                    from scanner.integrations.tableau import TableauClient
+                config = integration.config
+                return TableauClient(
+                    server=config.get("server", config.get("server_url", "")),
+                    token_name=config.get("token_name", ""),
+                    token_secret=config.get("token_secret", config.get("token_value", "")),
+                    site_id=config.get("site_id", ""),
+                )
+
+            elif integration_type == "POWERBI":
+                try:
+                    from integrations.powerbi import PowerBIClient
+                except ImportError:
+                    from scanner.integrations.powerbi import PowerBIClient
+                config = integration.config
+                return PowerBIClient(
+                    tenant_id=config.get("tenant_id", ""),
+                    client_id=config.get("client_id", ""),
+                    client_secret=config.get("client_secret", ""),
+                    use_admin_api=config.get("use_admin_api", True),
+                )
+
+            elif integration_type == "METABASE":
+                try:
+                    from integrations.metabase import MetabaseClient
+                except ImportError:
+                    from scanner.integrations.metabase import MetabaseClient
+                config = integration.config
+                return MetabaseClient(
+                    host=config.get("host", ""),
+                    username=config.get("username"),
+                    password=config.get("password"),
+                    api_key=config.get("api_key"),
+                )
+
+            elif integration_type == "AMAZON_S3":
+                try:
+                    from integrations.storage import S3Client
+                except ImportError:
+                    from scanner.integrations.storage import S3Client
+                return S3Client(integration.config)
+
+            elif integration_type == "GCS":
+                try:
+                    from integrations.storage import GCSClient
+                except ImportError:
+                    from scanner.integrations.storage import GCSClient
+                return GCSClient(integration.config)
+
+            elif integration_type == "ADLS":
+                try:
+                    from integrations.storage import ADLSClient
+                except ImportError:
+                    from scanner.integrations.storage import ADLSClient
+                return ADLSClient(integration.config)
+
         except Exception as e:
             logger.error(f"Import error for {integration_type}: {e}")
             raise
-        
+
         return None
     
-    async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
+    async def execute(self, tool_name: str, arguments: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """
         Execute a tool with the given arguments.
         
@@ -663,7 +830,203 @@ class ToolExecutor:
                 error=str(e)
             )
     
-    async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> ToolResult:
+    async def execute_confirmed(self, tool_name: str, confirmed_data: Dict[str, Any]) -> ToolResult:
+        """Execute a confirmed write action by calling the Next.js API."""
+        handler = getattr(self, f"_execute_confirmed_{tool_name}", None)
+        if not handler:
+            return ToolResult(success=False, error=f"No confirmed handler for {tool_name}")
+        try:
+            return await handler(confirmed_data)
+        except Exception as e:
+            logger.exception(f"Error executing confirmed {tool_name}")
+            return ToolResult(success=False, error=str(e))
+
+    # ---- HTTP helpers for 3-step pipeline ----
+
+    async def _call_fastapi(self, path: str, body: dict) -> dict:
+        """POST to FastAPI (scanner) endpoint."""
+        import aiohttp
+        base = "http://127.0.0.1:8000"
+        stack_id = getattr(self.context, 'pipeline_stack_id', '') or ''
+        url = f"{base}{path}"
+        if stack_id:
+            separator = '&' if '?' in url else '?'
+            url += f"{separator}stack_id={stack_id}"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=body, headers={"Content-Type": "application/json"}) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    raise Exception(f"FastAPI {path} failed ({resp.status}): {error}")
+                return await resp.json()
+
+    async def _call_nextjs(self, path: str, body: dict) -> dict:
+        """POST to Next.js endpoint with internal auth."""
+        import aiohttp
+        import os
+        url = f"{self.context.base_url}{path}"
+        headers = {
+            "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
+            "X-Organization-Id": self.context.org_id,
+            "Content-Type": "application/json",
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=body, headers=headers) as resp:
+                if resp.status not in (200, 201):
+                    error = await resp.text()
+                    raise Exception(f"Next.js {path} failed ({resp.status}): {error}")
+                return await resp.json()
+
+    def _resolve_fqn_to_node_id(self, fqn: str) -> str:
+        """Look up node ID from lineage graph."""
+        if hasattr(self.context, 'graph') and self.context.graph:
+            for node in self.context.graph.nodes:
+                if hasattr(node, 'fqn') and node.fqn == fqn:
+                    return getattr(node, 'id', '') or getattr(node, 'node_id', '') or ''
+        return ''
+
+    def _merge_policy_into_groups(self, groups: list, policies: dict) -> list:
+        """Merge resolved policy configs into group recommendations.
+
+        The /policies/resolve endpoint returns nested sections:
+          { "fqn": { freshness: {maxHours: 2}, schema: {strictness: "strict"}, ... } }
+
+        merge_policy_config() expects flat policy-field keys:
+          { "freshness_max_hours": 2, "schema_strictness": "strict", ... }
+
+        We flatten the nested structure before calling merge_policy_config.
+        """
+        from scanner.monitors.policy_config import merge_policy_config
+        policy_map = policies.get("policies", {})
+
+        def _flatten_policy(nested: dict) -> dict:
+            """Convert nested {section: {field: val}} to flat {section_field: val}."""
+            flat = {}
+            for section, fields in nested.items():
+                if isinstance(fields, dict):
+                    for key, val in fields.items():
+                        # Convert camelCase to snake_case: maxHours -> max_hours
+                        snake_key = ''.join(f'_{c.lower()}' if c.isupper() else c for c in key)
+                        flat[f"{section}_{snake_key}"] = val
+                # Skip non-dict fields like 'source', 'profileId', 'status'
+            return flat
+
+        for group in groups:
+            for rec in group.get("recommendations", []):
+                fqn = rec.get("target_fqn", "")
+                policy = policy_map.get(fqn)
+                if policy and rec.get("monitor_key"):
+                    flat_policy = _flatten_policy(policy)
+                    merged, _ = merge_policy_config(
+                        monitor_type=rec["monitor_key"],
+                        config=rec.get("config_hints", {}),
+                        policy_config=flat_policy,
+                        policy_overrides=[],
+                    )
+                    rec["config_hints"] = merged
+        return groups
+
+    # ---- Monitor creation via unified 3-step pipeline ----
+
+    async def _execute_confirmed_create_watch(self, data: Dict[str, Any]) -> ToolResult:
+        """Create monitors via the unified 3-step pipeline."""
+        anchor_fqn = data.get("anchorFqn") or data.get("anchor_fqn") or ""
+        node_id = data.get("nodeId") or data.get("node_id") or self._resolve_fqn_to_node_id(anchor_fqn)
+        monitors = data.get("monitors", [])
+
+        if not monitors:
+            return ToolResult(success=False, error="No monitors specified")
+
+        # Normalize monitor types
+        monitor_types = []
+        for mon in monitors:
+            mt = mon.get("monitorType") or mon.get("monitor_type") or ""
+            monitor_types.append(mt)
+
+        # Step 1: Try preview, but fall back to building groups from artifact data
+        groups = []
+        try:
+            if node_id:
+                manual_selections = {node_id: monitor_types}
+                preview = await self._call_fastapi("/api/v1/monitors/plans/preview", {
+                    "scope_type": "asset",
+                    "scope_config": {"nodeIds": [node_id]},
+                    "mode": "manual",
+                    "manual_selections": manual_selections,
+                    "families": [],
+                })
+                groups = preview.get("groups", [])
+        except Exception as e:
+            logger.warning(f"[CreateMonitor] Preview failed (using fallback): {e}")
+
+        # Fallback: build groups directly from the confirmed artifact data
+        if not groups:
+            recs = []
+            for mon in monitors:
+                mt = mon.get("monitorType") or mon.get("monitor_type") or ""
+                tfqn = mon.get("targetFqn") or mon.get("target_fqn") or anchor_fqn
+                recs.append({
+                    "monitor_key": mt,
+                    "target_fqn": tfqn,
+                    "target_node_id": node_id,
+                    "config_hints": mon.get("config", {}),
+                    "depth": 0,
+                    "priority": 1,
+                })
+            groups = [{
+                "anchor_name": data.get("name", anchor_fqn.split(".")[-1] if anchor_fqn else "Monitor"),
+                "anchor_fqn": anchor_fqn,
+                "anchor_id": node_id,
+                "anchor_node_type": "table",
+                "anchor_platform": "unknown",
+                "watch_type": data.get("watchType") or "pipeline_health",
+                "recommendations": recs,
+            }]
+
+        # Step 2: Policy resolve (non-fatal)
+        policies = {}
+        try:
+            policies = await self._call_fastapi("/api/v1/policies/resolve", {
+                "nodes": [{"fqn": anchor_fqn}],
+                "stackId": getattr(self.context, 'pipeline_stack_id', ''),
+            })
+        except Exception as e:
+            logger.warning(f"[CreateMonitor] Policy resolve failed (non-fatal): {e}")
+
+        # Merge policy into groups
+        if policies:
+            groups = self._merge_policy_into_groups(groups, policies)
+
+        try:
+            # Step 3: Create plan
+            result = await self._call_nextjs("/api/schedule/plans", {
+                "name": data.get("name", "Copilot Monitor"),
+                "scopeType": "asset",
+                "scopeConfig": {"nodeIds": [node_id]} if node_id else {},
+                "mode": "manual",
+                "families": [],
+                "schedule": data.get("schedule", "0 * * * *"),
+                "timezone": data.get("timezone", "UTC"),
+                "groups": groups,
+            })
+        except Exception as e:
+            logger.error(f"[CreateMonitor] Plan creation failed: {e}")
+            return ToolResult(success=False, error=f"Monitor creation failed: {e}")
+
+        total = result.get("totalMonitors", len(monitors))
+        if total == 0:
+            return ToolResult(success=False, error="Plan was created but contains 0 monitors — check monitor types and target FQNs")
+
+        return ToolResult(
+            success=True,
+            data={
+                "planId": result.get("id"),
+                "name": result.get("name"),
+                "monitorCount": total,
+                "message": f"Created {total} monitor(s) in plan '{result.get('name')}'",
+            }
+        )
+
+    async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
         """Execute a specific tool."""
         
         # Route to appropriate handler
@@ -681,16 +1044,88 @@ class ToolExecutor:
     # LINEAGE TOOL IMPLEMENTATIONS
     # ==========================================
     
+    def _build_filters(self, args: Dict[str, Any]) -> Optional[Filters]:
+        """Build engine Filters from tool args (returns None if no filter params)."""
+        level = args.get("level")
+        min_confidence = args.get("min_confidence")
+        system = args.get("system")
+
+        if not any([level, min_confidence, system]):
+            return None
+
+        filters = Filters()
+        if level:
+            try:
+                filters.lineage_levels = {LineageLevel(level)}
+            except ValueError:
+                pass
+        if min_confidence is not None:
+            filters.min_confidence = float(min_confidence)
+        if system:
+            filters.systems = {system}
+        return filters
+
+    def _resolve_node_id(self, node_id: str) -> Optional[str]:
+        """
+        Resolve an FQN, name, or partial name to an actual graph node ID.
+
+        The LLM sees node names/FQNs in the system prompt catalog but graph
+        nodes are keyed by hash IDs. This resolves the LLM-provided value
+        to the correct graph key.
+
+        Resolution order:
+          1. Direct ID match (already a graph key)
+          2. Exact FQN or name match
+          3. Suffix match (user says "orders", graph has "project.dataset.orders")
+        """
+        graph = self.context.graph
+        if not graph:
+            return None
+
+        # 1. Direct ID match
+        if node_id in graph.nodes:
+            return node_id
+
+        # 2. Exact FQN or name match
+        for nid, node in graph.nodes.items():
+            if node.fqn == node_id or node.name == node_id:
+                return nid
+
+        # 3. Suffix match (case-insensitive)
+        lower = node_id.lower()
+        for nid, node in graph.nodes.items():
+            name_lower = node.name.lower()
+            fqn_lower = (node.fqn or "").lower()
+            if name_lower == lower or fqn_lower.endswith('.' + lower):
+                return nid
+            # Also match last part of name (e.g. "orders" matches "stg_orders" via underscore split)
+            name_parts = name_lower.split('.')
+            if name_parts[-1] == lower:
+                return nid
+
+        return None
+
     async def _execute_get_upstream(self, args: Dict[str, Any]) -> ToolResult:
-        """Get upstream dependencies."""
+        """Get upstream dependencies with optional engine filtering."""
         node_id = args["node_id"]
         depth = args.get("depth", -1)
-        
+
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
-        
-        upstream = self.context.graph.get_upstream(node_id, depth=depth)
-        
+
+        resolved = self._resolve_node_id(node_id)
+        if not resolved:
+            return ToolResult(success=False, error=f"Node '{node_id}' not found in lineage graph. Use search_lineage to find it.")
+        node_id = resolved
+
+        filters = self._build_filters(args)
+
+        # Use engine store when filters are requested and available
+        if filters and self.context.engine_store:
+            upstream = self.context.engine_store.get_upstream(node_id, depth=depth, filters=filters)
+        else:
+            upstream = self.context.graph.get_upstream(node_id, depth=depth)
+
         return ToolResult(
             success=True,
             data={
@@ -703,22 +1138,34 @@ class ToolExecutor:
                         "type": node.node_type.value,
                         "platform": node.platform,
                         "depth": node.depth,
+                        "platform_domain": node.platform_domain.value if hasattr(node, 'platform_domain') else None,
+                        "asset_kind": node.asset_kind.value if hasattr(node, 'asset_kind') else None,
                     }
                     for node in upstream
                 ]
             }
         )
-    
+
     async def _execute_get_downstream(self, args: Dict[str, Any]) -> ToolResult:
-        """Get downstream dependents."""
+        """Get downstream dependents with optional engine filtering."""
         node_id = args["node_id"]
         depth = args.get("depth", -1)
-        
+
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
-        
-        downstream = self.context.graph.get_downstream(node_id, depth=depth)
-        
+
+        resolved = self._resolve_node_id(node_id)
+        if not resolved:
+            return ToolResult(success=False, error=f"Node '{node_id}' not found in lineage graph. Use search_lineage to find it.")
+        node_id = resolved
+
+        filters = self._build_filters(args)
+
+        if filters and self.context.engine_store:
+            downstream = self.context.engine_store.get_downstream(node_id, depth=depth, filters=filters)
+        else:
+            downstream = self.context.graph.get_downstream(node_id, depth=depth)
+
         return ToolResult(
             success=True,
             data={
@@ -731,19 +1178,64 @@ class ToolExecutor:
                         "type": node.node_type.value,
                         "platform": node.platform,
                         "depth": node.depth,
+                        "platform_domain": node.platform_domain.value if hasattr(node, 'platform_domain') else None,
+                        "asset_kind": node.asset_kind.value if hasattr(node, 'asset_kind') else None,
                     }
                     for node in downstream
                 ]
             }
         )
+
+    async def _execute_explain_edge(self, args: Dict[str, Any]) -> ToolResult:
+        """Explain a lineage edge — show evidence, confidence, and provenance."""
+        edge_id = args["edge_id"]
+
+        if not self.context.engine_store:
+            # Fall back to basic edge lookup from raw graph
+            if self.context.graph and edge_id in self.context.graph.edges:
+                edge = self.context.graph.edges[edge_id]
+                return ToolResult(success=True, data={
+                    "edge_id": edge.id,
+                    "from": edge.source_id,
+                    "to": edge.target_id,
+                    "edge_type": edge.edge_type.value,
+                    "confidence": edge.confidence,
+                })
+            return ToolResult(success=False, error=f"Edge {edge_id} not found")
+
+        result = self.context.engine_store.explain_edge(edge_id)
+        if "error" in result:
+            return ToolResult(success=False, error=result["error"])
+        return ToolResult(success=True, data=result)
+
+    async def _execute_get_lineage_stats(self, args: Dict[str, Any]) -> ToolResult:
+        """Get lineage coverage statistics."""
+        if not self.context.engine_store:
+            # Fall back to basic stats from raw graph
+            if self.context.graph:
+                return ToolResult(success=True, data={
+                    "total_nodes": len(self.context.graph.nodes),
+                    "total_edges": len(self.context.graph.edges),
+                    "roots": len(self.context.graph.get_roots()),
+                    "leaves": len(self.context.graph.get_leaves()),
+                })
+            return ToolResult(success=False, error="No lineage graph available")
+
+        stats = self.context.engine_store.get_stats()
+        return ToolResult(success=True, data=stats.to_dict())
     
     async def _execute_get_node_details(self, args: Dict[str, Any]) -> ToolResult:
         """Get detailed node information."""
         node_id = args["node_id"]
-        
+
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
-        
+
+        resolved = self._resolve_node_id(node_id)
+        if not resolved:
+            return ToolResult(success=False, error=f"Node '{node_id}' not found in lineage graph. Use search_lineage to find it.")
+        node_id = resolved
+
         node = self.context.graph.nodes.get(node_id)
         if not node:
             return ToolResult(success=False, error=f"Node not found: {node_id}")
@@ -930,11 +1422,15 @@ class ToolExecutor:
         limit = args.get("limit", 100)
         target_warehouse = args.get("warehouse", "").upper().strip()
 
-        # Validate query is SELECT only
-        if not sql.upper().startswith("SELECT"):
+        # Validate query is read-only (SELECT or WITH...SELECT for CTEs)
+        sql_upper = sql.upper()
+        is_select = sql_upper.startswith("SELECT")
+        is_cte = sql_upper.startswith("WITH") and "SELECT" in sql_upper
+
+        if not (is_select or is_cte):
             return ToolResult(
                 success=False,
-                error="Only SELECT queries are allowed"
+                error="Only SELECT queries are allowed (including WITH...SELECT CTEs)"
             )
 
         # Find warehouse adapter — use specified warehouse or infer
@@ -977,9 +1473,8 @@ class ToolExecutor:
                 if not connected:
                     return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
 
-            # Add LIMIT if not present
-            if "LIMIT" not in sql.upper():
-                sql = f"{sql} LIMIT {limit}"
+            # Add LIMIT if not present at the outer query level
+            sql = self._add_limit_if_needed(sql, limit)
 
             logger.info(f"Executing query on {adapter_type}: {sql[:100]}...")
 
@@ -1011,6 +1506,105 @@ class ToolExecutor:
                 error_msg = f"{error_msg}\n\n{validation_warning}"
 
             return ToolResult(success=False, error=error_msg)
+
+    def _add_limit_if_needed(self, sql: str, limit: int) -> str:
+        """
+        Add LIMIT to a query if it doesn't already have one at the outer level.
+
+        Handles edge cases:
+        - Trailing semicolons
+        - CTEs (WITH...SELECT) where LIMIT in subquery doesn't count
+        - UNION/INTERSECT/EXCEPT queries
+        - Queries ending with ) from subqueries
+
+        Returns the modified SQL.
+        """
+        # Strip trailing semicolons and whitespace
+        sql = sql.rstrip().rstrip(';').rstrip()
+
+        sql_upper = sql.upper()
+
+        # Find the position of the outermost SELECT for analysis
+        # For CTEs, we need to find the main SELECT after all WITH clauses
+        if sql_upper.startswith("WITH"):
+            # Find the main SELECT after all CTE definitions
+            # CTEs can be nested, so we need to track parentheses
+            paren_depth = 0
+            main_select_pos = -1
+            i = 0
+            while i < len(sql):
+                if sql[i] == '(':
+                    paren_depth += 1
+                elif sql[i] == ')':
+                    paren_depth -= 1
+                elif paren_depth == 0 and sql_upper[i:i+6] == "SELECT":
+                    # Found a SELECT at depth 0 - this is the main query
+                    main_select_pos = i
+                    break
+                i += 1
+
+            if main_select_pos > 0:
+                # Check if the main SELECT already has LIMIT
+                main_query = sql_upper[main_select_pos:]
+                # Look for LIMIT that's not inside parentheses
+                paren_depth = 0
+                has_outer_limit = False
+                for j, char in enumerate(main_query):
+                    if char == '(':
+                        paren_depth += 1
+                    elif char == ')':
+                        paren_depth -= 1
+                    elif paren_depth == 0 and main_query[j:j+5] == "LIMIT":
+                        has_outer_limit = True
+                        break
+
+                if has_outer_limit:
+                    return sql
+        else:
+            # Regular SELECT - check for LIMIT at outer level
+            paren_depth = 0
+            has_outer_limit = False
+            for i, char in enumerate(sql_upper):
+                if char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    paren_depth -= 1
+                elif paren_depth == 0 and sql_upper[i:i+5] == "LIMIT":
+                    has_outer_limit = True
+                    break
+
+            if has_outer_limit:
+                return sql
+
+        # Check if query ends with a closing paren (subquery or CTE final expression)
+        # In this case, we need to be careful - appending LIMIT might break it
+        # Example: SELECT * FROM (SELECT 1) AS t  -> SELECT * FROM (SELECT 1) AS t LIMIT 100 (OK)
+        # Example: (SELECT 1 UNION SELECT 2) -> (SELECT 1 UNION SELECT 2) LIMIT 100 (might break)
+        if sql.rstrip().endswith(')'):
+            # Check if the entire query is wrapped in parens (set operation)
+            stripped = sql.strip()
+            if stripped.startswith('(') and self._is_balanced_parens(stripped):
+                # Entire query is in parens - don't append, let user handle it
+                logger.info("Query wrapped in parentheses, skipping auto-LIMIT")
+                return sql
+
+        # Safe to append LIMIT
+        return f"{sql} LIMIT {limit}"
+
+    def _is_balanced_parens(self, sql: str) -> bool:
+        """Check if a string starting with ( has its closing ) at the very end."""
+        if not sql.startswith('(') or not sql.endswith(')'):
+            return False
+        depth = 0
+        for i, char in enumerate(sql):
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0 and i < len(sql) - 1:
+                    # Closed before the end
+                    return False
+        return depth == 0
 
     def _infer_warehouse_from_sql(self, sql: str) -> Optional[str]:
         """
@@ -1193,24 +1787,73 @@ class ToolExecutor:
     async def _execute_get_table_stats(self, args: Dict[str, Any]) -> ToolResult:
         """Get table statistics."""
         table_name = args["table_name"]
-        
+
         # Find warehouse adapter
         warehouse_types = ["SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT"]
         adapter = None
+        adapter_type = None
         for wh_type in warehouse_types:
             if wh_type in self._adapters:
                 adapter = self._adapters[wh_type]
+                adapter_type = wh_type
                 break
-        
+
         if not adapter:
             return ToolResult(success=False, error="No warehouse connected")
-        
+
+        # Reconnect if the adapter was disconnected after a prior operation
+        # (e.g. schema pre-fetch). Without this the underlying metadata queries
+        # fail with "Not connected to database" and return empty stats.
+        if not adapter.is_connected:
+            connected = adapter.connect()
+            if not connected:
+                return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
+
         try:
-            stats = await adapter.get_table_stats(table_name)
+            import asyncio
+            stats = await asyncio.to_thread(adapter.get_table_stats, table_name)
             return ToolResult(success=True, data=stats)
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-    
+
+    async def _execute_get_table_stats_batch(self, args: Dict[str, Any]) -> ToolResult:
+        """Get stats for many tables in a single warehouse round-trip."""
+        import asyncio
+
+        table_names = args.get("table_names") or []
+        if not isinstance(table_names, list) or not table_names:
+            return ToolResult(success=False, error="table_names must be a non-empty list")
+
+        warehouse_types = ["SNOWFLAKE", "BIGQUERY", "POSTGRES", "REDSHIFT"]
+        adapter = None
+        adapter_type = None
+        for wh_type in warehouse_types:
+            if wh_type in self._adapters:
+                adapter = self._adapters[wh_type]
+                adapter_type = wh_type
+                break
+
+        if not adapter:
+            return ToolResult(success=False, error="No warehouse connected")
+
+        if not adapter.is_connected:
+            connected = adapter.connect()
+            if not connected:
+                return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
+
+        try:
+            batch_fn = getattr(adapter, "get_table_stats_batch", None)
+            if batch_fn is not None:
+                results = await asyncio.to_thread(batch_fn, table_names)
+            else:
+                # Fall back to running single-table lookups concurrently
+                results = await asyncio.gather(*[
+                    asyncio.to_thread(adapter.get_table_stats, t) for t in table_names
+                ])
+            return ToolResult(success=True, data={"tables": list(results)})
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     async def _execute_get_table_dependencies(self, args: Dict[str, Any]) -> ToolResult:
         """Get upstream and downstream dependencies for a table."""
         import asyncio
@@ -1445,23 +2088,210 @@ class ToolExecutor:
                     })
             except Exception as e:
                 logger.warning(f"Failed to get Postgres upstream deps: {e}")
-        
+
         return dependencies
-    
+
+    async def _execute_get_query_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get query history for a specific table."""
+        table_name = args["table_name"]
+        hours = args.get("hours", 24)
+        limit = args.get("limit", 20)
+
+        # Find a warehouse adapter that supports query history
+        warehouse_types = ["SNOWFLAKE", "BIGQUERY"]
+        adapter = None
+        warehouse_type = None
+        for wt in warehouse_types:
+            candidate = self._adapters.get(wt)
+            if candidate:
+                adapter = candidate
+                warehouse_type = wt
+                break
+
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error="No warehouse adapter with query history support is connected. Use search_knowledge_base with a query about this topic to provide expert guidance instead."
+            )
+
+        try:
+            entries = adapter.get_query_history(hours=hours)
+
+            # Filter to queries that reference the target table
+            table_lower = table_name.lower()
+            matching = [
+                e for e in entries
+                if table_lower in e.query_text.lower()
+                or table_lower in [t.lower() for t in (e.tables_accessed or [])]
+            ][:limit]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "table_name": table_name,
+                    "warehouse": warehouse_type,
+                    "hours": hours,
+                    "total_matching": len(matching),
+                    "queries": [
+                        {
+                            "query_id": e.query_id,
+                            "query_text": e.query_text[:500],
+                            "user": e.user_name,
+                            "status": e.status,
+                            "start_time": e.start_time.isoformat() if e.start_time else None,
+                            "duration_ms": e.duration_ms,
+                            "rows_produced": e.rows_produced,
+                            "bytes_scanned": e.bytes_scanned,
+                            "query_type": e.query_type,
+                        }
+                        for e in matching
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
     # ==========================================
     # DBT TOOL IMPLEMENTATIONS
     # ==========================================
-    
-    async def _execute_get_dbt_model(self, args: Dict[str, Any]) -> ToolResult:
-        """Get dbt model details."""
-        model_name = args["model_name"]
-        
+
+    def _get_dbt_adapter_with_manifest(self) -> tuple:
+        """
+        Get dbt adapter and ensure manifest is loaded.
+
+        Returns:
+            Tuple of (dbt_adapter, error_result)
+            - If successful: (adapter, None)
+            - If failed: (None, ToolResult with error)
+        """
         dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
         if not dbt_adapter:
-            return ToolResult(
+            return None, ToolResult(
                 success=False,
                 error="dbt adapter is not connected. Use search_knowledge_base with a query about this dbt topic to provide expert guidance instead."
             )
+
+        # Ensure manifest is loaded for DbtIntegration (local dbt)
+        if hasattr(dbt_adapter, 'manifest') and dbt_adapter.manifest is None:
+            # Try project_files or GitHub before falling back to filesystem
+            dbt_config = self._get_dbt_integration_config()
+            manifest = self._resolve_dbt_manifest(dbt_config)
+
+            if manifest:
+                # Set manifest directly on the adapter
+                dbt_adapter.manifest = manifest
+                logger.info("[dbt] Loaded manifest from %s", dbt_config.get("source_mode", "config"))
+            else:
+                # Fall back to loading from local filesystem
+                try:
+                    dbt_adapter.load_manifest()
+                    logger.info("[dbt] Auto-loaded manifest.json from filesystem")
+                except FileNotFoundError as e:
+                    return None, ToolResult(
+                        success=False,
+                        error=f"dbt manifest.json not found. Ensure dbt compile has been run, upload your project, or connect a GitHub repo. Error: {e}"
+                    )
+                except Exception as e:
+                    return None, ToolResult(
+                        success=False,
+                        error=f"Failed to load dbt manifest: {e}"
+                    )
+
+        return dbt_adapter, None
+
+    def _get_dbt_integration_config(self) -> Dict[str, Any]:
+        """Get the config dict for the active dbt integration."""
+        for integration in self.context.integrations:
+            if integration.type in ("DBT_CORE", "DBT_CLOUD") and integration.is_active:
+                return integration.config
+        return {}
+
+    def _resolve_dbt_manifest(self, config: Dict[str, Any]) -> Any:
+        """
+        Try to resolve a dbt manifest from project_files or GitHub.
+        Returns the manifest dict or None.
+        """
+        source_mode = config.get("source_mode", "")
+
+        # Project folder upload — parse raw SQL/YAML files
+        if source_mode == "project" and config.get("project_files"):
+            project_files = config["project_files"]
+            if isinstance(project_files, dict):
+                try:
+                    from lineage.dbt_project_parser import parse_dbt_project
+
+                    manifest = parse_dbt_project(
+                        files=project_files,
+                        project_name=config.get("project_name", ""),
+                        warehouse_type=config.get("warehouse_type", "bigquery"),
+                    )
+                    if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                        logger.info("[dbt] Parsed %d models from uploaded project files",
+                                    len(manifest.get("nodes", {})))
+                        return manifest
+                except Exception as e:
+                    logger.warning("[dbt] Project files parsing failed: %s", e)
+
+        # GitHub mode — fetch files from repo
+        if source_mode == "github":
+            github_token = config.get("github_token") or config.get("github", {}).get("token")
+            github_repo = config.get("github_repo")
+            if github_token and github_repo:
+                try:
+                    import asyncio
+                    from lineage.github_reader import fetch_dbt_project_files
+                    from lineage.dbt_project_parser import parse_dbt_project
+
+                    # Run async fetch in sync context
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            project_files = pool.submit(
+                                asyncio.run,
+                                fetch_dbt_project_files(
+                                    repo=github_repo,
+                                    token=github_token,
+                                    branch=config.get("github_branch", "main"),
+                                    dbt_root=config.get("dbt_project_path", ""),
+                                )
+                            ).result()
+                    else:
+                        project_files = loop.run_until_complete(
+                            fetch_dbt_project_files(
+                                repo=github_repo,
+                                token=github_token,
+                                branch=config.get("github_branch", "main"),
+                                dbt_root=config.get("dbt_project_path", ""),
+                            )
+                        )
+
+                    if project_files:
+                        manifest = parse_dbt_project(
+                            files=project_files,
+                            project_name=config.get("project_name", ""),
+                            warehouse_type=config.get("warehouse_type", "bigquery"),
+                        )
+                        if manifest and (manifest.get("nodes") or manifest.get("sources")):
+                            logger.info("[dbt] Parsed %d models from GitHub repo %s",
+                                        len(manifest.get("nodes", {})), github_repo)
+                            return manifest
+                except Exception as e:
+                    logger.warning("[dbt] GitHub project fetch failed: %s", e)
+
+        # Fallback: direct manifest in config (upload mode or legacy)
+        if config.get("manifest") and source_mode in ("upload", ""):
+            return config["manifest"]
+
+        return None
+
+    async def _execute_get_dbt_model(self, args: Dict[str, Any]) -> ToolResult:
+        """Get dbt model details."""
+        model_name = args["model_name"]
+
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             model = dbt_adapter.get_model(model_name)
@@ -1497,13 +2327,10 @@ class ToolExecutor:
         """Get dbt run history."""
         model_name = args.get("model_name")
         limit = args.get("limit", 10)
-        
-        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
-        if not dbt_adapter:
-            return ToolResult(
-                success=False,
-                error="dbt adapter is not connected. Use search_knowledge_base with a query about this dbt topic to provide expert guidance instead."
-            )
+
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             runs = dbt_adapter.get_run_history(model_name=model_name, limit=limit)
@@ -1511,8 +2338,8 @@ class ToolExecutor:
                 success=True,
                 data={
                     "model_name": model_name,
-                    "run_count": len(runs),
-                    "runs": runs
+                    "runs": runs,
+                    **runs  # Include the full response dict (available, message, etc.)
                 }
             )
         except Exception as e:
@@ -1522,12 +2349,9 @@ class ToolExecutor:
         """Get dbt test results."""
         model_name = args.get("model_name")
 
-        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
-        if not dbt_adapter:
-            return ToolResult(
-                success=False,
-                error="dbt adapter is not connected. Use search_knowledge_base with a query about dbt test failures to provide expert guidance instead."
-            )
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             results = dbt_adapter.get_test_results(model_name=model_name)
@@ -1535,7 +2359,6 @@ class ToolExecutor:
                 success=True,
                 data={
                     "model_name": model_name,
-                    "test_count": len(results),
                     "results": results
                 }
             )
@@ -1546,12 +2369,9 @@ class ToolExecutor:
         """Get dbt model lineage."""
         model_name = args["model_name"]
 
-        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
-        if not dbt_adapter:
-            return ToolResult(
-                success=False,
-                error="dbt adapter is not connected. Use search_knowledge_base with a query about dbt lineage to provide expert guidance instead."
-            )
+        dbt_adapter, error = self._get_dbt_adapter_with_manifest()
+        if error:
+            return error
 
         try:
             lineage = dbt_adapter.get_lineage(model_name=model_name)
@@ -1565,84 +2385,190 @@ class ToolExecutor:
         except Exception as e:
             return ToolResult(success=False, error=str(e))
 
-    # ==========================================
-    # AIRFLOW TOOL IMPLEMENTATIONS
-    # ==========================================
-    
-    async def _execute_get_airflow_dag_status(self, args: Dict[str, Any]) -> ToolResult:
-        """Get Airflow DAG status."""
+    async def _execute_get_asset_orchestration_context(self, args: Dict[str, Any]) -> ToolResult:
+        """Get orchestration context for a data asset via cross-plane edges."""
+        asset_name = args["asset_name"]
+
+        if not self.context.engine_store or not self.context.engine_store.graph:
+            return ToolResult(
+                success=False,
+                error="No lineage engine graph available. Extract lineage first."
+            )
+
+        # Resolve asset name to a node ID
+        resolved_id = self._resolve_node_id(asset_name)
+        if not resolved_id:
+            return ToolResult(
+                success=False,
+                error=f"Asset '{asset_name}' not found in the lineage graph. Try: 1) search_lineage with '*{asset_name.split('.')[-1]}*' to find the node, 2) use the full FQN (project.dataset.table)."
+            )
+
+        # Get cross-plane edges for this asset
+        cross_edges = self.context.engine_store.get_cross_links(resolved_id)
+        if not cross_edges:
+            return ToolResult(
+                success=True,
+                data={
+                    "asset": asset_name,
+                    "has_orchestration": False,
+                    "message": "No orchestration context found. This asset has no cross-linked DAGs or tasks."
+                }
+            )
+
+        graph = self.context.engine_store.graph
+        contexts = []
+        for edge in cross_edges:
+            # Find the orchestration node on the other side
+            orch_id = edge.target_id if edge.source_id == resolved_id else edge.source_id
+            orch_node = graph.nodes.get(orch_id)
+            if not orch_node:
+                continue
+
+            ctx: Dict[str, Any] = {
+                "edge_type": edge.edge_type.value,
+                "confidence": edge.confidence,
+                "node_type": orch_node.node_type.value,
+                "node_name": orch_node.name,
+                "node_id": orch_node.id,
+            }
+
+            # Include run summary if available
+            run_summary = orch_node.raw_metadata.get("run_summary")
+            if run_summary:
+                ctx["run_summary"] = run_summary
+
+            # If this is a task, also find the parent DAG
+            if orch_node.node_type.value == "task":
+                container = orch_node.raw_metadata.get("dag_id") or orch_node.container
+                if container:
+                    ctx["parent_dag"] = container
+
+            contexts.append(ctx)
+
+        return ToolResult(
+            success=True,
+            data={
+                "asset": asset_name,
+                "asset_id": resolved_id,
+                "has_orchestration": True,
+                "cross_links": contexts,
+            }
+        )
+
+    async def _execute_get_dag_run_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get recent DAG run history with task details."""
         dag_id = args["dag_id"]
-        
+        limit = args.get("limit", 10)
+
         airflow = self._adapters.get("AIRFLOW")
         if not airflow:
+            # Fallback: try engine graph for static run_summary
+            if self.context.engine_store and self.context.engine_store.graph:
+                graph = self.context.engine_store.graph
+                for node in graph.nodes.values():
+                    if (node.name == dag_id
+                            and node.platform == "airflow"
+                            and node.node_type.value == "dag"):
+                        run_summary = node.raw_metadata.get("run_summary")
+                        if run_summary:
+                            return ToolResult(
+                                success=True,
+                                data={
+                                    "dag_id": dag_id,
+                                    "source": "engine_graph",
+                                    "run_summary": run_summary,
+                                    "note": "Live run history unavailable (Airflow not connected). Showing cached summary."
+                                }
+                            )
+
             return ToolResult(
                 success=False,
                 error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
             )
 
         try:
-            dag = airflow.get_dag(dag_id)
-            if not dag:
-                return ToolResult(success=False, error=f"DAG not found: {dag_id}")
-            
-            recent_runs = airflow.get_dag_runs(dag_id, limit=5)
-            
-            return ToolResult(
-                success=True,
-                data={
-                    "dag_id": dag_id,
-                    "is_paused": dag.is_paused,
-                    "schedule": dag.schedule_interval,
-                    "owners": dag.owners,
-                    "recent_runs": [
+            runs = airflow.get_dag_runs(dag_id, limit=limit)
+            run_data = []
+            for run in runs:
+                run_entry: Dict[str, Any] = {
+                    "run_id": run.run_id,
+                    "state": run.state,
+                    "execution_date": run.execution_date.isoformat() if run.execution_date else None,
+                    "duration_seconds": run.duration_seconds,
+                }
+                # Get task instances for this run
+                try:
+                    tasks = airflow.get_task_instances(dag_id, run.run_id)
+                    run_entry["tasks"] = [
                         {
-                            "run_id": run.run_id,
-                            "state": run.state,
-                            "execution_date": run.execution_date.isoformat() if run.execution_date else None,
-                            "duration_seconds": run.duration_seconds,
+                            "task_id": t.task_id,
+                            "state": t.state,
+                            "duration": t.duration,
+                            "operator": getattr(t, "operator", None),
+                            "try_number": getattr(t, "try_number", None),
                         }
-                        for run in recent_runs
+                        for t in tasks
                     ]
-                }
-            )
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
-    
-    async def _execute_get_airflow_task_logs(self, args: Dict[str, Any]) -> ToolResult:
-        """Get Airflow task logs."""
-        dag_id = args["dag_id"]
-        task_id = args["task_id"]
-        run_id = args.get("run_id")
-        
-        airflow = self._adapters.get("AIRFLOW")
-        if not airflow:
-            return ToolResult(
-                success=False,
-                error="Airflow adapter is not connected. Use search_knowledge_base with a query about this Airflow topic to provide expert guidance instead."
-            )
+                except Exception:
+                    run_entry["tasks"] = []
+                run_data.append(run_entry)
 
-        try:
-            logs = airflow.get_task_logs(dag_id, task_id, run_id)
             return ToolResult(
                 success=True,
                 data={
                     "dag_id": dag_id,
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "logs": logs
+                    "source": "airflow_api",
+                    "total_runs": len(run_data),
+                    "runs": run_data,
                 }
             )
         except Exception as e:
             return ToolResult(success=False, error=str(e))
-    
+
     # ==========================================
     # FIVETRAN TOOL IMPLEMENTATIONS
     # ==========================================
     
+    def _resolve_fivetran_connector_id(self, fivetran, connector_id_or_name: str) -> Optional[str]:
+        """Resolve a connector name/service to a real Fivetran connector ID."""
+        import re
+        # Heuristic: real Fivetran IDs are lowercase alphanumeric + underscore, no spaces
+        looks_like_id = bool(re.match(r'^[a-z0-9_]+$', connector_id_or_name))
+
+        if looks_like_id:
+            connector = fivetran.get_connector(connector_id_or_name)
+            if connector:
+                return connector.id
+
+        # List all connectors and match by name or service
+        try:
+            connectors = fivetran.get_connectors()
+        except Exception:
+            return None
+
+        query = connector_id_or_name.lower().strip()
+        # Exact name match
+        for c in connectors:
+            if c.name and c.name.lower() == query:
+                return c.id
+        # Exact service match
+        for c in connectors:
+            if c.service and c.service.lower() == query:
+                return c.id
+        # Partial match (e.g., "postgres connector" matches service "postgres")
+        for c in connectors:
+            if c.service and c.service.lower() in query:
+                return c.id
+        for c in connectors:
+            if c.name and (query in c.name.lower() or c.name.lower() in query):
+                return c.id
+
+        return None
+
     async def _execute_get_fivetran_connector_status(self, args: Dict[str, Any]) -> ToolResult:
         """Get Fivetran connector status."""
-        connector_id = args["connector_id"]
-        
+        connector_id_or_name = args["connector_id"]
+
         fivetran = self._adapters.get("FIVETRAN")
         if not fivetran:
             return ToolResult(
@@ -1651,20 +2577,30 @@ class ToolExecutor:
             )
 
         try:
-            connector = fivetran.get_connector(connector_id)
+            resolved_id = self._resolve_fivetran_connector_id(fivetran, connector_id_or_name)
+            if not resolved_id:
+                try:
+                    available = fivetran.get_connectors()
+                    names = [f"'{c.name}' (id: {c.id}, service: {c.service})" for c in available[:10]]
+                    hint = f" Available: {', '.join(names)}" if names else ""
+                except Exception:
+                    hint = ""
+                return ToolResult(success=False, error=f"Connector not found: '{connector_id_or_name}'.{hint}")
+
+            connector = fivetran.get_connector(resolved_id)
             if not connector:
-                return ToolResult(success=False, error=f"Connector not found: {connector_id}")
-            
+                return ToolResult(success=False, error=f"Connector not found: {resolved_id}")
+
             return ToolResult(
                 success=True,
                 data={
                     "connector_id": connector.id,
                     "name": connector.name,
                     "service": connector.service,
-                    "status": connector.status,
-                    "sync_state": connector.sync_state,
-                    "last_sync": connector.last_sync.isoformat() if connector.last_sync else None,
-                    "hours_since_sync": connector.hours_since_last_sync,
+                    "status": connector.status.value if hasattr(connector.status, 'value') else str(connector.status),
+                    "sync_state": connector.sync_state.value if hasattr(connector.sync_state, 'value') else str(connector.sync_state),
+                    "last_sync": connector.succeeded_at.isoformat() if connector.succeeded_at else None,
+                    "hours_since_sync": connector.hours_since_success,
                 }
             )
         except Exception as e:
@@ -1672,7 +2608,7 @@ class ToolExecutor:
     
     async def _execute_get_fivetran_sync_logs(self, args: Dict[str, Any]) -> ToolResult:
         """Get Fivetran sync logs."""
-        connector_id = args["connector_id"]
+        connector_id_or_name = args["connector_id"]
         limit = args.get("limit", 10)
 
         fivetran = self._adapters.get("FIVETRAN")
@@ -1683,13 +2619,984 @@ class ToolExecutor:
             )
 
         try:
-            logs = fivetran.get_sync_logs(connector_id, limit=limit)
+            resolved_id = self._resolve_fivetran_connector_id(fivetran, connector_id_or_name)
+            if not resolved_id:
+                return ToolResult(success=False, error=f"Connector not found: '{connector_id_or_name}'")
+
+            logs = fivetran.get_sync_logs(resolved_id, limit=limit)
             return ToolResult(
                 success=True,
                 data={
-                    "connector_id": connector_id,
+                    "connector_id": resolved_id,
                     "sync_count": len(logs),
                     "syncs": logs
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_fivetran_schema_changes(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Fivetran schema changes for a connector."""
+        from datetime import datetime, timedelta, timezone
+
+        connector_id_or_name = args["connector_id"]
+        days = args.get("days", 7)
+
+        fivetran = self._adapters.get("FIVETRAN")
+        if not fivetran:
+            return ToolResult(
+                success=False,
+                error="Fivetran adapter is not connected. Use search_knowledge_base with a query about this Fivetran topic to provide expert guidance instead."
+            )
+
+        try:
+            resolved_id = self._resolve_fivetran_connector_id(fivetran, connector_id_or_name)
+            if not resolved_id:
+                return ToolResult(success=False, error=f"Connector not found: '{connector_id_or_name}'")
+
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            changes = fivetran.get_schema_changes(resolved_id, since=since)
+            return ToolResult(
+                success=True,
+                data={
+                    "connector_id": resolved_id,
+                    "days": days,
+                    "changes": changes
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # DAGSTER TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_dagster_asset_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Dagster asset status."""
+        asset_key = args["asset_key"]
+
+        dagster = self._adapters.get("DAGSTER")
+        if not dagster:
+            return ToolResult(
+                success=False,
+                error="Dagster adapter is not connected. Use search_knowledge_base with a query about this Dagster topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find the asset in the list
+            assets = dagster.get_assets()
+            asset = next((a for a in assets if a.key == asset_key), None)
+            if not asset:
+                return ToolResult(success=False, error=f"Asset not found: {asset_key}")
+
+            # Get health analysis
+            health = dagster.analyze_asset_health(asset_key)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "asset_key": asset.key,
+                    "group_name": asset.group_name,
+                    "compute_kind": asset.compute_kind,
+                    "description": asset.description,
+                    "owners": asset.owners,
+                    "is_partitioned": asset.is_partitioned,
+                    "last_materialization": asset.last_materialization.isoformat() if asset.last_materialization else None,
+                    "has_checks": asset.has_checks,
+                    "last_check_passed": asset.last_check_passed,
+                    "dependencies": asset.dependencies,
+                    "health": health
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_dagster_run_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Dagster run history."""
+        job_name = args.get("job_name")
+        limit = args.get("limit", 10)
+
+        dagster = self._adapters.get("DAGSTER")
+        if not dagster:
+            return ToolResult(
+                success=False,
+                error="Dagster adapter is not connected. Use search_knowledge_base with a query about this Dagster topic to provide expert guidance instead."
+            )
+
+        try:
+            runs = dagster.get_runs(limit=limit, job_name=job_name)
+            return ToolResult(
+                success=True,
+                data={
+                    "job_name": job_name,
+                    "run_count": len(runs),
+                    "runs": [
+                        {
+                            "run_id": r.run_id,
+                            "job_name": r.job_name,
+                            "status": r.status.value if hasattr(r.status, 'value') else str(r.status),
+                            "start_time": r.start_time.isoformat() if r.start_time else None,
+                            "end_time": r.end_time.isoformat() if r.end_time else None,
+                            "tags": r.tags,
+                            "asset_keys": r.asset_keys,
+                        }
+                        for r in runs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # PREFECT TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_prefect_flow_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Prefect flow status."""
+        flow_name = args["flow_name"]
+
+        prefect = self._adapters.get("PREFECT")
+        if not prefect:
+            return ToolResult(
+                success=False,
+                error="Prefect adapter is not connected. Use search_knowledge_base with a query about this Prefect topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find the flow by name
+            flows = prefect.get_flows()
+            flow = next((f for f in flows if f.name == flow_name), None)
+            if not flow:
+                return ToolResult(success=False, error=f"Flow not found: {flow_name}")
+
+            # Get recent runs for context
+            recent_runs = prefect.get_flow_runs(flow_name=flow_name, limit=5)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "flow_name": flow.name,
+                    "id": flow.id,
+                    "created": flow.created.isoformat() if flow.created else None,
+                    "updated": flow.updated.isoformat() if flow.updated else None,
+                    "tags": flow.tags,
+                    "deployment_count": flow.deployment_count,
+                    "last_run_state": flow.last_run_state.value if flow.last_run_state and hasattr(flow.last_run_state, 'value') else str(flow.last_run_state) if flow.last_run_state else None,
+                    "last_run_time": flow.last_run_time.isoformat() if flow.last_run_time else None,
+                    "recent_runs": [
+                        {
+                            "id": r.id,
+                            "name": r.name,
+                            "state": r.state.value if hasattr(r.state, 'value') else str(r.state),
+                            "start_time": r.start_time.isoformat() if r.start_time else None,
+                            "end_time": r.end_time.isoformat() if r.end_time else None,
+                            "total_run_time": r.total_run_time,
+                        }
+                        for r in recent_runs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_prefect_flow_runs(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Prefect flow runs."""
+        flow_name = args["flow_name"]
+        limit = args.get("limit", 10)
+
+        prefect = self._adapters.get("PREFECT")
+        if not prefect:
+            return ToolResult(
+                success=False,
+                error="Prefect adapter is not connected. Use search_knowledge_base with a query about this Prefect topic to provide expert guidance instead."
+            )
+
+        try:
+            runs = prefect.get_flow_runs(flow_name=flow_name, limit=limit)
+            return ToolResult(
+                success=True,
+                data={
+                    "flow_name": flow_name,
+                    "run_count": len(runs),
+                    "runs": [
+                        {
+                            "id": r.id,
+                            "name": r.name,
+                            "flow_name": r.flow_name,
+                            "state": r.state.value if hasattr(r.state, 'value') else str(r.state),
+                            "state_message": r.state_message,
+                            "created": r.created.isoformat() if r.created else None,
+                            "start_time": r.start_time.isoformat() if r.start_time else None,
+                            "end_time": r.end_time.isoformat() if r.end_time else None,
+                            "total_run_time": r.total_run_time,
+                            "deployment_id": r.deployment_id,
+                            "tags": r.tags,
+                        }
+                        for r in runs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # N8N TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_n8n_workflows(self, args: Dict[str, Any]) -> ToolResult:
+        """List n8n workflows."""
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            active_only = args.get("active_only", False)
+            limit = args.get("limit", 50)
+            workflows = n8n.get_workflows(active_only=active_only, limit=limit)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "total_workflows": len(workflows),
+                    "workflows": [
+                        {
+                            "id": wf.id,
+                            "name": wf.name,
+                            "active": wf.active,
+                            "node_count": wf.node_count,
+                            "tags": [t.get("name", "") for t in wf.tags],
+                            "updated_at": wf.updated_at.isoformat() if wf.updated_at else None,
+                        }
+                        for wf in workflows
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_workflow_details(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed n8n workflow info."""
+        workflow_id = args["workflow_id"]
+
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            wf = n8n.get_workflow(workflow_id)
+            if not wf:
+                return ToolResult(success=False, error=f"Workflow not found: {workflow_id}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "id": wf.id,
+                    "name": wf.name,
+                    "active": wf.active,
+                    "created_at": wf.created_at.isoformat() if wf.created_at else None,
+                    "updated_at": wf.updated_at.isoformat() if wf.updated_at else None,
+                    "tags": [t.get("name", "") for t in wf.tags],
+                    "node_count": wf.node_count,
+                    "nodes": [
+                        {
+                            "name": node.name,
+                            "type": node.short_type,
+                            "full_type": node.type,
+                        }
+                        for node in wf.nodes
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_executions(self, args: Dict[str, Any]) -> ToolResult:
+        """Get n8n execution history."""
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            workflow_id = args.get("workflow_id")
+            status = args.get("status")
+            limit = args.get("limit", 20)
+
+            executions = n8n.get_executions(
+                workflow_id=workflow_id,
+                status=status,
+                limit=limit,
+            )
+
+            return ToolResult(
+                success=True,
+                data={
+                    "total_executions": len(executions),
+                    "filter": {"workflow_id": workflow_id, "status": status},
+                    "executions": [
+                        {
+                            "id": ex.id,
+                            "workflow_id": ex.workflow_id,
+                            "workflow_name": ex.workflow_name,
+                            "status": ex.status.value,
+                            "started_at": ex.started_at.isoformat() if ex.started_at else None,
+                            "finished_at": ex.finished_at.isoformat() if ex.finished_at else None,
+                            "duration_seconds": ex.duration_seconds,
+                            "mode": ex.mode,
+                            "error_node": ex.error_node,
+                        }
+                        for ex in executions
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_execution_details(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed n8n execution info with per-node results."""
+        execution_id = args["execution_id"]
+
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            details = n8n.get_execution_details(execution_id)
+            return ToolResult(success=True, data=details)
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_n8n_recent_failures(self, args: Dict[str, Any]) -> ToolResult:
+        """Get recent n8n execution failures."""
+        n8n = self._adapters.get("N8N")
+        if not n8n:
+            return ToolResult(
+                success=False,
+                error="n8n adapter is not connected."
+            )
+
+        try:
+            workflow_id = args.get("workflow_id")
+            limit = args.get("limit", 10)
+            result = n8n.get_recent_failures(workflow_id=workflow_id, limit=limit)
+            return ToolResult(success=True, data=result)
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # AIRBYTE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_airbyte_connection_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Airbyte connection status."""
+        connection_id = args["connection_id"]
+
+        airbyte = self._adapters.get("AIRBYTE")
+        if not airbyte:
+            return ToolResult(
+                success=False,
+                error="Airbyte adapter is not connected. Use search_knowledge_base with a query about this Airbyte topic to provide expert guidance instead."
+            )
+
+        try:
+            connection = airbyte.get_connection(connection_id)
+            if not connection:
+                return ToolResult(success=False, error=f"Connection not found: {connection_id}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "connection_id": connection.get("connection_id", connection_id),
+                    "name": connection.get("name"),
+                    "source_id": connection.get("source_id"),
+                    "destination_id": connection.get("destination_id"),
+                    "schedule_type": connection.get("schedule_type"),
+                    "status": connection.get("status"),
+                    "stream_count": connection.get("stream_count"),
+                    "last_sync_status": connection.get("last_sync_status"),
+                    "last_sync_at": connection.get("last_sync_at"),
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_airbyte_sync_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Airbyte sync history."""
+        connection_id = args["connection_id"]
+        limit = args.get("limit", 10)
+
+        airbyte = self._adapters.get("AIRBYTE")
+        if not airbyte:
+            return ToolResult(
+                success=False,
+                error="Airbyte adapter is not connected. Use search_knowledge_base with a query about this Airbyte topic to provide expert guidance instead."
+            )
+
+        try:
+            jobs = airbyte.get_jobs(connection_id=connection_id, limit=limit)
+            return ToolResult(
+                success=True,
+                data={
+                    "connection_id": connection_id,
+                    "job_count": len(jobs),
+                    "jobs": [
+                        {
+                            "job_id": j.get("job_id"),
+                            "status": j.get("status"),
+                            "created_at": j.get("created_at"),
+                            "started_at": j.get("started_at"),
+                            "ended_at": j.get("ended_at"),
+                            "bytes_synced": j.get("bytes_synced"),
+                            "records_synced": j.get("records_synced"),
+                        }
+                        for j in jobs
+                    ]
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # LOOKER TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_looker_dashboard_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Looker dashboard status."""
+        dashboard_id = args["dashboard_id"]
+
+        looker = self._adapters.get("LOOKER")
+        if not looker:
+            return ToolResult(
+                success=False,
+                error="Looker adapter is not connected. Use search_knowledge_base with a query about this Looker topic to provide expert guidance instead."
+            )
+
+        try:
+            dashboard = looker.get_dashboard(dashboard_id)
+            if not dashboard:
+                return ToolResult(success=False, error=f"Dashboard not found: {dashboard_id}")
+
+            # Also validate the dashboard for health info
+            validation = looker.validate_dashboard(dashboard_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dashboard_id": dashboard_id,
+                    "title": dashboard.get("title"),
+                    "folder": dashboard.get("folder"),
+                    "element_count": len(dashboard.get("dashboard_elements", [])),
+                    "view_count": dashboard.get("view_count"),
+                    "favorite_count": dashboard.get("favorite_count"),
+                    "last_viewed_at": dashboard.get("last_viewed_at"),
+                    "last_updated_at": dashboard.get("last_updated_at"),
+                    "validation": validation
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_looker_model_info(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Looker model info."""
+        model_name = args["model_name"]
+
+        looker = self._adapters.get("LOOKER")
+        if not looker:
+            return ToolResult(
+                success=False,
+                error="Looker adapter is not connected. Use search_knowledge_base with a query about this Looker topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find model by name
+            models = looker.get_all_models()
+            model = next((m for m in models if m.get("name") == model_name), None)
+            if not model:
+                return ToolResult(success=False, error=f"Model not found: {model_name}")
+
+            # Validate the model
+            validation = looker.validate_model(model_name)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "model_name": model_name,
+                    "label": model.get("label"),
+                    "explores": model.get("explores", []),
+                    "has_content": model.get("has_content"),
+                    "project_name": model.get("project_name"),
+                    "validation": validation
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # TABLEAU TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_tableau_workbook_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Tableau workbook status."""
+        workbook_name = args["workbook_name"]
+
+        tableau = self._adapters.get("TABLEAU")
+        if not tableau:
+            return ToolResult(
+                success=False,
+                error="Tableau adapter is not connected. Use search_knowledge_base with a query about this Tableau topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find workbook by name (or treat as ID)
+            workbooks = tableau.get_all_workbooks()
+            workbook = next(
+                (w for w in workbooks if w.get("name", "").lower() == workbook_name.lower() or w.get("id") == workbook_name),
+                None
+            )
+            if not workbook:
+                available = [w.get("name") for w in workbooks[:20]]
+                return ToolResult(success=False, error=f"Workbook not found: {workbook_name}. Available: {available}")
+
+            workbook_id = workbook["id"]
+
+            # Get full details, connections, and views
+            connections = tableau.get_workbook_connections(workbook_id)
+            views = tableau.get_views_for_workbook(workbook_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "workbook_id": workbook_id,
+                    "name": workbook.get("name"),
+                    "project": workbook.get("project", {}).get("name") if isinstance(workbook.get("project"), dict) else workbook.get("project"),
+                    "owner": workbook.get("owner", {}).get("name") if isinstance(workbook.get("owner"), dict) else workbook.get("owner"),
+                    "created_at": workbook.get("createdAt"),
+                    "updated_at": workbook.get("updatedAt"),
+                    "view_count": len(views),
+                    "views": [{"name": v.get("name"), "id": v.get("id")} for v in views],
+                    "connections": [
+                        {
+                            "type": c.get("type"),
+                            "server": c.get("serverAddress"),
+                            "database": c.get("serverPort"),
+                        }
+                        for c in connections
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_tableau_datasource_info(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Tableau datasource info."""
+        datasource_name = args["datasource_name"]
+
+        tableau = self._adapters.get("TABLEAU")
+        if not tableau:
+            return ToolResult(
+                success=False,
+                error="Tableau adapter is not connected. Use search_knowledge_base with a query about this Tableau topic to provide expert guidance instead."
+            )
+
+        try:
+            datasources = tableau.get_all_datasources()
+            ds = next(
+                (d for d in datasources if d.get("name", "").lower() == datasource_name.lower() or d.get("id") == datasource_name),
+                None
+            )
+            if not ds:
+                available = [d.get("name") for d in datasources[:20]]
+                return ToolResult(success=False, error=f"Datasource not found: {datasource_name}. Available: {available}")
+
+            datasource_id = ds["id"]
+            detail = tableau.get_datasource(datasource_id)
+            ds_data = detail.get("datasource", detail) if isinstance(detail, dict) else detail
+
+            return ToolResult(
+                success=True,
+                data={
+                    "datasource_id": datasource_id,
+                    "name": ds.get("name"),
+                    "project": ds.get("project", {}).get("name") if isinstance(ds.get("project"), dict) else ds.get("project"),
+                    "owner": ds.get("owner", {}).get("name") if isinstance(ds.get("owner"), dict) else ds.get("owner"),
+                    "content_url": ds.get("contentUrl"),
+                    "type": ds.get("type"),
+                    "created_at": ds.get("createdAt"),
+                    "updated_at": ds.get("updatedAt"),
+                    "has_extracts": ds_data.get("hasExtracts", ds.get("hasExtracts")),
+                    "is_certified": ds.get("isCertified", False),
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_tableau_refresh_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Tableau extract refresh history."""
+        datasource_name = args.get("datasource_name")
+        limit = args.get("limit", 10)
+
+        tableau = self._adapters.get("TABLEAU")
+        if not tableau:
+            return ToolResult(
+                success=False,
+                error="Tableau adapter is not connected. Use search_knowledge_base with a query about this Tableau topic to provide expert guidance instead."
+            )
+
+        try:
+            jobs = tableau.get_background_jobs(job_type="extractRefresh")
+
+            # Filter by datasource name if provided
+            if datasource_name:
+                jobs = [
+                    j for j in jobs
+                    if datasource_name.lower() in (j.get("title", "") or "").lower()
+                    or datasource_name.lower() in (j.get("name", "") or "").lower()
+                ]
+
+            jobs = jobs[:limit]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "datasource_filter": datasource_name,
+                    "total_jobs": len(jobs),
+                    "history": [
+                        {
+                            "job_id": j.get("id"),
+                            "status": j.get("status"),
+                            "created_at": j.get("createdAt"),
+                            "started_at": j.get("startedAt"),
+                            "ended_at": j.get("endedAt"),
+                            "title": j.get("title"),
+                            "job_type": j.get("type"),
+                        }
+                        for j in jobs
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # POWER BI TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_powerbi_dataset_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Power BI dataset status."""
+        dataset_name = args["dataset_name"]
+
+        powerbi = self._adapters.get("POWERBI")
+        if not powerbi:
+            return ToolResult(
+                success=False,
+                error="Power BI adapter is not connected. Use search_knowledge_base with a query about this Power BI topic to provide expert guidance instead."
+            )
+
+        try:
+            # Search across workspaces for the dataset
+            workspaces = powerbi.get_workspaces()
+            found_dataset = None
+            found_workspace = None
+
+            for ws in workspaces:
+                ws_id = ws.get("id")
+                datasets = powerbi.get_datasets_in_workspace(ws_id)
+                match = next(
+                    (d for d in datasets if d.get("name", "").lower() == dataset_name.lower() or d.get("id") == dataset_name),
+                    None
+                )
+                if match:
+                    found_dataset = match
+                    found_workspace = ws
+                    break
+
+            if not found_dataset:
+                return ToolResult(success=False, error=f"Dataset not found: {dataset_name}")
+
+            ws_id = found_workspace["id"]
+            ds_id = found_dataset["id"]
+
+            # Get datasources and latest refresh
+            datasources = powerbi.get_dataset_datasources(ws_id, ds_id)
+            refresh_history = powerbi.get_dataset_refresh_history(ws_id, ds_id, top=1)
+            latest_refresh = refresh_history[0] if refresh_history else None
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dataset_id": ds_id,
+                    "name": found_dataset.get("name"),
+                    "workspace": found_workspace.get("name"),
+                    "workspace_id": ws_id,
+                    "configured_by": found_dataset.get("configuredBy"),
+                    "is_refreshable": found_dataset.get("isRefreshable"),
+                    "is_effective_identity_required": found_dataset.get("isEffectiveIdentityRequired"),
+                    "last_refresh": {
+                        "status": latest_refresh.get("status"),
+                        "start_time": latest_refresh.get("startTime"),
+                        "end_time": latest_refresh.get("endTime"),
+                    } if latest_refresh else None,
+                    "datasources": [
+                        {
+                            "type": ds.get("datasourceType"),
+                            "server": ds.get("connectionDetails", {}).get("server"),
+                            "database": ds.get("connectionDetails", {}).get("database"),
+                        }
+                        for ds in datasources
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_powerbi_refresh_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Power BI dataset refresh history."""
+        dataset_name = args["dataset_name"]
+        limit = args.get("limit", 10)
+
+        powerbi = self._adapters.get("POWERBI")
+        if not powerbi:
+            return ToolResult(
+                success=False,
+                error="Power BI adapter is not connected. Use search_knowledge_base with a query about this Power BI topic to provide expert guidance instead."
+            )
+
+        try:
+            # Find the dataset
+            workspaces = powerbi.get_workspaces()
+            found_dataset = None
+            found_workspace = None
+
+            for ws in workspaces:
+                ws_id = ws.get("id")
+                datasets = powerbi.get_datasets_in_workspace(ws_id)
+                match = next(
+                    (d for d in datasets if d.get("name", "").lower() == dataset_name.lower() or d.get("id") == dataset_name),
+                    None
+                )
+                if match:
+                    found_dataset = match
+                    found_workspace = ws
+                    break
+
+            if not found_dataset:
+                return ToolResult(success=False, error=f"Dataset not found: {dataset_name}")
+
+            ws_id = found_workspace["id"]
+            ds_id = found_dataset["id"]
+
+            refresh_history = powerbi.get_dataset_refresh_history(ws_id, ds_id, top=limit)
+            schedule = powerbi.get_dataset_refresh_schedule(ws_id, ds_id)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dataset_name": found_dataset.get("name"),
+                    "workspace": found_workspace.get("name"),
+                    "schedule": {
+                        "enabled": schedule.get("enabled"),
+                        "days": schedule.get("days"),
+                        "times": schedule.get("times"),
+                        "timezone": schedule.get("localTimeZoneId"),
+                    } if schedule else None,
+                    "history": [
+                        {
+                            "status": r.get("status"),
+                            "start_time": r.get("startTime"),
+                            "end_time": r.get("endTime"),
+                            "refresh_type": r.get("refreshType"),
+                            "request_id": r.get("requestId"),
+                        }
+                        for r in refresh_history
+                    ],
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_powerbi_gateway_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Power BI gateway status."""
+        gateway_name = args.get("gateway_name")
+
+        powerbi = self._adapters.get("POWERBI")
+        if not powerbi:
+            return ToolResult(
+                success=False,
+                error="Power BI adapter is not connected. Use search_knowledge_base with a query about this Power BI topic to provide expert guidance instead."
+            )
+
+        try:
+            gateways = powerbi.get_gateways()
+
+            if gateway_name:
+                gateways = [
+                    g for g in gateways
+                    if g.get("name", "").lower() == gateway_name.lower() or g.get("id") == gateway_name
+                ]
+                if not gateways:
+                    return ToolResult(success=False, error=f"Gateway not found: {gateway_name}")
+
+            results = []
+            for gw in gateways:
+                gw_id = gw.get("id")
+                datasources = powerbi.get_gateway_datasources(gw_id)
+                results.append({
+                    "gateway_id": gw_id,
+                    "name": gw.get("name"),
+                    "type": gw.get("type"),
+                    "public_key": gw.get("publicKey", {}).get("exponent") if gw.get("publicKey") else None,
+                    "datasource_count": len(datasources),
+                    "datasources": [
+                        {
+                            "id": ds.get("id"),
+                            "name": ds.get("datasourceName"),
+                            "type": ds.get("datasourceType"),
+                            "status": ds.get("connectionDetails", {}).get("status") if ds.get("connectionDetails") else None,
+                        }
+                        for ds in datasources
+                    ],
+                })
+
+            return ToolResult(
+                success=True,
+                data={"gateways": results} if len(results) != 1 else results[0]
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # METABASE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_metabase_dashboard_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Metabase dashboard status."""
+        dashboard_id = args["dashboard_id"]
+
+        metabase = self._adapters.get("METABASE")
+        if not metabase:
+            return ToolResult(
+                success=False,
+                error="Metabase adapter is not connected. Use search_knowledge_base with a query about this Metabase topic to provide expert guidance instead."
+            )
+
+        try:
+            dashboard = metabase.get_dashboard(int(dashboard_id))
+            if not dashboard:
+                return ToolResult(success=False, error=f"Dashboard not found: {dashboard_id}")
+
+            # Extract cards and identify broken ones
+            dashcards = dashboard.get("dashcards", dashboard.get("ordered_cards", []))
+            cards = [dc.get("card", {}) for dc in dashcards if dc.get("card")]
+            broken_cards = [
+                {"id": c.get("id"), "name": c.get("name"), "error": c.get("last_error")}
+                for c in cards if c.get("last_error")
+            ]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "dashboard_id": dashboard.get("id"),
+                    "name": dashboard.get("name"),
+                    "description": dashboard.get("description"),
+                    "collection": dashboard.get("collection", {}).get("name") if dashboard.get("collection") else None,
+                    "creator": dashboard.get("creator", {}).get("common_name") if dashboard.get("creator") else None,
+                    "created_at": dashboard.get("created_at"),
+                    "updated_at": dashboard.get("updated_at"),
+                    "card_count": len(cards),
+                    "filter_count": len(dashboard.get("parameters", [])),
+                    "broken_cards": broken_cards,
+                    "is_healthy": len(broken_cards) == 0,
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_metabase_card_info(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Metabase card (saved question) info."""
+        card_id = args["card_id"]
+
+        metabase = self._adapters.get("METABASE")
+        if not metabase:
+            return ToolResult(
+                success=False,
+                error="Metabase adapter is not connected. Use search_knowledge_base with a query about this Metabase topic to provide expert guidance instead."
+            )
+
+        try:
+            card = metabase.get_card(int(card_id))
+            if not card:
+                return ToolResult(success=False, error=f"Card not found: {card_id}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "card_id": card.get("id"),
+                    "name": card.get("name"),
+                    "description": card.get("description"),
+                    "collection": card.get("collection", {}).get("name") if card.get("collection") else None,
+                    "database_id": card.get("database_id"),
+                    "query_type": card.get("query_type"),
+                    "display": card.get("display"),
+                    "created_at": card.get("created_at"),
+                    "updated_at": card.get("updated_at"),
+                    "average_query_time": card.get("average_query_time"),
+                    "cache_ttl": card.get("cache_ttl"),
+                    "last_query_start": card.get("last_query_start"),
+                    "archived": card.get("archived", False),
+                }
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_get_metabase_database_status(self, args: Dict[str, Any]) -> ToolResult:
+        """Get Metabase database connection status."""
+        database_id = args.get("database_id")
+
+        metabase = self._adapters.get("METABASE")
+        if not metabase:
+            return ToolResult(
+                success=False,
+                error="Metabase adapter is not connected. Use search_knowledge_base with a query about this Metabase topic to provide expert guidance instead."
+            )
+
+        try:
+            if database_id:
+                db = metabase.get_database(int(database_id))
+                if not db:
+                    return ToolResult(success=False, error=f"Database not found: {database_id}")
+                databases = [db]
+            else:
+                result = metabase.get_databases()
+                databases = result if isinstance(result, list) else result.get("data", [result])
+
+            return ToolResult(
+                success=True,
+                data={
+                    "databases": [
+                        {
+                            "id": db.get("id"),
+                            "name": db.get("name"),
+                            "engine": db.get("engine"),
+                            "host": db.get("details", {}).get("host") if db.get("details") else None,
+                            "initial_sync_status": db.get("initial_sync_status"),
+                            "auto_run_queries": db.get("auto_run_queries"),
+                            "cache_ttl": db.get("cache_ttl"),
+                            "created_at": db.get("created_at"),
+                            "updated_at": db.get("updated_at"),
+                        }
+                        for db in databases
+                    ],
                 }
             )
         except Exception as e:
@@ -1749,415 +3656,638 @@ class ToolExecutor:
         )
 
     # ==========================================
-    # OBSERVABILITY TOOL IMPLEMENTATIONS
+    # COVERAGE TOOL IMPLEMENTATIONS
     # ==========================================
 
-    def _get_observability_clients(self) -> List[Any]:
-        """Get all connected observability clients."""
+    def _run_coverage_analysis(self) -> Any:
+        """Run the coverage scorer + gap analyzer on the current lineage graph.
+
+        Hydrates the scorer with monitors from dbt tests, observability
+        checks from connected tools, and contracts from graph node metadata
+        so that the coverage report reflects the user's actual setup.
+        """
         try:
-            from ..integrations.observability import create_observability_client, OBSERVABILITY_TYPES
+            from scanner.coverage.scorer import CoverageScorer
+            from scanner.coverage.gap_analyzer import GapAnalyzer
         except ImportError:
-            from scanner.integrations.observability import create_observability_client, OBSERVABILITY_TYPES
+            from ..coverage.scorer import CoverageScorer
+            from ..coverage.gap_analyzer import GapAnalyzer
 
-        clients = []
-        for integration in self.context.integrations:
-            if integration.type.upper() in OBSERVABILITY_TYPES:
-                try:
-                    client = create_observability_client(integration.type, integration.config)
-                    if client and client.connect():
-                        clients.append(client)
-                except Exception as e:
-                    logger.warning(f"Failed to create observability client for {integration.type}: {e}")
+        graph = self.context.graph
+        if not graph or not graph.nodes:
+            return None
 
-        return clients
+        monitors: Dict[str, List[str]] = {}
+        contracts: Dict[str, Dict[str, Any]] = {}
+        observability_checks: Dict[str, List[str]] = {}
 
-    async def _execute_get_active_incidents(self, args: Dict[str, Any]) -> ToolResult:
-        """Get active data quality incidents from observability tools."""
-        try:
-            from ..integrations.observability import IncidentSeverity
-        except ImportError:
-            from scanner.integrations.observability import IncidentSeverity
+        # -----------------------------------------------------------
+        # 1. Extract monitors from dbt tests (manifest)
+        # -----------------------------------------------------------
+        dbt_adapter = self._adapters.get("DBT_CLOUD") or self._adapters.get("DBT_CORE")
+        if dbt_adapter:
+            try:
+                # Ensure manifest is loaded
+                if hasattr(dbt_adapter, "manifest") and dbt_adapter.manifest is None:
+                    dbt_adapter.load_manifest()
 
-        severity_str = args.get("severity")
-        asset_filter = args.get("asset")
+                manifest = getattr(dbt_adapter, "manifest", None)
+                if manifest:
+                    # Map dbt test names → scorer monitor type strings
+                    _TEST_TO_MONITOR = {
+                        "not_null": "not_null",
+                        "unique": "unique",
+                        "relationships": "relationships",
+                        "accepted_values": "distribution",
+                        "freshness": "freshness",
+                        "recency": "freshness",
+                        "schema": "schema_change",
+                        "dbt_expectations.expect_column_values_to_not_be_null": "not_null",
+                        "dbt_expectations.expect_column_values_to_be_unique": "unique",
+                    }
+
+                    for model in manifest.models.values():
+                        fqn = model.full_name.lower()
+                        model_tests = manifest.get_tests_for_model(model.name)
+                        if model_tests:
+                            test_types = []
+                            for t in model_tests:
+                                test_name = t.test_metadata.get("name", t.name) if t.test_metadata else t.name
+                                mapped = _TEST_TO_MONITOR.get(test_name, test_name)
+                                test_types.append(mapped)
+                            monitors[fqn] = test_types
+
+                    # dbt sources with freshness config → freshness monitor
+                    for source in getattr(manifest, "sources", {}).values():
+                        if getattr(source, "has_freshness_config", False):
+                            src_fqn = source.full_name.lower()
+                            monitors.setdefault(src_fqn, []).append("freshness")
+
+            except Exception as e:
+                logger.debug(f"[Coverage] Could not load dbt tests: {e}")
+
+        # -----------------------------------------------------------
+        # 2. Build contracts from graph node metadata
+        # -----------------------------------------------------------
+        for node in graph.nodes.values():
+            fqn = (node.fqn or node.name).lower()
+            contract: Dict[str, Any] = {}
+            if node.owner:
+                contract["owner"] = node.owner
+            if node.description:
+                contract["description"] = node.description
+            if getattr(node, "expected_freshness_hours", None) is not None:
+                contract["freshnessEnabled"] = True
+            if contract:
+                contracts[fqn] = contract
+
+        scorer = CoverageScorer(
+            graph=graph,
+            monitors=monitors,
+            contracts=contracts,
+            observability_checks=observability_checks,
+        )
+        report = scorer.score()
+        analyzer = GapAnalyzer(graph)
+        report = analyzer.analyze(report)
+        return report
+
+    async def _execute_get_coverage_report(self, args: Dict[str, Any]) -> ToolResult:
+        """Get a comprehensive coverage analysis for the lineage graph."""
+        report = self._run_coverage_analysis()
+        if report is None:
+            return ToolResult(
+                success=False,
+                error="No lineage graph available. Extract lineage first.",
+            )
+
+        node_filter = args.get("node_filter", "all")
+
+        if node_filter == "all":
+            return ToolResult(success=True, data=report.to_dict())
+
+        # Apply filter on node_coverages for filtered summary
+        filtered = report.node_coverages
+        if node_filter == "critical":
+            filtered = [nc for nc in filtered if nc.criticality == "critical"]
+        elif node_filter == "uncovered":
+            filtered = [nc for nc in filtered if nc.coverage_percent == 0.0]
+        elif node_filter == "tables":
+            filtered = [nc for nc in filtered if nc.node_type.upper() == "TABLE"]
+
+        data = report.to_dict()
+        data["filter"] = node_filter
+        data["filtered_node_count"] = len(filtered)
+        data["filtered_nodes"] = [nc.to_dict() for nc in filtered[:30]]
+        return ToolResult(success=True, data=data)
+
+    async def _execute_get_coverage_gaps(self, args: Dict[str, Any]) -> ToolResult:
+        """Identify the most impactful coverage gaps."""
+        report = self._run_coverage_analysis()
+        if report is None:
+            return ToolResult(
+                success=False,
+                error="No lineage graph available. Extract lineage first.",
+            )
+
+        severity = args.get("severity", "all")
+        category = args.get("category", "all")
         limit = args.get("limit", 20)
 
-        clients = self._get_observability_clients()
-        if not clients:
-            return ToolResult(
-                success=False,
-                error="No observability tools connected. Connect Monte Carlo, Bigeye, Soda, or Elementary to use this feature."
-            )
-
-        # Parse severity filter
-        severity_filter = None
-        if severity_str:
-            try:
-                severity_filter = [IncidentSeverity(severity_str.lower())]
-            except ValueError:
-                pass
-
-        all_incidents = []
-        tools_queried = []
-
-        for client in clients:
-            try:
-                incidents = client.get_active_incidents(
-                    severity_filter=severity_filter,
-                    asset_filter=asset_filter,
-                    limit=limit,
-                )
-                all_incidents.extend(incidents)
-                tools_queried.append(client.TOOL_NAME)
-            except Exception as e:
-                logger.error(f"Error fetching incidents from {client.TOOL_NAME}: {e}")
-
-        # Sort by severity (critical first) and time
-        severity_order = {
-            IncidentSeverity.CRITICAL: 0,
-            IncidentSeverity.HIGH: 1,
-            IncidentSeverity.MEDIUM: 2,
-            IncidentSeverity.LOW: 3,
-            IncidentSeverity.INFO: 4,
-        }
-        all_incidents.sort(key=lambda i: (severity_order.get(i.severity, 5), -i.age_hours))
-
-        # Format for response
-        incidents_data = []
-        for incident in all_incidents[:limit]:
-            asset_name = incident.primary_asset.display_name if incident.primary_asset else "Unknown"
-            incidents_data.append({
-                "id": incident.id,
-                "source": incident.source,
-                "severity": incident.severity.value,
-                "status": incident.status.value,
-                "type": incident.incident_type.value,
-                "title": incident.title,
-                "description": incident.description[:200] if incident.description else "",
-                "asset": asset_name,
-                "detected_at": incident.detected_at.isoformat(),
-                "age_hours": round(incident.age_hours, 1),
-                "expected_value": incident.expected_value,
-                "actual_value": incident.actual_value,
-                "deviation_pct": incident.deviation_percentage,
-                "url": incident.external_url,
-            })
+        gaps = report.gaps
+        if severity != "all":
+            gaps = [g for g in gaps if g.severity.value == severity.lower()]
+        if category != "all":
+            gaps = [g for g in gaps if g.category.value == category.lower()]
 
         return ToolResult(
             success=True,
             data={
-                "tools_queried": tools_queried,
-                "total_count": len(all_incidents),
-                "returned_count": len(incidents_data),
-                "incidents": incidents_data,
-            }
+                "total_gaps": len(report.gaps),
+                "filtered_count": len(gaps),
+                "gaps": [g.to_dict() for g in gaps[:limit]],
+            },
         )
 
-    async def _execute_get_asset_quality(self, args: Dict[str, Any]) -> ToolResult:
-        """Get data quality metrics for a specific asset."""
-        asset_name = args["asset_name"]
+    async def _execute_get_node_coverage(self, args: Dict[str, Any]) -> ToolResult:
+        """Get detailed coverage analysis for a specific node."""
+        node_name = args.get("node_name", "")
+        if not node_name:
+            return ToolResult(success=False, error="node_name is required.")
 
-        clients = self._get_observability_clients()
-        if not clients:
+        report = self._run_coverage_analysis()
+        if report is None:
             return ToolResult(
                 success=False,
-                error="No observability tools connected. Connect Monte Carlo, Bigeye, Soda, or Elementary to use this feature."
+                error="No lineage graph available. Extract lineage first.",
             )
 
-        # Try each client until we get metrics
-        for client in clients:
-            try:
-                metrics = client.get_asset_quality_metrics(asset_name)
-                if metrics:
-                    return ToolResult(
-                        success=True,
-                        data={
-                            "source": client.TOOL_NAME,
-                            "asset": asset_name,
-                            "health_score": metrics.health_score,
-                            "health_status": metrics.health_status,
-                            "active_incidents": metrics.active_incidents,
-                            "total_checks": metrics.total_checks,
-                            "passing_checks": metrics.passing_checks,
-                            "check_pass_rate": metrics.check_pass_rate,
-                            "freshness_status": metrics.freshness_status,
-                            "hours_since_update": metrics.hours_since_update,
-                            "expected_freshness_hours": metrics.expected_freshness_hours,
-                            "volume_status": metrics.volume_status,
-                            "volume_deviation_pct": metrics.volume_deviation_pct,
-                            "current_row_count": metrics.current_row_count,
-                            "expected_row_count": metrics.expected_row_count,
-                            "schema_changes_7d": metrics.schema_changes_7d,
-                        }
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to get metrics from {client.TOOL_NAME}: {e}")
-                continue
+        # Resolve node by name/FQN (case-insensitive, suffix match)
+        lower = node_name.lower()
+        for nc in report.node_coverages:
+            nc_name = nc.node_name.lower()
+            nc_id = nc.node_id.lower()
+            if nc_name == lower or nc_id == lower or nc_name.endswith("." + lower):
+                return ToolResult(success=True, data=nc.to_dict())
+
+        # Try partial match
+        for nc in report.node_coverages:
+            if lower in nc.node_name.lower() or lower in nc.node_id.lower():
+                return ToolResult(success=True, data=nc.to_dict())
 
         return ToolResult(
             success=False,
-            error=f"Asset '{asset_name}' not found in any connected observability tool. Verify the asset name format (e.g., 'database.schema.table')."
+            error=f"Node '{node_name}' not found. Available nodes: "
+            + ", ".join(nc.node_name for nc in report.node_coverages[:20]),
         )
 
-    async def _execute_trace_incident_root_cause(self, args: Dict[str, Any]) -> ToolResult:
-        """Trace an incident upstream through lineage to find root cause."""
-        incident_id = args.get("incident_id")
-        asset_name = args.get("asset_name")
-        depth = args.get("depth", 3)
-
-        if not incident_id and not asset_name:
+    async def _execute_get_monitor_recommendations(self, args: Dict[str, Any]) -> ToolResult:
+        """Get actionable monitor recommendations to close coverage gaps."""
+        report = self._run_coverage_analysis()
+        if report is None:
             return ToolResult(
                 success=False,
-                error="Either incident_id or asset_name must be provided."
+                error="No lineage graph available. Extract lineage first.",
             )
 
-        clients = self._get_observability_clients()
-        if not clients:
-            return ToolResult(
-                success=False,
-                error="No observability tools connected."
-            )
+        monitor_type = args.get("monitor_type", "all")
+        limit = args.get("limit", 10)
 
-        primary_incident = None
-        affected_asset = asset_name
-
-        # If incident_id provided, get the incident details first
-        if incident_id:
-            for client in clients:
-                try:
-                    incident = client.get_incident_details(incident_id)
-                    if incident:
-                        primary_incident = incident
-                        if incident.primary_asset:
-                            affected_asset = incident.primary_asset.fqn
-                        break
-                except Exception as e:
-                    logger.warning(f"Failed to get incident {incident_id} from {client.TOOL_NAME}: {e}")
-
-        if not affected_asset:
-            return ToolResult(
-                success=False,
-                error="Could not determine affected asset. Please provide asset_name."
-            )
-
-        # Get upstream incidents from observability tools
-        upstream_incidents = []
-        for client in clients:
-            try:
-                upstream = client.get_upstream_incidents(affected_asset, depth=depth)
-                upstream_incidents.extend(upstream)
-            except Exception as e:
-                logger.debug(f"No upstream incidents from {client.TOOL_NAME}: {e}")
-
-        # Also check Pallisade lineage if available
-        lineage_upstream = []
-        if self.context.graph:
-            try:
-                upstream_nodes = self.context.graph.get_upstream(affected_asset, depth=depth)
-                for node in upstream_nodes:
-                    # Check each upstream node for incidents
-                    for client in clients:
-                        try:
-                            node_incidents = client.get_incidents_for_asset(
-                                node.id,
-                                hours_back=168,  # 7 days
-                                include_resolved=False,
-                            )
-                            for inc in node_incidents:
-                                if inc.is_active:
-                                    upstream_incidents.append(inc)
-                                    lineage_upstream.append({
-                                        "node": node.id,
-                                        "node_type": node.node_type.value,
-                                        "incident_id": inc.id,
-                                        "incident_type": inc.incident_type.value,
-                                    })
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.debug(f"Lineage lookup failed: {e}")
-
-        # Format response
-        root_causes = []
-        for incident in upstream_incidents:
-            asset = incident.primary_asset.display_name if incident.primary_asset else "Unknown"
-            root_causes.append({
-                "incident_id": incident.id,
-                "source": incident.source,
-                "severity": incident.severity.value,
-                "type": incident.incident_type.value,
-                "title": incident.title,
-                "asset": asset,
-                "detected_at": incident.detected_at.isoformat(),
-                "url": incident.external_url,
-            })
+        recs = report.recommendations
+        if monitor_type != "all":
+            recs = [r for r in recs if r.monitor_type.value == monitor_type.lower()]
 
         return ToolResult(
             success=True,
             data={
-                "target_asset": affected_asset,
-                "primary_incident": {
-                    "id": primary_incident.id,
-                    "type": primary_incident.incident_type.value,
-                    "title": primary_incident.title,
-                } if primary_incident else None,
-                "upstream_issues_found": len(root_causes),
-                "root_causes": root_causes,
-                "lineage_path": lineage_upstream,
-                "recommendation": self._generate_root_cause_recommendation(primary_incident, root_causes),
-            }
+                "total_recommendations": len(report.recommendations),
+                "filtered_count": len(recs),
+                "recommendations": [r.to_dict() for r in recs[:limit]],
+            },
         )
 
-    def _generate_root_cause_recommendation(
-        self,
-        primary_incident,
-        root_causes: List[Dict],
-    ) -> str:
-        """Generate a recommendation based on root cause analysis."""
-        if not root_causes:
-            if primary_incident:
-                incident_type = primary_incident.incident_type.value
-                if incident_type == "freshness":
-                    return "No upstream issues detected. Check the orchestrator (Airflow, dbt Cloud, etc.) for failed or delayed jobs that update this table."
-                elif incident_type == "volume":
-                    return "No upstream issues detected. Check the source system for changes in data volume or filtering logic."
-                elif incident_type == "schema":
-                    return "No upstream issues detected. This appears to be a direct schema change on this table."
-            return "No upstream issues detected. Investigate the table directly."
+    async def _execute_run_coverage_monitor(self, args: Dict[str, Any]) -> ToolResult:
+        """Execute a specific monitor against a data asset."""
+        import asyncio
 
-        # Summarize root causes
-        issue_types = set(rc["type"] for rc in root_causes)
-        assets = set(rc["asset"] for rc in root_causes)
+        try:
+            from scanner.monitors.executor import MonitorExecutor
+        except ImportError:
+            from ..monitors.executor import MonitorExecutor
 
-        if "freshness" in issue_types:
-            return f"Root cause appears to be freshness issues in upstream tables: {', '.join(assets)}. Fix the upstream data pipeline first, then this table should resolve automatically."
-        elif "schema" in issue_types:
-            return f"Schema changes detected in upstream tables: {', '.join(assets)}. Review the schema changes and update downstream transformations accordingly."
-        elif "volume" in issue_types:
-            return f"Volume anomalies detected in upstream tables: {', '.join(assets)}. Investigate the source data before proceeding."
+        monitor_type = args.get("monitor_type")
+        table_fqn = args.get("table_fqn", "")
+        config = args.get("config") or {}
+
+        if not monitor_type or not table_fqn:
+            return ToolResult(
+                success=False,
+                error="Both monitor_type and table_fqn are required.",
+            )
+
+        # Parse FQN into parts
+        parts = table_fqn.split(".")
+        if len(parts) < 2:
+            return ToolResult(
+                success=False,
+                error=f"table_fqn must be at least schema.table (got '{table_fqn}').",
+            )
+        if len(parts) == 2:
+            database, schema, table = "", parts[0], parts[1]
         else:
-            return f"Issues found in upstream tables: {', '.join(assets)}. Fix these first before addressing the downstream problem."
+            database, schema, table = parts[0], parts[1], ".".join(parts[2:])
 
-    async def _execute_get_quality_checks(self, args: Dict[str, Any]) -> ToolResult:
-        """Get data quality checks configured for an asset."""
-        asset_name = args["asset_name"]
+        # Find a warehouse adapter
+        warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
+        adapter = None
+        adapter_type = None
+        for wh in warehouse_types:
+            if wh in self._adapters:
+                adapter = self._adapters[wh]
+                adapter_type = wh
+                break
 
-        clients = self._get_observability_clients()
-        if not clients:
+        if not adapter:
             return ToolResult(
                 success=False,
-                error="No observability tools connected."
+                error="No warehouse connected. Connect a warehouse to run monitors.",
             )
 
-        all_checks = []
-        tools_queried = []
+        if not adapter.is_connected:
+            adapter.connect()
 
-        for client in clients:
-            try:
-                checks = client.get_checks_for_asset(asset_name)
-                all_checks.extend(checks)
-                tools_queried.append(client.TOOL_NAME)
-            except Exception as e:
-                logger.warning(f"Failed to get checks from {client.TOOL_NAME}: {e}")
+        # Map warehouse type to sqlglot dialect
+        dialect_map = {
+            "BIGQUERY": "bigquery",
+            "SNOWFLAKE": "snowflake",
+            "POSTGRES": "postgres",
+            "REDSHIFT": "redshift",
+        }
+        dialect = dialect_map.get(adapter_type, "postgres")
 
-        if not all_checks:
-            return ToolResult(
-                success=True,
-                data={
-                    "asset": asset_name,
-                    "tools_queried": tools_queried,
-                    "total_checks": 0,
-                    "checks": [],
-                    "message": f"No data quality checks found for '{asset_name}'."
-                }
+        # ------------------------------------------------------------------
+        # Anomaly monitors REQUIRE a column.  The LLM often omits it, which
+        # produces invalid SQL (empty column → ``CASE WHEN  IS NULL``).
+        # Resolve a column from schema before creating the monitor.
+        # ------------------------------------------------------------------
+        if monitor_type == "anomaly" and not (config.get("column") or "").strip():
+            logger.info(
+                f"[Monitor] Anomaly monitor for {table_fqn}: no column in config, "
+                f"attempting auto-infer (schema populated: "
+                f"{bool(self.context.warehouse_schema)})"
             )
+            inferred = self._infer_anomaly_config(table_fqn, table)
 
-        # Format checks
-        checks_data = []
-        for check in all_checks:
-            checks_data.append({
-                "id": check.id,
-                "source": check.source,
-                "name": check.name,
-                "type": check.check_type.value,
-                "is_passing": check.is_passing,
-                "consecutive_failures": check.consecutive_failures,
-                "threshold": check.threshold,
-                "schedule": check.schedule,
-                "last_run_at": check.last_run_at.isoformat() if check.last_run_at else None,
-                "url": check.external_url,
-            })
+            # Fallback: query the warehouse directly for column metadata.
+            if inferred is None:
+                logger.info(
+                    f"[Monitor] Schema-based inference failed for {table_fqn}, "
+                    "querying warehouse INFORMATION_SCHEMA directly"
+                )
+                inferred = await self._infer_anomaly_config_from_warehouse(
+                    adapter, adapter_type, database, schema, table
+                )
 
-        passing = sum(1 for c in all_checks if c.is_passing)
-        failing = len(all_checks) - passing
+            if inferred is None or not inferred.get("column"):
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Cannot run anomaly monitor on '{table_fqn}': "
+                        "could not find a numeric column to monitor. "
+                        "Pass config with 'column' and 'metric', e.g.: "
+                        "config={\"column\": \"revenue\", \"metric\": \"avg\"}"
+                    ),
+                )
 
-        return ToolResult(
-            success=True,
-            data={
-                "asset": asset_name,
-                "tools_queried": tools_queried,
-                "total_checks": len(all_checks),
-                "passing": passing,
-                "failing": failing,
-                "checks": checks_data,
-            }
-        )
+            logger.info(f"[Monitor] Inferred anomaly config for {table_fqn}: {inferred}")
+            # Merge: explicit config keys take precedence over inferred ones.
+            user_specified_ts = bool(config.get("timestamp_column"))
+            merged = {**inferred, **{k: v for k, v in config.items() if v}}
+            config = merged
 
-    async def _execute_get_incident_details(self, args: Dict[str, Any]) -> ToolResult:
-        """Get detailed information about a specific incident."""
-        incident_id = args["incident_id"]
-
-        clients = self._get_observability_clients()
-        if not clients:
-            return ToolResult(
-                success=False,
-                error="No observability tools connected."
-            )
-
-        for client in clients:
-            try:
-                incident = client.get_incident_details(incident_id)
-                if incident:
-                    # Format affected assets
-                    assets = []
-                    for asset in incident.affected_assets:
-                        assets.append({
-                            "id": asset.id,
-                            "name": asset.name,
-                            "fqn": asset.fqn,
-                            "type": asset.asset_type,
-                            "column": asset.column_name,
-                        })
-
-                    return ToolResult(
-                        success=True,
-                        data={
-                            "id": incident.id,
-                            "source": incident.source,
-                            "severity": incident.severity.value,
-                            "status": incident.status.value,
-                            "type": incident.incident_type.value,
-                            "title": incident.title,
-                            "description": incident.description,
-                            "affected_assets": assets,
-                            "detected_at": incident.detected_at.isoformat(),
-                            "started_at": incident.started_at.isoformat() if incident.started_at else None,
-                            "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
-                            "expected_value": incident.expected_value,
-                            "actual_value": incident.actual_value,
-                            "deviation_pct": incident.deviation_percentage,
-                            "threshold": incident.threshold,
-                            "url": incident.external_url,
-                            "tags": incident.tags,
-                        }
+            # If the timestamp column was auto-inferred (user didn't specify
+            # one), pick the column whose MAX value is closest to today.
+            # This avoids using e.g. ``created_at`` (stale domain dates)
+            # when ``_loaded_at`` (recent ETL dates) exists.
+            if config.get("timestamp_column") and not user_specified_ts:
+                better_ts = await self._pick_best_timestamp_column(
+                    adapter, adapter_type, database, schema, table, table_fqn,
+                )
+                if better_ts and better_ts != config["timestamp_column"]:
+                    logger.info(
+                        f"[Monitor] Overriding timestamp column for {table_fqn}: "
+                        f"{config['timestamp_column']} → {better_ts} (closer to today)"
                     )
-            except Exception as e:
-                logger.debug(f"Incident {incident_id} not found in {client.TOOL_NAME}: {e}")
+                    config["timestamp_column"] = better_ts
 
-        return ToolResult(
-            success=False,
-            error=f"Incident '{incident_id}' not found in any connected observability tool."
+        # -----------------------------------------------------------------
+        # Inject cached historical values for anomaly monitors that lack
+        # a timestamp column (single-snapshot mode).  This lets repeated
+        # runs within the same session accumulate a baseline.
+        # -----------------------------------------------------------------
+        if monitor_type == "anomaly" and not config.get("timestamp_column"):
+            baseline_key = f"{table_fqn}.{config.get('column', '')}.{config.get('metric', 'avg')}"
+            cached = self._anomaly_baselines.get(baseline_key, [])
+            if cached and not config.get("historical_values"):
+                config["historical_values"] = cached
+
+        # Create and run the monitor
+        monitor = MonitorExecutor.create_monitor(monitor_type, config)
+        if not monitor:
+            return ToolResult(
+                success=False,
+                error=f"Unknown monitor type: {monitor_type}. "
+                "Supported: freshness, volume, schema_change, anomaly.",
+            )
+
+        def _query_func(sql: str):
+            return adapter.execute_query(sql)
+
+        executor = MonitorExecutor(query_func=_query_func, dialect=dialect)
+        result = await asyncio.to_thread(
+            executor.run_monitor, monitor, database, schema, table
         )
+
+        # -----------------------------------------------------------------
+        # Cache the current metric value for future anomaly runs.
+        # -----------------------------------------------------------------
+        if monitor_type == "anomaly" and result.value is not None:
+            baseline_key = f"{table_fqn}.{config.get('column', '')}.{config.get('metric', 'avg')}"
+            if baseline_key not in self._anomaly_baselines:
+                self._anomaly_baselines[baseline_key] = []
+            self._anomaly_baselines[baseline_key].append(float(result.value))
+
+        logger.info(
+            f"[Monitor] {monitor_type} result for {table_fqn}: "
+            f"status={result.status.value}, "
+            f"value={result.value}, "
+            f"data_points={result.details.get('baseline_count', result.details.get('data_points', 'n/a')) if result.details else 'n/a'}"
+            f"{', confidence=' + str(result.details.get('confidence_pct')) + '%' if result.details and result.details.get('confidence_pct') is not None else ''}"
+        )
+
+        return ToolResult(success=True, data=result.to_dict())
+
+    # BigQuery / warehouse numeric types used to auto-pick anomaly columns.
+    _NUMERIC_TYPE_KEYWORDS = frozenset({
+        "int", "integer", "int64", "bigint", "smallint", "tinyint",
+        "float", "float64", "double", "real", "numeric", "decimal",
+        "number", "bignumeric",
+    })
+
+    # Common timestamp column name patterns (lowercase).
+    # Broad coverage so anomaly backfill works out-of-the-box for most tables.
+    _TIMESTAMP_PATTERNS = (
+        # Generic
+        "created_at", "updated_at", "event_timestamp", "timestamp",
+        "event_time", "created_date", "date", "event_date",
+        # ETL / load timestamps
+        "loaded_at", "_loaded_at", "ingested_at", "_batched_at",
+        "inserted_at", "synced_at", "extracted_at",
+        # Domain-specific date columns
+        "order_date", "ordered_at", "purchase_date", "purchased_at",
+        "transaction_date", "transaction_at", "sale_date", "sold_at",
+        "shipped_at", "ship_date", "delivery_date", "delivered_at",
+        "invoice_date", "invoiced_at", "payment_date", "paid_at",
+        "signup_date", "registered_at", "registration_date",
+        "modified_at", "changed_at", "last_modified",
+        "occurred_at", "recorded_at", "processed_at",
+        "start_date", "end_date", "effective_date",
+        "report_date", "run_date", "snapshot_date",
+    )
+
+    def _infer_anomaly_config(
+        self, table_fqn: str, table_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Infer a sensible anomaly-monitor config from the pre-fetched schema.
+
+        Returns a dict with at least ``column`` and ``metric``, plus
+        ``timestamp_column`` if a timestamp-like column is found.
+        Returns ``None`` when no numeric column can be identified.
+        """
+        if not self.context.warehouse_schema:
+            return None
+
+        # Locate the TableSchema for this table.
+        table_schema = None
+        fqn_lower = table_fqn.lower()
+        tbl_lower = table_name.lower()
+        for _key, tables in self.context.warehouse_schema.items():
+            for ts in tables:
+                # Match by full FQN or by bare table name.
+                full = f"{ts.project}.{ts.dataset}.{ts.name}".lower() if ts.project else f"{ts.dataset}.{ts.name}".lower()
+                if full == fqn_lower or ts.name.lower() == tbl_lower:
+                    table_schema = ts
+                    break
+            if table_schema:
+                break
+
+        if not table_schema or not table_schema.columns:
+            return None
+
+        # Find first numeric column.
+        numeric_col = None
+        for col in table_schema.columns:
+            col_type = col.get("type", "").lower().split("(")[0].strip()
+            if col_type in self._NUMERIC_TYPE_KEYWORDS:
+                numeric_col = col["name"]
+                break
+
+        if not numeric_col:
+            return None
+
+        # Find a timestamp column for time-series analysis.
+        ts_col = None
+        col_names = {c["name"].lower(): c["name"] for c in table_schema.columns}
+        for pattern in self._TIMESTAMP_PATTERNS:
+            if pattern in col_names:
+                ts_col = col_names[pattern]
+                break
+        # Fallback: first column with "timestamp" or "date" in its type.
+        if ts_col is None:
+            for col in table_schema.columns:
+                col_type = col.get("type", "").lower()
+                if "timestamp" in col_type or "date" in col_type:
+                    ts_col = col["name"]
+                    break
+
+        result: Dict[str, Any] = {
+            "column": numeric_col,
+            "metric": "avg",
+        }
+        if ts_col:
+            result["timestamp_column"] = ts_col
+        return result
+
+    async def _infer_anomaly_config_from_warehouse(
+        self,
+        adapter,
+        adapter_type: str,
+        database: str,
+        schema: str,
+        table: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fallback: query INFORMATION_SCHEMA directly to find numeric and
+        timestamp columns when the pre-fetched schema is unavailable.
+        """
+        import asyncio
+
+        try:
+            if adapter_type == "BIGQUERY":
+                project = getattr(adapter, "project", database)
+                sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM `{project}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+                    f"WHERE table_name = '{table}' "
+                    f"ORDER BY ordinal_position"
+                )
+            else:
+                sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM information_schema.columns "
+                    f"WHERE table_schema = '{schema}' "
+                    f"AND table_name = '{table}' "
+                    f"ORDER BY ordinal_position"
+                )
+
+            rows = await asyncio.to_thread(adapter.execute_query, sql)
+            if not rows:
+                return None
+
+            # Find first numeric column.
+            numeric_col = None
+            ts_col = None
+            for row in rows:
+                col_name = row.get("column_name", "")
+                col_type = row.get("data_type", "").lower().split("(")[0].strip()
+
+                if not numeric_col and col_type in self._NUMERIC_TYPE_KEYWORDS:
+                    numeric_col = col_name
+
+                if not ts_col:
+                    if col_name.lower() in self._TIMESTAMP_PATTERNS:
+                        ts_col = col_name
+                    elif "timestamp" in col_type or "date" in col_type:
+                        ts_col = col_name
+
+            if not numeric_col:
+                return None
+
+            result: Dict[str, Any] = {
+                "column": numeric_col,
+                "metric": "avg",
+            }
+            if ts_col:
+                result["timestamp_column"] = ts_col
+            return result
+
+        except Exception as e:
+            logger.warning(f"[Monitor] Direct schema query failed for {schema}.{table}: {e}")
+            return None
+
+    async def _pick_best_timestamp_column(
+        self,
+        adapter,
+        adapter_type: str,
+        database: str,
+        schema: str,
+        table: str,
+        table_fqn: str,
+    ) -> Optional[str]:
+        """Find the timestamp/date column whose MAX value is closest to today.
+
+        Queries INFORMATION_SCHEMA for all timestamp/date columns, then
+        runs ``SELECT MAX(col) …`` for each candidate.  Returns the
+        column name whose maximum value is nearest to the current date,
+        which is the best choice for anomaly time-series bucketing.
+        """
+        from datetime import datetime, date, timezone
+
+        # Step 1 — discover all timestamp / date columns.
+        try:
+            if adapter_type == "BIGQUERY":
+                project = getattr(adapter, "project", database)
+                col_sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM `{project}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
+                    f"WHERE table_name = '{table}' "
+                    f"AND (data_type LIKE '%TIMESTAMP%' OR data_type LIKE '%DATE%' "
+                    f"OR data_type LIKE '%DATETIME%') "
+                    f"ORDER BY ordinal_position"
+                )
+            else:
+                col_sql = (
+                    f"SELECT column_name, data_type "
+                    f"FROM information_schema.columns "
+                    f"WHERE table_schema = '{schema}' "
+                    f"AND table_name = '{table}' "
+                    f"AND (data_type ILIKE '%timestamp%' OR data_type ILIKE '%date%') "
+                    f"ORDER BY ordinal_position"
+                )
+
+            rows = await asyncio.to_thread(adapter.execute_query, col_sql)
+            if not rows or len(rows) <= 1:
+                # 0 or 1 timestamp column — nothing to improve.
+                return rows[0]["column_name"] if rows else None
+
+            candidates = [r["column_name"] for r in rows]
+        except Exception:
+            return None
+
+        # Step 2 — get MAX of each candidate in a single query.
+        try:
+            if adapter_type == "BIGQUERY":
+                max_exprs = ", ".join(
+                    f"MAX(CAST(CAST(`{col}` AS TIMESTAMP) AS DATE)) AS `max_{i}`"
+                    for i, col in enumerate(candidates)
+                )
+            else:
+                max_exprs = ", ".join(
+                    f"MAX(CAST({col} AS DATE)) AS max_{i}"
+                    for i, col in enumerate(candidates)
+                )
+
+            max_sql = f"SELECT {max_exprs} FROM {table_fqn}"
+            max_rows = await asyncio.to_thread(adapter.execute_query, max_sql)
+            if not max_rows:
+                return None
+
+            row = max_rows[0]
+            today = datetime.now(timezone.utc).date()
+
+            best_col: Optional[str] = None
+            best_diff = float("inf")
+
+            for i, col in enumerate(candidates):
+                val = row.get(f"max_{i}")
+                if val is None:
+                    continue
+                try:
+                    if isinstance(val, str):
+                        d = date.fromisoformat(val[:10])
+                    elif hasattr(val, "date") and callable(val.date):
+                        d = val.date()
+                    elif isinstance(val, date):
+                        d = val
+                    else:
+                        continue
+                    diff = abs((today - d).days)
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_col = col
+                except (ValueError, TypeError):
+                    continue
+
+            if best_col:
+                logger.info(
+                    f"[Monitor] Best timestamp column for {table_fqn}: "
+                    f"{best_col} (MAX is {best_diff} day(s) from today)"
+                )
+            return best_col
+        except Exception as e:
+            logger.warning(f"[Monitor] Failed to pick best timestamp column: {e}")
+            return None
 
     # ==========================================
     # CHANGE PLAN TOOL IMPLEMENTATIONS
@@ -2401,8 +4531,17 @@ class ToolExecutor:
         if not github_token:
             return ToolResult(
                 success=False,
-                error="GitHub is not connected. Please connect GitHub in your integrations to apply changes."
+                error="GitHub is not connected. Please connect GitHub in Settings > Integrations to apply changes."
             )
+
+        # Pre-validate the token before proceeding
+        pre_applier = ChangePlanApplier(github_token)
+        try:
+            token_valid, token_error = await pre_applier.validate_token()
+            if not token_valid:
+                return ToolResult(success=False, error=token_error)
+        finally:
+            await pre_applier.close()
 
         # Auto-detect repo from context if not provided
         if not repo_owner or not repo_name:
@@ -2455,30 +4594,49 @@ class ToolExecutor:
             await applier.close()
 
     def _get_github_token(self) -> Optional[str]:
-        """Get GitHub token from context integrations."""
+        """Get GitHub token from context integrations.
+
+        Priority: 1) per-tool github_token (explicit classic PAT — has full repo scope),
+                  2) dedicated GITHUB integration (OAuth token — may have limited scope).
+        """
+        # First: per-tool github_token (user explicitly configured a PAT for private repos)
+        for integration in self.context.integrations:
+            config = integration.config or {}
+            token = config.get("github_token")
+            if token:
+                logger.info(f"[GitHub] Found github_token in {integration.type} integration")
+                return token
+
+        # Fallback: dedicated GITHUB integration (OAuth)
         for integration in self.context.integrations:
             if integration.type.upper() == "GITHUB":
                 config = integration.config or {}
                 token = config.get("access_token") or config.get("token")
                 if token:
-                    logger.info(f"[GitHub] Found token in integration config (key: {'access_token' if config.get('access_token') else 'token'})")
+                    logger.info("[GitHub] Found token in GITHUB OAuth integration")
                     return token
-                else:
-                    logger.warning(f"[GitHub] Found GITHUB integration but no token in config. Keys: {list(config.keys())}")
-        logger.warning("[GitHub] No GITHUB integration found in context")
+
+        logger.warning("[GitHub] No GitHub token found in any integration")
         return None
 
     def _get_github_repo(self) -> Optional[Dict[str, str]]:
         """Get the primary GitHub repo from context (e.g., from VERSION_CONTROL node or first repo)."""
+        # Priority 1: Dedicated GITHUB integration with explicit repo
         for integration in self.context.integrations:
             if integration.type.upper() == "GITHUB":
-                # Check if there's a specific repo configured
                 config = integration.config or {}
-                if config.get("repo"):
-                    # Format: "owner/repo"
-                    parts = config["repo"].split("/")
-                    if len(parts) == 2:
-                        return {"owner": parts[0], "name": parts[1]}
+
+                # Check for separate owner + repo fields (from pipeline config UI)
+                owner = config.get("owner")
+                repo_name = config.get("repo")
+                if owner and repo_name:
+                    # repo might be "owner/repo" or just "repo"
+                    if "/" in repo_name:
+                        parts = repo_name.split("/")
+                        if len(parts) == 2:
+                            return {"owner": parts[0], "name": parts[1]}
+                    else:
+                        return {"owner": owner, "name": repo_name}
 
                 # Check metadata for repos list
                 metadata = getattr(integration, 'metadata', {}) or config.get('metadata', {})
@@ -2489,6 +4647,18 @@ class ToolExecutor:
                     parts = full_name.split("/")
                     if len(parts) == 2:
                         return {"owner": parts[0], "name": parts[1]}
+
+        # Priority 2: Cross-reference from orchestration/transformation configs
+        # (dbt Core, Airflow, etc. often have a github_repo field)
+        for integration in self.context.integrations:
+            config = integration.config or {}
+            repo = config.get("github_repo") or config.get("repo")
+            if repo and isinstance(repo, str) and "/" in repo:
+                parts = repo.split("/")
+                if len(parts) == 2:
+                    logger.info(f"[GitHub] Auto-detected repo {repo} from {integration.type} config")
+                    return {"owner": parts[0], "name": parts[1]}
+
         return None
 
     def _get_github_repos_list(self) -> List[str]:
@@ -2806,3 +4976,581 @@ class ToolExecutor:
         except Exception as e:
             logger.exception("Failed to read GitHub file")
             return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # ONBOARDING TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_get_pending_questions(self, args: Dict[str, Any]) -> ToolResult:
+        """Get pending onboarding questions based on connected integrations."""
+        try:
+            from .onboarding.questions import get_all_pending_questions
+
+            # Get integration types from context
+            integration_types = self.context.integration_types or []
+
+            # Get already answered questions from pipeline context
+            answered_keys = set()
+            if self.context.pipeline_context:
+                # Extract answered keys from environment, integration, and conventions contexts
+                env_ctx = self.context.pipeline_context.get("environmentContext") or {}
+                int_ctx = self.context.pipeline_context.get("integrationContexts") or {}
+                conv_ctx = self.context.pipeline_context.get("conventionsContext") or {}
+
+                answered_keys.update(env_ctx.keys())
+                answered_keys.update(conv_ctx.keys())
+                for int_answers in int_ctx.values():
+                    if isinstance(int_answers, dict):
+                        answered_keys.update(int_answers.keys())
+
+            # Get pending questions
+            questions = get_all_pending_questions(integration_types, answered_keys)
+
+            return ToolResult(
+                success=True,
+                data={
+                    "pending_count": len(questions),
+                    "questions": [
+                        {
+                            "key": q.key,
+                            "text": q.text,
+                            "category": q.category.value,
+                            "integration_type": q.integration_type,
+                            "priority": q.priority,
+                            "required": q.required,
+                            "example_answers": q.example_answers,
+                        }
+                        for q in questions[:10]  # Return top 10 by priority
+                    ],
+                    "answered_count": len(answered_keys),
+                }
+            )
+        except Exception as e:
+            logger.exception("Failed to get pending questions")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_save_onboarding_context(self, args: Dict[str, Any]) -> ToolResult:
+        """Save an answer from onboarding to the pipeline context."""
+        question_key = args.get("question_key")
+        answer = args.get("answer")
+        integration_type = args.get("integration_type")
+
+        if not question_key or not answer:
+            return ToolResult(
+                success=False,
+                error="Both question_key and answer are required"
+            )
+
+        try:
+            from .onboarding.questions import get_question_by_key, QuestionCategory
+
+            # Validate the question exists
+            question = get_question_by_key(question_key)
+            if not question:
+                return ToolResult(
+                    success=False,
+                    error=f"Unknown question key: {question_key}"
+                )
+
+            # Determine where to store based on category
+            context_field = "environmentContext"
+            if question.category in (QuestionCategory.CONVENTIONS,):
+                context_field = "conventionsContext"
+            elif question.category in (QuestionCategory.BUSINESS, QuestionCategory.CRITICALITY, QuestionCategory.STAKEHOLDERS):
+                context_field = "environmentContext"
+            elif question.integration_type:
+                context_field = "integrationContexts"
+
+            # Note: The actual persistence happens via the API endpoint
+            # This tool returns the structured data for the LLM to confirm
+            return ToolResult(
+                success=True,
+                data={
+                    "saved": True,
+                    "question_key": question_key,
+                    "answer": answer,
+                    "category": question.category.value,
+                    "context_field": context_field,
+                    "integration_type": integration_type or question.integration_type,
+                    "message": f"Saved answer for '{question_key}': {answer}",
+                }
+            )
+        except Exception as e:
+            logger.exception("Failed to save onboarding context")
+            return ToolResult(success=False, error=str(e))
+
+    async def _execute_complete_onboarding(self, args: Dict[str, Any]) -> ToolResult:
+        """Mark onboarding as complete."""
+        summary = args.get("summary", "")
+
+        try:
+            # Build summary of what was learned
+            learned_items = []
+
+            if self.context.pipeline_context:
+                env_ctx = self.context.pipeline_context.get("environmentContext") or {}
+                int_ctx = self.context.pipeline_context.get("integrationContexts") or {}
+                conv_ctx = self.context.pipeline_context.get("conventionsContext") or {}
+
+                for key, value in env_ctx.items():
+                    learned_items.append(f"- {key}: {value}")
+                for key, value in conv_ctx.items():
+                    learned_items.append(f"- {key}: {value}")
+                for int_type, answers in int_ctx.items():
+                    if isinstance(answers, dict):
+                        for key, value in answers.items():
+                            learned_items.append(f"- [{int_type}] {key}: {value}")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "completed": True,
+                    "summary": summary or "Onboarding complete",
+                    "learned_items": learned_items,
+                    "message": "Onboarding has been marked as complete. I now have context about your pipeline setup.",
+                }
+            )
+        except Exception as e:
+            logger.exception("Failed to complete onboarding")
+            return ToolResult(success=False, error=str(e))
+
+    # ==========================================
+    # IMPACT ANALYSIS TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_analyze_change_impact(self, args: Dict[str, Any]) -> ToolResult:
+        """
+        Analyze the full impact of a proposed change.
+
+        Returns upstream sources, downstream dependents, breaking changes,
+        and required remediations.
+        """
+        objects = args.get("objects", [])
+        change_type = args.get("change_type", "MODIFY_LOGIC")
+        details = args.get("details", "")
+
+        if not objects:
+            return ToolResult(
+                success=False,
+                error="objects parameter is required - provide list of tables/models being changed"
+            )
+
+        results = {
+            "objects_analyzed": objects,
+            "change_type": change_type,
+            "details": details,
+            "upstream": [],
+            "downstream": [],
+            "breaking_changes": [],
+            "safe_changes": [],
+            "remediation_needed": [],
+        }
+
+        try:
+            for obj in objects:
+                # Get downstream dependents
+                downstream_result = await self._execute_get_downstream({
+                    "node_id": obj,
+                    "depth": 3
+                })
+
+                # Get upstream sources
+                upstream_result = await self._execute_get_upstream({
+                    "node_id": obj,
+                    "depth": 2
+                })
+
+                if upstream_result.success and upstream_result.data:
+                    results["upstream"].extend(
+                        upstream_result.data.get("upstream_nodes", [])
+                    )
+
+                if downstream_result.success and downstream_result.data:
+                    downstream_nodes = downstream_result.data.get("downstream_nodes", [])
+                    results["downstream"].extend(downstream_nodes)
+
+                    # Analyze each downstream for breaking changes
+                    for dep in downstream_nodes:
+                        impact = self._analyze_dependency_impact(dep, change_type, details)
+                        if impact["breaking"]:
+                            results["breaking_changes"].append({
+                                "object": dep.get("name", dep.get("id")),
+                                "type": dep.get("type", "unknown"),
+                                "platform": dep.get("platform", "unknown"),
+                                "reason": impact["reason"],
+                                "suggested_fix": impact["suggested_fix"],
+                            })
+                            results["remediation_needed"].append({
+                                "object": dep.get("name", dep.get("id")),
+                                "action": impact["suggested_fix"],
+                            })
+                        else:
+                            results["safe_changes"].append(dep.get("name", dep.get("id")))
+
+            # Add summary
+            results["summary"] = {
+                "total_upstream": len(results["upstream"]),
+                "total_downstream": len(results["downstream"]),
+                "breaking_count": len(results["breaking_changes"]),
+                "safe_count": len(results["safe_changes"]),
+                "requires_action": len(results["breaking_changes"]) > 0,
+            }
+
+            return ToolResult(success=True, data=results)
+
+        except Exception as e:
+            logger.exception("Failed to analyze change impact")
+            return ToolResult(success=False, error=str(e))
+
+    def _analyze_dependency_impact(
+        self,
+        dependent: Dict[str, Any],
+        change_type: str,
+        details: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze how a change impacts a specific dependent object.
+
+        Returns dict with:
+        - breaking: bool
+        - reason: str
+        - suggested_fix: str
+        """
+        dep_type = dependent.get("type", "").lower()
+        dep_platform = dependent.get("platform", "").lower()
+        dep_name = dependent.get("name", dependent.get("id", "unknown"))
+
+        # Default to breaking for destructive changes
+        if change_type == "DELETE":
+            return {
+                "breaking": True,
+                "reason": f"Deleting source will break {dep_name}",
+                "suggested_fix": f"Update or remove {dep_name} before deletion",
+            }
+
+        if change_type == "RENAME":
+            return {
+                "breaking": True,
+                "reason": f"Rename will break references in {dep_name}",
+                "suggested_fix": f"Update references in {dep_name} to use new name",
+            }
+
+        if change_type == "MOVE":
+            # Moving to different dataset/schema
+            if "model" in dep_type or "dbt" in dep_platform:
+                return {
+                    "breaking": True,
+                    "reason": f"Dataset change will break ref() or source() in {dep_name}",
+                    "suggested_fix": f"Update ref() in {dep_name} to point to new location. Details: {details}",
+                }
+            elif "dashboard" in dep_type or "looker" in dep_platform or "bi" in dep_platform:
+                return {
+                    "breaking": True,
+                    "reason": f"Dataset change will break data source in {dep_name}",
+                    "suggested_fix": f"Update data source in {dep_name} to point to new location",
+                }
+            elif "view" in dep_type:
+                return {
+                    "breaking": True,
+                    "reason": f"Dataset change will break view definition in {dep_name}",
+                    "suggested_fix": f"Recreate view {dep_name} with updated source reference",
+                }
+
+        if change_type == "MODIFY_COLUMNS":
+            if "model" in dep_type or "view" in dep_type:
+                return {
+                    "breaking": True,
+                    "reason": f"Column changes may break SELECT in {dep_name}",
+                    "suggested_fix": f"Check and update column references in {dep_name}",
+                }
+            elif "dashboard" in dep_type or "report" in dep_type:
+                return {
+                    "breaking": True,
+                    "reason": f"Column changes may break metrics/dimensions in {dep_name}",
+                    "suggested_fix": f"Update field mappings in {dep_name}",
+                }
+
+        # MODIFY_LOGIC is generally safe unless it changes output schema
+        if change_type == "MODIFY_LOGIC":
+            return {
+                "breaking": False,
+                "reason": "Logic change preserves schema compatibility",
+                "suggested_fix": "No action needed - verify output data quality",
+            }
+
+        # Default: assume potentially breaking for safety
+        return {
+            "breaking": True,
+            "reason": f"Change may impact {dep_name}",
+            "suggested_fix": f"Review {dep_name} for compatibility with changes",
+        }
+
+    # ==========================================
+    # INFRASTRUCTURE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    def _get_server_adapter(self, server_name: str):
+        """Find a linux_server integration by name and return a connected ServerAdapter."""
+        from scanner.adapters.server import ServerAdapter
+
+        # Find the integration matching the server name
+        for integration in self.context.integrations:
+            if integration.type.upper() == "LINUX_SERVER" and (
+                integration.name.lower() == server_name.lower()
+                or server_name.lower() in integration.name.lower()
+            ):
+                adapter = ServerAdapter()
+                adapter.connect(integration.config)
+                return adapter
+
+        # If only one server integration exists, use it regardless of name
+        server_integrations = [
+            i for i in self.context.integrations
+            if i.type.upper() == "LINUX_SERVER" and i.is_active
+        ]
+        if len(server_integrations) == 1:
+            adapter = ServerAdapter()
+            adapter.connect(server_integrations[0].config)
+            return adapter
+
+        return None
+
+    async def _execute_check_server_health(self, args: Dict[str, Any]) -> ToolResult:
+        """Get CPU, memory, disk, and load for a connected server."""
+        server_name = args.get("server", "")
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'. "
+                      f"Connect a Linux Server in your pipeline first."
+            )
+
+        try:
+            health = adapter.get_system_health()
+            return ToolResult(
+                success=True,
+                data={
+                    "hostname": health.hostname,
+                    "os": health.os_info,
+                    "cpu_percent": health.cpu_percent,
+                    "memory_percent": health.memory_percent,
+                    "memory_total_gb": health.memory_total_gb,
+                    "memory_used_gb": health.memory_used_gb,
+                    "load_avg": health.load_avg,
+                    "uptime_seconds": health.uptime_seconds,
+                    "disk_usage": [
+                        {
+                            "mount": d.mount,
+                            "percent": d.percent,
+                            "total_gb": d.total_gb,
+                            "used_gb": d.used_gb,
+                            "available_gb": d.available_gb,
+                        }
+                        for d in health.disk_usage
+                    ],
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Health check failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    async def _execute_check_certificates(self, args: Dict[str, Any]) -> ToolResult:
+        """Check TLS/SSL certificates on a server."""
+        server_name = args.get("server", "")
+        paths = args.get("paths")
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'."
+            )
+
+        try:
+            certs = adapter.check_certificates(paths)
+            cert_data = []
+            for c in certs:
+                entry = {
+                    "path": c.path,
+                    "subject": c.subject,
+                    "issuer": c.issuer,
+                    "not_after": c.not_after,
+                    "days_until_expiry": c.days_until_expiry,
+                    "has_client_cert": c.has_client_cert,
+                }
+                if c.error:
+                    entry["error"] = c.error
+                cert_data.append(entry)
+
+            # Summarize issues
+            issues = []
+            for c in certs:
+                if c.days_until_expiry is not None and c.days_until_expiry <= 7:
+                    issues.append(f"{c.path}: expires in {c.days_until_expiry} days")
+                if not c.has_client_cert and c.subject:
+                    issues.append(f"{c.path}: missing client cert")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "certificates": cert_data,
+                    "total": len(certs),
+                    "issues": issues,
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Certificate check failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    async def _execute_analyze_server_logs(self, args: Dict[str, Any]) -> ToolResult:
+        """Tail and analyze log entries on a server."""
+        server_name = args.get("server", "")
+        log_path = args.get("log_path", "")
+        lines = int(args.get("lines", 200))
+
+        if not log_path:
+            return ToolResult(success=False, error="log_path is required")
+
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'."
+            )
+
+        try:
+            content = adapter.tail_log(log_path, lines)
+            # Count error lines
+            import re
+            error_pattern = re.compile(r"ERROR|FATAL|CRITICAL|EXCEPTION", re.IGNORECASE)
+            all_lines = content.split("\n")
+            error_lines = [l for l in all_lines if error_pattern.search(l)]
+
+            return ToolResult(
+                success=True,
+                data={
+                    "log_path": log_path,
+                    "total_lines": len(all_lines),
+                    "error_count": len(error_lines),
+                    "recent_errors": [l.strip()[:300] for l in error_lines[-20:]],
+                    "last_lines": [l.strip()[:300] for l in all_lines[-10:]],
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Log analysis failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    async def _execute_list_server_services(self, args: Dict[str, Any]) -> ToolResult:
+        """List systemd service status on a server."""
+        server_name = args.get("server", "")
+        adapter = self._get_server_adapter(server_name)
+        if not adapter:
+            return ToolResult(
+                success=False,
+                error=f"No Linux server integration found matching '{server_name}'."
+            )
+
+        try:
+            services = adapter.list_services()
+            return ToolResult(
+                success=True,
+                data={
+                    "services": [
+                        {
+                            "name": s.name,
+                            "status": s.status,
+                            "enabled": s.enabled,
+                        }
+                        for s in services
+                    ],
+                    "total": len(services),
+                    "running": sum(1 for s in services if s.status == "running"),
+                    "failed": sum(1 for s in services if s.status == "failed"),
+                },
+            )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Service listing failed: {e}")
+        finally:
+            adapter.disconnect()
+
+    # ==========================================
+    # WRITE TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_create_watch(self, arguments: Dict[str, Any]) -> "ToolArtifactResult":
+        """Propose creating a watch — returns artifact for user confirmation, does not execute."""
+        from .artifacts import ToolArtifactResult
+
+        name = arguments.get("name", "Untitled Watch")
+        watch_type = arguments.get("watch_type", "custom_watch")
+        anchor_fqn = arguments.get("anchor_fqn", "")
+        raw_monitors = arguments.get("monitors", [])
+        schedule = arguments.get("schedule", "0 */6 * * *")
+        timezone = arguments.get("timezone", "UTC")
+
+        # Normalize monitors to camelCase for the API and card display
+        monitors = []
+        for mon in raw_monitors:
+            monitors.append({
+                "monitorType": mon.get("monitorType") or mon.get("monitor_type"),
+                "targetFqn": mon.get("targetFqn") or mon.get("target_fqn"),
+                "config": mon.get("config", {}),
+                "name": mon.get("name"),
+            })
+
+        confirmation_tier = "modal" if len(monitors) >= 5 else "inline"
+
+        return ToolArtifactResult(
+            artifact_type="watch_preview",
+            action="create",
+            data={
+                "name": name,
+                "watchType": watch_type,
+                "anchorFqn": anchor_fqn,
+                "monitors": monitors,
+                "schedule": schedule,
+                "timezone": timezone,
+            },
+            editable_fields=["name", "schedule", "timezone", "monitors"],
+            confirmation_tier=confirmation_tier,
+            tool_name="create_watch",
+        )
+
+    async def _execute_run_watch(self, arguments: Dict[str, Any]) -> ToolResult:
+        """Run all monitors in a watch immediately via Next.js API."""
+        import aiohttp
+
+        watch_id = arguments.get("watch_id")
+        if not watch_id:
+            return ToolResult(success=False, error="watch_id is required")
+
+        import os
+        url = f"{self.context.base_url}/api/schedule/watches/{watch_id}/run"
+        headers = {
+            "X-Internal-Secret": os.environ.get("INTERNAL_API_SECRET", "pallisade-internal"),
+            "X-Organization-Id": self.context.org_id,
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        return ToolResult(success=False, error=f"Watch run failed ({resp.status}): {body}")
+                    data = await resp.json()
+                    watch = data.get("watch", {})
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "watchId": watch_id,
+                            "healthScore": watch.get("healthScore"),
+                            "summary": watch.get("summary", "Watch run completed"),
+                            "failureGroups": watch.get("failureGroups", []),
+                        }
+                    )
+        except Exception as e:
+            return ToolResult(success=False, error=f"Failed to run watch: {str(e)}")

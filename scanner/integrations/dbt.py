@@ -850,6 +850,40 @@ class DbtIntegration:
             'total_downstream': len(direct_downstream),
         }
 
+    def get_run_history(
+        self, model_name: Optional[str] = None, limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Get dbt run history for a model or all models.
+
+        Note: For local dbt projects, run history is not available via manifest.json.
+        Run history requires either:
+        - dbt Cloud integration (use DbtCloudClient)
+        - Parsing run_results.json from previous runs (not implemented)
+
+        Args:
+            model_name: Optional model name to filter results
+            limit: Maximum number of runs to return
+
+        Returns:
+            Dict with:
+                - available: False (for local dbt)
+                - message: Explanation of why history isn't available
+                - runs: Empty list
+        """
+        return {
+            "available": False,
+            "message": (
+                "Run history is not available for local dbt projects. "
+                "To access run history, connect dbt Cloud via the integrations page. "
+                "dbt Cloud provides job runs, execution times, and failure history."
+            ),
+            "model": model_name,
+            "limit": limit,  # Included for API consistency
+            "runs": [],
+            "total_runs": 0,
+        }
+
 
 # =============================================================================
 # DBT CLOUD API CLIENT

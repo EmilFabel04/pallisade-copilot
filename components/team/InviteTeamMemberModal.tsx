@@ -120,7 +120,7 @@ export function InviteTeamMemberModal({
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md p-6 shadow-2xl">
+      <div className="bg-[var(--surface)] border border-[var(--subtle-border)] rounded-2xl w-full max-w-md p-6 shadow-2xl">
         {!inviteLink ? (
           <>
             {/* Header */}
@@ -130,15 +130,15 @@ export function InviteTeamMemberModal({
                   <UserPlus className="w-6 h-6 text-violet-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold text-white">Invite Team Member</h3>
-                  <p className="text-sm text-slate-400">Add someone to {organizationName}</p>
+                  <h3 className="text-xl font-semibold text-[var(--text)]">Invite Team Member</h3>
+                  <p className="text-sm text-[var(--muted)]">Add someone to {organizationName}</p>
                 </div>
               </div>
               <button
                 onClick={handleClose}
-                className="p-2 hover:bg-slate-800 rounded-lg transition-colors"
+                className="p-2 hover:bg-[var(--hover-bg)] rounded-lg transition-colors"
               >
-                <X className="w-5 h-5 text-slate-400" />
+                <X className="w-5 h-5 text-[var(--muted)]" />
               </button>
             </div>
 
@@ -153,7 +153,7 @@ export function InviteTeamMemberModal({
             <div className="space-y-4">
               {/* Email */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">
                   Email Address
                 </label>
                 <input
@@ -161,14 +161,14 @@ export function InviteTeamMemberModal({
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="colleague@company.com"
-                  className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none text-white placeholder:text-slate-500"
+                  className="w-full px-4 py-2.5 bg-[var(--surface-inset)] border border-[var(--subtle-border)] rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none text-[var(--text)] placeholder:text-[var(--muted)]"
                   autoFocus
                 />
               </div>
 
               {/* Role Selection */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-2">
                   Role
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -182,14 +182,14 @@ export function InviteTeamMemberModal({
                         className={`p-3 rounded-lg border transition-all text-left ${
                           isSelected
                             ? 'border-violet-500 bg-violet-500/10 ring-1 ring-violet-500/50'
-                            : 'border-slate-700 hover:border-slate-600 bg-slate-800/50'
+                            : 'border-[var(--subtle-border)] hover:border-[var(--border-medium)] bg-[var(--surface-inset)]'
                         }`}
                       >
                         <div className="flex items-center gap-2 mb-1">
                           <Icon className={`w-4 h-4 ${option.color}`} />
-                          <span className="font-medium text-white text-sm">{option.label}</span>
+                          <span className="font-medium text-[var(--text)] text-sm">{option.label}</span>
                         </div>
-                        <p className="text-xs text-slate-400">{option.description}</p>
+                        <p className="text-xs text-[var(--muted)]">{option.description}</p>
                       </button>
                     );
                   })}
@@ -198,8 +198,8 @@ export function InviteTeamMemberModal({
 
               {/* Personal Note */}
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                  Personal Note <span className="text-slate-500 font-normal">(optional)</span>
+                <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">
+                  Personal Note <span className="text-[var(--muted)] font-normal">(optional)</span>
                 </label>
                 <textarea
                   value={personalNote}
@@ -215,7 +215,7 @@ export function InviteTeamMemberModal({
             <div className="flex gap-3 mt-6">
               <button
                 onClick={handleClose}
-                className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium text-white transition-colors"
+                className="flex-1 px-4 py-2.5 bg-[var(--surface-inset)] hover:bg-[var(--hover-bg)] rounded-lg font-medium text-[var(--text)] transition-colors"
               >
                 Cancel
               </button>
@@ -245,23 +245,23 @@ export function InviteTeamMemberModal({
               <div className="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
                 <CheckCircle className="w-8 h-8 text-emerald-400" />
               </div>
-              <h3 className="text-xl font-semibold text-white">Invite Sent!</h3>
-              <p className="text-sm text-slate-400 mt-1">
-                Share this link with <span className="text-white">{email}</span>
+              <h3 className="text-xl font-semibold text-[var(--text)]">Invite Sent!</h3>
+              <p className="text-sm text-[var(--muted)] mt-1">
+                Share this link with <span className="text-[var(--text)]">{email}</span>
               </p>
             </div>
 
             {/* Invite Link */}
-            <div className="bg-slate-800 rounded-lg p-3 flex items-center gap-2 mb-4">
+            <div className="bg-[var(--surface-inset)] rounded-lg p-3 flex items-center gap-2 mb-4">
               <input
                 type="text"
                 value={inviteLink}
                 readOnly
-                className="flex-1 bg-transparent text-sm text-slate-300 outline-none"
+                className="flex-1 bg-transparent text-sm text-[var(--text-secondary)] outline-none"
               />
               <button
                 onClick={copyInviteLink}
-                className="p-2 hover:bg-slate-700 rounded-lg transition-colors text-slate-400 hover:text-white"
+                className="p-2 hover:bg-[var(--hover-bg)] rounded-lg transition-colors text-[var(--muted)] hover:text-[var(--text)]"
                 title="Copy link"
               >
                 <Copy className="w-4 h-4" />
@@ -271,7 +271,7 @@ export function InviteTeamMemberModal({
             {/* Role Badge */}
             {selectedRole && (
               <div className="flex items-center justify-center gap-2 mb-6">
-                <span className="text-sm text-slate-400">Invited as</span>
+                <span className="text-sm text-[var(--muted)]">Invited as</span>
                 <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium ${selectedRole.bg} ${selectedRole.color}`}>
                   <selectedRole.icon className="w-3.5 h-3.5" />
                   {selectedRole.label}
@@ -286,7 +286,7 @@ export function InviteTeamMemberModal({
                   setEmail('');
                   setInviteLink(null);
                 }}
-                className="flex-1 px-4 py-2.5 bg-slate-800 hover:bg-slate-700 rounded-lg font-medium text-white transition-colors"
+                className="flex-1 px-4 py-2.5 bg-[var(--surface-inset)] hover:bg-[var(--hover-bg)] rounded-lg font-medium text-[var(--text)] transition-colors"
               >
                 Invite Another
               </button>

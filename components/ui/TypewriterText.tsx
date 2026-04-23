@@ -107,7 +107,7 @@ export function TypewriterLog({
       case 'warning': return 'text-amber-400';
       case 'error': return 'text-red-400';
       case 'data': return 'text-blue-400';
-      default: return 'text-white/70';
+      default: return 'text-[var(--text-tertiary)]';
     }
   };
 

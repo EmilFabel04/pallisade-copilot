@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactElement } from 'react';
 import { FindingCard } from './FindingCard';
 
 interface Finding {
@@ -45,7 +45,7 @@ function groupBySuppression(findings: Finding[]): Record<string, Finding[]> {
   return groups;
 }
 
-const sourceLabels: Record<string, { label: string; description: string; icon: JSX.Element }> = {
+const sourceLabels: Record<string, { label: string; description: string; icon: ReactElement }> = {
   semantic_classification: {
     label: 'ML Classification',
     description: 'Suppressed because the LLM classified this column type as naturally high-variance',
@@ -123,7 +123,7 @@ export function SuppressedFindings({
             </svg>
           </div>
           <div className="text-left">
-            <h3 className="text-sm font-medium text-white">
+            <h3 className="text-sm font-medium text-[var(--text)]">
               Suppressed Findings ({findings.length})
             </h3>
             <p className="text-xs text-[var(--muted)]">
@@ -145,7 +145,7 @@ export function SuppressedFindings({
       {isExpanded && (
         <div className="border-t border-purple-500/20">
           {/* Summary by source */}
-          <div className="p-4 bg-black/20">
+          <div className="p-4 bg-[var(--overlay-faint)]">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {groupKeys.map((source) => {
                 const info = sourceLabels[source] || sourceLabels.unknown;
@@ -153,14 +153,14 @@ export function SuppressedFindings({
                 return (
                   <div 
                     key={source}
-                    className="bg-black/40 rounded-lg p-2 flex items-center gap-2"
+                    className="bg-[var(--overlay-bg)] rounded-lg p-2 flex items-center gap-2"
                   >
                     <div className="text-purple-400">
                       {info.icon}
                     </div>
                     <div>
                       <p className="text-xs text-[var(--muted)]">{info.label}</p>
-                      <p className="text-sm text-white font-medium">{count}</p>
+                      <p className="text-sm text-[var(--text)] font-medium">{count}</p>
                     </div>
                   </div>
                 );
@@ -180,12 +180,12 @@ export function SuppressedFindings({
                   {/* Group header */}
                   <button
                     onClick={() => toggleGroup(source)}
-                    className="w-full p-3 flex items-center justify-between hover:bg-white/5 transition-colors"
+                    className="w-full p-3 flex items-center justify-between hover:bg-[var(--subtle-bg)] transition-colors"
                   >
                     <div className="flex items-center gap-2">
                       <div className="text-purple-400">{info.icon}</div>
                       <div className="text-left">
-                        <span className="text-sm text-white font-medium">{info.label}</span>
+                        <span className="text-sm text-[var(--text)] font-medium">{info.label}</span>
                         <span className="text-xs text-[var(--muted)] ml-2">
                           ({sourceFindings.length} {sourceFindings.length === 1 ? 'finding' : 'findings'})
                         </span>
@@ -233,7 +233,7 @@ export function SuppressedFindings({
           </div>
 
           {/* Help text */}
-          <div className="p-4 bg-black/20 border-t border-purple-500/20">
+          <div className="p-4 bg-[var(--overlay-faint)] border-t border-purple-500/20">
             <div className="flex items-start gap-2">
               <svg className="w-4 h-4 text-purple-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

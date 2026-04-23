@@ -65,8 +65,8 @@ class DbtManifestParser(BaseParser):
             # Parse tests (for test dependencies)
             self._parse_tests(manifest.get("nodes", {}))
             
-            # Build edges from depends_on
-            self._build_edges(manifest.get("nodes", {}), manifest.get("exposures", {}))
+            # Build edges from depends_on (pass sources for source→model edges)
+            self._build_edges(manifest.get("nodes", {}), manifest.get("exposures", {}), manifest.get("sources", {}))
             
             # Compute depths
             self.graph.compute_depths()
@@ -238,25 +238,26 @@ class DbtManifestParser(BaseParser):
         # Tests don't become nodes, but we track their dependencies
         pass
     
-    def _build_edges(self, nodes: Dict[str, Any], exposures: Dict[str, Any]) -> None:
+    def _build_edges(self, nodes: Dict[str, Any], exposures: Dict[str, Any],
+                     sources: Dict[str, Any] = None) -> None:
         """Build edges from depends_on relationships."""
-        
+
         # Process model dependencies
         for node_id, node_data in nodes.items():
             if node_data.get("resource_type") not in ("model", "snapshot", "seed"):
                 continue
-            
+
             target_fqn = self._get_node_fqn(node_data)
             target_id = self.generate_node_id(target_fqn)
-            
+
             if target_id not in self.graph.nodes:
                 continue
-            
+
             depends_on = node_data.get("depends_on", {})
-            
+
             # Process node dependencies
             for dep in depends_on.get("nodes", []):
-                source_fqn = self._get_dependency_fqn(dep, nodes)
+                source_fqn = self._get_dependency_fqn(dep, nodes, sources)
                 if source_fqn:
                     source_id = self.generate_node_id(source_fqn)
                     if source_id in self.graph.nodes:
@@ -266,19 +267,19 @@ class DbtManifestParser(BaseParser):
                             edge_type=EdgeType.DERIVED_FROM,
                         )
                         self.graph.add_edge(edge)
-        
+
         # Process exposure dependencies
         for exposure_id, exposure_data in exposures.items():
             fqn = f"exposure.{exposure_data.get('name', exposure_id)}"
             target_id = self.generate_node_id(fqn)
-            
+
             if target_id not in self.graph.nodes:
                 continue
-            
+
             depends_on = exposure_data.get("depends_on", {})
-            
+
             for dep in depends_on.get("nodes", []):
-                source_fqn = self._get_dependency_fqn(dep, nodes)
+                source_fqn = self._get_dependency_fqn(dep, nodes, sources)
                 if source_fqn:
                     source_id = self.generate_node_id(source_fqn)
                     if source_id in self.graph.nodes:
@@ -303,20 +304,26 @@ class DbtManifestParser(BaseParser):
         table = node.get("alias") or node.get("name", "")
         return self.normalize_fqn(database, schema, table)
     
-    def _get_dependency_fqn(self, dep_id: str, nodes: Dict[str, Any]) -> Optional[str]:
+    def _get_dependency_fqn(self, dep_id: str, nodes: Dict[str, Any],
+                            sources: Dict[str, Any] = None) -> Optional[str]:
         """Get FQN for a dependency reference."""
         # dep_id format: model.project.name, source.project.name.table, etc.
         parts = dep_id.split(".")
-        
-        if parts[0] == "source":
-            # source.project.source_name.table_name
-            return None  # Sources are handled separately
-        
+
+        if parts[0] == "source" and sources:
+            # source.project.source_name.table_name — look up in sources dict
+            for source_id, source_data in sources.items():
+                if source_id == dep_id or source_data.get("unique_id") == dep_id:
+                    return self._get_source_fqn(source_data)
+            return None
+        elif parts[0] == "source":
+            return None  # No sources dict available
+
         # Look up in nodes
         for node_id, node_data in nodes.items():
             if node_id == dep_id or node_data.get("unique_id") == dep_id:
                 return self._get_node_fqn(node_data)
-        
+
         return None
     
     def _parse_freshness(self, freshness: Dict[str, Any]) -> int:

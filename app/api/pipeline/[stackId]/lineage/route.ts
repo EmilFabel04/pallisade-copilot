@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
+import { extractLineageForStack } from './extract-lineage';
 
 // POST /api/pipeline/[stackId]/lineage - Extract lineage from warehouse nodes
 export async function POST(
@@ -11,248 +10,20 @@ export async function POST(
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-
     const organizationId = (session.user as any).organizationId;
     if (!organizationId) {
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
-
     const { stackId } = await params;
     const body = await request.json().catch(() => ({}));
-    const { nodeId, options = {} } = body;
-
-    // Get the pipeline stack
-    const stack = await prisma.pipelineStack.findFirst({
-      where: {
-        id: stackId,
-        organizationId,
-      },
-      include: {
-        nodes: true,
-      },
-    });
-
-    if (!stack) {
-      return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
-    }
-
-    // Find warehouse nodes to extract lineage from
-    const warehouseNodes = stack.nodes.filter(
-      (n) => n.layer === 'WAREHOUSE' && (n.status === 'CONNECTED' || n.status === 'ACTIVE')
-    );
-
-    if (warehouseNodes.length === 0) {
-      return NextResponse.json({ 
-        error: 'No connected warehouse nodes found' 
-      }, { status: 400 });
-    }
-
-    // If nodeId specified, only extract from that node
-    const nodesToProcess = nodeId 
-      ? warehouseNodes.filter(n => n.id === nodeId)
-      : warehouseNodes;
-
-    if (nodesToProcess.length === 0) {
-      return NextResponse.json({ 
-        error: 'Specified node not found or not a connected warehouse' 
-      }, { status: 400 });
-    }
-
-    const results: any[] = [];
-    let totalNodes = 0;
-    let totalEdges = 0;
-
-    for (const node of nodesToProcess) {
-      try {
-        console.log(`[LINEAGE] Extracting lineage from ${node.name} (${node.toolType})`);
-        
-        // Call scanner API to extract lineage
-        const response = await fetch(`${SCANNER_API_URL}/api/v1/lineage/extract`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            integration_type: node.toolType.toUpperCase(),
-            config: node.config,
-            options: {
-              region: options.region || 'auto',
-              days_back: options.days_back || 30,
-              enable_data_catalog: options.enable_data_catalog || false,
-            },
-          }),
-          signal: AbortSignal.timeout(120000), // 2 minute timeout
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          console.error(`[LINEAGE] Scanner error for ${node.name}:`, errorData);
-          results.push({
-            nodeId: node.id,
-            nodeName: node.name,
-            success: false,
-            error: errorData.error || 'Scanner request failed',
-          });
-          continue;
-        }
-
-        const lineageData = await response.json();
-        
-        if (!lineageData.success) {
-          results.push({
-            nodeId: node.id,
-            nodeName: node.name,
-            success: false,
-            error: lineageData.errors?.join(', ') || 'Lineage extraction failed',
-          });
-          continue;
-        }
-
-        console.log(`[LINEAGE] Got ${lineageData.nodes?.length || 0} nodes, ${lineageData.edges?.length || 0} edges from ${node.name}`);
-
-        // Store nodes in database
-        const nodeMap = new Map<string, string>(); // fqn -> db id
-
-        for (const lineageNode of lineageData.nodes || []) {
-          const fqn = lineageNode.fqn || lineageNode.name;
-          const parts = fqn.split('.');
-          const tableName = parts[parts.length - 1];
-          const schema = parts.length > 1 ? parts[parts.length - 2] : null;
-          const database = parts.length > 2 ? parts[parts.length - 3] : null;
-
-          try {
-            const dbNode = await prisma.lineageNode.upsert({
-              where: {
-                organizationId_name: {
-                  organizationId,
-                  name: fqn,
-                },
-              },
-              create: {
-                name: fqn,
-                database: database || lineageNode.database,
-                schema: schema || lineageNode.schema,
-                tableName: tableName,
-                nodeType: lineageNode.node_type || 'table',
-                description: lineageNode.description,
-                criticality: lineageNode.criticality?.toUpperCase() || 'MEDIUM',
-                rowCount: lineageNode.row_count,
-                upstreamCount: lineageNode.upstream_count || 0,
-                downstreamCount: lineageNode.downstream_count || 0,
-                organizationId,
-                integrationId: node.integrationId,
-              },
-              update: {
-                nodeType: lineageNode.node_type || 'table',
-                description: lineageNode.description,
-                rowCount: lineageNode.row_count,
-                upstreamCount: lineageNode.upstream_count || 0,
-                downstreamCount: lineageNode.downstream_count || 0,
-                integrationId: node.integrationId,
-              },
-            });
-            
-            nodeMap.set(lineageNode.id, dbNode.id);
-          } catch (err) {
-            console.error(`[LINEAGE] Failed to upsert node ${fqn}:`, err);
-          }
-        }
-
-        // Store edges in database
-        let edgesCreated = 0;
-        for (const lineageEdge of lineageData.edges || []) {
-          const sourceDbId = nodeMap.get(lineageEdge.source_id);
-          const targetDbId = nodeMap.get(lineageEdge.target_id);
-
-          if (sourceDbId && targetDbId) {
-            try {
-              await prisma.lineageEdge.upsert({
-                where: {
-                  sourceId_targetId: {
-                    sourceId: sourceDbId,
-                    targetId: targetDbId,
-                  },
-                },
-                create: {
-                  sourceId: sourceDbId,
-                  targetId: targetDbId,
-                  edgeType: lineageEdge.edge_type || 'depends_on',
-                  columns: lineageEdge.columns?.map((c: any) => 
-                    typeof c === 'string' ? c : `${c.source} -> ${c.target}`
-                  ) || [],
-                  transformation: lineageEdge.transformation,
-                  organizationId,
-                },
-                update: {
-                  edgeType: lineageEdge.edge_type || 'depends_on',
-                  columns: lineageEdge.columns?.map((c: any) => 
-                    typeof c === 'string' ? c : `${c.source} -> ${c.target}`
-                  ) || [],
-                  transformation: lineageEdge.transformation,
-                },
-              });
-              edgesCreated++;
-            } catch (err) {
-              console.error(`[LINEAGE] Failed to upsert edge:`, err);
-            }
-          }
-        }
-
-        // Create a lineage snapshot record
-        await prisma.lineageSnapshot.create({
-          data: {
-            organizationId,
-            integrationId: node.integrationId,
-            source: 'warehouse_scan',
-            dialect: node.toolType.toLowerCase(),
-            status: 'ready',
-            nodeCount: nodeMap.size,
-            edgeCount: edgesCreated,
-            rootCount: lineageData.stats?.root_count || 0,
-            leafCount: lineageData.stats?.leaf_count || 0,
-          },
-        });
-
-        totalNodes += nodeMap.size;
-        totalEdges += edgesCreated;
-
-        results.push({
-          nodeId: node.id,
-          nodeName: node.name,
-          success: true,
-          nodesExtracted: nodeMap.size,
-          edgesExtracted: edgesCreated,
-        });
-
-      } catch (err) {
-        console.error(`[LINEAGE] Error processing ${node.name}:`, err);
-        results.push({
-          nodeId: node.id,
-          nodeName: node.name,
-          success: false,
-          error: err instanceof Error ? err.message : 'Unknown error',
-        });
-      }
-    }
-
-    return NextResponse.json({
-      success: results.some(r => r.success),
-      results,
-      stats: {
-        totalNodes,
-        totalEdges,
-        nodesProcessed: nodesToProcess.length,
-      },
-    });
-
+    return extractLineageForStack(stackId, organizationId, body, session);
   } catch (error) {
     console.error('[LINEAGE] Error extracting lineage:', error);
-    return NextResponse.json(
-      { error: 'Failed to extract lineage' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to extract lineage' }, { status: 500 });
   }
 }
 
@@ -262,7 +33,7 @@ export async function GET(
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -303,14 +74,14 @@ export async function GET(
     const allNodes = await prisma.lineageNode.findMany({
       where: {
         organizationId,
-        ...(integrationIds.length > 0 
+        ...(integrationIds.length > 0
           ? { integrationId: { in: integrationIds } }
           : {}
         ),
       },
       orderBy: { name: 'asc' },
     });
-    
+
     // Deduplicate nodes by name (keep first occurrence)
     const seenNames = new Set<string>();
     const nodes = allNodes.filter(n => {
@@ -352,6 +123,7 @@ export async function GET(
         schema: n.schema,
         tableName: n.tableName,
         nodeType: n.nodeType,
+        platform: n.platform,
         description: n.description,
         criticality: n.criticality,
         rowCount: n.rowCount,
@@ -388,7 +160,7 @@ export async function DELETE(
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -412,6 +184,18 @@ export async function DELETE(
     const deletedSnapshots = await prisma.lineageSnapshot.deleteMany({
       where: { organizationId },
     });
+
+    // Clear in-memory engine graph and run registry so stale views aren't served
+    try {
+      const { stackId: delStackId } = await params;
+      await scannerClient.fetch(session, `/api/v1/lineage/engine/clear-cache?stack_id=${delStackId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      console.warn('[LINEAGE] Failed to clear engine cache (non-fatal)');
+    }
 
     console.log(`[LINEAGE] Cleared: ${deletedNodes.count} nodes, ${deletedEdges.count} edges, ${deletedSnapshots.count} snapshots`);
 

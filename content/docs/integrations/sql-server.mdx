@@ -1,0 +1,88 @@
+---
+title: SQL Server / Azure SQL
+description: Connect Microsoft SQL Server or Azure SQL Database to Pallisade for schema discovery, column statistics, DMV-based query history, and freshness tracking.
+section: integrations
+order: 6
+---
+
+# SQL Server / Azure SQL
+
+## Overview
+
+The SQL Server integration connects Pallisade to SQL Server 2016+, SQL Server 2019+, Azure SQL Database, and Azure Synapse Analytics. It reads metadata from `INFORMATION_SCHEMA` and `sys` catalog views, queries DMVs (`sys.dm_exec_query_stats`) for query history, and uses `TABLESAMPLE` for efficient data profiling.
+
+Key capabilities:
+
+- **Schema discovery** -- tables, views, columns, primary keys, and extended properties
+- **Column statistics** -- null rates, distinct counts, min/max, avg, stddev via live queries
+- **Query history** -- from `sys.dm_exec_query_stats` and `sys.dm_exec_sql_text`
+- **Table sizes** -- from `sys.allocation_units` and `sys.partitions`
+- **Freshness** -- `sys.dm_db_index_usage_stats` for last update, or timestamp column scanning
+- **Extended properties** -- table and column descriptions from `sys.extended_properties`
+
+## Prerequisites
+
+- SQL Server 2016+ or Azure SQL Database
+- A login with `SELECT` access to target schemas
+- `VIEW SERVER STATE` permission (for DMV-based query history)
+- ODBC Driver 18 for SQL Server installed on the Pallisade host
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **SQL Server** or **Azure SQL** from the Warehouse layer.
+2. Fill in the connection fields:
+
+**SQL Server:**
+
+| Field | Required | Description |
+|---|---|---|
+| `server` | Yes | Server hostname (e.g., `localhost` or `sql.example.com`) |
+| `port` | No | Port number (default: `1433`) |
+| `database` | Yes | Database name |
+| `username` | Yes | SQL login username |
+| `password` | Yes | Password |
+
+**Azure SQL:**
+
+| Field | Required | Description |
+|---|---|---|
+| `server` | Yes | Server name (e.g., `yourserver.database.windows.net`) |
+| `database` | Yes | Database name |
+| `username` | Yes | Admin username (e.g., `admin@yourserver`) |
+| `password` | Yes | Password |
+
+3. Click **Test Connection**. Pallisade runs `SELECT @@VERSION, DB_NAME()` to verify.
+
+<Callout type="warning">
+For Azure SQL, encryption is enabled by default. The adapter sets `Encrypt=yes` and `TrustServerCertificate=yes`. If you need stricter certificate validation, configure it at the ODBC driver level.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Tables and views** | From `INFORMATION_SCHEMA.TABLES` |
+| **Columns** | Name, data type, nullability, default, primary key flag, extended property descriptions |
+| **Table sizes** | From `sys.allocation_units` (total pages * 8KB) |
+| **Row counts** | From `sys.partitions` |
+| **Timestamps** | `create_date` and `modify_date` from `sys.tables` |
+| **Column statistics** | Null rate, distinct count, min/max, avg, stddev using `TABLESAMPLE` |
+| **Freshness** | `last_user_update` from `sys.dm_db_index_usage_stats`, or MAX of timestamp column |
+| **Query history** | From `sys.dm_exec_query_stats` -- SQL text, execution time, rows produced |
+
+## Troubleshooting
+
+**ODBC driver not found**
+Pallisade requires ODBC Driver 18 for SQL Server. Install it from the Microsoft documentation for your platform.
+
+**"Login failed" for Azure SQL**
+Ensure the Azure SQL firewall allows connections from Pallisade's IP address. In the Azure portal, add a firewall rule under your SQL server's networking settings.
+
+**No query history**
+The `sys.dm_exec_query_stats` DMV requires `VIEW SERVER STATE` permission. On Azure SQL Database, use `VIEW DATABASE STATE` instead.
+
+**Connection timeout with named instances**
+When connecting to a named instance, use the format `server\instance` in the server field. Ensure the SQL Server Browser service is running on the host.
+
+**Extended properties not showing**
+Column descriptions come from `sys.extended_properties` with `name = 'MS_Description'`. If your database uses a different property name, descriptions will not appear.

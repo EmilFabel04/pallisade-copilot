@@ -1,0 +1,76 @@
+---
+title: Amazon Redshift
+description: Connect Amazon Redshift to Pallisade for schema discovery, column profiling, query history from STL tables, and data freshness tracking.
+section: integrations
+order: 4
+---
+
+# Amazon Redshift
+
+## Overview
+
+The Redshift integration connects Pallisade to your Amazon Redshift cluster or Redshift Serverless endpoint. It reads metadata from `pg_tables` and `information_schema`, queries `stl_query` and `stl_insert` for query history and freshness, and computes column-level statistics including medians.
+
+Key capabilities:
+
+- **Schema discovery** -- tables, views, columns, primary keys, and descriptions
+- **Column statistics** -- null rates, distinct counts, min/max, avg, stddev, median
+- **Query history** -- from `stl_query` and `stl_querytext` system tables
+- **Sort key detection** -- clustering awareness for Redshift sort keys
+- **Data freshness** -- `stl_insert` for last-insert timestamps or timestamp column scanning
+- **Table sizes** -- via `pg_total_relation_size()`
+
+## Prerequisites
+
+- An Amazon Redshift cluster (RA3, DC2, DS2) or Redshift Serverless workgroup
+- A database user with `SELECT` access to target schemas and system tables
+- Network access from Pallisade to the cluster endpoint (VPC, security groups)
+
+<Callout type="tip">
+For query history access, the Redshift user needs access to `stl_query` and `stl_querytext`. These are available to superusers by default. For non-superusers, grant `SELECT` on these system views.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Redshift** from the Warehouse layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Cluster endpoint (e.g., `cluster.us-east-1.redshift.amazonaws.com`) |
+| `port` | Yes | Port number (default: `5439`) |
+| `database` | Yes | Database name (e.g., `dev`) |
+| `username` | Yes | Database user |
+| `password` | Yes | Password |
+
+3. Click **Test Connection**. Pallisade runs `SELECT version(), current_database()` to verify.
+4. Scanning begins across all non-system schemas.
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Tables and views** | From `pg_tables` and `pg_views`, excluding system schemas |
+| **Columns** | Name, data type, nullability, default, primary key flag, descriptions |
+| **Row counts** | From `pg_class.reltuples` |
+| **Table sizes** | `pg_total_relation_size()` |
+| **Column statistics** | Null rate, distinct count, min/max, avg, stddev, median via `PERCENTILE_CONT` |
+| **Freshness** | `stl_insert.endtime` for last insert, or MAX of timestamp column |
+| **Query history** | From `stl_query` joined with `stl_querytext` -- full SQL, timing, rows, bytes scanned |
+
+## Troubleshooting
+
+**Connection timeout or refused**
+Redshift clusters are typically inside a VPC. Ensure the security group allows inbound traffic on port 5439 from Pallisade's IP. For Redshift Serverless, check the workgroup's network settings.
+
+**SSL connection errors**
+The adapter defaults to `sslmode=require`. If your cluster requires a specific certificate, ensure it is configured in your environment.
+
+**"permission denied for relation stl_query"**
+System tables like `stl_query` are restricted to superusers. Create a view that the Pallisade user can access, or grant the user superuser privileges in a read-only capacity.
+
+**No freshness data**
+If no timestamp column is detected and `stl_insert` has no recent entries, freshness cannot be computed. Ensure tables have been loaded recently or have a recognizable timestamp column (e.g., `updated_at`, `created_at`).
+
+**Slow statistics collection**
+Redshift does not support `TABLESAMPLE`. Pallisade uses `LIMIT` with subqueries for sampling. For very large tables, column stats may take time. Consider running stats during off-peak hours.

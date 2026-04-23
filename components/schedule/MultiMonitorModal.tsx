@@ -1,0 +1,1715 @@
+'use client';
+
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { cn } from '@/lib/utils';
+import { NodeSelectionSurface, type SelectionViewMode, type NodeMeta, type ChildItem } from './NodeSelectionSurface';
+import { ScheduleInput } from './ScheduleInput';
+import { AlertChannelPicker } from './AlertChannelPicker';
+import { AlertDestinationPicker, type AlertDestination } from './AlertDestinationPicker';
+import { ColumnPicker } from './ColumnPicker';
+import { getMonitorDefinition, DOMAIN_MONITOR_MAP, DOMAIN_COLORS, TOOL_HEALTH_DEFAULTS, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
+import type { MonitoringPlanPreview } from '@/types/health-watch';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface MultiMonitorModalProps {
+  open: boolean;
+  onClose: () => void;
+  onComplete: () => void;
+  stackId?: string;
+  preselectedNodeIds?: string[];
+  /** Pre-built node metadata (skips NodeSelectionSurface loading) */
+  preselectedNodeMeta?: NodeMeta[];
+  integrations?: Array<{ id: string; name: string; type: string }>;
+}
+
+type Step = 1 | 2 | 3;
+type ConfigTab = 'presets' | 'ai-prompt';
+
+interface MonitorOption {
+  key: string;        // "FRESHNESS", etc.
+  targetFqn: string;
+  targetNodeId: string;
+  family: string;
+  reason: string;
+  groupIdx: number;
+  monIdx: number;
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const STEP_LABELS: Record<Step, string> = {
+  1: 'Select Assets',
+  2: 'Configure Monitors',
+  3: 'Finalize & Create',
+};
+
+const MONITOR_COLORS: Record<string, string> = {
+  FRESHNESS: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  VOLUME: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  SCHEMA_CHANGE: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+  SYNC_LAG: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+  FAILED_SYNCS: 'bg-red-500/15 text-red-400 border-red-500/30',
+  CONNECTOR_SCHEMA_DRIFT: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  DAG_LAST_RUN: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+  DAG_SCHEDULE_LAG: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+  DBT_TEST_FAILURES: 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+  DBT_MODEL_FRESHNESS: 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+  DBT_SOURCE_FRESHNESS: 'bg-pink-500/15 text-pink-400 border-pink-500/30',
+  NULL_RATE: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  DISTRIBUTION: 'bg-teal-500/15 text-teal-400 border-teal-500/30',
+  ANOMALY: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+  REFERENTIAL: 'bg-lime-500/15 text-lime-400 border-lime-500/30',
+  BI_FRESHNESS_PROXY: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
+  BI_CONTENT_HEALTH: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
+  BI_UPSTREAM_BREAK_RISK: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
+  BI_REFRESH_FAILURE: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
+  TASK_FAILURE_RATE: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+  QUERY_PERFORMANCE: 'bg-sky-500/15 text-sky-400 border-sky-500/30',
+  COST_ANOMALY: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
+  STORAGE_GROWTH: 'bg-lime-500/15 text-lime-400 border-lime-500/30',
+  SERVER_HEALTH: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  CERTIFICATE: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  LOG_ANALYSIS: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  NULL_CHECK: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  UNIQUENESS_CHECK: 'bg-teal-500/15 text-teal-400 border-teal-500/30',
+  RANGE_VALIDATION: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+  ACCEPTED_VALUES: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
+  DATE_CONSISTENCY: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+  OUTLIER_DETECTION: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+  CUSTOM_SQL: 'bg-white/10 text-white/50 border-white/20',
+};
+
+
+
+/**
+ * Monitor keys that strictly target tool-level nodes (connectors, DAGs,
+ * warehouse ops, infra) — these should NOT appear on data nodes.
+ *
+ * dbt monitors and BI monitors are intentionally excluded from this set
+ * because their targets (models, dashboards) appear as data-like nodes
+ * in the lineage graph, not as tool service nodes.
+ */
+const TOOL_ONLY_MONITOR_KEYS = new Set([
+  'SYNC_LAG', 'FAILED_SYNCS', 'CONNECTOR_SCHEMA_DRIFT',
+  'DAG_LAST_RUN', 'DAG_SCHEDULE_LAG', 'TASK_FAILURE_RATE',
+  'QUERY_PERFORMANCE', 'COST_ANOMALY', 'STORAGE_GROWTH',
+  'CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS',
+]);
+
+/**
+ * Returns true if any checked tool monitor has missing required config fields.
+ * Only applies to tool nodes (subNodeIds.length > 0) with TOOL_ONLY_MONITOR_KEYS monitors.
+ */
+function hasIncompleteToolConfig(
+  checks: Record<string, boolean>,
+  configs: Record<string, Record<string, any>>,
+  nodesWithMonitors: Array<{ meta: { subNodeIds?: string[] }; monitors: Array<{ targetNodeId: string; key: string }> }>,
+): boolean {
+  for (const { monitors } of nodesWithMonitors) {
+    for (const mon of monitors) {
+      const checkKey = `${mon.targetNodeId}::${mon.key}`;
+      if (!checks[checkKey]) continue;
+
+      const def = getMonitorDefinition(mon.key);
+      if (!def) continue;
+
+      const config = configs[checkKey] || {};
+      const hasMissing = def.config_schema
+        .filter((f) => f.required)
+        .some((f) => {
+          const val = config[f.key];
+          if (Array.isArray(val)) return val.length === 0;
+          return !val && val !== 0;
+        });
+
+      if (hasMissing) return true;
+    }
+  }
+  return false;
+}
+
+const CONFIG_TABS: { key: ConfigTab; label: string; icon: string }[] = [
+  {
+    key: 'presets',
+    label: 'Monitors',
+    icon: 'M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm0 8a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zm12 0a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z',
+  },
+  {
+    key: 'ai-prompt',
+    label: 'AI Prompt',
+    icon: 'M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z',
+  },
+];
+
+/** Config field keys that correspond to child item platform IDs (connectors, DAGs). */
+const CHILD_ID_FIELDS = new Set(['connector_id', 'dag_id']);
+
+// ---------------------------------------------------------------------------
+// Monitor Card sub-component
+// ---------------------------------------------------------------------------
+
+function MonitorCard({
+  mon,
+  checked,
+  onToggle,
+  showTarget,
+  isToolNode,
+  config,
+  onConfigChange,
+  childItems,
+}: {
+  mon: MonitorOption;
+  checked: boolean;
+  onToggle: () => void;
+  showTarget?: boolean;
+  isToolNode?: boolean;
+  config?: Record<string, any>;
+  onConfigChange?: (key: string, value: any) => void;
+  childItems?: ChildItem[];
+}) {
+  const def = getMonitorDefinition(mon.key);
+  const label = def?.label || mon.key;
+  const description = def?.description || mon.reason;
+
+  // Required config fields — applies to both tool and data monitors that
+  // expose a config_schema with required fields.
+  const requiredFields = def ? def.config_schema.filter((f) => f.required) : [];
+  const hasRequiredConfig = requiredFields.length > 0;
+  const showConfig = checked && hasRequiredConfig;
+
+  // Check if all required fields are filled (arrays must have at least one item)
+  const isConfigComplete = requiredFields.length === 0 || requiredFields.every(
+    (f) => {
+      const val = config?.[f.key];
+      if (Array.isArray(val)) return val.length > 0;
+      return val || val === 0;
+    },
+  );
+
+  return (
+    <div className={cn(
+      'rounded-lg border transition-all overflow-hidden h-full flex flex-col',
+      checked
+        ? (MONITOR_COLORS[mon.key] || 'bg-[var(--accent)]/15 text-[var(--accent)] border-[var(--accent)]/30')
+        : 'border-[var(--border)] text-[var(--text)] hover:border-[var(--muted)]/50',
+    )}>
+      <button
+        onClick={onToggle}
+        className="flex items-start gap-3 p-3 text-left transition-all w-full flex-1"
+      >
+        {/* Checkbox */}
+        <div
+          className={cn(
+            'w-4 h-4 mt-0.5 rounded-sm border flex items-center justify-center shrink-0 transition-colors',
+            checked
+              ? 'bg-current border-current'
+              : 'border-[var(--muted)]/40',
+          )}
+        >
+          {checked && (
+            <svg className="w-2.5 h-2.5" fill="none" stroke="var(--bg)" strokeWidth={4} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          )}
+        </div>
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[12px] font-medium">{label}</span>
+            {!checked && hasRequiredConfig && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-500/10 text-amber-400/80 border border-amber-500/20">
+                Config required
+              </span>
+            )}
+            {checked && hasRequiredConfig && (
+              <span className={cn(
+                'px-1.5 py-0.5 rounded text-[9px] font-medium',
+                isConfigComplete
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-amber-500/15 text-amber-400',
+              )}>
+                {isConfigComplete ? 'Configured' : 'Requires config'}
+              </span>
+            )}
+          </div>
+          {description && (
+            <p className={cn(
+              'text-[11px] mt-0.5 leading-relaxed',
+              checked ? 'opacity-80' : 'text-[var(--muted)]',
+            )}>
+              {description}
+            </p>
+          )}
+          {showTarget && mon.targetFqn && (
+            <p className="text-[10px] font-mono mt-1 opacity-60 truncate">
+              {mon.targetFqn}
+            </p>
+          )}
+        </div>
+      </button>
+
+      {/* Inline config form for tool monitors */}
+      {showConfig && (
+        <div
+          className="px-3 pb-3 pt-1 border-t border-[var(--border)] bg-[var(--surface)]/50 space-y-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {requiredFields.map((field) => {
+            const hasChildPicker = CHILD_ID_FIELDS.has(field.key) && childItems && childItems.length > 0;
+            const selectedIds: string[] = hasChildPicker ? (Array.isArray(config?.[field.key]) ? config[field.key] : []) : [];
+
+            return (
+              <div key={field.key}>
+                <label className="block text-[10px] text-[var(--muted)] uppercase tracking-wide mb-1">
+                  {hasChildPicker
+                    ? `Select ${field.key === 'connector_id' ? 'Connectors' : field.key === 'dag_id' ? 'DAGs' : field.label}`
+                    : field.label}
+                </label>
+                {hasChildPicker ? (
+                  <div className="space-y-1">
+                    {childItems!.map((child) => {
+                      const isSelected = selectedIds.includes(child.platformId);
+                      return (
+                        <label
+                          key={child.id}
+                          className={cn(
+                            'flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors text-[12px]',
+                            isSelected
+                              ? 'bg-[var(--accent)]/10 text-[var(--text)]'
+                              : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--subtle-bg)]',
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => {
+                              const next = isSelected
+                                ? selectedIds.filter((id) => id !== child.platformId)
+                                : [...selectedIds, child.platformId];
+                              onConfigChange?.(field.key, next);
+                            }}
+                            className="rounded border-[var(--border)] accent-[var(--accent)]"
+                          />
+                          <span className="font-medium">{child.name}</span>
+                          <span className="text-[10px] font-mono opacity-60">{child.platformId}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : field.type === 'select' ? (
+                  <select
+                    value={config?.[field.key] ?? field.default_value ?? ''}
+                    onChange={(e) => onConfigChange?.(field.key, e.target.value)}
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)]"
+                  >
+                    <option value="">{field.placeholder || 'Select...'}</option>
+                    {field.options?.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                ) : field.type === 'multi-text' || field.type === 'textarea' ? (
+                  <textarea
+                    value={config?.[field.key] ?? ''}
+                    onChange={(e) => onConfigChange?.(field.key, e.target.value)}
+                    placeholder={field.placeholder}
+                    rows={3}
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)] resize-none"
+                  />
+                ) : field.type === 'checkbox' ? (
+                  <label className="flex items-center gap-2 text-[12px] text-[var(--text)]">
+                    <input
+                      type="checkbox"
+                      checked={!!config?.[field.key]}
+                      onChange={(e) => onConfigChange?.(field.key, e.target.checked)}
+                      className="rounded border-[var(--border)]"
+                    />
+                    {field.placeholder || field.label}
+                  </label>
+                ) : (
+                  <input
+                    type={field.type === 'number' ? 'number' : 'text'}
+                    value={config?.[field.key] ?? ''}
+                    onChange={(e) => onConfigChange?.(
+                      field.key,
+                      field.type === 'number' ? (e.target.value === '' ? '' : Number(e.target.value)) : e.target.value,
+                    )}
+                    placeholder={field.placeholder}
+                    className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded px-2 py-1.5 text-[12px] text-[var(--text)] placeholder:text-[var(--muted)]/40 focus:outline-none focus:border-[var(--accent)]"
+                  />
+                )}
+                {field.help_text && (
+                  <p className="text-[10px] text-[var(--muted)] mt-0.5">{field.help_text}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Manual monitor entry type
+// ---------------------------------------------------------------------------
+
+interface ManualMonitorEntry {
+  id: string;
+  monitorType: string;
+  targetFqn: string;
+  config: Record<string, any>;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export function MultiMonitorModal({
+  open,
+  onClose,
+  onComplete,
+  stackId,
+  preselectedNodeIds,
+  preselectedNodeMeta,
+  integrations = [],
+}: MultiMonitorModalProps) {
+  const [step, setStep] = useState<Step>(1);
+  const [viewMode, setViewMode] = useState<SelectionViewMode>('lineage');
+
+  // Step 1: Node selection
+  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(
+    preselectedNodeIds || [],
+  );
+  const [allNodeMeta, setAllNodeMeta] = useState<NodeMeta[]>([]);
+
+  // Step 2: Monitor configuration
+  const [configTab, setConfigTab] = useState<ConfigTab>('presets');
+  // preview is derived via useMemo from rawPreview + tool monitor injection (see below)
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [monitorChecks, setMonitorChecks] = useState<Record<string, boolean>>({});
+  const [monitorConfigs, setMonitorConfigs] = useState<Record<string, Record<string, any>>>({});
+
+  // AI Prompt tab state
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiIntegrationId, setAiIntegrationId] = useState('');
+
+  // Manual tab state
+  const [manualMonitors, setManualMonitors] = useState<ManualMonitorEntry[]>([]);
+  const [manualMonitorType, setManualMonitorType] = useState('FRESHNESS');
+  const [manualTargetFqn, setManualTargetFqn] = useState('');
+
+  // Step 3: Finalize & Create
+  const [schedule, setSchedule] = useState('0 */6 * * *');
+  const [alertChannels, setAlertChannels] = useState<string[]>([]);
+  const [alertOnStatus, setAlertOnStatus] = useState<string[]>(['FAIL', 'ERROR']);
+  const [alertDestinations, setAlertDestinations] = useState<AlertDestination[]>([]);
+  const [creating, setCreating] = useState(false);
+
+  // Collapsed node sections
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+
+  // Warehouse integrations for AI prompt
+  const warehouseIntegrations = useMemo(() => {
+    const seen = new Set<string>();
+    return integrations.filter((i) => {
+      const t = i.type.toLowerCase();
+      if (!['bigquery', 'snowflake', 'postgres', 'redshift'].includes(t)) return false;
+      if (seen.has(i.id)) return false;
+      seen.add(i.id);
+      return true;
+    });
+  }, [integrations]);
+
+  // Reset state when modal opens
+  useEffect(() => {
+    if (open) {
+      setStep(preselectedNodeIds?.length ? 2 : 1);
+      setSelectedNodeIds(preselectedNodeIds || []);
+      // Seed node metadata if provided (skips NodeSelectionSurface requirement)
+      if (preselectedNodeMeta?.length) {
+        setAllNodeMeta(preselectedNodeMeta);
+      }
+      setRawPreview(null);
+      setPreviewFailed(false);
+      setMonitorChecks({});
+      setMonitorConfigs({});
+      setConfigTab('presets');
+      setAiPrompt('');
+      setAiIntegrationId('');
+      setManualMonitors([]);
+      setSchedule('0 */6 * * *');
+      setAlertChannels([]);
+      setAlertOnStatus(['FAIL', 'ERROR']);
+      setAlertDestinations([]);
+      setCreating(false);
+      setCollapsedNodes(new Set());
+    }
+  }, [open, preselectedNodeIds, preselectedNodeMeta]);
+
+  // Node metadata callback from NodeSelectionSurface.
+  // Merge with any preselected tool node meta (which has subNodeIds/domain
+  // that the NodeSelectionSurface nodes won't have).
+  const handleNodesLoaded = useCallback((nodes: NodeMeta[]) => {
+    if (preselectedNodeMeta?.length) {
+      const surfaceIds = new Set(nodes.map((n) => n.id));
+      const extras = preselectedNodeMeta.filter((pm) => !surfaceIds.has(pm.id));
+      setAllNodeMeta([...extras, ...nodes]);
+    } else {
+      setAllNodeMeta(nodes);
+    }
+  }, [preselectedNodeMeta]);
+
+  // ---- Expand tool node IDs to actual graph node IDs ----
+  const resolvedGraphNodeIds = useMemo(() => {
+    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const nid of selectedNodeIds) {
+      const meta = metaById.get(nid);
+      if (meta?.subNodeIds?.length) {
+        for (const sub of meta.subNodeIds) {
+          if (!seen.has(sub)) {
+            seen.add(sub);
+            ids.push(sub);
+          }
+        }
+      } else {
+        if (!seen.has(nid)) {
+          seen.add(nid);
+          ids.push(nid);
+        }
+      }
+    }
+    return ids;
+  }, [selectedNodeIds, allNodeMeta]);
+
+  // ---- Fetch raw preview from API ----
+  const [rawPreview, setRawPreview] = useState<MonitoringPlanPreview | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
+
+  const fetchFullPreview = useCallback(async () => {
+    if (!stackId) return;
+    setPreviewLoading(true);
+    setPreviewFailed(false);
+    const emptyPreview: MonitoringPlanPreview = {
+      scope_type: 'custom', mode: 'recommended', families: ['full_coverage'],
+      groups: [], total_nodes: 0, total_monitors: 0,
+      raw_monitor_count: 0, dedup_count: 0, coverage_pct: 0,
+      warnings: [], family_eligibility: [],
+    };
+    if (resolvedGraphNodeIds.length === 0) {
+      setRawPreview(emptyPreview);
+      setMonitorChecks({});
+      setPreviewLoading(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/schedule/plans/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scopeType: 'custom',
+          scopeConfig: { nodeIds: resolvedGraphNodeIds },
+          mode: 'recommended',
+          families: ['full_coverage'],
+          stackId,
+        }),
+      });
+      if (res.ok) {
+        const data: MonitoringPlanPreview = await res.json();
+        setRawPreview(data);
+      } else {
+        setRawPreview(emptyPreview);
+      }
+      setMonitorChecks({});
+    } catch (err) {
+      console.error('[MultiMonitor] Failed to fetch preview:', err);
+      setRawPreview(emptyPreview);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [stackId, resolvedGraphNodeIds]);
+
+  // ---- Inject synthetic tool monitor groups (always uses current state) ----
+  const preview = useMemo<MonitoringPlanPreview | null>(() => {
+    if (!rawPreview) return null;
+    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
+    const toolGroups: MonitoringPlanPreview['groups'] = [];
+
+    for (const nid of selectedNodeIds) {
+      const meta = metaById.get(nid);
+      if (!meta?.subNodeIds?.length) continue;
+      const domain = meta.domain || '';
+      const domainMonitors = DOMAIN_MONITOR_MAP[domain];
+      if (!domainMonitors) continue;
+
+      const recommendations = [...domainMonitors].map((monKey) => {
+        const def = getMonitorDefinition(monKey);
+        return {
+          monitor_key: monKey,
+          target_fqn: meta.fqn,
+          target_node_id: meta.id,
+          source: 'tool_domain',
+          reason: def?.description || `Recommended for ${domain} tools`,
+          priority: 1,
+          config_hints: {} as Record<string, any>,
+          integration_type: meta.platform || '',
+          already_monitored: false,
+        };
+      });
+
+      toolGroups.push({
+        group_index: rawPreview.groups.length + toolGroups.length,
+        family: `${domain}_ops`,
+        watch_type: 'tool_health',
+        anchor_id: meta.id,
+        anchor_name: meta.name,
+        anchor_fqn: meta.fqn,
+        anchor_node_type: 'tool',
+        anchor_platform: meta.platform || '',
+        node_count: 1,
+        monitor_count: recommendations.length,
+        coverage_pct: 100,
+        shared_node_ids: [],
+        recommendations,
+      });
+    }
+
+    if (toolGroups.length === 0) return rawPreview;
+    return {
+      ...rawPreview,
+      groups: [...rawPreview.groups, ...toolGroups],
+      total_monitors: rawPreview.total_monitors + toolGroups.reduce((s, g) => s + g.recommendations.length, 0),
+    };
+  }, [rawPreview, allNodeMeta, selectedNodeIds]);
+
+  // Auto-check all tool monitors with default thresholds when preview loads
+  useEffect(() => {
+    if (!preview || previewLoading) return;
+
+    const metaById = new Map(allNodeMeta.map((m) => [m.id, m]));
+    const autoChecks: Record<string, boolean> = {};
+    const autoConfigs: Record<string, Record<string, any>> = {};
+
+    for (const nid of selectedNodeIds) {
+      const meta = metaById.get(nid);
+      if (!meta?.subNodeIds?.length) continue;
+      const domain = meta.domain || '';
+      const domainDefaults = TOOL_HEALTH_DEFAULTS[domain];
+      if (!domainDefaults) continue;
+
+      for (const group of preview.groups) {
+        if (group.anchor_id !== meta.id) continue;
+        for (const rec of group.recommendations) {
+          const checkKey = `${rec.target_node_id}::${rec.monitor_key}`;
+          autoChecks[checkKey] = true;
+          const defaults = domainDefaults[rec.monitor_key];
+          if (defaults && Object.keys(defaults).length > 0) {
+            autoConfigs[checkKey] = { ...defaults };
+          }
+        }
+      }
+    }
+
+    if (Object.keys(autoChecks).length > 0) {
+      setMonitorChecks((prev) => ({ ...prev, ...autoChecks }));
+      setMonitorConfigs((prev) => {
+        const merged = { ...prev };
+        for (const [k, v] of Object.entries(autoConfigs)) {
+          merged[k] = { ...(prev[k] || {}), ...v };
+        }
+        return merged;
+      });
+    }
+  }, [preview, previewLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-fetch preview when opening directly at step 2
+  useEffect(() => {
+    if (open && step === 2 && !rawPreview && !previewLoading && !previewFailed) {
+      fetchFullPreview();
+    }
+  }, [open, step, rawPreview, previewLoading, previewFailed, fetchFullPreview]);
+
+  // ---- Build per-node monitor map from preview (keyed by node ID) ----
+  const nodeMonitorMap = useMemo(() => {
+    if (!preview) return new Map<string, MonitorOption[]>();
+    const map = new Map<string, MonitorOption[]>();
+    preview.groups.forEach((group, gi) => {
+      group.recommendations.forEach((rec, mi) => {
+        const nodeId = rec.target_node_id;
+        if (!nodeId) return;
+        if (!map.has(nodeId)) map.set(nodeId, []);
+        map.get(nodeId)!.push({
+          key: rec.monitor_key,
+          targetFqn: rec.target_fqn,
+          targetNodeId: nodeId,
+          family: group.family,
+          reason: rec.reason || '',
+          groupIdx: gi,
+          monIdx: mi,
+        });
+      });
+    });
+    return map;
+  }, [preview]);
+
+  // ---- Selected nodes with their metadata and available monitors ----
+  // Tool nodes (pipeline overview nodes with subNodeIds) only show domain-specific
+  // tool monitors (e.g. Fivetran → SYNC_LAG, Airflow → DAG_LAST_RUN).
+  // Data nodes only show data monitors (FRESHNESS, VOLUME, etc.).
+  const selectedNodesWithMonitors = useMemo(() => {
+    const selectedSet = new Set(selectedNodeIds);
+    const nodes: { meta: NodeMeta; monitors: MonitorOption[] }[] = [];
+
+    for (const nm of allNodeMeta) {
+      if (!selectedSet.has(nm.id)) continue;
+
+      const isToolNode = !!nm.subNodeIds?.length;
+      let monitors: MonitorOption[];
+
+      if (isToolNode) {
+        // Tool/service node — show domain-specific tool monitors.
+        // Synthetic tool monitors are injected under the tool node's own
+        // ID (see injectToolMonitors); sub-nodes may also carry matching
+        // keys from the preview, so deduplicate by monitor key.
+        const domain = nm.domain || '';
+        const domainMonitors = DOMAIN_MONITOR_MAP[domain];
+        const allMons: MonitorOption[] = [];
+        const seenKeys = new Set<string>();
+        // Collect from the tool node's own ID first (synthetic tool monitors)
+        for (const m of nodeMonitorMap.get(nm.id) || []) {
+          if (!seenKeys.has(m.key)) { seenKeys.add(m.key); allMons.push(m); }
+        }
+        // Then from sub-nodes (skip duplicates)
+        for (const subId of nm.subNodeIds!) {
+          for (const m of nodeMonitorMap.get(subId) || []) {
+            if (!seenKeys.has(m.key)) { seenKeys.add(m.key); allMons.push(m); }
+          }
+        }
+        monitors = domainMonitors
+          ? allMons.filter((m) => domainMonitors.has(m.key))
+          : allMons.filter((m) => TOOL_ONLY_MONITOR_KEYS.has(m.key));
+      } else {
+        // Data node — show the full asset monitor catalog (recommended + all).
+        // Preview may only surface a few recommendations; we still want the user
+        // to be able to pick any data-quality monitor for the asset.
+        const raw = nodeMonitorMap.get(nm.id) || [];
+        const filtered = raw.filter((m) => !TOOL_ONLY_MONITOR_KEYS.has(m.key));
+        const seenKeys = new Set(filtered.map((m) => m.key));
+        const extras: MonitorOption[] = [];
+        for (const key of ASSET_MONITOR_TYPES) {
+          if (seenKeys.has(key)) continue;
+          extras.push({
+            key,
+            targetFqn: nm.fqn || '',
+            targetNodeId: nm.id,
+            family: 'custom',
+            reason: '',
+            groupIdx: -1,
+            monIdx: -1,
+          });
+        }
+        monitors = [...filtered, ...extras];
+      }
+
+      nodes.push({ meta: nm, monitors });
+    }
+
+    nodes.sort((a, b) => {
+      if (b.monitors.length !== a.monitors.length)
+        return b.monitors.length - a.monitors.length;
+      return a.meta.name.localeCompare(b.meta.name);
+    });
+
+    return nodes;
+  }, [selectedNodeIds, allNodeMeta, nodeMonitorMap]);
+
+  // (resolvedGraphNodeIds, rawPreview, preview, fetchFullPreview moved above nodeMonitorMap)
+
+  // ---- Auto-generated plan name ----
+  const autoGeneratedName = useMemo(() => {
+    if (configTab === 'ai-prompt') return 'AI Monitor';
+    const names: string[] = [];
+    for (const { meta } of selectedNodesWithMonitors) {
+      if (meta.subNodeIds?.length) {
+        names.push(`${meta.name} Health`);
+      } else {
+        names.push(`${meta.name} Monitor`);
+      }
+    }
+    if (names.length === 0) return 'Monitor';
+    if (names.length === 1) return names[0];
+    return `${names[0]} +${names.length - 1} more`;
+  }, [selectedNodesWithMonitors, configTab]);
+
+  const planName = autoGeneratedName;
+
+  // ---- Set of visible monitor keys after tool/data split filtering ----
+  const visibleMonitorKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const { monitors } of selectedNodesWithMonitors) {
+      for (const m of monitors) {
+        keys.add(`${m.targetNodeId}::${m.key}`);
+      }
+    }
+    return keys;
+  }, [selectedNodesWithMonitors]);
+
+  // ---- Toggle individual monitor ----
+  const toggleMonitor = useCallback((nodeId: string, monitorKey: string) => {
+    const key = `${nodeId}::${monitorKey}`;
+
+    setMonitorChecks((prev) => {
+      const willBeChecked = !prev[key];
+
+      // Seed default values for tool monitors when checking
+      if (willBeChecked && TOOL_ONLY_MONITOR_KEYS.has(monitorKey)) {
+        const def = getMonitorDefinition(monitorKey);
+        if (def) {
+          const defaults: Record<string, any> = {};
+          for (const field of def.config_schema) {
+            if (field.default_value !== undefined) {
+              defaults[field.key] = field.default_value;
+            }
+          }
+          if (Object.keys(defaults).length > 0) {
+            setMonitorConfigs((p) => ({
+              ...p,
+              [key]: { ...(p[key] || {}), ...defaults },
+            }));
+          }
+        }
+      }
+
+      return { ...prev, [key]: willBeChecked };
+    });
+  }, []);
+
+  // ---- Toggle all monitors for a node ----
+  const toggleAllForNode = useCallback(
+    (_nodeId: string, monitors: MonitorOption[]) => {
+      const allChecked =
+        monitors.length > 0 &&
+        monitors.every((m) => monitorChecks[`${m.targetNodeId}::${m.key}`]);
+      const newChecks = { ...monitorChecks };
+      for (const mon of monitors) {
+        newChecks[`${mon.targetNodeId}::${mon.key}`] = !allChecked;
+      }
+      setMonitorChecks(newChecks);
+
+      // Seed default config values for tool monitors being checked
+      if (!allChecked) {
+        const newConfigs: Record<string, Record<string, any>> = {};
+        for (const mon of monitors) {
+          const key = `${mon.targetNodeId}::${mon.key}`;
+          if (!TOOL_ONLY_MONITOR_KEYS.has(mon.key)) continue;
+          const def = getMonitorDefinition(mon.key);
+          if (!def) continue;
+          const defaults: Record<string, any> = {};
+          for (const field of def.config_schema) {
+            if (field.default_value !== undefined) {
+              defaults[field.key] = field.default_value;
+            }
+          }
+          if (Object.keys(defaults).length > 0) {
+            newConfigs[key] = defaults;
+          }
+        }
+        if (Object.keys(newConfigs).length > 0) {
+          setMonitorConfigs((prev) => {
+            const merged = { ...prev };
+            for (const [k, v] of Object.entries(newConfigs)) {
+              merged[k] = { ...(prev[k] || {}), ...v };
+            }
+            return merged;
+          });
+        }
+      }
+    },
+    [monitorChecks],
+  );
+
+  // ---- Toggle node section collapse ----
+  const toggleNodeCollapse = useCallback((nodeId: string) => {
+    setCollapsedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  // ---- Add manual monitor ----
+  const addManualMonitor = useCallback(() => {
+    if (!manualMonitorType || !manualTargetFqn.trim()) return;
+    setManualMonitors((prev) => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}`,
+        monitorType: manualMonitorType,
+        targetFqn: manualTargetFqn.trim(),
+        config: {},
+      },
+    ]);
+    setManualTargetFqn('');
+  }, [manualMonitorType, manualTargetFqn]);
+
+  // ---- Remove manual monitor ----
+  const removeManualMonitor = useCallback((id: string) => {
+    setManualMonitors((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
+  // ---- Count checked monitors ----
+  const checkedCount = useMemo(
+    () => Object.values(monitorChecks).filter(Boolean).length,
+    [monitorChecks],
+  );
+
+  // ---- Total monitor count (preset + manual) ----
+  const totalMonitorCount = useMemo(() => {
+    if (configTab === 'ai-prompt') return aiPrompt.trim().length > 0 ? 1 : 0;
+    return checkedCount + manualMonitors.length;
+  }, [configTab, checkedCount, manualMonitors.length, aiPrompt]);
+
+  // ---- Step navigation ----
+  const goToStep = useCallback(
+    (target: Step) => {
+      if (target === 2) fetchFullPreview();
+      setStep(target);
+    },
+    [fetchFullPreview],
+  );
+
+  const incompleteToolConfig = useMemo(
+    () => hasIncompleteToolConfig(monitorChecks, monitorConfigs, selectedNodesWithMonitors),
+    [monitorChecks, monitorConfigs, selectedNodesWithMonitors],
+  );
+
+  const canGoNext = useMemo(() => {
+    switch (step) {
+      case 1:
+        return selectedNodeIds.length > 0;
+      case 2:
+        if (configTab === 'ai-prompt') return aiPrompt.trim().length > 0;
+        if (totalMonitorCount === 0) return false;
+        return !incompleteToolConfig;
+      case 3:
+        return configTab === 'ai-prompt' || !!preview;
+      default:
+        return false;
+    }
+  }, [step, selectedNodeIds, configTab, aiPrompt, totalMonitorCount, incompleteToolConfig, preview]);
+
+  // ---- Create plan or task ----
+  const handleCreate = useCallback(async () => {
+    if (!stackId) return;
+    setCreating(true);
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+      if (configTab === 'ai-prompt') {
+        // AI Prompt mode → wrap in a plan via POST /api/schedule/plans
+        // Use selected node FQN as target, fall back to plan name
+        const selectedMeta = allNodeMeta.find(n => selectedNodeIds.includes(n.id));
+        const targetFqn = selectedMeta?.fqn || planName;
+        const groups = [{
+          anchor_name: planName,
+          anchor_fqn: targetFqn,
+          anchor_id: selectedMeta?.id || 'ai_prompt',
+          anchor_node_type: 'prompt',
+          anchor_platform: selectedMeta?.platform || 'ai',
+          watch_type: 'custom_watch',
+          recommendations: [{
+            monitor_key: 'AI_PROMPT',
+            target_fqn: targetFqn,
+            config_hints: {
+              taskMode: 'prompt',
+              prompt: aiPrompt,
+              ...(aiIntegrationId ? { integrationId: aiIntegrationId } : {}),
+            },
+          }],
+        }];
+
+        const res = await fetch('/api/schedule/plans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: planName,
+            scopeType: 'asset',
+            mode: 'manual',
+            families: [],
+            schedule,
+            timezone,
+            alertChannels,
+            alertOnStatus,
+            groups,
+            stackId,
+          }),
+        });
+        if (res.ok) {
+          onComplete();
+          onClose();
+        } else {
+          const text = await res.text();
+          try {
+            const err = JSON.parse(text);
+            alert(`Failed to create: ${err.error || 'Unknown error'}`);
+          } catch {
+            alert(`Failed to create: ${text || res.statusText}`);
+          }
+        }
+      } else {
+        // Presets / Manual mode → create plan via POST /api/schedule/plans
+        if (!preview) return;
+
+        // Reconstruct groups with only checked monitors.
+        // For tool monitors with multi-ID config (connector_id/dag_id arrays),
+        // expand into one recommendation per selected ID.
+        const filteredGroups = preview.groups
+          .map((g) => ({
+            ...g,
+            recommendations: g.recommendations
+              .filter((rec) => {
+                const key = `${rec.target_node_id}::${rec.monitor_key}`;
+                return monitorChecks[key] ?? false;
+              })
+              .flatMap((rec) => {
+                const key = `${rec.target_node_id}::${rec.monitor_key}`;
+                const extraConfig = monitorConfigs[key];
+                if (!extraConfig) return [rec];
+
+                // Find array-valued child ID fields to expand
+                const arrayField = Object.entries(extraConfig).find(
+                  ([k, v]) => CHILD_ID_FIELDS.has(k) && Array.isArray(v) && v.length > 0,
+                );
+                if (arrayField) {
+                  const [fieldKey, ids] = arrayField;
+                  return (ids as string[]).map((id) => ({
+                    ...rec,
+                    config_hints: {
+                      ...(rec.config_hints || {}),
+                      ...extraConfig,
+                      [fieldKey]: id, // single ID per monitor
+                    },
+                  }));
+                }
+
+                return [{ ...rec, config_hints: { ...(rec.config_hints || {}), ...extraConfig } }];
+              }),
+          }))
+          .filter((g) => g.recommendations.length > 0);
+
+        // Custom asset monitors: monitors the user manually picked for an asset
+        // that the preview didn't recommend (e.g. DATA_TYPE_VALIDATION).
+        // Marked with family === 'custom' and groupIdx === -1 in the monitor list.
+        //
+        // These must join the SAME group as the asset's other monitors — not a
+        // separate "Custom Asset Monitors" bucket. We fold each one into:
+        //   1) an existing group whose anchor_fqn matches the asset's fqn, or
+        //   2) an existing group that already contains a rec for this node, or
+        //   3) a new per-asset group (one per unique target).
+        type CustomRec = {
+          monitor_key: string;
+          target_fqn: string;
+          target_node_id: string;
+          source: string;
+          reason: string;
+          priority: number;
+          config_hints: Record<string, any>;
+          integration_type: string;
+          already_monitored: boolean;
+        };
+        const customAssetMonitors: Array<{ rec: CustomRec; meta: NodeMeta }> =
+          selectedNodesWithMonitors.flatMap(({ meta, monitors }) =>
+            monitors
+              .filter((m) => m.family === 'custom' && m.groupIdx === -1 && monitorChecks[`${m.targetNodeId}::${m.key}`])
+              .map((m) => ({
+                meta,
+                rec: {
+                  monitor_key: m.key,
+                  target_fqn: m.targetFqn || meta.fqn || '',
+                  target_node_id: m.targetNodeId,
+                  source: 'custom',
+                  reason: 'User-selected data quality monitor',
+                  priority: 1,
+                  config_hints: monitorConfigs[`${m.targetNodeId}::${m.key}`] || {},
+                  integration_type: '',
+                  already_monitored: false,
+                } as CustomRec,
+              })),
+          );
+        for (const { rec, meta } of customAssetMonitors) {
+          const existingGroup = filteredGroups.find((g) =>
+            (g.anchor_fqn && g.anchor_fqn === rec.target_fqn) ||
+            g.recommendations.some((r) => r.target_node_id === rec.target_node_id),
+          );
+          if (existingGroup) {
+            existingGroup.recommendations.push(rec as any);
+            existingGroup.monitor_count = existingGroup.recommendations.length;
+          } else {
+            filteredGroups.push({
+              group_index: filteredGroups.length,
+              family: 'custom',
+              watch_type: 'custom_watch',
+              anchor_id: rec.target_node_id,
+              anchor_name: meta.name || rec.target_fqn.split('.').pop() || rec.target_fqn,
+              anchor_fqn: rec.target_fqn,
+              anchor_node_type: '',
+              anchor_platform: meta.platform || '',
+              node_count: 1,
+              monitor_count: 1,
+              coverage_pct: 100,
+              shared_node_ids: [],
+              recommendations: [rec as any],
+            } as any);
+          }
+        }
+
+        // Add manual monitors as an extra group if any
+        if (manualMonitors.length > 0) {
+          filteredGroups.push({
+            group_index: filteredGroups.length,
+            family: 'manual',
+            watch_type: 'manual',
+            anchor_id: '',
+            anchor_name: 'Manual Monitors',
+            anchor_fqn: '',
+            anchor_node_type: '',
+            anchor_platform: '',
+            node_count: manualMonitors.length,
+            monitor_count: manualMonitors.length,
+            coverage_pct: 100,
+            shared_node_ids: [],
+            recommendations: manualMonitors.map((m) => ({
+              monitor_key: m.monitorType,
+              target_fqn: m.targetFqn,
+              target_node_id: '',
+              source: 'manual',
+              reason: 'Manually configured',
+              priority: 1,
+              config_hints: m.config,
+              integration_type: '',
+              already_monitored: false,
+            })),
+          });
+        }
+
+        const usedFamilies = [...new Set(filteredGroups.map((g) => g.family))];
+
+        const res = await fetch('/api/schedule/plans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: planName,
+            scopeType: 'custom',
+            scopeConfig: { nodeIds: resolvedGraphNodeIds },
+            mode: 'manual',
+            families: usedFamilies,
+            schedule,
+            timezone,
+            alertChannels,
+            alertOnStatus,
+            alertDestinations,
+            groups: filteredGroups,
+            stackId,
+          }),
+        });
+
+        if (res.ok) {
+          onComplete();
+          onClose();
+        } else {
+          const text = await res.text();
+          try {
+            const err = JSON.parse(text);
+            alert(`Failed to create: ${err.error || 'Unknown error'}`);
+          } catch {
+            alert(`Failed to create: ${text || res.statusText}`);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[MultiMonitor] Create error:', err);
+    } finally {
+      setCreating(false);
+    }
+  }, [
+    stackId,
+    configTab,
+    preview,
+    monitorChecks,
+    monitorConfigs,
+    manualMonitors,
+    planName,
+    resolvedGraphNodeIds,
+    schedule,
+    alertChannels,
+    alertOnStatus,
+    alertDestinations,
+    aiPrompt,
+    aiIntegrationId,
+    selectedNodesWithMonitors,
+    onComplete,
+    onClose,
+  ]);
+
+  if (!open) return null;
+
+  // Count nodes that have at least one checked monitor
+  const nodesWithCheckedMonitors = selectedNodesWithMonitors.filter((n) =>
+    n.monitors.some((m) => monitorChecks[`${m.targetNodeId}::${m.key}`]),
+  ).length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+
+      {/* Modal — near full-screen */}
+      <div className="relative w-[95vw] max-w-[1400px] h-[92vh] bg-[var(--bg)] border border-[var(--border)] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+        {/* ---- Header ---- */}
+        <div className="flex items-center justify-between px-6 py-3 border-b border-[var(--border)] shrink-0">
+          <div className="flex items-center gap-4">
+            <h2 className="text-[16px] font-semibold text-[var(--text)]">
+              New Monitor
+            </h2>
+
+            {/* Step indicators */}
+            <div className="flex items-center gap-1">
+              {([1, 2, 3] as Step[]).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => s < step && goToStep(s)}
+                  disabled={s > step}
+                  className={cn(
+                    'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors',
+                    s === step
+                      ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
+                      : s < step
+                        ? 'text-[var(--muted)] hover:text-[var(--text)] cursor-pointer'
+                        : 'text-[var(--muted)]/40 cursor-default',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold',
+                      s === step
+                        ? 'bg-[var(--accent)] text-white'
+                        : s < step
+                          ? 'bg-[var(--muted)]/20 text-[var(--text)]'
+                          : 'bg-[var(--muted)]/10 text-[var(--muted)]/40',
+                    )}
+                  >
+                    {s < step ? (
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      s
+                    )}
+                  </span>
+                  <span className="hidden sm:inline">{STEP_LABELS[s]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Close button */}
+          <button
+            onClick={onClose}
+            className="p-1.5 hover:bg-[var(--subtle-bg)] rounded-lg transition-colors"
+          >
+            <svg className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* ---- Body ---- */}
+        <div className="flex-1 overflow-y-auto">
+          {/* ============ Step 1: Select Assets ============ */}
+          {step === 1 && stackId && (
+            <div className="h-full flex flex-col">
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)]">
+                <span className="text-[11px] text-[var(--muted)] mr-1">View:</span>
+                <button
+                  onClick={() => setViewMode('lineage')}
+                  className={cn(
+                    'px-2.5 py-1 rounded text-[11px] font-medium transition-colors',
+                    viewMode === 'lineage'
+                      ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
+                      : 'text-[var(--muted)] hover:text-[var(--text)]',
+                  )}
+                >
+                  Lineage
+                </button>
+                <button
+                  onClick={() => setViewMode('pipeline-overview')}
+                  className={cn(
+                    'px-2.5 py-1 rounded text-[11px] font-medium transition-colors',
+                    viewMode === 'pipeline-overview'
+                      ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
+                      : 'text-[var(--muted)] hover:text-[var(--text)]',
+                  )}
+                >
+                  Pipeline Overview
+                </button>
+              </div>
+              <div className="flex-1">
+                <NodeSelectionSurface
+                  stackId={stackId}
+                  mode={viewMode}
+                  selectedNodeIds={selectedNodeIds}
+                  onSelectionChange={setSelectedNodeIds}
+                  preselectedNodeIds={preselectedNodeIds}
+                  onNodesLoaded={handleNodesLoaded}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* ============ Step 2: Configure Monitors ============ */}
+          {step === 2 && (
+            <div className="h-full flex flex-col">
+              {/* Tab bar */}
+              <div className="shrink-0 px-6 pt-4 pb-0 border-b border-[var(--border)]">
+                <div className="flex items-center gap-1">
+                  {CONFIG_TABS.map((tab) => (
+                    <button
+                      key={tab.key}
+                      onClick={() => setConfigTab(tab.key)}
+                      className={cn(
+                        'flex items-center gap-2 px-4 py-2.5 text-[13px] font-medium border-b-2 transition-colors -mb-px',
+                        configTab === tab.key
+                          ? 'border-[var(--accent)] text-[var(--accent)]'
+                          : 'border-transparent text-[var(--muted)] hover:text-[var(--text)]',
+                      )}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={tab.icon} />
+                      </svg>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* ---- Presets Tab ---- */}
+              {configTab === 'presets' && (
+                <div className="flex-1 overflow-y-auto">
+                  {/* Per-node monitor configuration with rich cards */}
+                  <div className="px-6 py-4">
+                    {previewLoading ? (
+                      <div className="space-y-3">
+                        {[1, 2, 3, 4, 5].map((i) => (
+                          <div key={i} className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 animate-pulse">
+                            <div className="flex items-center gap-3 mb-3">
+                              <div className="h-4 w-4 rounded bg-[var(--muted)]/20" />
+                              <div className="h-4 w-32 rounded bg-[var(--muted)]/20" />
+                              <div className="h-3 w-20 rounded bg-[var(--muted)]/15" />
+                            </div>
+                            <div className="flex gap-2 ml-7">
+                              <div className="h-16 w-48 rounded bg-[var(--muted)]/10" />
+                              <div className="h-16 w-44 rounded bg-[var(--muted)]/10" />
+                              <div className="h-16 w-52 rounded bg-[var(--muted)]/10" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : selectedNodesWithMonitors.length === 0 ? (
+                      <div className="flex items-center justify-center h-64 text-[13px] text-[var(--muted)]">
+                        No monitor data available. Go back to select assets.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {/* Header stats */}
+                        <div className="flex items-center gap-4 mb-3">
+                          <span className="text-[13px] text-[var(--text)]">
+                            <span className="font-medium">{selectedNodesWithMonitors.length}</span> assets
+                          </span>
+                          <span className="text-[13px] text-[var(--text)]">
+                            <span className="font-medium text-[var(--accent)]">{checkedCount}</span> monitors selected
+                          </span>
+                          {checkedCount > 0 && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-white/10 text-[var(--muted)]">
+                              Custom
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Node sections with rich monitor cards */}
+                        {selectedNodesWithMonitors.map(({ meta, monitors }) => {
+                          const allChecked =
+                            monitors.length > 0 &&
+                            monitors.every((m) => monitorChecks[`${m.targetNodeId}::${m.key}`]);
+                          const someChecked = monitors.some(
+                            (m) => monitorChecks[`${m.targetNodeId}::${m.key}`],
+                          );
+                          const checkedForNode = monitors.filter(
+                            (m) => monitorChecks[`${m.targetNodeId}::${m.key}`],
+                          ).length;
+                          const isCollapsed = collapsedNodes.has(meta.id);
+
+                          return (
+                            <div
+                              key={meta.id}
+                              className={cn(
+                                'rounded-lg border bg-[var(--surface)] transition-colors',
+                                someChecked ? 'border-[var(--accent)]/30' : 'border-[var(--border)]',
+                              )}
+                            >
+                              {/* Node header */}
+                              <div
+                                className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none"
+                                onClick={() => toggleNodeCollapse(meta.id)}
+                              >
+                                {monitors.length > 0 && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleAllForNode(meta.id, monitors);
+                                    }}
+                                    className={cn(
+                                      'w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors',
+                                      allChecked
+                                        ? 'bg-[var(--accent)] border-[var(--accent)]'
+                                        : someChecked
+                                          ? 'bg-[var(--accent)]/50 border-[var(--accent)]'
+                                          : 'border-[var(--border)] hover:border-[var(--muted)]',
+                                    )}
+                                  >
+                                    {(allChecked || someChecked) && (
+                                      <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d={allChecked ? 'M5 13l4 4L19 7' : 'M5 12h14'} />
+                                      </svg>
+                                    )}
+                                  </button>
+                                )}
+                                <span className="text-[13px] font-medium text-[var(--text)]">{meta.name}</span>
+                                <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-medium', DOMAIN_COLORS[meta.domain] || 'bg-white/10 text-white/50')}>
+                                  {meta.platform}
+                                </span>
+                                <span className="text-[11px] text-[var(--muted)] font-mono truncate max-w-[400px]" title={meta.fqn}>
+                                  {meta.fqn}
+                                </span>
+                                {monitors.length > 0 && (
+                                  <span className="ml-auto text-[11px] text-[var(--muted)] tabular-nums shrink-0">
+                                    {checkedForNode}/{monitors.length}
+                                  </span>
+                                )}
+                                {/* Collapse chevron */}
+                                <svg
+                                  className={cn('w-4 h-4 text-[var(--muted)] transition-transform shrink-0', isCollapsed ? '-rotate-90' : '')}
+                                  fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
+
+                              {/* Monitor cards (collapsible) */}
+                              {!isCollapsed && (
+                                <div className="px-4 pb-4">
+                                  {monitors.length > 0 ? (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 ml-7 auto-rows-fr">
+                                      {monitors.map((mon) => {
+                                        const checkKey = `${mon.targetNodeId}::${mon.key}`;
+                                        const checked = monitorChecks[checkKey] ?? false;
+                                        const isOutlier = mon.key === 'OUTLIER_DETECTION' || mon.key === 'ANOMALY';
+                                        return (
+                                          <div key={checkKey} className="h-full flex flex-col">
+                                            <MonitorCard
+                                              mon={mon}
+                                              checked={checked}
+                                              onToggle={() => toggleMonitor(mon.targetNodeId, mon.key)}
+                                              showTarget={!!meta.subNodeIds}
+                                              isToolNode={!!meta.subNodeIds?.length}
+                                              config={monitorConfigs[checkKey]}
+                                              onConfigChange={(fieldKey, value) =>
+                                                setMonitorConfigs((prev) => ({
+                                                  ...prev,
+                                                  [checkKey]: { ...(prev[checkKey] || {}), [fieldKey]: value },
+                                                }))
+                                              }
+                                              childItems={meta.childItems}
+                                            />
+                                            {checked && isOutlier && mon.targetFqn && (
+                                              <div className="ml-7 mt-1 mb-2">
+                                                <label className="text-[10px] text-[var(--muted)] uppercase tracking-wide mb-1 block">Column to monitor</label>
+                                                <ColumnPicker
+                                                  targetFqn={mon.targetFqn}
+                                                  stackId={stackId}
+                                                  value={monitorConfigs[checkKey]?.column || ''}
+                                                  onChange={(col) => setMonitorConfigs(prev => ({
+                                                    ...prev,
+                                                    [checkKey]: { ...(prev[checkKey] || {}), column: col },
+                                                  }))}
+                                                  numericOnly
+                                                  className="w-full bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg px-2 py-1.5 text-[12px] text-[var(--text)] focus:outline-none focus:border-[var(--overlay-strong)]"
+                                                />
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <p className="text-[11px] text-[var(--muted)] ml-7 italic">
+                                      No applicable monitors for this asset type
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ---- AI Prompt Tab ---- */}
+              {configTab === 'ai-prompt' && (
+                <div className="flex-1 overflow-y-auto px-6 py-6">
+                  <div className="max-w-2xl mx-auto space-y-6">
+                    <div>
+                      <h3 className="text-[15px] font-medium text-[var(--text)] mb-1">
+                        Describe your monitoring needs
+                      </h3>
+                      <p className="text-[12px] text-[var(--muted)]">
+                        Write what you want monitored in natural language. The AI will create and configure the appropriate monitors.
+                      </p>
+                    </div>
+
+                    <textarea
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      placeholder="e.g., Check if the orders table has received fresh data in the last 24 hours. If stale, report which datasets haven't been updated."
+                      rows={6}
+                      className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-lg px-4 py-3 text-[13px] text-[var(--text)] placeholder-[var(--muted)]/50 focus:outline-none focus:border-[var(--accent)] resize-none"
+                      autoFocus
+                    />
+
+                    {/* Warehouse selector */}
+                    {warehouseIntegrations.length > 0 && (
+                      <div>
+                        <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">
+                          Run against warehouse
+                        </label>
+                        <select
+                          value={aiIntegrationId}
+                          onChange={(e) => setAiIntegrationId(e.target.value)}
+                          className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-lg px-3 py-2 text-[13px] text-[var(--text)] focus:outline-none focus:border-[var(--accent)] appearance-none"
+                        >
+                          <option value="">Auto-detect</option>
+                          {warehouseIntegrations.map((i, idx) => (
+                            <option key={`${i.id}-${idx}`} value={i.id}>
+                              {i.name} ({i.type})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Selected assets context */}
+                    <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+                      <p className="text-[11px] text-[var(--muted)] mb-2">
+                        Selected assets ({selectedNodeIds.length})
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedNodesWithMonitors.slice(0, 10).map(({ meta }) => (
+                          <span
+                            key={meta.id}
+                            className={cn(
+                              'px-2 py-0.5 rounded text-[10px] font-medium',
+                              DOMAIN_COLORS[meta.domain] || 'bg-white/10 text-white/50',
+                            )}
+                          >
+                            {meta.name}
+                          </span>
+                        ))}
+                        {selectedNodesWithMonitors.length > 10 && (
+                          <span className="px-2 py-0.5 rounded text-[10px] text-[var(--muted)] bg-white/5">
+                            +{selectedNodesWithMonitors.length - 10} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ---- Manual Tab ---- */}
+            </div>
+          )}
+
+          {/* ============ Step 3: Finalize & Create ============ */}
+          {step === 3 && (
+            <div className="flex-1 overflow-y-auto">
+              <div className="max-w-lg mx-auto py-8 px-6 space-y-6">
+                {/* Title */}
+                <div className="text-center">
+                  <h3 className="text-[18px] font-semibold text-[var(--text)]">
+                    {configTab === 'ai-prompt' ? 'Finalize Your AI Monitor' : 'Finalize Your Monitor'}
+                  </h3>
+                  <p className="text-[13px] text-[var(--muted)] mt-2">
+                    {configTab === 'ai-prompt' ? (
+                      'AI will configure monitors from your prompt'
+                    ) : (
+                      <>
+                        <span className="font-medium text-[var(--accent)]">{totalMonitorCount}</span>{' '}
+                        monitors across{' '}
+                        <span className="font-medium">{nodesWithCheckedMonitors}</span>{' '}
+                        assets
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                {/* Auto-generated name */}
+                <div className="text-center">
+                  <span className="text-[14px] font-medium text-[var(--text)]">{planName}</span>
+                </div>
+
+                {/* Schedule */}
+                <div>
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Schedule</label>
+                  <ScheduleInput value={schedule} onChange={setSchedule} />
+                </div>
+
+                {/* Alert destinations — per-integration routing */}
+                <div>
+                  <label className="block text-[12px] font-medium text-[var(--muted)] mb-2">Alert destinations</label>
+                  <p className="text-[11px] text-[var(--muted)] mb-2">
+                    Pick which integrations receive alerts, and which monitor states each one reacts to. These
+                    apply to every monitor being created — you can override per-monitor later from the monitor edit panel.
+                  </p>
+                  <AlertDestinationPicker
+                    destinations={alertDestinations}
+                    onChange={setAlertDestinations}
+                    defaultTriggerOn={['FAIL', 'ERROR']}
+                    integrations={integrations.length > 0 ? integrations : undefined}
+                  />
+                </div>
+
+                {/* Tool monitor config summary */}
+                {configTab === 'presets' && (() => {
+                  const toolMons = selectedNodesWithMonitors.flatMap(({ meta, monitors }) => {
+                    if (!meta.subNodeIds?.length) return [];
+                    return monitors
+                      .filter((m) => TOOL_ONLY_MONITOR_KEYS.has(m.key) && monitorChecks[`${m.targetNodeId}::${m.key}`])
+                      .flatMap((m) => {
+                        const def = getMonitorDefinition(m.key);
+                        const mLabel = def?.label || m.key;
+                        const checkKey = `${m.targetNodeId}::${m.key}`;
+                        const cfg = monitorConfigs[checkKey] || {};
+                        // Expand multi-ID fields into separate entries
+                        const arrayField = Object.entries(cfg).find(
+                          ([k, v]) => CHILD_ID_FIELDS.has(k) && Array.isArray(v) && v.length > 0,
+                        );
+                        if (arrayField) {
+                          return (arrayField[1] as string[]).map((id) => ({
+                            key: `${checkKey}::${id}`,
+                            label: mLabel,
+                            targetId: id,
+                            nodeName: meta.name,
+                          }));
+                        }
+                        return [{ key: checkKey, label: mLabel, targetId: '', nodeName: meta.name }];
+                      });
+                  });
+                  if (toolMons.length === 0) return null;
+                  return (
+                    <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+                      <p className="text-[11px] text-[var(--muted)] mb-2">
+                        Tool Monitors ({toolMons.length})
+                      </p>
+                      <div className="space-y-1.5">
+                        {toolMons.map((tm) => (
+                          <div key={tm.key} className="flex items-center gap-2">
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-medium bg-emerald-500/15 text-emerald-400">
+                              Configured
+                            </span>
+                            <span className="text-[12px] text-[var(--text)]">{tm.label}</span>
+                            {tm.targetId ? (
+                              <span className="text-[10px] font-mono text-[var(--muted)]">{tm.targetId}</span>
+                            ) : (
+                              <span className="text-[10px] text-[var(--muted)]">on {tm.nodeName}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+                {configTab === 'ai-prompt' && (
+                  <div className="p-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+                    <p className="text-[11px] text-[var(--muted)] mb-1">Prompt</p>
+                    <p className="text-[12px] text-[var(--text)] line-clamp-3">{aiPrompt}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ---- Footer ---- */}
+        <div className="flex items-center justify-between px-6 py-3 border-t border-[var(--border)] bg-[var(--surface)] shrink-0">
+          <button
+            onClick={() => step === 1 ? onClose() : goToStep((step - 1) as Step)}
+            className="px-4 py-2 text-[13px] text-[var(--muted)] hover:text-[var(--text)] transition-colors"
+          >
+            {step === 1 ? 'Cancel' : 'Back'}
+          </button>
+
+          {step < 3 ? (
+            <div className="flex items-center">
+              {step === 2 && incompleteToolConfig && (
+                <span className="text-[11px] text-amber-400 mr-3">
+                  Configure all selected tool monitors before proceeding
+                </span>
+              )}
+              <button
+                onClick={() => goToStep((step + 1) as Step)}
+                disabled={!canGoNext}
+                className={cn(
+                  'px-5 py-2 rounded-lg text-[13px] font-medium transition-colors',
+                  canGoNext
+                    ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90'
+                    : 'bg-[var(--muted)]/20 text-[var(--muted)] cursor-not-allowed',
+                )}
+              >
+                {step === 2
+                  ? configTab === 'ai-prompt'
+                    ? 'Next'
+                    : `Next \u00b7 ${totalMonitorCount} monitors`
+                  : 'Next'}
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={handleCreate}
+              disabled={!canGoNext || creating}
+              className={cn(
+                'px-5 py-2 rounded-lg text-[13px] font-medium transition-colors',
+                canGoNext && !creating
+                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)]/90'
+                  : 'bg-[var(--muted)]/30 text-[var(--muted)] cursor-not-allowed border border-[var(--muted)]/20',
+              )}
+            >
+              {creating ? 'Creating...' : configTab === 'ai-prompt' ? 'Create AI Monitor' : 'Create Monitor'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

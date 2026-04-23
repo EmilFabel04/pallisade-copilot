@@ -1,6 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '../../../../lib/db';
-import { hashPassword } from '../../../../lib/auth';
+import { hashPassword } from '../../../../lib/passwords';
+
+/**
+ * Parse pipeline access from a TeamInvite's personalNote field.
+ * Returns the array if valid, null otherwise.
+ */
+function parsePipelineAccess(
+  personalNote: string | null,
+): Array<{ pipelineId: string; accessLevel: string }> | null {
+  if (!personalNote) return null;
+  try {
+    const parsed = JSON.parse(personalNote);
+    if (parsed?.pipelineAccess && Array.isArray(parsed.pipelineAccess)) {
+      return parsed.pipelineAccess;
+    }
+  } catch {
+    // Plain text note, not JSON
+  }
+  return null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,7 +56,16 @@ export async function POST(request: NextRequest) {
     // Hash password
     const passwordHash = await hashPassword(password);
 
-    // Create user and organization in a transaction
+    // Check for a pending invite matching this email
+    const invite = await prisma.teamInvite.findFirst({
+      where: {
+        email: email.toLowerCase(),
+        status: 'PENDING',
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    // Create user and handle org/invite in a transaction
     const result = await prisma.$transaction(async (tx) => {
       // Create user first
       const user = await tx.user.create({
@@ -54,16 +82,72 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      // Create organization if name provided
       let organization = null;
-      if (organizationName) {
-        organization = await tx.organization.create({
+
+      if (invite) {
+        // ---- Invite path: join existing org ----
+        await tx.teamMember.create({
           data: {
-            name: organizationName,
+            userId: user.id,
+            organizationId: invite.organizationId,
+            role: invite.role,
+            status: 'ACTIVE',
+            joinedAt: new Date(),
           },
         });
 
-        // Create team membership as OWNER
+        await tx.user.update({
+          where: { id: user.id },
+          data: { organizationId: invite.organizationId },
+        });
+
+        await tx.teamInvite.update({
+          where: { id: invite.id },
+          data: { status: 'ACCEPTED', respondedAt: new Date() },
+        });
+
+        // Grant pipeline access
+        const pipelineAccess = parsePipelineAccess(invite.personalNote);
+        if (pipelineAccess && pipelineAccess.length > 0) {
+          // Use admin-specified pipelines
+          for (const pa of pipelineAccess) {
+            await tx.pipelineAccess.create({
+              data: {
+                userId: user.id,
+                pipelineId: pa.pipelineId,
+                accessLevel: pa.accessLevel === 'EDITOR' ? 'EDITOR' : pa.accessLevel === 'OWNER' ? 'OWNER' : 'VIEWER',
+                grantedBy: invite.invitedById || user.id,
+              },
+            });
+          }
+        } else {
+          // Default: VIEWER access to all org pipelines
+          const orgPipelines = await tx.pipelineStack.findMany({
+            where: { organizationId: invite.organizationId },
+            select: { id: true },
+          });
+          for (const pipeline of orgPipelines) {
+            await tx.pipelineAccess.create({
+              data: {
+                userId: user.id,
+                pipelineId: pipeline.id,
+                accessLevel: 'VIEWER',
+                grantedBy: invite.invitedById || user.id,
+              },
+            });
+          }
+        }
+
+        organization = await tx.organization.findUnique({
+          where: { id: invite.organizationId },
+          select: { id: true, name: true },
+        });
+      } else if (organizationName) {
+        // ---- Normal path: create new org ----
+        organization = await tx.organization.create({
+          data: { name: organizationName },
+        });
+
         await tx.teamMember.create({
           data: {
             userId: user.id,
@@ -74,7 +158,6 @@ export async function POST(request: NextRequest) {
           },
         });
 
-        // Update user with organizationId
         await tx.user.update({
           where: { id: user.id },
           data: { organizationId: organization.id },
@@ -99,4 +182,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

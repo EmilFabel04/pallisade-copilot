@@ -1,973 +1,490 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { PipelineNode, getToolById } from '@/components/pipeline/types';
+import { Search, Filter, SortAsc, SortDesc, Plus, Database, X } from 'lucide-react';
+import { PipelineLayer, LAYER_COLORS, LAYER_LABELS } from '@/components/pipeline/types';
+import { useSourcesData, filterAndSort } from '@/components/sources/useSourcesData';
+import {
+  ControlPlaneSource,
+  SourceStatus,
+  ExtractionStatus,
+  SourceFilters,
+  SortField,
+  STATUS_CONFIG,
+  EXTRACTION_STATUS_CONFIG,
+  getDefaultFilters,
+} from '@/components/sources/types';
+import SourceSummaryBar from '@/components/sources/SourceSummaryBar';
+import SourceCard from '@/components/sources/SourceCard';
+import SourceDetailDrawer from '@/components/sources/SourceDetailDrawer';
+// SLA editing removed — SLAs are defined in lineage, viewed read-only here
 
-// Cache TTL: 5 minutes
-const CACHE_TTL_MS = 5 * 60 * 1000;
-const CACHE_KEY = 'pallisade_sources_cache';
-
-interface TableInfo {
-  name: string;
-  schema: string;
-  dataset?: string;
-  database?: string;
-  rowCount?: number | null;
-  columns?: number | null;
-  type?: string; // TABLE, VIEW, MATERIALIZED VIEW, etc.
-  lastUpdated?: string;
-}
-
-interface DbtModel {
-  name: string;
-  schema: string;
-  materialization: string;
-  description?: string;
-  tags?: string[];
-  testCount?: number;
-}
-
-interface ConnectorInfo {
-  name: string;
-  status: string;
-  lastSync?: string;
-}
-
-interface SourceData {
-  tables: TableInfo[];
-  models: DbtModel[];
-  connectors: ConnectorInfo[];
-  datasets: string[];
-  source?: string;
-  connected?: boolean;
-  error?: string;
-  message?: string; // Helpful message explaining the status
-  fetchedAt?: number;
-}
-
-interface CacheEntry {
-  data: Record<string, SourceData>;
-  nodes: PipelineNode[];
-  stackId: string;
-  timestamp: number;
-}
-
-// Load cache from localStorage
-function loadCache(): CacheEntry | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (!cached) return null;
-    const entry: CacheEntry = JSON.parse(cached);
-    // Check if cache is still valid
-    if (Date.now() - entry.timestamp < CACHE_TTL_MS) {
-      return entry;
-    }
-    // Cache expired
-    localStorage.removeItem(CACHE_KEY);
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Save cache to localStorage
-function saveCache(data: Record<string, SourceData>, nodes: PipelineNode[], stackId: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const entry: CacheEntry = {
-      data,
-      nodes,
-      stackId,
-      timestamp: Date.now(),
-    };
-    localStorage.setItem(CACHE_KEY, JSON.stringify(entry));
-  } catch {
-    // localStorage might be full or disabled
-  }
-}
+const ALL_LAYERS: PipelineLayer[] = ['INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
+// Layers that don't participate in the data pipeline graph (alerting/ticketing destinations).
+const NON_PIPELINE_LAYERS = new Set<PipelineLayer>(['NOTIFICATIONS']);
+const ALL_STATUSES: SourceStatus[] = ['healthy', 'degraded', 'disconnected', 'expiring_soon', 'pending'];
+const ALL_EXTRACTION_STATUSES: ExtractionStatus[] = ['ok', 'stale', 'failed', 'never'];
+const SORT_OPTIONS: { field: SortField; label: string }[] = [
+  { field: 'name', label: 'Name' },
+  { field: 'status', label: 'Status' },
+  { field: 'layer', label: 'Layer' },
+  { field: 'lastTestedAt', label: 'Last Check' },
+  { field: 'lastExtractedAt', label: 'Last Extracted' },
+];
 
 export default function SourcesPage() {
-  const [nodes, setNodes] = useState<PipelineNode[]>([]);
-  const [currentStackId, setCurrentStackId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
-  const [nodeData, setNodeData] = useState<Record<string, SourceData>>({});
-  const [loadingData, setLoadingData] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'tables' | 'models' | 'connectors'>('tables');
-  const [searchQuery, setSearchQuery] = useState('');
-  const initializedRef = useRef(false);
-
-  // Load node data function
-  const loadNodeData = useCallback(async (nodeId: string, stackId: string, forceRefresh = false) => {
-    // Check if already have data and not forcing refresh
-    if (nodeData[nodeId] && !forceRefresh) return;
-    
-    setLoadingData(nodeId);
-    try {
-      const res = await fetch(`/api/pipeline/${stackId}/nodes/${nodeId}/tables`);
-      if (res.ok) {
-        const data = await res.json();
-        const newData: SourceData = {
-          tables: data.tables || [],
-          models: data.models || [],
-          connectors: data.connectors || [],
-          datasets: data.datasets || [],
-          source: data.source,
-          connected: data.connected,
-          message: data.message,
-          fetchedAt: Date.now(),
-        };
-        setNodeData((prev) => {
-          const updated = { ...prev, [nodeId]: newData };
-          // Save to cache
-          saveCache(updated, nodes, stackId);
-          return updated;
-        });
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        setNodeData((prev) => ({
-          ...prev,
-          [nodeId]: { 
-            tables: [], 
-            models: [], 
-            connectors: [], 
-            datasets: [],
-            error: errorData.error || 'Failed to fetch data',
-            fetchedAt: Date.now(),
-          },
-        }));
-      }
-    } catch {
-      setNodeData((prev) => ({
-        ...prev,
-        [nodeId]: { 
-          tables: [], 
-          models: [], 
-          connectors: [], 
-          datasets: [],
-          error: 'Connection failed',
-          fetchedAt: Date.now(),
-        },
-      }));
-    } finally {
-      setLoadingData(null);
+  const { sources, summary, pipelineSLA, loading, error, refresh, patchSource } = useSourcesData();
+  const [filters, setFilters] = useState<SourceFilters>(getDefaultFilters());
+  const [selectedSource, setSelectedSource] = useState<ControlPlaneSource | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [showLayerFilter, setShowLayerFilter] = useState(false);
+  const [showExtractionFilter, setShowExtractionFilter] = useState(false);
+  const filtered = useMemo(() => filterAndSort(sources, filters), [sources, filters]);
+  const { pipelineSources, nonPipelineSources } = useMemo(() => {
+    const pipe: ControlPlaneSource[] = [];
+    const nonPipe: ControlPlaneSource[] = [];
+    for (const s of filtered) {
+      (NON_PIPELINE_LAYERS.has(s.layer) ? nonPipe : pipe).push(s);
     }
-  }, [nodeData, nodes]);
+    return { pipelineSources: pipe, nonPipelineSources: nonPipe };
+  }, [filtered]);
 
-  // Get the best default tab for a given node
-  const getDefaultTab = (node: PipelineNode): 'tables' | 'models' | 'connectors' => {
-    if (node.toolType === 'dbt_cloud' || node.toolType === 'dbt_core') return 'models';
-    if (node.toolType === 'fivetran' || node.toolType === 'airbyte' || node.toolType === 'stitch') return 'connectors';
-    return 'tables';
-  };
-
-  // Initialize from cache or fetch fresh data
-  useEffect(() => {
-    if (initializedRef.current) return;
-    initializedRef.current = true;
-
-    const initialize = async () => {
-      // Try to load from cache first
-      const cached = loadCache();
-
-      if (cached) {
-        setNodes(cached.nodes);
-        setCurrentStackId(cached.stackId);
-        setNodeData(cached.data);
-
-        // Auto-select first node
-        const firstConnected = cached.nodes.find((n: PipelineNode) =>
-          n.status === 'ACTIVE' || n.status === 'CONNECTED'
-        ) || cached.nodes[0];
-
-        if (firstConnected) {
-          setSelectedNode(firstConnected.id);
-          setActiveTab(getDefaultTab(firstConnected));
-        }
-        setLoading(false);
-        return;
-      }
-
-      // No cache, fetch fresh
-      try {
-        const res = await fetch('/api/pipeline');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.stack) {
-            setCurrentStackId(data.stack.id);
-            if (data.stack.nodes && data.stack.nodes.length > 0) {
-              setNodes(data.stack.nodes);
-
-              const firstConnected = data.stack.nodes.find((n: PipelineNode) =>
-                n.status === 'ACTIVE' || n.status === 'CONNECTED'
-              ) || data.stack.nodes[0];
-
-              if (firstConnected) {
-                setSelectedNode(firstConnected.id);
-                setActiveTab(getDefaultTab(firstConnected));
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load pipeline:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    initialize();
+  const updateSearch = useCallback((search: string) => {
+    setFilters(f => ({ ...f, search }));
   }, []);
 
-  // Load data when node is selected (only if not cached)
-  useEffect(() => {
-    if (selectedNode && currentStackId && !nodeData[selectedNode] && !loadingData) {
-      loadNodeData(selectedNode, currentStackId);
+  const toggleLayer = useCallback((layer: PipelineLayer) => {
+    setFilters(f => {
+      const next = new Set(f.layers);
+      if (next.has(layer)) next.delete(layer); else next.add(layer);
+      return { ...f, layers: next };
+    });
+  }, []);
+
+  const toggleStatus = useCallback((status: SourceStatus) => {
+    setFilters(f => {
+      const next = new Set(f.statuses);
+      if (next.has(status)) next.delete(status); else next.add(status);
+      return { ...f, statuses: next };
+    });
+  }, []);
+
+  const toggleExtractionStatus = useCallback((es: ExtractionStatus) => {
+    setFilters(f => {
+      const next = new Set(f.extractionStatuses);
+      if (next.has(es)) next.delete(es); else next.add(es);
+      return { ...f, extractionStatuses: next };
+    });
+  }, []);
+
+  const setSort = useCallback((field: SortField) => {
+    setFilters(f => ({
+      ...f,
+      sort: { field, dir: f.sort.field === field && f.sort.dir === 'asc' ? 'desc' : 'asc' },
+    }));
+  }, []);
+
+  const handleTestConnection = useCallback(async (source: ControlPlaneSource) => {
+    setTestingId(source.id);
+    try {
+      const res = await fetch(`/api/integrations/${source.id}/test`, { method: 'POST' });
+      if (res.ok) refresh(true);
+    } catch {} finally {
+      setTestingId(null);
     }
-  }, [selectedNode, currentStackId, nodeData, loadNodeData, loadingData]);
+  }, [refresh]);
 
-  const handleSelectNode = (node: PipelineNode) => {
-    setSelectedNode(node.id);
-    setSearchQuery('');
-    setActiveTab(getDefaultTab(node));
-  };
+  const handleDisconnect = useCallback(async (source: ControlPlaneSource) => {
+    if (!confirm(`Disconnect ${source.name}? This will remove the integration.`)) return;
+    try {
+      await fetch(`/api/integrations/${source.id}`, { method: 'DELETE' });
+      refresh(true);
+      if (selectedSource?.id === source.id) setSelectedSource(null);
+    } catch {}
+  }, [refresh, selectedSource]);
 
-  const handleRefresh = () => {
-    if (selectedNode && currentStackId) {
-      // Force refresh the selected node
-      loadNodeData(selectedNode, currentStackId, true);
-    }
-  };
 
-  const getStatusIndicator = (status: string) => {
-    switch (status) {
-      case 'ACTIVE':
-      case 'CONNECTED':
-        return <span className="w-2 h-2 rounded-full bg-emerald-500" />;
-      case 'ERROR':
-        return <span className="w-2 h-2 rounded-full bg-red-500" />;
-      case 'TESTING':
-        return <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />;
-      default:
-        return <span className="w-2 h-2 rounded-full bg-white/20" />;
-    }
-  };
+  const activeFilterCount =
+    filters.layers.size + filters.statuses.size + filters.extractionStatuses.size + filters.slaTiers.size +
+    (filters.search ? 1 : 0);
 
-  const getToolName = (toolType: string) => {
-    const tool = getToolById(toolType);
-    return tool?.name || toolType;
-  };
-
-  const formatRowCount = (rowCount: number | null | undefined): string => {
-    if (rowCount === null || rowCount === undefined) return '—';
-    if (rowCount === 0) return '0';
-    return rowCount.toLocaleString();
-  };
-
-  const selectedNodeObj = nodes.find((n) => n.id === selectedNode);
-  const currentData = selectedNode ? nodeData[selectedNode] : null;
-
-  // Get configured datasets from node config
-  const getConfiguredDatasets = (node: PipelineNode): string[] => {
-    if (!node.config) return [];
-    const config = node.config as Record<string, unknown>;
-    if (config.datasets && Array.isArray(config.datasets)) {
-      return config.datasets as string[];
-    }
-    if (config.schemas && Array.isArray(config.schemas)) {
-      return config.schemas as string[];
-    }
-    return [];
-  };
-
-  // Filter tables by search
-  const filteredTables = currentData?.tables?.filter(t => 
-    !searchQuery || 
-    t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (t.schema && t.schema.toLowerCase().includes(searchQuery.toLowerCase())) ||
-    (t.dataset && t.dataset.toLowerCase().includes(searchQuery.toLowerCase()))
-  ) || [];
-
-  const filteredModels = currentData?.models?.filter(m =>
-    !searchQuery ||
-    m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    m.schema.toLowerCase().includes(searchQuery.toLowerCase())
-  ) || [];
-
-  // Organize nodes by category
-  const warehouses = nodes.filter((n) => n.layer === 'WAREHOUSE');
-  const transformations = nodes.filter((n) => n.layer === 'TRANSFORMATION');
-  const ingestion = nodes.filter((n) => n.layer === 'INGESTION');
-  const reporting = nodes.filter((n) => n.layer === 'REPORTING');
-
-  // Format cache age
-  const getCacheAge = (): string | null => {
-    if (!currentData?.fetchedAt) return null;
-    const seconds = Math.floor((Date.now() - currentData.fetchedAt) / 1000);
-    if (seconds < 60) return `${seconds}s ago`;
-    const minutes = Math.floor(seconds / 60);
-    return `${minutes}m ago`;
-  };
-
+  // Loading skeleton
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="animate-spin w-6 h-6 border-2 border-white/20 border-t-white/60 rounded-full" />
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)] p-4 animate-pulse">
+              <div className="h-3 w-20 bg-[var(--overlay-medium)] rounded mb-2" />
+              <div className="h-6 w-12 bg-[var(--overlay-medium)] rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="space-y-2">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)] p-4 animate-pulse">
+              <div className="flex items-center gap-4">
+                <div className="w-9 h-9 rounded-lg bg-[var(--overlay-medium)]" />
+                <div className="flex-1 space-y-1.5">
+                  <div className="h-4 w-32 bg-[var(--overlay-medium)] rounded" />
+                  <div className="h-3 w-48 bg-[var(--overlay-bg)] rounded" />
+                </div>
+                <div className="h-5 w-16 bg-[var(--overlay-medium)] rounded-full" />
+                <div className="h-5 w-16 bg-[var(--overlay-bg)] rounded-full" />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
 
-  if (nodes.length === 0) {
+  // Empty state
+  if (!loading && sources.length === 0) {
     return (
-      <div className="max-w-2xl mx-auto text-center py-20">
-        <div className="w-14 h-14 rounded-xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center mx-auto mb-5">
-          <svg className="w-7 h-7 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375" />
-          </svg>
+      <div className="p-6">
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="w-16 h-16 rounded-2xl bg-[var(--overlay-bg)] flex items-center justify-center mb-4">
+            <Database className="w-8 h-8 text-[var(--text-faint)]" />
+          </div>
+          <h2 className="text-lg font-semibold text-[var(--text)] mb-2">No sources connected</h2>
+          <p className="text-sm text-[var(--text-tertiary)] max-w-sm mb-6">
+            Connect your data warehouse, ingestion tools, and transformation layers to get started.
+          </p>
+          <Link
+            href="/dashboard/pipeline"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)]
+                       text-white text-sm font-medium transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Open Integrations
+          </Link>
         </div>
-        <h1 className="text-xl font-semibold text-white mb-2">No data sources configured</h1>
-        <p className="text-white/50 text-[14px] mb-6 max-w-md mx-auto">
-          Configure your data warehouse, transformation tools, and other integrations in the Pipeline Builder to see what data is available.
-        </p>
-        <Link
-          href="/dashboard/pipeline"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-2)] text-white text-[13px] font-medium transition-colors"
-        >
-          Open Pipeline Builder
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        </Link>
       </div>
     );
   }
 
   return (
-    <div className="flex h-[calc(100vh-56px)] -m-6">
-      {/* Left Panel - Source List */}
-      <div className="w-64 flex-shrink-0 border-r border-white/[0.04] bg-[#030303] flex flex-col">
-        <div className="p-4 border-b border-white/[0.04]">
-          <h1 className="text-[15px] font-medium text-white">Data Sources</h1>
-          <p className="text-[12px] text-white/40 mt-0.5">
-            {nodes.filter((n) => n.status === 'ACTIVE' || n.status === 'CONNECTED').length} of {nodes.length} connected
-          </p>
+    <div className="p-6 space-y-5">
+      {error && (
+        <div className="px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
+          {error}
         </div>
+      )}
 
-        <div className="flex-1 overflow-y-auto py-2">
-          {/* Warehouses */}
-          {warehouses.length > 0 && (
-            <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
-                Warehouses
-              </div>
-              {warehouses.map((node) => (
-                <button
-                  key={node.id}
-                  onClick={() => handleSelectNode(node)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                    selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
-                  }`}
-                >
-                  {getStatusIndicator(node.status)}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
+      <SourceSummaryBar summary={summary} />
 
-          {/* Transformation */}
-          {transformations.length > 0 && (
-            <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
-                Transformation
-              </div>
-              {transformations.map((node) => (
-                <button
-                  key={node.id}
-                  onClick={() => handleSelectNode(node)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                    selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
-                  }`}
-                >
-                  {getStatusIndicator(node.status)}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Ingestion */}
-          {ingestion.length > 0 && (
-            <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
-                Ingestion
-              </div>
-              {ingestion.map((node) => (
-                <button
-                  key={node.id}
-                  onClick={() => handleSelectNode(node)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                    selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
-                  }`}
-                >
-                  {getStatusIndicator(node.status)}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* Reporting */}
-          {reporting.length > 0 && (
-            <div className="mb-3">
-              <div className="px-4 py-1.5 text-[10px] font-medium text-white/40 uppercase tracking-wider">
-                Reporting
-              </div>
-              {reporting.map((node) => (
-                <button
-                  key={node.id}
-                  onClick={() => handleSelectNode(node)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                    selectedNode === node.id
-                      ? 'bg-white/[0.08] text-white'
-                      : 'text-white/70 hover:bg-white/[0.04] hover:text-white'
-                  }`}
-                >
-                  {getStatusIndicator(node.status)}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-medium truncate">{node.name}</p>
-                    <p className="text-[11px] text-white/40 truncate">{getToolName(node.toolType)}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[200px] max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-faint)]" />
+          <input
+            type="text"
+            value={filters.search}
+            onChange={(e) => updateSearch(e.target.value)}
+            placeholder="Search sources..."
+            className="w-full pl-9 pr-3 py-2 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)]
+                       text-sm text-[var(--text)] placeholder:text-[var(--text-faint)]
+                       focus:outline-none focus:border-[var(--border-medium)]"
+          />
+          {filters.search && (
+            <button
+              onClick={() => updateSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-[var(--hover-bg)] text-[var(--text-faint)]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
 
-        {/* Configure Link */}
-        <div className="p-3 border-t border-white/[0.04]">
-          <Link
-            href="/dashboard/pipeline"
-            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg bg-white/[0.04] hover:bg-white/[0.06] text-white/60 hover:text-white text-[12px] font-medium transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.204-.107-.397.165-.71.505-.78.929l-.15.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.505-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.107-1.204l-.527-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            Configure Sources
-          </Link>
+        {/* Domain filter (Data Plane / Control Plane / All) */}
+        <div className="flex items-center gap-1 rounded-lg border border-[var(--subtle-border)] bg-[var(--surface-raised)] p-0.5">
+          {(['ALL', 'DATA_PLANE', 'CONTROL_PLANE'] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => setFilters(f => ({ ...f, graphDomain: d }))}
+              className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                filters.graphDomain === d
+                  ? 'bg-[var(--active-bg)] text-[var(--text)]'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text)]'
+              }`}
+            >
+              {d === 'ALL' ? 'All' : d === 'DATA_PLANE' ? 'Data' : 'Control'}
+            </button>
+          ))}
+        </div>
+
+        {/* Layer filter */}
+        <FilterDropdown
+          label="Layer"
+          active={filters.layers.size > 0}
+          count={filters.layers.size}
+          open={showLayerFilter}
+          onToggle={() => { setShowLayerFilter(!showLayerFilter); setShowExtractionFilter(false);}}
+          onClear={() => setFilters(f => ({ ...f, layers: new Set() }))}
+        >
+          {ALL_LAYERS.map((layer) => (
+            <FilterItem
+              key={layer}
+              label={LAYER_LABELS[layer]}
+              active={filters.layers.has(layer)}
+              onClick={() => toggleLayer(layer)}
+              dot={LAYER_COLORS[layer]}
+            />
+          ))}
+        </FilterDropdown>
+
+        {/* Extraction status filter */}
+        <FilterDropdown
+          label="Extraction"
+          active={filters.extractionStatuses.size > 0}
+          count={filters.extractionStatuses.size}
+          open={showExtractionFilter}
+          onToggle={() => { setShowExtractionFilter(!showExtractionFilter); setShowLayerFilter(false);}}
+          onClear={() => setFilters(f => ({ ...f, extractionStatuses: new Set() }))}
+        >
+          {ALL_EXTRACTION_STATUSES.map((es) => {
+            const cfg = EXTRACTION_STATUS_CONFIG[es];
+            const count = sources.filter(s => s.extractionStatus === es).length;
+            return (
+              <FilterItem
+                key={es}
+                label={`${cfg.label} (${count})`}
+                active={filters.extractionStatuses.has(es)}
+                onClick={() => toggleExtractionStatus(es)}
+              />
+            );
+          })}
+        </FilterDropdown>
+
+        {/* Status filter pills */}
+        <div className="flex items-center gap-1">
+          {ALL_STATUSES.map((status) => {
+            const cfg = STATUS_CONFIG[status];
+            const active = filters.statuses.has(status);
+            const count = sources.filter(s => s.status === status).length;
+            if (count === 0) return null;
+            return (
+              <button
+                key={status}
+                onClick={() => toggleStatus(status)}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors
+                  ${active ? `${cfg.bg} ${cfg.color}` : 'text-[var(--text-faint)] hover:text-[var(--text-tertiary)]'}`}
+              >
+                {cfg.label}
+                <span className="text-[10px] opacity-60">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Sort */}
+        <div className="flex items-center gap-1 ml-auto">
+          {SORT_OPTIONS.map((opt) => {
+            const active = filters.sort.field === opt.field;
+            return (
+              <button
+                key={opt.field}
+                onClick={() => setSort(opt.field)}
+                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs transition-colors
+                  ${active ? 'text-[var(--text)] bg-[var(--overlay-medium)]' : 'text-[var(--text-faint)] hover:text-[var(--text-tertiary)]'}`}
+              >
+                {opt.label}
+                {active && (
+                  filters.sort.dir === 'asc'
+                    ? <SortAsc className="w-3 h-3" />
+                    : <SortDesc className="w-3 h-3" />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      {/* Right Panel - Details */}
-      <div className="flex-1 flex flex-col min-w-0 bg-[#020202]">
-        {selectedNodeObj ? (
-          <>
-            {/* Source Header */}
-            <div className="px-6 py-4 border-b border-white/[0.04]">
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <h2 className="text-lg font-medium text-white">{selectedNodeObj.name}</h2>
-                    {getStatusIndicator(selectedNodeObj.status)}
-                    {currentData?.source === 'demo' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400" title="Scanner service unavailable - showing sample data">
-                        Demo Data
-                      </span>
-                    )}
-                    {currentData?.source === 'live' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400">
-                        Live
-                      </span>
-                    )}
-                    {currentData?.source === 'unconfigured' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400">
-                        Not Configured
-                      </span>
-                    )}
-                    {currentData?.source === 'disconnected' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-gray-500/10 text-gray-400">
-                        Disconnected
-                      </span>
-                    )}
-                    {currentData?.source === 'misconfigured' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400">
-                        Configuration Error
-                      </span>
-                    )}
-                    {currentData?.source === 'error' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-red-500/10 text-red-400">
-                        Connection Error
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-[13px] text-white/40">
-                    {getToolName(selectedNodeObj.toolType)}
-                    {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).project_id ? (
-                      <span> · {String((selectedNodeObj.config as Record<string, unknown>).project_id)}</span>
-                    ) : null}
-                    {selectedNodeObj.config && (selectedNodeObj.config as Record<string, unknown>).database ? (
-                      <span> · {String((selectedNodeObj.config as Record<string, unknown>).database)}</span>
-                    ) : null}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {getCacheAge() && (
-                    <span className="text-[11px] text-white/30">
-                      Updated {getCacheAge()}
-                    </span>
-                  )}
-                  <button
-                    onClick={handleRefresh}
-                    disabled={loadingData === selectedNode}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-white/50 hover:text-white hover:bg-white/[0.04] transition-colors disabled:opacity-50"
-                  >
-                    <svg className={`w-4 h-4 ${loadingData === selectedNode ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-                    </svg>
-                    Refresh
-                  </button>
-                  <Link
-                    href="/dashboard/pipeline"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] text-white/50 hover:text-white hover:bg-white/[0.04] transition-colors"
-                  >
-                    Edit
-                  </Link>
-                </div>
-              </div>
+      {/* Active filters */}
+      {activeFilterCount > 0 && (
+        <div className="flex items-center gap-2 text-xs text-[var(--text-faint)]">
+          <span>Showing {filtered.length} of {sources.length} sources</span>
+          <button onClick={() => setFilters(getDefaultFilters())} className="text-[var(--accent-2)] hover:underline">
+            Clear all filters
+          </button>
+        </div>
+      )}
 
-              {/* Show configured datasets/schemas */}
-              {selectedNodeObj.config && getConfiguredDatasets(selectedNodeObj).length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {getConfiguredDatasets(selectedNodeObj).map((ds, i) => (
-                    <span key={i} className="px-2 py-1 rounded bg-white/[0.04] text-[11px] text-white/60 font-mono">
-                      {ds}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Status message banner */}
-              {currentData?.message && currentData.source !== 'live' && (
-                <div className={`flex items-center gap-2 px-3 py-2 rounded-lg mb-3 text-[12px] ${
-                  currentData.source === 'demo' ? 'bg-amber-500/10 text-amber-300' :
-                  currentData.source === 'unconfigured' ? 'bg-blue-500/10 text-blue-300' :
-                  currentData.source === 'disconnected' ? 'bg-gray-500/10 text-gray-300' :
-                  'bg-red-500/10 text-red-300'
-                }`}>
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span>{currentData.message}</span>
-                  {currentData.source === 'unconfigured' && (
-                    <Link href="/dashboard/pipeline" className="ml-auto underline hover:no-underline">
-                      Configure
-                    </Link>
-                  )}
-                </div>
-              )}
-
-              {/* Tabs */}
-              <div className="flex items-center gap-4">
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setActiveTab('tables')}
-                    className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
-                      activeTab === 'tables'
-                        ? 'bg-white/[0.08] text-white'
-                        : 'text-white/50 hover:text-white hover:bg-white/[0.04]'
-                    }`}
-                  >
-                    Tables {currentData?.tables && currentData.tables.length > 0 && `(${currentData.tables.length})`}
-                  </button>
-                  {(selectedNodeObj.toolType === 'dbt_cloud' || selectedNodeObj.toolType === 'dbt_core') && (
-                    <button
-                      onClick={() => setActiveTab('models')}
-                      className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
-                        activeTab === 'models'
-                          ? 'bg-white/[0.08] text-white'
-                          : 'text-white/50 hover:text-white hover:bg-white/[0.04]'
-                      }`}
-                    >
-                      Models {currentData?.models && currentData.models.length > 0 && `(${currentData.models.length})`}
-                    </button>
-                  )}
-                  {(selectedNodeObj.toolType === 'fivetran' || selectedNodeObj.toolType === 'airbyte' || selectedNodeObj.toolType === 'stitch') && (
-                    <button
-                      onClick={() => setActiveTab('connectors')}
-                      className={`px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors ${
-                        activeTab === 'connectors'
-                          ? 'bg-white/[0.08] text-white'
-                          : 'text-white/50 hover:text-white hover:bg-white/[0.04]'
-                      }`}
-                    >
-                      Connectors {currentData?.connectors && currentData.connectors.length > 0 && `(${currentData.connectors.length})`}
-                    </button>
-                  )}
-                </div>
-
-                {/* Search */}
-                <div className="flex-1 max-w-xs">
-                  <div className="relative">
-                    <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                    </svg>
-                    <input
-                      type="text"
-                      placeholder="Search..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full pl-9 pr-3 py-1.5 rounded-md bg-white/[0.04] border border-white/[0.06] text-[12px] text-white placeholder-white/30 focus:outline-none focus:border-white/[0.12]"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto">
-              {loadingData === selectedNode ? (
-                <div className="flex items-center justify-center h-64">
-                  <div className="flex items-center gap-3 text-white/50">
-                    <div className="animate-spin w-5 h-5 border-2 border-white/20 border-t-white/60 rounded-full" />
-                    <span className="text-[13px]">Loading data...</span>
-                  </div>
-                </div>
-              ) : currentData?.error ? (
-                <div className="flex items-center justify-center h-64">
-                  <div className="text-center">
-                    <svg className="w-10 h-10 text-red-500/50 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-                    </svg>
-                    <p className="text-[13px] text-white/50">{currentData.error}</p>
-                    <button
-                      onClick={handleRefresh}
-                      className="mt-3 text-[12px] text-white/40 hover:text-white underline"
-                    >
-                      Try again
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {/* Tables Tab */}
-                  {activeTab === 'tables' && (
-                    <div className="p-6">
-                      {filteredTables.length > 0 ? (
-                        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Table Name</th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">
-                                  {selectedNodeObj.toolType === 'bigquery' ? 'Dataset' : 'Schema'}
-                                </th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Type</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Columns</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Row Count</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/[0.04]">
-                              {filteredTables.map((table, i) => (
-                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                  <td className="px-4 py-3">
-                                    <code className="text-[13px] text-white">{table.name}</code>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <code className="text-[13px] text-white/50">{table.dataset || table.schema}</code>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${
-                                      table.type === 'VIEW' ? 'bg-purple-500/10 text-purple-400' :
-                                      table.type === 'MATERIALIZED VIEW' ? 'bg-blue-500/10 text-blue-400' :
-                                      table.type === 'EXTERNAL' ? 'bg-amber-500/10 text-amber-400' :
-                                      'bg-white/[0.06] text-white/50'
-                                    }`}>
-                                      {table.type || 'TABLE'}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">{table.columns ?? '—'}</span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">
-                                      {formatRowCount(table.rowCount)}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
-                          <svg className="w-10 h-10 text-white/15 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125" />
-                          </svg>
-                          <p className="text-[13px] text-white/40">
-                            {searchQuery ? 'No tables match your search' : 'No tables found'}
-                          </p>
-                          {!searchQuery && (
-                            <p className="text-[12px] text-white/25 mt-1">
-                              Configure datasets in Pipeline Builder to discover tables
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Models Tab (for dbt) */}
-                  {activeTab === 'models' && (
-                    <div className="p-6">
-                      {filteredModels.length > 0 ? (
-                        <DbtModelsVisual models={filteredModels} />
-                      ) : (
-                        <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
-                          <p className="text-[13px] text-white/40">No dbt models found</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Connectors Tab */}
-                  {activeTab === 'connectors' && (
-                    <div className="p-6">
-                      {currentData?.connectors && currentData.connectors.length > 0 ? (
-                        <div className="border border-white/[0.06] rounded-lg overflow-hidden">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="border-b border-white/[0.06] bg-white/[0.02]">
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Connector</th>
-                                <th className="text-left px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Status</th>
-                                <th className="text-right px-4 py-3 text-[11px] font-medium text-white/50 uppercase tracking-wider">Last Sync</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/[0.04]">
-                              {currentData.connectors.map((connector, i) => (
-                                <tr key={i} className="hover:bg-white/[0.02] transition-colors">
-                                  <td className="px-4 py-3">
-                                    <span className="text-[13px] text-white">{connector.name}</span>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium ${
-                                      connector.status === 'active' || connector.status === 'syncing' 
-                                        ? 'bg-emerald-500/10 text-emerald-400' 
-                                        : connector.status === 'paused' 
-                                        ? 'bg-amber-500/10 text-amber-400'
-                                        : 'bg-red-500/10 text-red-400'
-                                    }`}>
-                                      <span className={`w-1.5 h-1.5 rounded-full ${
-                                        connector.status === 'active' || connector.status === 'syncing' 
-                                          ? 'bg-emerald-500' 
-                                          : connector.status === 'paused' 
-                                          ? 'bg-amber-500'
-                                          : 'bg-red-500'
-                                      }`} />
-                                      {connector.status}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-right">
-                                    <span className="text-[13px] text-white/50">{connector.lastSync ?? '—'}</span>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="text-center py-16 border border-white/[0.04] border-dashed rounded-lg">
-                          <p className="text-[13px] text-white/40">No connectors found</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          </>
-        ) : (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center">
-              <p className="text-[13px] text-white/40">Select a source to view details</p>
-            </div>
+      {/* Source list — split into pipeline vs non-pipeline (alerting/ticketing) */}
+      <div className="space-y-6">
+        <SourceSection
+          title="Pipeline tools"
+          description="Tools that move, store, or transform data in your pipeline"
+          sources={pipelineSources}
+          testingId={testingId}
+          onSelect={setSelectedSource}
+          onTestConnection={handleTestConnection}
+          onDisconnect={handleDisconnect}
+        />
+        {nonPipelineSources.length > 0 && (
+          <SourceSection
+            title="Non-pipeline tools"
+            description="Alerting, ticketing, and other destinations that react to pipeline events"
+            sources={nonPipelineSources}
+            testingId={testingId}
+            onSelect={setSelectedSource}
+            onTestConnection={handleTestConnection}
+            onDisconnect={handleDisconnect}
+          />
+        )}
+        {filtered.length === 0 && sources.length > 0 && (
+          <div className="text-center py-12">
+            <p className="text-sm text-[var(--text-faint)]">No sources match your filters</p>
+            <button onClick={() => setFilters(getDefaultFilters())} className="mt-2 text-xs text-[var(--accent-2)] hover:underline">
+              Clear filters
+            </button>
           </div>
         )}
+      </div>
+
+      {/* Detail drawer */}
+      {selectedSource && (
+        <SourceDetailDrawer
+          source={selectedSource}
+          onClose={() => setSelectedSource(null)}
+          onQuickLinksChange={(id, links) => {
+            patchSource(id, { quickLinks: links });
+            setSelectedSource((cur) => (cur && cur.id === id ? { ...cur, quickLinks: links } : cur));
+          }}
+        />
+      )}
+
+    </div>
+  );
+}
+
+// ─── Source section (groups cards under a heading) ────────────────
+
+function SourceSection({
+  title,
+  description,
+  sources,
+  testingId,
+  onSelect,
+  onTestConnection,
+  onDisconnect,
+}: {
+  title: string;
+  description: string;
+  sources: ControlPlaneSource[];
+  testingId: string | null;
+  onSelect: (s: ControlPlaneSource) => void;
+  onTestConnection: (s: ControlPlaneSource) => void;
+  onDisconnect: (s: ControlPlaneSource) => void;
+}) {
+  if (sources.length === 0) {
+    return (
+      <div>
+        <SectionHeader title={title} description={description} count={0} />
+        <p className="text-xs text-[var(--text-faint)] px-1">No tools in this group.</p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <SectionHeader title={title} description={description} count={sources.length} />
+      <div className="space-y-2">
+        {sources.map((source) => (
+          <div key={source.id} className="relative">
+            <SourceCard
+              source={source}
+              onClick={onSelect}
+              onTestConnection={onTestConnection}
+              onDisconnect={onDisconnect}
+            />
+            {testingId === source.id && (
+              <div className="absolute inset-0 rounded-lg bg-[var(--surface)]/60 flex items-center justify-center">
+                <div className="w-5 h-5 border-2 border-[var(--overlay-strong)] border-t-[var(--text-tertiary)] rounded-full animate-spin" />
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-// ==========================================
-// dbt Models Visual Display
-// ==========================================
-
-const MATERIALIZATION_CONFIG: Record<string, { color: string; bg: string; icon: string }> = {
-  table: { color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20', icon: 'M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125' },
-  view: { color: 'text-purple-400', bg: 'bg-purple-500/10 border-purple-500/20', icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178zM15 12a3 3 0 11-6 0 3 3 0 016 0z' },
-  incremental: { color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/20', icon: 'M3 4.5h14.25M3 9h9.75M3 13.5h9.75m4.5-4.5v12m0 0l-3.75-3.75M17.25 21L21 17.25' },
-  ephemeral: { color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/20', icon: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z' },
-};
-
-function DbtModelsVisual({ models }: { models: DbtModel[] }) {
-  const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
-
-  // Group by schema
-  const grouped: Record<string, DbtModel[]> = {};
-  models.forEach((m) => {
-    if (!grouped[m.schema]) grouped[m.schema] = [];
-    grouped[m.schema].push(m);
-  });
-  const schemaNames = Object.keys(grouped).sort();
-
-  // Stats
-  const matCounts: Record<string, number> = {};
-  models.forEach((m) => {
-    matCounts[m.materialization] = (matCounts[m.materialization] || 0) + 1;
-  });
-  const totalTests = models.reduce((sum, m) => sum + (m.testCount ?? 0), 0);
-
+function SectionHeader({ title, description, count }: { title: string; description: string; count: number }) {
   return (
-    <div className="space-y-6">
-      {/* Summary row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Models</div>
-          <div className="text-2xl font-semibold text-white">{models.length}</div>
-        </div>
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Schemas</div>
-          <div className="text-2xl font-semibold text-white">{schemaNames.length}</div>
-        </div>
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Tests</div>
-          <div className="text-2xl font-semibold text-white">{totalTests}</div>
-        </div>
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-          <div className="text-[11px] text-white/40 uppercase tracking-wider mb-1">Materialization</div>
-          <div className="flex flex-wrap gap-1.5 mt-1">
-            {Object.entries(matCounts).map(([mat, count]) => {
-              const cfg = MATERIALIZATION_CONFIG[mat] || MATERIALIZATION_CONFIG.table;
-              return (
-                <span key={mat} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border ${cfg.bg} ${cfg.color}`}>
-                  {count} {mat}
-                </span>
-              );
-            })}
-          </div>
-        </div>
+    <div className="flex items-baseline justify-between mb-2 px-1">
+      <div>
+        <h3 className="text-[13px] font-semibold text-[var(--text)] uppercase tracking-wide">
+          {title}
+          <span className="ml-2 text-[11px] font-medium text-[var(--text-faint)]">{count}</span>
+        </h3>
+        <p className="text-[11px] text-[var(--text-faint)] mt-0.5">{description}</p>
       </div>
-
-      {/* Schema groups */}
-      {schemaNames.map((schema) => {
-        const schemaModels = grouped[schema];
-        const isExpanded = expandedSchema === null || expandedSchema === schema;
-
-        return (
-          <div key={schema} className="rounded-lg border border-white/[0.06] overflow-hidden">
-            {/* Schema header */}
-            <button
-              onClick={() => setExpandedSchema(expandedSchema === schema ? null : schema)}
-              className="w-full flex items-center justify-between px-5 py-3.5 bg-white/[0.02] hover:bg-white/[0.04] transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center">
-                  <span className="text-[10px] font-bold text-orange-400">dbt</span>
-                </div>
-                <div className="text-left">
-                  <div className="text-[13px] font-medium text-white">{schema}</div>
-                  <div className="text-[11px] text-white/40">{schemaModels.length} model{schemaModels.length !== 1 ? 's' : ''}</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                {/* Mini materialization summary */}
-                <div className="flex gap-1.5">
-                  {Object.entries(
-                    schemaModels.reduce<Record<string, number>>((acc, m) => {
-                      acc[m.materialization] = (acc[m.materialization] || 0) + 1;
-                      return acc;
-                    }, {})
-                  ).map(([mat, count]) => {
-                    const cfg = MATERIALIZATION_CONFIG[mat] || MATERIALIZATION_CONFIG.table;
-                    return (
-                      <span key={mat} className={`w-5 h-5 rounded flex items-center justify-center text-[10px] font-medium ${cfg.bg} ${cfg.color}`} title={`${count} ${mat}`}>
-                        {count}
-                      </span>
-                    );
-                  })}
-                </div>
-                <svg className={`w-4 h-4 text-white/30 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </div>
-            </button>
-
-            {/* Model cards */}
-            {isExpanded && (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 p-4">
-                {schemaModels.map((model) => {
-                  const cfg = MATERIALIZATION_CONFIG[model.materialization] || MATERIALIZATION_CONFIG.table;
-                  return (
-                    <div
-                      key={model.name}
-                      className={`rounded-lg border p-4 hover:bg-white/[0.02] transition-colors ${cfg.bg}`}
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <svg className={`w-4 h-4 flex-shrink-0 ${cfg.color}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d={cfg.icon} />
-                          </svg>
-                          <code className="text-[13px] font-medium text-white truncate">{model.name}</code>
-                        </div>
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${cfg.color} bg-black/20`}>
-                          {model.materialization}
-                        </span>
-                      </div>
-                      {model.description && (
-                        <p className="text-[11px] text-white/40 mb-2 line-clamp-2">{model.description}</p>
-                      )}
-                      <div className="flex items-center gap-3 mt-auto">
-                        {model.tags && model.tags.length > 0 && (
-                          <div className="flex gap-1 flex-wrap">
-                            {model.tags.slice(0, 3).map((tag) => (
-                              <span key={tag} className="px-1.5 py-0.5 rounded bg-white/[0.06] text-[10px] text-white/50">{tag}</span>
-                            ))}
-                          </div>
-                        )}
-                        {(model.testCount ?? 0) > 0 && (
-                          <div className="flex items-center gap-1 ml-auto">
-                            <svg className="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            <span className="text-[10px] text-emerald-400">{model.testCount} tests</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
     </div>
+  );
+}
+
+// ─── Reusable filter components ───────────────────────────────────
+
+function FilterDropdown({
+  label, active, count, open, onToggle, onClear, children,
+}: {
+  label: string; active: boolean; count: number; open: boolean;
+  onToggle: () => void; onClear: () => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <button
+        onClick={onToggle}
+        className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors
+          ${active
+            ? 'border-[var(--accent)] text-[var(--accent-2)] bg-[var(--accent)]/5'
+            : 'border-[var(--subtle-border)] text-[var(--text-tertiary)] hover:text-[var(--text)]'
+          }`}
+      >
+        <Filter className="w-3.5 h-3.5" />
+        {label}
+        {count > 0 && (
+          <span className="ml-1 px-1.5 py-0.5 rounded-full bg-[var(--accent)] text-white text-[10px] font-medium">
+            {count}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 w-52 rounded-lg border border-[var(--subtle-border)]
+                       bg-[var(--surface)] shadow-xl z-50 py-1">
+          {children}
+          {active && (
+            <button
+              onClick={onClear}
+              className="w-full px-3 py-2 text-xs text-[var(--text-faint)] hover:text-[var(--text-tertiary)]
+                         border-t border-[var(--subtle-border)] transition-colors"
+            >
+              Clear filter
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterItem({
+  label, active, onClick, dot,
+}: {
+  label: string; active: boolean; onClick: () => void; dot?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors
+        ${active ? 'bg-[var(--hover-bg)] text-[var(--text)]' : 'text-[var(--text-secondary)] hover:bg-[var(--hover-bg)]'}`}
+    >
+      {dot && <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: dot }} />}
+      {label}
+      {active && <span className="ml-auto text-[var(--accent-2)]">&#10003;</span>}
+    </button>
   );
 }

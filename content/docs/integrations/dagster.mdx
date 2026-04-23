@@ -1,0 +1,78 @@
+---
+title: Dagster
+description: Connect Dagster to Pallisade for asset lineage, job health monitoring, schedule and sensor tracking, and materialization freshness.
+section: integrations
+order: 10
+---
+
+# Dagster
+
+## Overview
+
+The Dagster integration connects Pallisade to your Dagster deployment via the GraphQL API. Pallisade monitors assets, jobs, schedules, and sensors, and tracks asset materialization freshness and health. It supports both self-hosted Dagster (dagit/dagster-webserver) and Dagster Cloud.
+
+Key capabilities:
+
+- **Asset lineage** -- full upstream/downstream dependency graph across all assets
+- **Materialization freshness** -- hours since last materialization per asset
+- **Job health** -- success rates, duration trends, and failure analysis
+- **Schedule monitoring** -- cron schedules, next tick, and active/stopped status
+- **Sensor monitoring** -- sensor status, target jobs, and polling intervals
+- **Asset checks** -- pass/fail status of asset check evaluations
+- **Partition awareness** -- detection of partitioned assets
+
+## Prerequisites
+
+For **self-hosted Dagster**:
+- Dagster webserver running and accessible (default: `http://localhost:3000`)
+
+For **Dagster Cloud**:
+- Dagster Cloud deployment name
+- Dagster Cloud API token
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Dagster** from the Transformation layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Dagster webserver URL (e.g., `https://your-dagster.com`) |
+| `api_token` | No | Dagster Cloud API token (leave empty for self-hosted) |
+
+For Dagster Cloud, the adapter constructs the endpoint as `https://{deployment}.dagster.cloud/graphql` using the deployment name extracted from the host URL.
+
+3. Click **Test Connection**. Pallisade runs a `{ version }` GraphQL query to verify connectivity.
+
+<Callout type="tip">
+For Dagster Cloud, use the full deployment URL as the host (e.g., `https://myorg.dagster.cloud`). The API token is generated in your Dagster Cloud organization settings under **Tokens**.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Assets** | Key, group name, description, compute_kind (dbt/python/sql), owners, dependencies |
+| **Materializations** | Last materialization timestamp and run ID per asset |
+| **Jobs** | Job name, run status, start/end time, duration, asset selection, tags |
+| **Schedules** | Name, cron expression, target job, status (RUNNING/STOPPED), next tick |
+| **Sensors** | Name, target job, status (RUNNING/STOPPED), polling interval |
+| **Health metrics** | Success rate, avg duration, failure count per job or asset |
+| **Freshness** | Hours since last materialization per asset |
+
+## Troubleshooting
+
+**GraphQL query fails with connection error**
+Ensure the Dagster webserver is running and the URL is correct. For Docker deployments, verify the port mapping. The GraphQL endpoint is at `{host}/graphql`.
+
+**Assets query returns empty**
+If your Dagster deployment uses software-defined assets, they should appear automatically. Legacy pipeline-only deployments without assets will have an empty asset list.
+
+**"Dagster Cloud API token invalid"**
+Generate a new token in the Dagster Cloud UI under your organization settings. Tokens may expire or be revoked by organization admins.
+
+**Materialization freshness shows null**
+The asset has never been materialized, or the GraphQL query could not retrieve the timestamp. Trigger a materialization and retry.
+
+**Schedules show as STOPPED**
+Schedules must be explicitly started in the Dagster UI or via the CLI. A schedule in STOPPED state will not trigger runs. This is the expected default state.

@@ -1,0 +1,82 @@
+---
+title: Databricks
+description: Connect Databricks Lakehouse to Pallisade for Unity Catalog metadata, Delta Lake freshness, column statistics, and audit-log lineage.
+section: integrations
+order: 5
+---
+
+# Databricks
+
+## Overview
+
+The Databricks integration connects Pallisade to your Databricks workspace via a SQL Warehouse. It supports the Unity Catalog three-level namespace (`catalog.schema.table`), reads metadata from `INFORMATION_SCHEMA`, uses `DESCRIBE HISTORY` for Delta Lake freshness, and queries `system.access.audit` for query history lineage.
+
+Key capabilities:
+
+- **Unity Catalog discovery** -- catalogs, schemas, and tables with the full three-level namespace
+- **Column metadata** -- names, data types, nullability, comments from `INFORMATION_SCHEMA.COLUMNS`
+- **Delta Lake freshness** -- `DESCRIBE HISTORY` for last operation timestamp without scanning data
+- **Column statistics** -- null rates, distinct counts, min/max, avg, stddev via standard SQL
+- **Partition and clustering** -- detected from `DESCRIBE DETAIL`
+- **Query history** -- up to 90 days from `system.access.audit` (Unity Catalog)
+
+## Prerequisites
+
+- A Databricks workspace with a running SQL Warehouse (Classic or Serverless)
+- A personal access token (PAT) or OAuth token
+- The SQL Warehouse HTTP path (found in Connection Details)
+- (Optional) Unity Catalog system tables enabled for query history
+
+<Callout type="tip">
+Serverless SQL Warehouses provide instant startup and are recommended for Pallisade connections. They eliminate cold-start delays during scanning.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Databricks** from the Warehouse layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Workspace URL (e.g., `https://adb-xxxx.azuredatabricks.net`) |
+| `token` | Yes | Personal access token (starts with `dapi...`) |
+| `http_path` | Yes | SQL Warehouse HTTP path (e.g., `/sql/1.0/warehouses/xxxx`) |
+| `catalog` | No | Unity Catalog name (default: `hive_metastore`) |
+| `schema` | No | Default schema (default: `default`) |
+
+3. Click **Test Connection**. Pallisade runs `SELECT current_catalog(), current_schema()` to verify.
+4. Scanning begins for all tables in the specified catalog.
+
+<Callout type="warning">
+The `http_path` is specific to your SQL Warehouse. Find it in the Databricks UI under **SQL Warehouses > [Your Warehouse] > Connection Details**. It typically looks like `/sql/1.0/warehouses/abc123def456`.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Tables and views** | From `INFORMATION_SCHEMA.TABLES` with fallback to `SHOW TABLES` |
+| **Columns** | Name, data type, full_data_type, nullability, default, comment |
+| **Delta metadata** | Row count, size, created/modified timestamps from `DESCRIBE DETAIL` |
+| **Partition columns** | From `DESCRIBE DETAIL` partition info |
+| **Clustering columns** | Z-ORDER columns from `DESCRIBE DETAIL` |
+| **Column statistics** | Null rate, distinct count, min/max, avg, stddev |
+| **Freshness** | `DESCRIBE HISTORY` for last operation, or MAX of timestamp column |
+| **Query history** | From `system.access.audit` -- SQL text, user email, status, catalog, schema |
+
+## Troubleshooting
+
+**"databricks-sql-connector is not installed"**
+The Pallisade backend requires the `databricks-sql-connector` Python package. This should be pre-installed. Contact support if you see this error.
+
+**"Table not found" for known tables**
+Check that the `catalog` field matches where your tables live. If you use `hive_metastore` (legacy), leave the catalog field empty. For Unity Catalog tables, specify the catalog name.
+
+**No query history**
+`system.access.audit` requires Unity Catalog system tables to be enabled. Check with your Databricks admin. Without it, Pallisade can still discover schema and compute statistics.
+
+**DESCRIBE HISTORY fails**
+This command only works for Delta Lake tables. External tables or non-Delta formats will fall back to timestamp column scanning for freshness.
+
+**SQL Warehouse is stopped**
+Pallisade cannot connect when the warehouse is stopped. Enable auto-start on the warehouse or ensure it is running before scanning.

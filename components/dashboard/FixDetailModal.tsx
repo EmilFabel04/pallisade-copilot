@@ -171,20 +171,20 @@ export function FixDetailModal({
       return code
         .replace(/^(\s*-\s)/gm, '<span class="text-amber-400">$1</span>')
         .replace(/^(\s*\w+):/gm, '<span class="text-cyan-400">$1</span>:')
-        .replace(/(#.*$)/gm, '<span class="text-gray-500">$1</span>');
+        .replace(/(#.*$)/gm, '<span class="text-[var(--muted)]">$1</span>');
     }
     if (language === 'sql') {
       return code
         .replace(/\b(SELECT|FROM|WHERE|AND|OR|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AS|CREATE|INSERT|UPDATE|DELETE|ALTER|DROP|TABLE|VIEW|INDEX|DISTINCT|ORDER BY|GROUP BY|HAVING|LIMIT|OFFSET|UNION|NULL|NOT|IS|IN|BETWEEN|LIKE|EXISTS|CASE|WHEN|THEN|ELSE|END)\b/gi, 
           '<span class="text-purple-400 font-medium">$1</span>')
         .replace(/'([^']*)'/g, '<span class="text-emerald-400">\'$1\'</span>')
-        .replace(/(--.*$)/gm, '<span class="text-gray-500">$1</span>');
+        .replace(/(--.*$)/gm, '<span class="text-[var(--muted)]">$1</span>');
     }
     if (language === 'python') {
       return code
         .replace(/\b(def|class|import|from|return|if|else|elif|for|while|try|except|finally|with|as|pass|break|continue|lambda|yield|async|await|True|False|None)\b/g, 
           '<span class="text-purple-400 font-medium">$1</span>')
-        .replace(/(#.*$)/gm, '<span class="text-gray-500">$1</span>')
+        .replace(/(#.*$)/gm, '<span class="text-[var(--muted)]">$1</span>')
         .replace(/'([^']*)'/g, '<span class="text-emerald-400">\'$1\'</span>')
         .replace(/"([^"]*)"/g, '<span class="text-emerald-400">"$1"</span>');
     }
@@ -200,9 +200,9 @@ export function FixDetailModal({
       />
       
       {/* Modal */}
-      <div className="relative w-full max-w-3xl max-h-[90vh] bg-[#0c0c14] border border-[rgba(255,255,255,0.08)] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="relative w-full max-w-3xl max-h-[90vh] bg-[var(--surface-inset)] border border-[var(--subtle-border)] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[rgba(255,255,255,0.06)] bg-gradient-to-r from-emerald-500/10 to-teal-500/10">
+        <div className="px-6 py-4 border-b border-[var(--subtle-border)] bg-gradient-to-r from-emerald-500/10 to-teal-500/10">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-start gap-4">
               {/* Stack icon */}
@@ -218,24 +218,24 @@ export function FixDetailModal({
                   </span>
                   {/* Source badge */}
                   {sourceConfig && (
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium bg-[rgba(255,255,255,0.05)] ${sourceConfig.color} flex items-center gap-1`}>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium bg-[var(--subtle-bg)] ${sourceConfig.color} flex items-center gap-1`}>
                       <span>{sourceConfig.icon}</span>
                       {sourceConfig.label}
                     </span>
                   )}
                   {/* Effort badge */}
-                  <span className="px-2 py-0.5 rounded text-xs bg-[rgba(255,255,255,0.05)] text-[var(--muted)]">
+                  <span className="px-2 py-0.5 rounded text-xs bg-[var(--subtle-bg)] text-[var(--muted)]">
                     {effortConfig.icon} {effortConfig.label}
                   </span>
                 </div>
-                <h2 className="text-xl font-bold text-white">{fix.title}</h2>
+                <h2 className="text-xl font-bold text-[var(--text)]">{fix.title}</h2>
                 <p className="text-sm text-[var(--muted)] mt-1">{fix.description}</p>
               </div>
             </div>
             
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+              className="p-2 rounded-lg hover:bg-[var(--subtle-bg)] transition-colors"
             >
               <svg className="w-5 h-5 text-[var(--muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -245,7 +245,7 @@ export function FixDetailModal({
           
           {/* Finding reference */}
           {finding && (
-            <div className="mt-3 pt-3 border-t border-[rgba(255,255,255,0.06)]">
+            <div className="mt-3 pt-3 border-t border-[var(--subtle-border)]">
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-[var(--muted)]">Fixing:</span>
                 <span className={`w-2 h-2 rounded-full ${
@@ -273,7 +273,7 @@ export function FixDetailModal({
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
           {/* Why this fix */}
-          <div className="px-6 py-4 bg-[rgba(255,255,255,0.02)] border-b border-[rgba(255,255,255,0.06)]">
+          <div className="px-6 py-4 bg-[var(--overlay-faint)] border-b border-[var(--subtle-border)]">
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-lg bg-blue-500/10 flex items-center justify-center flex-shrink-0">
                 <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -288,7 +288,7 @@ export function FixDetailModal({
             
             {/* Learning evidence */}
             {fix.similarFixesCount && fix.similarFixesCount > 0 && (
-              <div className="mt-3 p-3 rounded-lg bg-[rgba(255,255,255,0.02)] border border-[var(--border-dim)]">
+              <div className="mt-3 p-3 rounded-lg bg-[var(--overlay-faint)] border border-[var(--border-dim)]">
                 <div className="flex items-center gap-4 text-sm">
                   <div className="flex items-center gap-1.5">
                     <span className="text-purple-400">📊</span>
@@ -309,13 +309,13 @@ export function FixDetailModal({
           </div>
           
           {/* Section tabs */}
-          <div className="px-6 py-2 border-b border-[rgba(255,255,255,0.06)] flex gap-1">
+          <div className="px-6 py-2 border-b border-[var(--subtle-border)] flex gap-1">
             <button
               onClick={() => setActiveSection('code')}
               className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                 activeSection === 'code'
                   ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'text-[var(--muted)] hover:text-white hover:bg-[rgba(255,255,255,0.04)]'
+                  : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
               }`}
             >
               <span>💻</span>
@@ -327,7 +327,7 @@ export function FixDetailModal({
                 className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                   activeSection === 'steps'
                     ? 'bg-blue-500/10 text-blue-400'
-                    : 'text-[var(--muted)] hover:text-white hover:bg-[rgba(255,255,255,0.04)]'
+                    : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
                 }`}
               >
                 <span>📝</span>
@@ -339,7 +339,7 @@ export function FixDetailModal({
               className={`px-4 py-2 text-sm font-medium rounded-lg transition-all flex items-center gap-2 ${
                 activeSection === 'preview'
                   ? 'bg-purple-500/10 text-purple-400'
-                  : 'text-[var(--muted)] hover:text-white hover:bg-[rgba(255,255,255,0.04)]'
+                  : 'text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)]'
               }`}
             >
               <span>👁️</span>
@@ -359,7 +359,7 @@ export function FixDetailModal({
               )}
               
               {/* Code block */}
-              <div className="rounded-xl overflow-hidden border border-emerald-500/20 bg-[rgba(0,0,0,0.4)]">
+              <div className="rounded-xl overflow-hidden border border-emerald-500/20 bg-[var(--overlay-bg)]">
                 {/* Code header */}
                 <div className="px-4 py-2 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -420,7 +420,7 @@ export function FixDetailModal({
             <div className="p-6">
               <div className="space-y-3">
                 {fix.steps.map((step, i) => (
-                  <div key={i} className="flex gap-4 p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+                  <div key={i} className="flex gap-4 p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center text-sm font-bold">
                       {i + 1}
                     </div>
@@ -437,7 +437,7 @@ export function FixDetailModal({
           {activeSection === 'preview' && (
             <div className="p-6">
               <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+                <div className="p-4 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
                   <h3 className="text-sm font-medium mb-3">Before vs After</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -495,7 +495,7 @@ export function FixDetailModal({
                            fix.confidence === 'medium' ? 'Medium Risk' : 'High Risk'}
                         </span>
                       </div>
-                      <div className="h-2 bg-[rgba(255,255,255,0.05)] rounded-full overflow-hidden">
+                      <div className="h-2 bg-[var(--subtle-bg)] rounded-full overflow-hidden">
                         <div 
                           className={`h-full rounded-full ${
                             fix.confidence === 'high' ? 'bg-emerald-500' : 
@@ -520,7 +520,7 @@ export function FixDetailModal({
         </div>
         
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.3)] flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-[var(--subtle-border)] bg-[var(--overlay-bg)] flex items-center justify-between">
           <div className="text-xs text-[var(--muted)]">
             {effortConfig.icon} {effortConfig.description}
           </div>
@@ -553,7 +553,7 @@ export function FixDetailModal({
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
                 copied
                   ? 'bg-emerald-500/20 text-emerald-400'
-                  : 'bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)]'
+                  : 'bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)]'
               }`}
             >
               {copied ? '✓ Copied!' : '📋 Copy Code'}

@@ -4,3 +4,4 @@ export { ValidationStatus } from './ValidationStatus';
 export { ImpactAnalysisBadge } from './ImpactAnalysisBadge';
 export { ChangePlanToolResult, isChangePlanTool } from './ChangePlanToolResult';
 export { SharePlanModal } from './SharePlanModal';
+export { PRCard } from './PRCard';

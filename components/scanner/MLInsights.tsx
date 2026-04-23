@@ -80,13 +80,13 @@ export function MLInsights({
       {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
+        className="w-full px-4 py-3 flex items-center justify-between hover:bg-[var(--overlay-faint)] transition-colors"
       >
         <div className="flex items-center gap-2">
           <svg className="w-4 h-4 text-[var(--accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
           </svg>
-          <span className="text-sm font-medium text-white">ML Insights</span>
+          <span className="text-sm font-medium text-[var(--text)]">ML Insights</span>
         </div>
         
         <div className="flex items-center gap-3">
@@ -122,22 +122,22 @@ export function MLInsights({
             <div>
               <h4 className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider mb-2">Trend Analysis</h4>
               <div className="grid grid-cols-3 gap-3">
-                <div className="bg-black/20 rounded-lg p-3">
+                <div className="bg-[var(--overlay-faint)] rounded-lg p-3">
                   <div className="flex items-center gap-1.5 mb-1">
                     {trendIcon[trend.direction]}
                     <span className="text-xs text-[var(--muted)]">Direction</span>
                   </div>
-                  <p className="text-sm font-medium text-white capitalize">{trend.direction}</p>
+                  <p className="text-sm font-medium text-[var(--text)] capitalize">{trend.direction}</p>
                 </div>
-                <div className="bg-black/20 rounded-lg p-3">
+                <div className="bg-[var(--overlay-faint)] rounded-lg p-3">
                   <p className="text-xs text-[var(--muted)] mb-1">Rate</p>
-                  <p className="text-sm font-medium text-white">
+                  <p className="text-sm font-medium text-[var(--text)]">
                     {trend.slopePerHour > 0 ? '+' : ''}{trend.slopePerHour.toFixed(2)}/hr
                   </p>
                 </div>
-                <div className="bg-black/20 rounded-lg p-3">
+                <div className="bg-[var(--overlay-faint)] rounded-lg p-3">
                   <p className="text-xs text-[var(--muted)] mb-1">Confidence</p>
-                  <p className="text-sm font-medium text-white">{(trend.confidence * 100).toFixed(0)}%</p>
+                  <p className="text-sm font-medium text-[var(--text)]">{(trend.confidence * 100).toFixed(0)}%</p>
                 </div>
               </div>
             </div>
@@ -149,11 +149,11 @@ export function MLInsights({
               <h4 className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider mb-2">Seasonal Patterns</h4>
               <div className="space-y-2">
                 {seasonality.map((pattern, i) => (
-                  <div key={i} className="bg-black/20 rounded-lg p-3">
+                  <div key={i} className="bg-[var(--overlay-faint)] rounded-lg p-3">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-1.5">
                         {seasonalityIcons[pattern.type]}
-                        <span className="text-sm text-white capitalize">{pattern.type} Pattern</span>
+                        <span className="text-sm text-[var(--text)] capitalize">{pattern.type} Pattern</span>
                       </div>
                       <span className="text-xs text-[var(--muted)]">
                         {(pattern.amplitude * 100).toFixed(0)}% variation
@@ -186,14 +186,14 @@ export function MLInsights({
             <div>
               <h4 className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider mb-2">Learned Baseline</h4>
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-black/20 rounded-lg p-3">
+                <div className="bg-[var(--overlay-faint)] rounded-lg p-3">
                   <p className="text-xs text-[var(--muted)] mb-1">Expected Value</p>
-                  <p className="text-sm font-medium text-white">{baseline.mean.toFixed(1)} ± {baseline.stdDev.toFixed(1)}</p>
+                  <p className="text-sm font-medium text-[var(--text)]">{baseline.mean.toFixed(1)} ± {baseline.stdDev.toFixed(1)}</p>
                 </div>
                 {baseline.bucketStats && Object.keys(baseline.bucketStats).length > 0 && (
-                  <div className="bg-black/20 rounded-lg p-3">
+                  <div className="bg-[var(--overlay-faint)] rounded-lg p-3">
                     <p className="text-xs text-[var(--muted)] mb-1">Time Buckets</p>
-                    <div className="text-xs text-white space-y-0.5">
+                    <div className="text-xs text-[var(--text)] space-y-0.5">
                       {Object.entries(baseline.bucketStats).slice(0, 3).map(([bucket, stats]) => (
                         <div key={bucket} className="flex justify-between">
                           <span className="text-[var(--muted)]">{bucket.replace('_', ' ')}:</span>

@@ -1,0 +1,62 @@
+---
+title: Pallisade Documentation
+description: The AI-powered data pipeline reliability platform. Monitor, debug, and improve your data pipelines from a single control plane.
+---
+
+# Pallisade Documentation
+
+Pallisade is a data reliability platform that gives data teams a single control plane for monitoring, debugging, and improving their data pipelines. At its core is **Scout**, an AI copilot that understands your warehouse schemas, lineage graph, and monitor history -- so you can ask questions, investigate incidents, and ship fixes without context-switching between tools.
+
+## Core Features
+
+### [AI Copilot (Scout)](/docs/copilot)
+
+An AI assistant purpose-built for data engineering. Scout connects directly to your warehouses, transformation layer, and orchestration tools so it can answer questions with real data. Eight interaction modes tailor its behavior to the task at hand -- from debugging pipeline failures to generating production-ready dbt models.
+
+### [Data Lineage](/docs/lineage)
+
+A unified lineage graph that spans your entire stack, from ingestion through transformation to reporting. Two visualization planes (data lineage and orchestration lineage) give you full visibility into table dependencies and DAG execution flows. Every edge carries a confidence score backed by evidence.
+
+### [Pipeline Builder](/docs/pipeline-builder)
+
+Visual pipeline configuration where you define your stack, connect integrations, and organize nodes into layers. The builder gives you a health overview of every integration in your pipeline.
+
+### [Scheduled Monitoring](/docs/scheduled-monitoring)
+
+Automated quality checks that run on a cron schedule and alert your team when something breaks. Eight data quality monitor types plus three infrastructure monitors cover freshness, volume, schema drift, anomalies, and more.
+
+### [Sources Browser](/docs/sources-browser)
+
+Browse all tables, dbt models, and connectors across your connected warehouses. View schemas, row counts, column details, and link directly to lineage.
+
+### [Change Plans](/docs/change-plans)
+
+Structured change management for schema migrations, dbt model refactors, and pipeline modifications. Scout traces the lineage graph for impact analysis, generates file patches, validates changes, and creates GitHub PRs.
+
+### [Artifacts Library](/docs/artifacts)
+
+Save any Scout response as a persistent, searchable artifact. Tag, categorize, pin favorites, and share with the team.
+
+### [Team & Access Control](/docs/team-access)
+
+Role-based access control with five organization roles and per-pipeline permissions. Invite members, manage access levels, and review the audit log.
+
+## Supported Integrations
+
+Pallisade connects to the tools your data team already uses:
+
+| Category | Platforms |
+|----------|-----------|
+| **Warehouses** | BigQuery, Snowflake, PostgreSQL, Redshift, SQL Server, Azure SQL, Databricks |
+| **Transformation** | dbt Cloud, dbt Core |
+| **Orchestration** | Apache Airflow, Dagster, Prefect |
+| **Data Integration** | Fivetran, Airbyte, Stitch |
+| **BI & Reporting** | Looker, Tableau, Power BI, Metabase |
+| **Alerts** | Slack, Microsoft Teams, PagerDuty, OpsGenie |
+| **Ticketing** | Jira, Linear, Asana, GitHub Issues |
+| **Cloud Storage** | Amazon S3, Google Cloud Storage, Azure Data Lake Storage |
+| **Infrastructure** | Linux servers via SSH |
+
+## Getting Started
+
+New to Pallisade? Start with the [Getting Started guide](/docs/getting-started) to set up your first pipeline, connect a warehouse, and begin your first Scout conversation.

@@ -4,22 +4,49 @@
  * Node Configuration Modal
  *
  * Professional modal for configuring node credentials and settings
- * Supports OAuth flow for GitHub
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { PipelineNode, getToolById, LAYER_COLORS, ConfigField } from './types';
-import { Loader2, Check, ExternalLink } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
-// Tools that support OAuth authentication
-const OAUTH_TOOLS = ['github'];
-
-interface GitHubConnectionInfo {
-  connected: boolean;
-  username?: string;
-  repoCount?: number;
-  avatar?: string;
-}
+const TOOL_LOGO_MAP: Record<string, string> = {
+  bigquery: '/icon_logos/google-bigquery-logo-1.svg',
+  snowflake: '/icon_logos/snowflake-data-cloud-icon.svg',
+  redshift: '/icon_logos/aws-redshift-logo.svg',
+  postgres: '/icon_logos/postgresql.svg',
+  sqlserver: '/icon_logos/azure-sql-server.svg',
+  azure_sql: '/icon_logos/azure-sql-server.svg',
+  azure_synapse: '/icon_logos/Microsoft_Azure-OXJddnt9u_brandlogos.net.svg',
+  databricks: '/icon_logos/azure-databricks.svg',
+  fivetran: '/icon_logos/fivetran_logo_icon_170149.svg',
+  airbyte: '/icon_logos/Airbyte_idZV_I3WYE_0.svg',
+  dbt_cloud: '/icon_logos/dbt-seeklogo.svg',
+  dbt_core: '/icon_logos/dbt-seeklogo.svg',
+  airflow: '/icon_logos/apache-airflow.svg',
+  dagster: '/icon_logos/dagster-primary-mark.svg',
+  prefect: '/icon_logos/prefect-1.svg',
+  looker: '/icon_logos/google-looker-seeklogo.svg',
+  tableau: '/icon_logos/tableau-icon-svgrepo-com.svg',
+  metabase: '/icon_logos/metabase.svg',
+  powerbi: '/icon_logos/powerbi.svg',
+  amazon_s3: '/icon_logos/amazon-web-services-light.svg',
+  gcs: '/icon_logos/google-cloud-platform.svg',
+  adls: '/icon_logos/Microsoft_Azure-OXJddnt9u_brandlogos.net.svg',
+  github: '/icon_logos/github-light.svg',
+  github_issues: '/icon_logos/github-light.svg',
+  gitlab: '/icon_logos/gitlab.svg',
+  bitbucket: '/icon_logos/bitbucket.svg',
+  slack: '/icon_logos/slack.svg',
+  pagerduty: '/icon_logos/pagerduty.svg',
+  opsgenie: '/icon_logos/atlassian-opsgenie.svg',
+  teams: '/icon_logos/microsoft-teams.svg',
+  jira: '/icon_logos/jira.svg',
+  linear: '/icon_logos/linear-dark.svg',
+  asana: '/icon_logos/asana.svg',
+  linux_server: '/icon_logos/linux.svg',
+};
 
 interface NodeConfigModalProps {
   node: PipelineNode;
@@ -122,7 +149,7 @@ function MultiSelectField({
               <button 
                 type="button"
                 onClick={() => removeValue(v)}
-                className="hover:bg-white/10 rounded p-0.5"
+                className="hover:bg-[var(--overlay-medium)] rounded p-0.5"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -135,7 +162,7 @@ function MultiSelectField({
 
       {/* Options checkboxes or manual input */}
       {loading ? (
-        <div className="flex items-center gap-2 text-gray-400 text-sm py-3">
+        <div className="flex items-center gap-2 text-[var(--muted)] text-sm py-3">
           <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
@@ -143,14 +170,14 @@ function MultiSelectField({
           Loading {field.optionsEndpoint}...
         </div>
       ) : options.length > 0 ? (
-        <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 rounded-xl bg-[rgba(255,255,255,0.02)] border border-[rgba(255,255,255,0.06)]">
+        <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 rounded-xl bg-[var(--overlay-faint)] border border-[var(--subtle-border)]">
           {options.map(opt => (
             <label 
               key={opt.value}
               className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
                 value.includes(opt.value) 
                   ? 'bg-[var(--accent)]/10 border border-[var(--accent)]/30' 
-                  : 'hover:bg-[rgba(255,255,255,0.04)] border border-transparent'
+                  : 'hover:bg-[var(--overlay-bg)] border border-transparent'
               }`}
             >
               <input
@@ -159,7 +186,7 @@ function MultiSelectField({
                 onChange={() => toggleOption(opt.value)}
                 className="w-4 h-4 rounded border-gray-600 text-[var(--accent)] focus:ring-[var(--accent)] focus:ring-offset-0 bg-transparent"
               />
-              <span className="text-sm text-white truncate">{opt.label}</span>
+              <span className="text-sm text-[var(--text)] truncate">{opt.label}</span>
             </label>
           ))}
         </div>
@@ -171,7 +198,7 @@ function MultiSelectField({
             onChange={(e) => setManualInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addManualValue())}
             placeholder={field.placeholder || 'Enter value and press Enter'}
-            className="flex-1 px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white placeholder:text-gray-500 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+            className="flex-1 px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
           />
           <button
             type="button"
@@ -194,7 +221,7 @@ function MultiSelectField({
         <button
           type="button"
           onClick={fetchOptions}
-          className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+          className="text-xs text-[var(--muted)] hover:text-[var(--text)] flex items-center gap-1"
         >
           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -204,7 +231,112 @@ function MultiSelectField({
       )}
 
       {field.helperText && (
-        <p className="text-xs text-gray-500">{field.helperText}</p>
+        <p className="text-xs text-[var(--muted)]">{field.helperText}</p>
+      )}
+    </div>
+  );
+}
+
+// Dynamic select field that loads options from an API endpoint
+function DynamicSelectField({
+  field,
+  value = '',
+  onChange,
+  stackId,
+  nodeId,
+  toolType,
+  config,
+}: {
+  field: ConfigField;
+  value: string;
+  onChange: (value: string) => void;
+  stackId?: string;
+  nodeId?: string;
+  toolType?: string;
+  config: Record<string, any>;
+}) {
+  const [options, setOptions] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchOptions = useCallback(async () => {
+    if (!field.dynamicOptions || !field.optionsEndpoint) return;
+    if (!stackId || !nodeId) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/pipeline/${stackId}/nodes/${nodeId}/${field.optionsEndpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config, toolType }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const items = data.options || data.datasets || data.schemas || [];
+        setOptions(items);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.error || 'Failed to load options');
+      }
+    } catch {
+      setError('Failed to fetch options');
+    } finally {
+      setLoading(false);
+    }
+  }, [field.dynamicOptions, field.optionsEndpoint, stackId, nodeId, config, toolType]);
+
+  useEffect(() => {
+    fetchOptions();
+  }, [fetchOptions]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-[var(--muted)] text-sm py-3">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        Loading {field.optionsEndpoint}...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {options.length > 0 ? (
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+        >
+          <option value="">Select...</option>
+          {options.map(opt => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      ) : (
+        <div>
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={field.placeholder || 'Enter value'}
+            className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+          />
+          {error && <p className="text-xs text-amber-400 mt-1">{error}</p>}
+        </div>
+      )}
+      {field.dynamicOptions && stackId && nodeId && (
+        <button
+          type="button"
+          onClick={fetchOptions}
+          className="text-xs text-[var(--muted)] hover:text-[var(--text)] flex items-center gap-1"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Refresh
+        </button>
       )}
     </div>
   );
@@ -212,63 +344,25 @@ function MultiSelectField({
 
 export default function NodeConfigModal({ node, stackId, onSave, onClose }: NodeConfigModalProps) {
   const tool = getToolById(node.toolType);
-  const [config, setConfig] = useState<Record<string, any>>(node.config || {});
+  const [config, setConfig] = useState<Record<string, any>>(() => {
+    const initial = node.config || {};
+    // Ensure Airflow defaults
+    if (node.toolType === 'airflow') {
+      if (!initial.source_mode) {
+        // Detect mode from config fields: github_repo → github mode, otherwise api
+        initial.source_mode = initial.github_repo ? 'github' : 'api';
+      }
+      if (!initial.dag_directory) {
+        initial.dag_directory = 'dags';
+      }
+      return { ...initial };
+    }
+    return initial;
+  });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // OAuth state for GitHub
-  const isOAuthTool = OAUTH_TOOLS.includes(node.toolType);
-  const [useOAuth, setUseOAuth] = useState(isOAuthTool);
-  const [githubInfo, setGithubInfo] = useState<GitHubConnectionInfo | null>(null);
-  const [loadingGithub, setLoadingGithub] = useState(false);
-
-  // Check for existing GitHub OAuth connection
-  useEffect(() => {
-    if (isOAuthTool) {
-      checkGitHubConnection();
-    }
-  }, [isOAuthTool]);
-
-  const checkGitHubConnection = async () => {
-    setLoadingGithub(true);
-    try {
-      const res = await fetch('/api/integrations');
-      if (res.ok) {
-        const data = await res.json();
-        const githubIntegration = data.integrations?.find(
-          (i: any) => i.type === 'GITHUB' && i.status === 'ACTIVE'
-        );
-        if (githubIntegration) {
-          setGithubInfo({
-            connected: true,
-            username: githubIntegration.metadata?.username,
-            repoCount: githubIntegration.metadata?.repoCount,
-            avatar: githubIntegration.metadata?.avatar,
-          });
-          // Pre-fill config with linked integration
-          setConfig(prev => ({
-            ...prev,
-            _integration_id: githubIntegration.id,
-            _oauth_linked: true,
-          }));
-        } else {
-          setGithubInfo({ connected: false });
-        }
-      }
-    } catch (error) {
-      console.error('Failed to check GitHub connection:', error);
-      setGithubInfo({ connected: false });
-    } finally {
-      setLoadingGithub(false);
-    }
-  };
-
-  const handleGitHubConnect = () => {
-    // Store node info in sessionStorage so we can update it after OAuth
-    sessionStorage.setItem('pending_github_node', JSON.stringify({ nodeId: node.id, stackId }));
-    window.location.href = '/api/integrations/oauth/github';
-  };
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Get config fields - use tool's fields or provide a fallback
   const configFields: ConfigField[] = tool?.configFields || [
@@ -297,6 +391,49 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
     reader.readAsText(file);
   };
 
+  const handleFolderUpload = async (name: string, fileList: FileList) => {
+    const projectFiles: Record<string, string> = {};
+    const relevantExts = ['.sql', '.yml', '.yaml'];
+    const skipDirs = ['target', 'dbt_packages', 'dbt_modules', '.git', 'logs', 'node_modules'];
+    let fileCount = 0;
+
+    const readPromises: Promise<void>[] = [];
+
+    for (let i = 0; i < fileList.length; i++) {
+      const file = fileList[i];
+      const path = file.webkitRelativePath || file.name;
+      const lower = path.toLowerCase();
+
+      // Only .sql and .yml/.yaml files
+      if (!relevantExts.some(ext => lower.endsWith(ext))) continue;
+
+      // Skip irrelevant directories
+      const parts = path.split('/');
+      if (parts.some(p => skipDirs.includes(p))) continue;
+
+      readPromises.push(
+        file.text().then(content => {
+          // Strip the top-level folder name from the path
+          // e.g. "my-dbt-project/models/x.sql" → "models/x.sql"
+          const relPath = parts.length > 1 ? parts.slice(1).join('/') : path;
+          projectFiles[relPath] = content;
+          fileCount++;
+        }).catch(() => {
+          // Skip files that can't be read
+        })
+      );
+    }
+
+    await Promise.all(readPromises);
+
+    if (fileCount > 0) {
+      handleFieldChange(name, projectFiles);
+      setTestResult({ success: true, message: `Loaded ${fileCount} project files (SQL + YAML)` });
+    } else {
+      setTestResult({ success: false, message: 'No SQL or YAML files found in selected folder' });
+    }
+  };
+
   const testConnection = async () => {
     setTesting(true);
     setTestResult(null);
@@ -308,6 +445,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
         body: JSON.stringify({
           toolType: node.toolType,
           config,
+          stackId,
         }),
       });
 
@@ -322,6 +460,8 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
   const isValid = configFields.every(field => {
     if (!field.required) return true;
+    // Skip validation for fields hidden by showWhen
+    if (field.showWhen && config[field.showWhen.field] !== field.showWhen.value) return true;
     const value = config[field.name];
     // For multi-select, check array has items
     if (field.type === 'multi-select') {
@@ -333,47 +473,54 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
   const layerColor = LAYER_COLORS[node.layer];
 
-  return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div 
-        className="w-full max-w-lg bg-[#0A0A0F] rounded-2xl border border-[rgba(255,255,255,0.08)] shadow-2xl overflow-hidden"
+        className="h-full w-full max-w-xl bg-[var(--surface)] border-l border-[var(--subtle-border)] shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div
-          className="px-6 py-5 border-b border-[rgba(255,255,255,0.06)]"
+          className="px-6 py-5 border-b border-[var(--subtle-border)]"
           style={{ background: `linear-gradient(135deg, ${layerColor}10, transparent)` }}
         >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div 
-                className="w-12 h-12 rounded-xl flex items-center justify-center"
-                style={{ backgroundColor: layerColor + '20' }}
+              <div
+                className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 bg-white"
               >
-                <svg 
-                  className="w-6 h-6" 
-                  viewBox="0 0 24 24" 
-                  fill="none" 
-                  stroke={layerColor}
-                  strokeWidth="2"
-                >
-                  <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                  <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                </svg>
+                {TOOL_LOGO_MAP[node.toolType] ? (
+                  <img
+                    src={TOOL_LOGO_MAP[node.toolType]}
+                    alt={`${node.toolType} logo`}
+                    className="w-7 h-7 object-contain"
+                  />
+                ) : (
+                  <svg
+                    className="w-6 h-6"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke={layerColor}
+                    strokeWidth="2"
+                  >
+                    <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                    <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                  </svg>
+                )}
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-white">
+                <h2 className="text-lg font-semibold text-[var(--text)]">
                   Configure {node.name}
                 </h2>
-                <p className="text-sm text-gray-400">{tool?.description || 'Connect this tool to Pallisade'}</p>
+                <p className="text-sm text-[var(--muted)]">{tool?.description || 'Connect this tool to Pallisade'}</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.06)] text-gray-400 hover:text-white transition-colors"
+              className="p-2 rounded-lg hover:bg-[var(--hover-bg)] text-[var(--muted)] hover:text-[var(--text)] transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -384,77 +531,16 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
 
         {/* Body */}
         <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto">
-          {/* OAuth section for GitHub */}
-          {isOAuthTool && (
-            <div className="mb-6">
-              {loadingGithub ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
-                </div>
-              ) : githubInfo?.connected ? (
-                // Already connected via OAuth
-                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                  <div className="flex items-center gap-3">
-                    {githubInfo.avatar ? (
-                      <img src={githubInfo.avatar} alt="" className="w-10 h-10 rounded-full" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-[#24292e] flex items-center justify-center">
-                        <GitHubIcon className="w-5 h-5 text-white" />
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 text-emerald-400 mb-0.5">
-                        <Check className="w-4 h-4" />
-                        <span className="font-medium text-sm">GitHub Connected</span>
-                      </div>
-                      <p className="text-white text-sm">@{githubInfo.username}</p>
-                      <p className="text-xs text-gray-400">{githubInfo.repoCount} repositories available</p>
-                    </div>
-                    <button
-                      onClick={handleGitHubConnect}
-                      className="text-xs text-gray-400 hover:text-white underline"
-                    >
-                      Reconnect
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                // Not connected - show OAuth button
-                <div className="text-center py-6">
-                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#24292e] flex items-center justify-center">
-                    <GitHubIcon className="w-8 h-8 text-white" />
-                  </div>
-                  <h3 className="text-lg font-medium text-white mb-2">Connect to GitHub</h3>
-                  <p className="text-sm text-gray-400 mb-6 max-w-sm mx-auto">
-                    Sign in with GitHub to access your repositories for creating PRs and tracking changes.
-                  </p>
-
-                  <button
-                    onClick={handleGitHubConnect}
-                    className="inline-flex items-center gap-2 px-6 py-3 bg-[#24292e] hover:bg-[#2d3339] text-white font-medium rounded-lg transition-colors"
-                  >
-                    <GitHubIcon className="w-5 h-5" />
-                    Connect with GitHub
-                    <ExternalLink className="w-4 h-4 ml-1 opacity-50" />
-                  </button>
-
-                  <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)]">
-                    <button
-                      onClick={() => setUseOAuth(false)}
-                      className="text-xs text-gray-500 hover:text-gray-300"
-                    >
-                      Or configure manually with Personal Access Token →
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Manual config fields (shown if not using OAuth or if OAuth is connected) */}
-          {(!isOAuthTool || !useOAuth || githubInfo?.connected) && configFields.map(field => (
+          {/* Config fields */}
+          {configFields.filter(field => {
+            // Apply showWhen conditional visibility
+            if (field.showWhen) {
+              if (config[field.showWhen.field] !== field.showWhen.value) return false;
+            }
+            return true;
+          }).map(field => (
             <div key={field.name}>
-              <label className="block text-sm font-medium text-white mb-2">
+              <label className="block text-sm font-medium text-[var(--text)] mb-2">
                 {field.label}
                 {field.required && <span className="text-red-400 ml-1">*</span>}
               </label>
@@ -474,7 +560,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[rgba(255,255,255,0.1)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
+                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[var(--border-medium)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
                   >
                     {config[field.name] ? (
                       <span className="flex items-center justify-center gap-2 text-emerald-400">
@@ -484,7 +570,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                         File uploaded successfully
                       </span>
                     ) : (
-                      <span className="flex items-center justify-center gap-2 text-gray-400">
+                      <span className="flex items-center justify-center gap-2 text-[var(--muted)]">
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                         </svg>
@@ -493,7 +579,47 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                     )}
                   </button>
                   {field.helperText && (
-                    <p className="text-xs text-gray-500 mt-2">{field.helperText}</p>
+                    <p className="text-xs text-[var(--muted)] mt-2">{field.helperText}</p>
+                  )}
+                </div>
+              ) : field.type === 'folder' ? (
+                <div>
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    /* @ts-expect-error webkitdirectory is not in React types */
+                    webkitdirectory=""
+                    directory=""
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      const files = e.target.files;
+                      if (files && files.length > 0) handleFolderUpload(field.name, files);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => folderInputRef.current?.click()}
+                    className="w-full px-4 py-4 rounded-xl border-2 border-dashed border-[var(--border-medium)] hover:border-[var(--accent)] hover:bg-[var(--accent)]/5 text-sm transition-all"
+                  >
+                    {config[field.name] && typeof config[field.name] === 'object' ? (
+                      <span className="flex items-center justify-center gap-2 text-emerald-400">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        {Object.keys(config[field.name]).length} project files loaded
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-center gap-2 text-[var(--muted)]">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                        Click to select project folder
+                      </span>
+                    )}
+                  </button>
+                  {field.helperText && (
+                    <p className="text-xs text-[var(--muted)] mt-2">{field.helperText}</p>
                   )}
                 </div>
               ) : field.type === 'multi-select' ? (
@@ -506,11 +632,21 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   toolType={node.toolType}
                   config={config}
                 />
+              ) : field.type === 'select' && field.dynamicOptions ? (
+                <DynamicSelectField
+                  field={field}
+                  value={config[field.name] || ''}
+                  onChange={(value) => handleFieldChange(field.name, value)}
+                  stackId={stackId}
+                  nodeId={node.id}
+                  toolType={node.toolType}
+                  config={config}
+                />
               ) : field.type === 'select' ? (
                 <select
                   value={config[field.name] || ''}
                   onChange={(e) => handleFieldChange(field.name, e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
                 >
                   <option value="">Select...</option>
                   {field.options?.map(opt => (
@@ -523,7 +659,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   onChange={(e) => handleFieldChange(field.name, e.target.value)}
                   placeholder={field.placeholder}
                   rows={4}
-                  className="w-full px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white placeholder:text-gray-500 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all resize-none"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all resize-none"
                 />
               ) : (
                 <input
@@ -531,7 +667,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
                   value={config[field.name] || ''}
                   onChange={(e) => handleFieldChange(field.name, e.target.value)}
                   placeholder={field.placeholder}
-                  className="w-full px-4 py-3 rounded-xl bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] text-white placeholder:text-gray-500 focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[var(--text)] placeholder:text-[var(--text-faint)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] focus:outline-none transition-all"
                 />
               )}
             </div>
@@ -561,11 +697,11 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-[rgba(255,255,255,0.06)] bg-[rgba(0,0,0,0.2)] flex items-center justify-between">
+        <div className="px-6 py-4 border-t border-[var(--subtle-border)] bg-[var(--overlay-bg)] flex items-center justify-between">
           <button
             onClick={testConnection}
             disabled={!isValid || testing}
-            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl bg-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.08)] text-white border border-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.12)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl bg-[var(--overlay-bg)] hover:bg-[var(--hover-bg)] text-[var(--text)] border border-[var(--subtle-border)] hover:border-[var(--overlay-strong)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {testing ? (
               <>
@@ -588,13 +724,24 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
           <div className="flex items-center gap-3">
             <button 
               onClick={onClose} 
-              className="px-4 py-2.5 text-sm font-medium rounded-xl text-gray-400 hover:text-white hover:bg-[rgba(255,255,255,0.04)] transition-all"
+              className="px-4 py-2.5 text-sm font-medium rounded-xl text-[var(--muted)] hover:text-[var(--text)] hover:bg-[var(--overlay-bg)] transition-all"
             >
               Cancel
             </button>
             <button
-              onClick={() => onSave(config)}
-              disabled={!isValid && !(isOAuthTool && githubInfo?.connected)}
+              onClick={() => {
+                // Strip fields hidden by showWhen before saving — prevents stale
+                // mode-specific values (e.g. old GitHub fields when switching to API mode)
+                // from being persisted alongside the new mode's fields.
+                const cleanConfig = { ...config };
+                configFields.forEach(field => {
+                  if (field.showWhen && cleanConfig[field.showWhen.field] !== field.showWhen.value) {
+                    delete cleanConfig[field.name];
+                  }
+                });
+                onSave(cleanConfig);
+              }}
+              disabled={!isValid}
               className="px-5 py-2.5 text-sm font-medium rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Save Configuration
@@ -602,15 +749,7 @@ export default function NodeConfigModal({ node, stackId, onSave, onClose }: Node
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// GitHub Icon Component
-function GitHubIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-    </svg>
+    </div>,
+    document.body,
   );
 }

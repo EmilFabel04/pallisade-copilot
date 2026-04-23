@@ -1,0 +1,279 @@
+# Platform Registry — Single Source of Truth (YAML)
+#
+# Every platform/tool known to the lineage engine is registered here.
+# To add a new platform, add ONE entry under `platforms:`.
+#
+# Fields (all optional except category and domain):
+#   category:        warehouse | ingestion | transformation | orchestration | reporting | infrastructure | version_control | quality
+#   domain:          warehouse | transform | orchestration | bi | ingestion | catalog | app | other
+#   capabilities:    list of additional ToolCategory values (eligibility hints, not proof)
+#   is_warehouse:    true if this is a data warehouse (default: false)
+#   is_sql_engine:   true if it executes SQL (default: false)
+#   adapter_id:      name of the adapter module (default: null)
+#   heuristic_order: extraction ordering, lower = higher priority (default: 50)
+#   aliases:         list of alternative names (default: [])
+
+platforms:
+
+  # ── Warehouses ──────────────────────────────────────────────────────────
+  bigquery:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    adapter_id: live_warehouse
+    heuristic_order: 10
+
+  snowflake:
+    category: warehouse
+    domain: warehouse
+    capabilities: [transformation]
+    is_warehouse: true
+    is_sql_engine: true
+    adapter_id: live_warehouse
+    heuristic_order: 11
+
+  postgres:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    adapter_id: live_warehouse
+    heuristic_order: 12
+
+  redshift:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    adapter_id: live_warehouse
+    heuristic_order: 13
+
+  databricks:
+    category: warehouse
+    domain: warehouse
+    capabilities: [orchestration, transformation]
+    is_warehouse: true
+    is_sql_engine: true
+    adapter_id: live_databricks
+    heuristic_order: 14
+
+  trino:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    heuristic_order: 15
+
+  duckdb:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    heuristic_order: 16
+
+  mysql:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    heuristic_order: 17
+
+  mssql:
+    category: warehouse
+    domain: warehouse
+    is_warehouse: true
+    is_sql_engine: true
+    heuristic_order: 18
+
+  # ── Transformation ──────────────────────────────────────────────────────
+  dbt_core:
+    category: transformation
+    domain: transform
+    adapter_id: live_dbt
+    heuristic_order: 20
+    aliases: [dbt]
+
+  dbt_cloud:
+    category: transformation
+    domain: transform
+    adapter_id: live_dbt
+    heuristic_order: 21
+
+  spark:
+    category: transformation
+    domain: transform
+    heuristic_order: 22
+
+  dataform:
+    category: transformation
+    domain: transform
+    heuristic_order: 23
+
+  sqlmesh:
+    category: transformation
+    domain: transform
+    heuristic_order: 24
+
+  # ── Ingestion ───────────────────────────────────────────────────────────
+  fivetran:
+    category: ingestion
+    domain: ingestion
+    adapter_id: live_fivetran
+    heuristic_order: 30
+
+  airbyte:
+    category: ingestion
+    domain: ingestion
+    adapter_id: live_airbyte
+    heuristic_order: 31
+
+  n8n:
+    category: ingestion
+    domain: ingestion
+    adapter_id: live_n8n
+    heuristic_order: 32
+
+  meltano:
+    category: ingestion
+    domain: ingestion
+    heuristic_order: 33
+
+  stitch:
+    category: ingestion
+    domain: ingestion
+    heuristic_order: 34
+
+  hevo:
+    category: ingestion
+    domain: ingestion
+    heuristic_order: 35
+
+  matillion:
+    category: ingestion
+    domain: ingestion
+    heuristic_order: 36
+
+  rivery:
+    category: ingestion
+    domain: ingestion
+    heuristic_order: 37
+
+  singer:
+    category: ingestion
+    domain: ingestion
+    heuristic_order: 38
+
+  # ── Orchestration ───────────────────────────────────────────────────────
+  airflow:
+    category: orchestration
+    domain: orchestration
+    adapter_id: live_airflow
+    heuristic_order: 40
+
+  dagster:
+    category: orchestration
+    domain: orchestration
+    adapter_id: live_dagster
+    heuristic_order: 41
+
+  prefect:
+    category: orchestration
+    domain: orchestration
+    adapter_id: live_prefect
+    heuristic_order: 42
+
+  flink:
+    category: orchestration
+    domain: orchestration
+    heuristic_order: 43
+
+  # ── Reporting / BI ──────────────────────────────────────────────────────
+  looker:
+    category: reporting
+    domain: bi
+    adapter_id: live_looker
+    heuristic_order: 50
+
+  tableau:
+    category: reporting
+    domain: bi
+    adapter_id: live_tableau
+    heuristic_order: 51
+
+  powerbi:
+    category: reporting
+    domain: bi
+    adapter_id: live_powerbi
+    heuristic_order: 52
+
+  metabase:
+    category: reporting
+    domain: bi
+    adapter_id: live_metabase
+    heuristic_order: 53
+
+  superset:
+    category: reporting
+    domain: bi
+    heuristic_order: 54
+
+  mode:
+    category: reporting
+    domain: bi
+    heuristic_order: 55
+
+  sigma:
+    category: reporting
+    domain: bi
+    heuristic_order: 56
+
+  thoughtspot:
+    category: reporting
+    domain: bi
+    heuristic_order: 57
+
+  # ── Quality ─────────────────────────────────────────────────────────────
+  elementary:
+    category: quality
+    domain: other
+    adapter_id: live_elementary
+    heuristic_order: 60
+
+  # ── Infrastructure ──────────────────────────────────────────────────────
+  linux:
+    category: infrastructure
+    domain: other
+    heuristic_order: 70
+
+  linux_server:
+    category: infrastructure
+    domain: other
+    adapter_id: live_linux
+    heuristic_order: 70
+
+  ssh:
+    category: infrastructure
+    domain: other
+    adapter_id: live_linux
+    heuristic_order: 71
+
+  # ── Version Control ─────────────────────────────────────────────────────
+  github:
+    category: version_control
+    domain: other
+    adapter_id: live_github
+    heuristic_order: 80
+
+  gitlab:
+    category: version_control
+    domain: other
+    adapter_id: live_github
+    heuristic_order: 81
+
+  # ── Storage ─────────────────────────────────────────────────────────────
+  storage:
+    category: infrastructure
+    domain: other
+    adapter_id: live_storage
+    heuristic_order: 90

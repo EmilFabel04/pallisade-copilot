@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { IntegrationType } from '@prisma/client';
 
 // GET /api/integrations/saved
 // Returns a lightweight list of saved connections so users can pick an existing integration
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -23,11 +23,17 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams;
     const typeFilter = searchParams.get('type') || undefined;
+    // Support comma-separated types: ?types=SLACK,PAGERDUTY,JIRA
+    // Validate against the Prisma enum to avoid runtime errors
+    const validTypes = new Set(Object.values(IntegrationType));
+    const typesFilter = searchParams.get('types')
+      ?.split(',')
+      .filter((t): t is IntegrationType => validTypes.has(t as IntegrationType)) || undefined;
 
     const connections = await prisma.integration.findMany({
       where: {
         organizationId: user.organizationId,
-        ...(typeFilter ? { type: typeFilter } : {}),
+        ...(typesFilter?.length ? { type: { in: typesFilter } } : typeFilter ? { type: typeFilter as IntegrationType } : {}),
       },
       select: {
         id: true,

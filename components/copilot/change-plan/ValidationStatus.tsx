@@ -134,16 +134,16 @@ export function ValidationStatus({ validations, compact = false, onRunValidation
               disabled={!canClick}
               className={`
                 flex flex-col items-center gap-1 p-2 rounded-lg transition-all
-                ${canClick ? 'cursor-pointer hover:bg-white/[0.04]' : 'cursor-default opacity-60'}
+                ${canClick ? 'cursor-pointer hover:bg-[var(--overlay-bg)]' : 'cursor-default opacity-60'}
               `}
               style={{
-                backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                border: `1px solid ${expandedLevel === level ? config.color : 'rgba(255, 255, 255, 0.06)'}`,
+                backgroundColor: 'var(--overlay-faint)',
+                border: `1px solid ${expandedLevel === level ? config.color : 'var(--subtle-border)'}`,
               }}
               title={status === 'pending' && onRunValidation ? `Click to run ${level} validation` : undefined}
             >
               <div style={{ color: config.color }}>{config.icon}</div>
-              <span className="text-xs font-medium text-white/80">{LEVEL_LABELS[level]}</span>
+              <span className="text-xs font-medium text-[var(--text-secondary)]">{LEVEL_LABELS[level]}</span>
               <span className="text-[10px]" style={{ color: config.color }}>
                 {config.label}
               </span>
@@ -158,7 +158,7 @@ export function ValidationStatus({ validations, compact = false, onRunValidation
                 </div>
               )}
               {status === 'pending' && onRunValidation && (
-                <span className="text-[9px] text-white/40">Click to run</span>
+                <span className="text-[9px] text-[var(--muted)]">Click to run</span>
               )}
             </button>
           );
@@ -169,7 +169,7 @@ export function ValidationStatus({ validations, compact = false, onRunValidation
         <div
           className="p-3 rounded-lg text-xs space-y-2"
           style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.02)',
+            backgroundColor: 'var(--overlay-faint)',
             border: '1px solid rgba(255, 255, 255, 0.06)',
           }}
         >
@@ -190,7 +190,7 @@ export function ValidationStatus({ validations, compact = false, onRunValidation
               <span className="text-red-400 font-medium block mb-1">Errors:</span>
               <ul className="space-y-1">
                 {validations[expandedLevel]!.errors.map((error, i) => (
-                  <li key={i} className="text-white/70 pl-2 border-l-2 border-red-400/30">
+                  <li key={i} className="text-[var(--text-tertiary)] pl-2 border-l-2 border-red-400/30">
                     {error}
                   </li>
                 ))}
@@ -203,7 +203,7 @@ export function ValidationStatus({ validations, compact = false, onRunValidation
               <span className="text-yellow-400 font-medium block mb-1">Warnings:</span>
               <ul className="space-y-1">
                 {validations[expandedLevel]!.warnings.map((warning, i) => (
-                  <li key={i} className="text-white/70 pl-2 border-l-2 border-yellow-400/30">
+                  <li key={i} className="text-[var(--text-tertiary)] pl-2 border-l-2 border-yellow-400/30">
                     {warning}
                   </li>
                 ))}
@@ -212,7 +212,7 @@ export function ValidationStatus({ validations, compact = false, onRunValidation
           )}
 
           {validations[expandedLevel]!.duration_seconds && (
-            <div className="text-white/50">
+            <div className="text-[var(--muted)]">
               Duration: {validations[expandedLevel]!.duration_seconds.toFixed(2)}s
             </div>
           )}

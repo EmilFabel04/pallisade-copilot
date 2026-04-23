@@ -1,0 +1,132 @@
+---
+title: Data Lineage
+description: Visualize table dependencies, orchestration flows, and column-level lineage across your entire data stack.
+section: guides
+order: 3
+---
+
+# Data Lineage
+
+Pallisade builds a unified lineage graph that spans your entire stack -- from ingestion through transformation to reporting. The lineage viewer helps you understand how data flows, trace the impact of changes, and investigate failures by following dependencies upstream and downstream.
+
+## Visualization Planes
+
+The lineage viewer offers two complementary views that can be toggled independently.
+
+### Data Lineage
+
+The data lineage plane shows table and view dependencies extracted from SQL queries, dbt manifests, and warehouse metadata. Nodes are color-coded by pipeline layer:
+
+| Layer | Color | Examples |
+|-------|-------|----------|
+| Ingestion | Blue | Fivetran synced tables, Airbyte destinations |
+| Staging | Teal | `stg_` prefixed dbt models |
+| Warehouse | Purple | Core fact and dimension tables |
+| Reporting | Green | BI-facing views and aggregations |
+
+Edges represent data flow: an edge from table A to table B means B depends on A (B reads from A or is built from A).
+
+### Orchestration Lineage
+
+The orchestration lineage plane shows DAG and task execution flows from Airflow, Dagster, or Prefect. This view can be overlaid on the data lineage to show which orchestration tasks produce which tables.
+
+Use orchestration lineage to answer questions like:
+- Which Airflow task populates the `daily_revenue` table?
+- What is the execution order between my staging and mart tasks?
+- Which tasks ran successfully and which failed in the last DAG run?
+
+### Lane Pipeline Overview
+
+The lane view provides a high-level overview of your pipeline organized by layer. Nodes are grouped into swim lanes (ingestion, transformation, warehouse, reporting) so you can see the overall shape of your data flow at a glance.
+
+## Confidence Scoring
+
+Every edge in the lineage graph carries a confidence score from 0 to 1, based on the strength of the evidence behind the relationship.
+
+| Confidence Range | Meaning |
+|-----------------|---------|
+| 0.9 -- 1.0 | High confidence. Direct evidence from SQL parsing or dbt manifest `ref()` calls. |
+| 0.7 -- 0.89 | Medium confidence. Inferred from naming conventions or partial SQL matches. |
+| 0.5 -- 0.69 | Low confidence. Weak evidence -- table names appear together but the relationship is not proven. |
+| Below 0.5 | Speculative. Flagged for manual review. |
+
+Use the confidence slider in the filter bar to set a minimum threshold. Edges below your threshold are hidden from the view.
+
+<Callout type="tip">
+Start with a confidence threshold of 0.7 to see well-supported relationships. Lower it to 0.5 to discover potential edges that may need verification.
+</Callout>
+
+## Edge Evidence
+
+Click any edge to open the evidence panel. This panel shows the exact source that created the relationship:
+
+- **SQL-based edges** display the parsed SQL statement with the relevant `FROM`, `JOIN`, or `INSERT INTO` clauses highlighted.
+- **dbt manifest edges** show the `ref()` or `source()` call from the model file.
+- **Warehouse metadata edges** show the information schema query that discovered the dependency.
+
+Each evidence entry includes the adapter that produced it (e.g., `live_warehouse`, `live_dbt`), a timestamp, and the confidence score.
+
+## Filtering
+
+The filter bar at the top of the lineage viewer lets you narrow the graph:
+
+| Filter | Description |
+|--------|-------------|
+| **Layer** | Show only nodes from specific layers (ingestion, staging, warehouse, reporting) |
+| **Node type** | Filter by table, view, dbt model, Airflow task, etc. |
+| **Confidence threshold** | Hide edges below a minimum confidence score |
+| **Search** | Find nodes by name and center the view on them |
+
+Filters apply in real time. The graph re-renders as you adjust sliders and toggles.
+
+## Node Inspection
+
+Click any node to open the inspection panel. The panel shows:
+
+- **Basic metadata** -- Full qualified name, type, layer, dataset/schema
+- **Upstream neighbors** -- Tables and models that feed into this node
+- **Downstream neighbors** -- Tables and models that depend on this node
+- **Freshness** -- Time since the last row was written (if a timestamp column exists)
+- **Row count** -- Current row count from the warehouse
+- **Health score** -- Composite score based on monitor results, freshness, and test pass rate
+- **Monitor status** -- Summary of active monitors and their latest results
+
+Double-click a node to recenter the graph on that node and show its immediate neighborhood.
+
+## Layout
+
+The lineage graph uses the Dagre layout algorithm, which arranges nodes in a directed acyclic graph with minimal edge crossings.
+
+**Layout controls:**
+
+- **Direction toggle** -- Switch between left-to-right (LR) and top-to-bottom (TB) layouts
+- **Zoom** -- Scroll to zoom in and out; pinch on trackpad
+- **Pan** -- Click and drag on the canvas background
+- **Fit to view** -- Reset zoom and pan to show the entire graph
+- **Minimap** -- A small overview in the corner for orientation in large graphs
+
+## Cross-Adapter Deduplication
+
+When the same table is referenced by multiple adapters (e.g., a dbt model and a warehouse SQL query both reference `analytics.orders`), Pallisade resolves them to a single node. This deduplication uses a stable ID based on domain, namespace, container, and name -- platform is excluded so that cross-adapter matches work automatically.
+
+<Callout type="info">
+If you see duplicate nodes for the same table, check that the fully qualified names match across your adapters. Differences in dataset/schema naming are the most common cause of failed deduplication.
+</Callout>
+
+## Coverage Stats
+
+The lineage header displays coverage statistics showing what percentage of your data assets have traced lineage:
+
+- **Table coverage** -- Percentage of tables with at least one upstream or downstream edge
+- **Column coverage** -- Percentage of columns with column-level lineage traced
+
+These metrics help you identify blind spots in your lineage graph and prioritize which areas need additional adapter coverage.
+
+## Using Lineage with Scout
+
+From the lineage viewer, you can right-click any node or edge and select **Ask Scout** to start a conversation with context pre-filled. Scout can:
+
+- Explain what a table does and where its data comes from
+- Trace the full upstream path to source tables
+- Identify all downstream consumers that would break if a table changes
+- Run ad-hoc quality checks on a selected node

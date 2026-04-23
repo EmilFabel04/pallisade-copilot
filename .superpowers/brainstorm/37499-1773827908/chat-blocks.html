@@ -1,0 +1,128 @@
+<h2>How should action blocks appear in chat?</h2>
+<p class="subtitle">These are the interactive cards the LLM renders inline when it creates/edits resources</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Compact Action Cards</h3>
+      <p>Minimal cards that show the action type, target, and key config. Expandable for details. Edit button opens side panel.</p>
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-body" style="padding: 16px; font-size: 13px;">
+          <div style="background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px; margin-bottom: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="background: #22c55e33; color: #22c55e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">CREATE</span>
+                <span style="color: #e2e8f0; font-weight: 600;">Freshness Monitor</span>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button class="mock-button" style="font-size: 11px; padding: 4px 10px;">Edit</button>
+                <button class="mock-button" style="font-size: 11px; padding: 4px 10px; background: #22c55e33; color: #22c55e;">Confirm</button>
+              </div>
+            </div>
+            <div style="color: #94a3b8; font-size: 12px; margin-top: 8px;">
+              <code style="color: #818cf8;">analytics.public.orders</code> · Every 6h · Warn after 12h stale
+            </div>
+          </div>
+          <div style="background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="background: #22c55e33; color: #22c55e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">CREATE</span>
+                <span style="color: #e2e8f0; font-weight: 600;">Volume Monitor</span>
+              </div>
+              <div style="display: flex; gap: 6px;">
+                <button class="mock-button" style="font-size: 11px; padding: 4px 10px;">Edit</button>
+                <button class="mock-button" style="font-size: 11px; padding: 4px 10px; background: #22c55e33; color: #22c55e;">Confirm</button>
+              </div>
+            </div>
+            <div style="color: #94a3b8; font-size: 12px; margin-top: 8px;">
+              <code style="color: #818cf8;">analytics.public.orders</code> · Daily · Expect 10k-50k rows
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Rich Editable Forms</h3>
+      <p>Full inline forms with editable fields directly in chat. User modifies values in-place and confirms.</p>
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-body" style="padding: 16px; font-size: 13px;">
+          <div style="background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+              <span style="background: #22c55e33; color: #22c55e; padding: 2px 8px; border-radius: 4px; font-size: 11px;">CREATE</span>
+              <span style="color: #e2e8f0; font-weight: 600;">Freshness Monitor</span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+              <div>
+                <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">Target</div>
+                <input class="mock-input" value="analytics.public.orders" style="font-size: 12px; width: 100%; box-sizing: border-box;">
+              </div>
+              <div>
+                <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">Timestamp Column</div>
+                <input class="mock-input" value="updated_at" style="font-size: 12px; width: 100%; box-sizing: border-box;">
+              </div>
+              <div>
+                <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">Schedule</div>
+                <input class="mock-input" value="0 */6 * * *" style="font-size: 12px; width: 100%; box-sizing: border-box;">
+              </div>
+              <div>
+                <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">Warn Threshold</div>
+                <input class="mock-input" value="12 hours" style="font-size: 12px; width: 100%; box-sizing: border-box;">
+              </div>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 6px;">
+              <button class="mock-button" style="font-size: 11px; padding: 4px 12px;">Cancel</button>
+              <button class="mock-button" style="font-size: 11px; padding: 4px 12px; background: #22c55e33; color: #22c55e;">Create Monitor</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Summary Cards + Side Panel Edit</h3>
+      <p>Read-only summary cards in chat. Clicking "Edit" opens your existing MonitorConfigForm in a side panel. Best of both worlds.</p>
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-body" style="padding: 16px; font-size: 13px;">
+          <div style="display: flex; gap: 12px;">
+            <div style="flex: 2;">
+              <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">ASSISTANT</div>
+              <div style="color: #e2e8f0; margin-bottom: 12px; font-size: 13px;">I'll set up freshness monitoring for your orders table. Here's what I'm proposing:</div>
+              <div style="background: #1a1a2e; border: 1px solid #2a2a4a; border-radius: 8px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                  <div>
+                    <div style="color: #e2e8f0; font-weight: 600; font-size: 14px;">Freshness Monitor</div>
+                    <div style="color: #94a3b8; font-size: 12px; margin-top: 4px;">
+                      <code style="color: #818cf8;">analytics.public.orders</code>
+                    </div>
+                    <div style="display: flex; gap: 12px; margin-top: 8px; color: #94a3b8; font-size: 12px;">
+                      <span>⏰ Every 6h</span>
+                      <span>⚠️ Warn: 12h</span>
+                      <span>🔴 Fail: 24h</span>
+                      <span>📊 updated_at</span>
+                    </div>
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 6px;">
+                    <button class="mock-button" style="font-size: 11px; padding: 4px 12px;">Edit →</button>
+                    <button class="mock-button" style="font-size: 11px; padding: 4px 12px; background: #22c55e33; color: #22c55e;">Confirm</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style="flex: 1; background: #12122a; border: 1px solid #2a2a4a; border-radius: 8px; padding: 12px; opacity: 0.5;">
+              <div style="color: #64748b; font-size: 11px; margin-bottom: 8px;">EDIT PANEL (opens on click)</div>
+              <div style="color: #94a3b8; font-size: 12px;">Full MonitorConfigForm with all fields...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

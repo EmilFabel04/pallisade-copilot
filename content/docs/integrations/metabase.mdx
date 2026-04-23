@@ -1,0 +1,73 @@
+---
+title: Metabase
+description: Connect Metabase to Pallisade for dashboard health monitoring, database sync status, query performance tracking, and card error detection.
+section: integrations
+order: 17
+---
+
+# Metabase
+
+## Overview
+
+The Metabase integration connects Pallisade to your Metabase instance via the REST API. Pallisade monitors dashboard health (broken cards), tracks database sync status and cache health, detects slow queries, and identifies stale or unused content.
+
+Key capabilities:
+
+- **Dashboard health** -- detect broken cards (saved questions with errors)
+- **Database sync status** -- initial sync progress, ongoing sync health, last sync timestamp
+- **Query performance** -- average query time per card, slow query detection (10s+ threshold)
+- **Card monitoring** -- saved questions, models, and native queries with error tracking
+- **Collection organization** -- content grouped by collection for health aggregation
+- **Cache health** -- field value cache schedule and refresh status
+
+## Prerequisites
+
+- A Metabase instance (self-hosted or Metabase Cloud)
+- An admin user account (username and password)
+
+<Callout type="tip">
+Create a dedicated Metabase user for Pallisade with admin privileges. This ensures the integration can access all collections, databases, and cards across the instance.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Metabase** from the Reporting layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Metabase URL (e.g., `https://your-metabase.com`) |
+| `username` | Yes | Admin email address (e.g., `admin@example.com`) |
+| `password` | Yes | Metabase password |
+
+3. Click **Test Connection**. Pallisade authenticates via the `/api/session` endpoint.
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Databases** | ID, name, engine type, host, port, database name, sync status, last sync timestamp |
+| **Cards (questions)** | ID, name, collection, database, query type (query/native/model), display type |
+| **Card health** | Last error, average query time, cache TTL, created/updated/last queried timestamps |
+| **Dashboards** | ID, name, collection, cards list, parameter configuration |
+| **Collections** | Hierarchy, card counts, organization structure |
+| **Sync status** | Initial sync progress, ongoing sync health per database |
+| **Cache status** | Field value cache schedule per database |
+| **Slow cards** | Cards with average query time exceeding 10 seconds |
+
+## Troubleshooting
+
+**"Invalid credentials"**
+Verify the username (email) and password are correct. Metabase uses session-based authentication -- ensure the user account is active and not locked.
+
+**Database sync shows "incomplete"**
+Initial database syncs can take time for large databases. Metabase scans table and column metadata progressively. Wait for the sync to complete before expecting full metadata.
+
+**Slow cards flagged despite fast perceived load**
+Metabase caches query results. The `avg_query_time_ms` reflects uncached execution time. Cards may feel fast to users due to caching while underlying queries are slow.
+
+**No cards found in a collection**
+The authenticated user may not have access to all collections. Ensure the user has admin privileges or explicit access to the target collections.
+
+**Connection timeout**
+Metabase instances behind a reverse proxy may have timeout settings. Pallisade's HTTP client uses a 30-second timeout. If your Metabase instance is slow to respond, check the proxy and server configuration.

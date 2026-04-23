@@ -202,7 +202,7 @@ export function ApplyFixModal({
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-[var(--card)] rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="p-6 border-b border-[rgba(255,255,255,0.06)]">
+        <div className="p-6 border-b border-[var(--subtle-border)]">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-xl font-semibold">Apply Fix to Repository</h2>
@@ -210,7 +210,7 @@ export function ApplyFixModal({
             </div>
             <button
               onClick={onClose}
-              className="p-2 hover:bg-[rgba(255,255,255,0.05)] rounded-lg transition-colors"
+              className="p-2 hover:bg-[var(--subtle-bg)] rounded-lg transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -225,11 +225,11 @@ export function ApplyFixModal({
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                   step === s ? 'bg-[var(--accent)] text-white' :
                   ['repo', 'config', 'success'].indexOf(step) > i ? 'bg-emerald-500/20 text-emerald-400' :
-                  'bg-[rgba(255,255,255,0.05)] text-[var(--muted)]'
+                  'bg-[var(--subtle-bg)] text-[var(--muted)]'
                 }`}>
                   {['repo', 'config', 'success'].indexOf(step) > i ? '✓' : i + 1}
                 </div>
-                {i < 2 && <div className="w-8 h-0.5 bg-[rgba(255,255,255,0.1)]" />}
+                {i < 2 && <div className="w-8 h-0.5 bg-[var(--overlay-medium)]" />}
               </div>
             ))}
           </div>
@@ -272,7 +272,7 @@ export function ApplyFixModal({
                     <button
                       key={repo.id}
                       onClick={() => handleSelectRepo(repo)}
-                      className="w-full p-4 rounded-xl border border-[rgba(255,255,255,0.06)] hover:border-[var(--accent)]/50 hover:bg-[rgba(255,255,255,0.02)] transition-all text-left flex items-center gap-4"
+                      className="w-full p-4 rounded-xl border border-[var(--subtle-border)] hover:border-[var(--accent)]/50 hover:bg-[var(--overlay-faint)] transition-all text-left flex items-center gap-4"
                     >
                       <img
                         src={repo.ownerAvatar}
@@ -306,7 +306,7 @@ export function ApplyFixModal({
           {step === 'config' && selectedRepo && (
             <div className="space-y-5">
               {/* Selected repo */}
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-[rgba(255,255,255,0.03)]">
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-[var(--overlay-bg)]">
                 <img
                   src={selectedRepo.ownerAvatar}
                   alt={selectedRepo.owner}
@@ -354,7 +354,7 @@ export function ApplyFixModal({
                   value={filePath}
                   onChange={(e) => setFilePath(e.target.value)}
                   placeholder="models/staging/_sources.yml"
-                  className="w-full px-4 py-2.5 rounded-xl bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)] focus:border-[var(--accent)] outline-none font-mono text-sm"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] focus:border-[var(--accent)] outline-none font-mono text-sm"
                 />
                 {dbtStructure?.suggestedPaths && (
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -366,7 +366,7 @@ export function ApplyFixModal({
                         className={`text-xs px-2 py-1 rounded ${
                           filePath === path
                             ? 'bg-[var(--accent)]/20 text-[var(--accent-2)]'
-                            : 'bg-[rgba(255,255,255,0.05)] text-[var(--muted)] hover:text-white'
+                            : 'bg-[var(--subtle-bg)] text-[var(--muted)] hover:text-[var(--text)]'
                         }`}
                       >
                         {path}
@@ -391,7 +391,7 @@ export function ApplyFixModal({
                       className={`p-3 rounded-xl border text-left transition-all ${
                         writeMode === mode.id
                           ? 'border-[var(--accent)] bg-[var(--accent)]/10'
-                          : 'border-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.12)]'
+                          : 'border-[var(--subtle-border)] hover:border-[var(--overlay-strong)]'
                       }`}
                     >
                       <div className="text-sm font-medium">{mode.label}</div>
@@ -404,7 +404,7 @@ export function ApplyFixModal({
               {/* Code preview */}
               <div>
                 <label className="block text-sm font-medium mb-2">Code to Apply</label>
-                <pre className="text-xs bg-[rgba(0,0,0,0.4)] p-4 rounded-xl overflow-x-auto max-h-48">
+                <pre className="text-xs bg-[var(--overlay-bg)] p-4 rounded-xl overflow-x-auto max-h-48">
                   <code>{fix.code}</code>
                 </pre>
               </div>
@@ -448,10 +448,10 @@ export function ApplyFixModal({
 
         {/* Footer */}
         {step === 'config' && (
-          <div className="p-6 border-t border-[rgba(255,255,255,0.06)] flex justify-end gap-3">
+          <div className="p-6 border-t border-[var(--subtle-border)] flex justify-end gap-3">
             <button
               onClick={() => setStep('repo')}
-              className="px-4 py-2 text-sm rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+              className="px-4 py-2 text-sm rounded-lg hover:bg-[var(--subtle-bg)] transition-colors"
             >
               Back
             </button>
@@ -478,10 +478,10 @@ export function ApplyFixModal({
         )}
 
         {step === 'success' && (
-          <div className="p-6 border-t border-[rgba(255,255,255,0.06)] flex justify-center">
+          <div className="p-6 border-t border-[var(--subtle-border)] flex justify-center">
             <button
               onClick={onClose}
-              className="px-6 py-2 text-sm rounded-lg bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] transition-colors"
+              className="px-6 py-2 text-sm rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)] transition-colors"
             >
               Close
             </button>

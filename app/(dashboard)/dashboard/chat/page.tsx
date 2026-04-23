@@ -17,7 +17,7 @@ export default function ChatRedirectPage() {
   return (
     <div className="h-full flex items-center justify-center">
       <div className="text-center">
-        <div className="w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+        <div className="w-8 h-8 red-spinner mx-auto mb-4" />
         <p className="text-sm text-[var(--muted)]">Redirecting to AI Chat...</p>
       </div>
     </div>

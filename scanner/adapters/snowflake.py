@@ -649,3 +649,90 @@ class SnowflakeAdapter(DatabaseAdapter):
         """Snowflake random sample."""
         return f"SELECT * FROM {table} SAMPLE ({n} ROWS)"
 
+    # =========================================================================
+    # HISTORICAL QUERY METHODS
+    # =========================================================================
+
+    def get_freshness_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get per-day freshness history using TABLE_STORAGE_METRICS."""
+        parts = table.split(".")
+        if len(parts) == 3:
+            db, schema, tbl = parts
+        elif len(parts) == 2:
+            db, schema, tbl = self.database, parts[0], parts[1]
+        else:
+            db, schema, tbl = self.database, self.schema, parts[0]
+
+        query = f"""
+            SELECT DISTINCT DATE(ACTIVE_BYTES_TIMESTAMP) as mod_date,
+                   MAX(ACTIVE_BYTES_TIMESTAMP) as timestamp
+            FROM {db}.INFORMATION_SCHEMA.TABLE_STORAGE_METRICS
+            WHERE TABLE_NAME = '{tbl.upper()}' AND TABLE_SCHEMA = '{schema.upper()}'
+              AND ACTIVE_BYTES_TIMESTAMP >= DATEADD(DAY, -{days}, CURRENT_TIMESTAMP())
+            GROUP BY mod_date
+            ORDER BY mod_date
+        """
+        rows = self.execute_query(query)
+        return [{"timestamp": row["TIMESTAMP"]} for row in rows]
+
+    def get_row_count_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get per-day row count history using TABLE_STORAGE_METRICS."""
+        parts = table.split(".")
+        if len(parts) == 3:
+            db, schema, tbl = parts
+        elif len(parts) == 2:
+            db, schema, tbl = self.database, parts[0], parts[1]
+        else:
+            db, schema, tbl = self.database, self.schema, parts[0]
+
+        query = f"""
+            SELECT DATE(ACTIVE_BYTES_TIMESTAMP) as DATE,
+                   MAX(ROW_COUNT) as ROW_COUNT
+            FROM {db}.INFORMATION_SCHEMA.TABLE_STORAGE_METRICS
+            WHERE TABLE_NAME = '{tbl.upper()}' AND TABLE_SCHEMA = '{schema.upper()}'
+              AND ACTIVE_BYTES_TIMESTAMP >= DATEADD(DAY, -{days}, CURRENT_TIMESTAMP())
+            GROUP BY DATE
+            ORDER BY DATE
+        """
+        rows = self.execute_query(query)
+        return [{"date": row["DATE"], "row_count": int(row["ROW_COUNT"])} for row in rows]
+
+    def get_daily_null_rates(self, table: str, timestamp_column: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get per-day null rates across all non-timestamp columns."""
+        parts = table.split(".")
+        if len(parts) == 3:
+            db, schema, tbl = parts
+        elif len(parts) == 2:
+            db, schema, tbl = self.database, parts[0], parts[1]
+        else:
+            db, schema, tbl = self.database, self.schema, parts[0]
+
+        cols_query = f"""
+            SELECT COLUMN_NAME FROM {db}.INFORMATION_SCHEMA.COLUMNS
+            WHERE TABLE_NAME = '{tbl.upper()}' AND TABLE_SCHEMA = '{schema.upper()}'
+              AND COLUMN_NAME != '{timestamp_column.upper()}'
+        """
+        col_rows = self.execute_query(cols_query)
+        columns = [r["COLUMN_NAME"] for r in col_rows]
+        if not columns:
+            return []
+
+        null_exprs = " + ".join(f'COUNT(CASE WHEN "{c}" IS NULL THEN 1 END)' for c in columns)
+        total_expr = f"COUNT(*) * {len(columns)}"
+
+        query = f"""
+            SELECT DATE("{timestamp_column}") as DATE,
+                   DIV0({null_exprs}, {total_expr}) as NULL_RATE
+            FROM {db}.{schema}.{tbl}
+            WHERE "{timestamp_column}" >= DATEADD(DAY, -{days}, CURRENT_TIMESTAMP())
+            GROUP BY DATE
+            ORDER BY DATE
+        """
+        rows = self.execute_query(query)
+        return [{"date": row["DATE"], "null_rate": float(row["NULL_RATE"] or 0)} for row in rows]
+
+    def get_schema_change_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Snowflake ACCOUNT_USAGE.COLUMNS tracks column history but with 45-min latency.
+        For V1, return empty list (safe default: strict schema suggestion)."""
+        return []
+

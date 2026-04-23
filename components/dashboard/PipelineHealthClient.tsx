@@ -75,7 +75,7 @@ const getStatusIcon = (status: string) => {
     case 'ERROR':
       return <XCircle className="w-4 h-4 text-red-400" />;
     default:
-      return <div className="w-4 h-4 rounded-full bg-gray-500/50" />;
+      return <div className="w-4 h-4 rounded-full bg-[var(--muted)]" />;
   }
 };
 
@@ -147,7 +147,7 @@ export function PipelineHealthClient() {
           </div>
         </div>
         <div className="text-center py-6">
-          <div className="w-12 h-12 rounded-xl bg-[rgba(255,255,255,0.03)] flex items-center justify-center mx-auto mb-3">
+          <div className="w-12 h-12 rounded-xl bg-[var(--overlay-bg)] flex items-center justify-center mx-auto mb-3">
             <Layers className="w-6 h-6 text-[var(--muted)]" />
           </div>
           <p className="text-[var(--muted)] mb-4">No data pipeline configured yet</p>
@@ -176,7 +176,7 @@ export function PipelineHealthClient() {
           <button
             onClick={() => fetchData(true)}
             disabled={refreshing}
-            className="p-1.5 rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors disabled:opacity-50"
+            className="p-1.5 rounded-lg hover:bg-[var(--subtle-bg)] transition-colors disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCw className={`w-4 h-4 text-[var(--muted)] ${refreshing ? 'animate-spin' : ''}`} />
@@ -218,8 +218,8 @@ export function PipelineHealthClient() {
           return (
             <div 
               key={layer}
-              className={`relative rounded-lg border border-[rgba(255,255,255,0.06)] overflow-hidden ${
-                isConfigured ? 'bg-gradient-to-br ' + config.color : 'bg-[rgba(255,255,255,0.02)]'
+              className={`relative rounded-lg border border-[var(--subtle-border)] overflow-hidden ${
+                isConfigured ? 'bg-gradient-to-br ' + config.color : 'bg-[var(--overlay-faint)]'
               }`}
             >
               <div className="p-3">
@@ -258,7 +258,7 @@ export function PipelineHealthClient() {
               
               {/* Score bar */}
               {isConfigured && (
-                <div className="h-1 bg-[rgba(0,0,0,0.2)]">
+                <div className="h-1 bg-[var(--overlay-faint)]">
                   <div 
                     className={`h-full transition-all ${
                       health.score >= 80 ? 'bg-emerald-500' :
@@ -275,14 +275,14 @@ export function PipelineHealthClient() {
 
       {/* Stack List (if multiple) */}
       {stacks.length > 1 && (
-        <div className="mt-4 pt-4 border-t border-[rgba(255,255,255,0.06)]">
+        <div className="mt-4 pt-4 border-t border-[var(--subtle-border)]">
           <div className="text-xs text-[var(--muted)] uppercase tracking-wide mb-2">Pipeline Stacks</div>
           <div className="space-y-2">
             {stacks.slice(0, 3).map(stack => (
               <Link
                 key={stack.id}
                 href={`/dashboard/pipeline?stack=${stack.id}`}
-                className="flex items-center gap-3 p-2 rounded-lg hover:bg-[rgba(255,255,255,0.03)] transition-colors"
+                className="flex items-center gap-3 p-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors"
               >
                 <div className={`w-8 h-8 rounded flex items-center justify-center ${getScoreBg(stack.healthScore)}`}>
                   <span className={`text-sm font-bold ${getScoreColor(stack.healthScore)}`}>

@@ -1,0 +1,208 @@
+---
+title: "Monitor System"
+description: "Reference for structured monitors: types, auto-configuration, adaptive lookback, dialect-aware SQL, LLM validation, and alert dispatch."
+section: "reference"
+order: 4
+---
+
+## Overview
+
+Pallisade monitors are automated quality checks that run on a cron schedule against connected integrations. There are two modes: **structured monitors** (SQL-based or SSH-based, covered here) and **prompt-based tasks** (free-form LLM analysis).
+
+### Status Values
+
+Every monitor run produces one of these statuses:
+
+| Status | Meaning |
+|--------|---------|
+| `PASS` | All checks passed |
+| `WARN` | Warning threshold exceeded but not critical |
+| `FAIL` | Critical threshold exceeded or anomaly detected |
+| `ERROR` | Query failed, column missing, invalid config, or connection issue |
+| `SKIPPED` | Insufficient data to run a meaningful check |
+
+### Source Files
+
+| File | Purpose |
+|------|---------|
+| `scanner/monitors/base.py` | `BaseMonitor`, `MonitorResult`, `MonitorStatus` |
+| `scanner/monitors/freshness.py` | `FreshnessMonitor` |
+| `scanner/monitors/volume.py` | `VolumeMonitor` |
+| `scanner/monitors/anomaly.py` | `AnomalyMonitor` |
+| `scanner/monitors/schema.py` | `SchemaMonitor` |
+| `scanner/monitors/infrastructure.py` | `CertificateMonitor`, `ServerHealthMonitor`, `LogMonitor` |
+| `scanner/monitors/executor.py` | `MonitorExecutor`, registry, auto-configuration, routing |
+| `scanner/scheduler/executor.py` | `TaskExecutor` -- orchestrates execution, LLM validation |
+| `scanner/scheduler/service.py` | `SchedulerService` -- cron loop, result persistence, alerting |
+
+---
+
+## SQL-Based Monitors
+
+These monitors generate SQL in a Postgres-compatible dialect, transpile it to the target warehouse via `sqlglot`, execute, and evaluate the results. Supported warehouses: BigQuery, Snowflake, Postgres, Redshift.
+
+### Freshness
+
+**Purpose:** Detect when a table has not been updated recently.
+
+**How it works:** Queries `MAX(timestamp_column)` and computes hours since the last row was written.
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `timestamp_column` | string | auto-detected | Column to check |
+| `max_hours` | float | 24 | SLA threshold in hours |
+| `warn_hours` | float | max_hours * 0.75 | Warning threshold |
+
+**Auto-detection of timestamp column:** When no column is specified, the system queries `INFORMATION_SCHEMA.COLUMNS` and picks the best match from a priority list: `_partitiontime` > `loaded_at` > `ingested_at` > `_etl_loaded_at` > `_fivetran_synced` > `_airbyte_extracted_at` > `created_at` > `updated_at` > `timestamp`.
+
+**Auto-configuration of SLA threshold:** When no `max_hours` is provided, the system queries 30 days of daily `MAX(timestamp_column)`, computes P95 gap in hours, and sets `max_hours = ceil(P95 * 1.5)` clamped to [1h, 168h].
+
+| Condition | Status |
+|-----------|--------|
+| hours <= warn_hours | PASS |
+| warn_hours < hours <= max_hours | WARN |
+| hours > max_hours | FAIL |
+| Table is empty | SKIPPED |
+
+### Volume
+
+**Purpose:** Detect anomalous row count changes (drops or spikes).
+
+**Two modes:**
+
+- **Simple mode** (no `time_bucket_column`): `SELECT COUNT(*)` checked against `min_rows`/`max_rows` thresholds.
+- **Time-series mode** (with `time_bucket_column`): Daily row counts over a lookback window, Z-score analysis on the latest day.
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `min_rows` / `max_rows` | int | auto | Row count thresholds (simple mode) |
+| `anomaly_threshold` | float | 3.0 | Z-score threshold |
+| `time_bucket_column` | string | auto | Column for daily bucketing |
+| `lookback_days` | int | 30 | Baseline window |
+| `max_scan_days` | int | 90 | Upper bound for lookback |
+
+**Auto-configuration:** Discovers a timestamp column, queries 30 days of daily counts, computes mean and stddev, sets `min_rows = max(0, mean - 3s)` and `max_rows = mean + 3s`.
+
+### Anomaly
+
+**Purpose:** Statistical Z-score anomaly detection on any column metric.
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `column` | string | "" | Target column. Use `"*"` for multi-column mode. |
+| `metric` | string | "row_count" or "avg" | Metric to track |
+| `anomaly_threshold` | float | 3.0 | Z-score threshold |
+| `seasonality` | string | null | `"day_of_week"` for weekday-aware baseline |
+| `lookback_days` | int | 30 | Baseline window |
+| `timestamp_column` | string | null | Column for time bucketing |
+
+**Available metrics (column-level):** `null_rate`, `distinct_count`, `distinct_rate`, `min`, `max`, `avg`, `sum`, `stddev`, `zero_rate`. **Table-level:** `row_count`.
+
+**Multi-column mode (`column: "*"`):** Discovers all applicable columns (all columns for `null_rate`/`distinct_rate`; numeric only for `avg`/`min`/`max`), caps at 50, runs the metric independently on each, and reports FAIL if any column is anomalous.
+
+**Adaptive lookback:** If fewer than 3 data points are found, retries with shorter windows: 25 -> 20 -> 14 -> 7 days. The system never falls back to unbounded scans.
+
+**Confidence scaling:** 30+ days = 100%, 20-29 = 85%, 14-19 = 75%, 7-13 = 60%, 3-6 = 40%, fewer than 3 = observation mode.
+
+### Schema Change
+
+**Purpose:** Detect column additions, removals, and data type changes.
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `baseline_columns` | array | null | Expected schema (captured on first run) |
+| `fail_on_column_added` | bool | false | New columns trigger FAIL |
+| `fail_on_column_removed` | bool | true | Missing columns trigger FAIL |
+| `fail_on_type_change` | bool | true | Type changes trigger FAIL |
+
+**Dialect-aware type normalization** prevents false positives: `INT64`/`int`/`int4` all normalize to `integer`; `STRING` normalizes to `text`; `TIMESTAMP_TZ`/`TIMESTAMP_LTZ` normalize to `timestamptz`.
+
+On first run with no baseline, the monitor captures the current schema and returns PASS.
+
+---
+
+## Infrastructure Monitors
+
+These monitors connect via SSH to Linux servers and do not use SQL.
+
+### Certificate Monitor
+
+Checks TLS/SSL certificate expiry. Auto-discovers certificate files or checks specific `cert_paths`. Detects missing client certificates for mutual TLS.
+
+| Config Key | Default | Description |
+|------------|---------|-------------|
+| `cert_paths` | auto-discover | Specific certificate file paths |
+| `warn_days` | 30 | Days before expiry for WARN |
+| `fail_days` | 7 | Days before expiry for FAIL |
+
+### Server Health Monitor
+
+Checks CPU, memory, and disk usage. WARN triggers at 80% of threshold.
+
+| Config Key | Default | Description |
+|------------|---------|-------------|
+| `max_cpu` | 90.0 | CPU % threshold |
+| `max_memory` | 90.0 | Memory % threshold |
+| `max_disk` | 85.0 | Disk % threshold |
+
+### Log Analysis Monitor
+
+Scans server log files for error patterns via regex.
+
+| Config Key | Default | Description |
+|------------|---------|-------------|
+| `log_paths` | required | Log file paths to scan |
+| `error_patterns` | `["ERROR", "FATAL", "CRITICAL"]` | Regex patterns |
+| `max_errors` | 10 | Error count threshold for FAIL |
+| `lookback_lines` | 1000 | Lines to tail from each file |
+
+---
+
+## UI Routing Aliases
+
+The frontend exposes three convenience monitor types that route to the Anomaly backend:
+
+| UI Type | Routes To | Default Config |
+|---------|-----------|---------------|
+| `null_rate` | `anomaly` | `metric: "null_rate", column: "*"` |
+| `uniqueness` | `anomaly` | `metric: "distinct_rate", column: "*"` |
+| `distribution` | `anomaly` | `metric: "avg", column: "*"` |
+
+Defined in `scanner/monitors/executor.py` as `MONITOR_ROUTING`.
+
+---
+
+## Execution Flow
+
+When a scheduled task triggers:
+
+1. **Scheduler detects due task** -- `SchedulerService` runs a 60-second loop, picks up to 50 due tasks per iteration.
+2. **Resolve monitor type** -- `MonitorExecutor.resolve_monitor_type()` applies routing aliases.
+3. **Parse target FQN** -- Splits `raw.orders` into database, schema, table.
+4. **Auto-configure** -- Fills missing config by querying the warehouse (timestamp column, SLA threshold, baseline stats). Never overwrites user-provided values.
+5. **Build and execute SQL** -- `build_query()` generates SQL, `sqlglot` transpiles to target dialect, adapter executes.
+6. **Evaluate results** -- Produces `MonitorResult` with status, value, threshold, message, and details.
+7. **Adaptive retry** -- Anomaly monitors with too few data points retry with shorter lookback windows.
+8. **LLM validation (optional)** -- FAIL/WARN results can be sent to an LLM for false-positive review.
+9. **Save result** -- Creates `MonitorRun` record, updates `Monitor` with `lastRunAt`, `lastStatus`, `nextRunAt`, and baseline stats.
+10. **Dispatch alerts** -- Sends to configured channels (Slack, Teams, PagerDuty, OpsGenie) if status matches `alertOnStatus`.
+
+### LLM Validation Constraints
+
+- Never upgrades PASS to FAIL
+- Downgrades (FAIL -> WARN, WARN -> PASS) only when `confidence_pct < 60` or `baseline_count < 7`
+- Both `raw_status` and `final_status` are persisted alongside `llm_reason`
+
+---
+
+## Baseline Persistence
+
+Monitors that compute baselines persist stats in the `Monitor` database record:
+
+| Field | Description |
+|-------|-------------|
+| `baselineMean` | Mean of the metric across the baseline window |
+| `baselineStddev` | Standard deviation |
+| `baselineCount` | Number of data points |
+
+These values are injected as `stored_baseline` on the next run, providing continuity even if warehouse data is temporarily unavailable.

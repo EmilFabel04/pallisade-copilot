@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { SlackClient } from '@/lib/integrations/slack';
 import { JiraClient } from '@/lib/integrations/jira';
 import { formatPlanForSlack, formatPlanForJira, formatPlanForGitHubIssue } from '@/lib/integrations/share-plan';
 import type { ChangePlan } from '@/types/change-plan';
+import { notifyEvents } from '@/lib/notifications';
 
 interface SharePlanRequest {
   plan: ChangePlan;
@@ -21,7 +21,7 @@ interface SharePlanRequest {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
         type: true,
         credentials: true,
         config: true,
+        accessToken: true,
       },
     });
 
@@ -82,18 +83,26 @@ export async function POST(request: NextRequest) {
     // Handle based on target type
     switch (target.type) {
       case 'slack': {
-        const webhookUrl = credentials.webhook_url || credentials.webhookUrl || config.webhook_url;
-        if (!webhookUrl) {
-          return NextResponse.json({ error: 'Slack webhook URL not configured' }, { status: 400 });
+        let botToken = '';
+        if (integration.accessToken) {
+          try { botToken = decrypt(integration.accessToken); } catch {}
+        }
+        if (!botToken) {
+          return NextResponse.json({ error: 'Slack bot token not configured' }, { status: 400 });
         }
 
+        const slackCreds = integration.credentials
+          ? (typeof integration.credentials === 'string' ? JSON.parse(integration.credentials as string) : integration.credentials) as Record<string, any>
+          : {};
         const slackClient = new SlackClient({
-          webhook_url: webhookUrl,
-          channel: target.channel || config.channel,
+          bot_token: botToken,
+          channel: target.channel || slackCreds.channel || config.channel,
         });
 
         const message = formatPlanForSlack(plan);
         await slackClient.sendMessage(message);
+
+        notifyEvents.planShared(user.organizationId!, undefined, (session.user as any).id, plan.title || 'Change Plan', 'Slack');
 
         return NextResponse.json({
           success: true,
@@ -125,6 +134,8 @@ export async function POST(request: NextRequest) {
 
         const issue = formatPlanForJira(plan);
         const result = await jiraClient.createIssue(issue);
+
+        notifyEvents.planShared(user.organizationId!, undefined, (session.user as any).id, plan.title || 'Change Plan', 'Jira');
 
         return NextResponse.json({
           success: true,
@@ -180,6 +191,8 @@ export async function POST(request: NextRequest) {
 
         const githubIssue = await response.json();
 
+        notifyEvents.planShared(user.organizationId!, undefined, (session.user as any).id, plan.title || 'Change Plan', 'GitHub');
+
         return NextResponse.json({
           success: true,
           message: 'GitHub issue created successfully',
@@ -203,7 +216,7 @@ export async function POST(request: NextRequest) {
 // GET endpoint to list available integrations for sharing
 export async function GET(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }

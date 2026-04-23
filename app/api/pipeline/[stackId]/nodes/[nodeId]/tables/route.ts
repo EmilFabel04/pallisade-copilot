@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import type { Session } from 'next-auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-
-const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8000';
+import { scannerClient } from '@/lib/scanner-client';
 
 // GET /api/pipeline/[stackId]/nodes/[nodeId]/tables - Get data from any pipeline node
 // Use ?refresh=true to force fresh discovery from warehouse
@@ -13,7 +12,7 @@ export async function GET(
   { params }: { params: Promise<{ stackId: string; nodeId: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -31,7 +30,7 @@ export async function GET(
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
-    // Get the pipeline node
+    // Get the pipeline node (include integration for credential resolution)
     const node = await prisma.pipelineNode.findFirst({
       where: {
         id: nodeId,
@@ -42,6 +41,7 @@ export async function GET(
       },
       include: {
         stack: true,
+        integration: true,
       },
     });
 
@@ -49,22 +49,27 @@ export async function GET(
       return NextResponse.json({ error: 'Node not found' }, { status: 404 });
     }
 
-    // Get credentials and cached data from node config
+    // Resolve credentials — prefer Integration table, fall back to legacy PipelineNode.config
     let credentials: Record<string, any> = {};
-    let cachedData: Record<string, any> | null = null;
-    if (node.config) {
+    let cachedData: Record<string, any> | null = (node.config as any)?._cached || null;
+
+    if ((node as any).integrationId && (node as any).integration?.credentials) {
+      try {
+        const intCreds = (node as any).integration.credentials as any;
+        if (intCreds.encrypted) {
+          credentials = JSON.parse(decrypt(intCreds.encrypted));
+        } else {
+          credentials = intCreds;
+        }
+      } catch (e) {
+        console.error('[NODE DATA] Integration credentials parsing failed:', e);
+      }
+    } else if (node.config) {
       try {
         const configJson = node.config as { encrypted?: string; _cached?: any; [key: string]: any };
-
-        // Always extract cached data if present (works for both encrypted and unencrypted)
-        cachedData = configJson._cached || null;
-
         if (configJson.encrypted) {
-          // Decrypt if credentials are encrypted
-          const decrypted = decrypt(configJson.encrypted);
-          credentials = JSON.parse(decrypted);
+          credentials = JSON.parse(decrypt(configJson.encrypted));
         } else {
-          // Config is stored directly (not encrypted)
           const { _cached, ...creds } = configJson;
           credentials = creds;
         }
@@ -74,7 +79,7 @@ export async function GET(
     }
 
     // Check if node has been configured
-    if (!node.config || Object.keys(credentials).length === 0) {
+    if (Object.keys(credentials).length === 0) {
       console.log(`[NODE DATA] Node ${nodeId} (${node.toolType}) has no configuration`);
       return NextResponse.json({
         tables: [],
@@ -103,16 +108,16 @@ export async function GET(
     let result: Response;
     switch (node.layer) {
       case 'WAREHOUSE':
-        result = await getWarehouseData(node, credentials);
+        result = await getWarehouseData(node, credentials, session);
         break;
       case 'TRANSFORMATION':
-        result = await getTransformationData(node, credentials);
+        result = await getTransformationData(node, credentials, session);
         break;
       case 'INGESTION':
-        result = await getIngestionData(node, credentials);
+        result = await getIngestionData(node, credentials, session);
         break;
       case 'REPORTING':
-        result = await getReportingData(node, credentials);
+        result = await getReportingData(node, credentials, session);
         break;
       default:
         return NextResponse.json({ tables: [], models: [], connectors: [] });
@@ -123,13 +128,11 @@ export async function GET(
     if (responseData.connected !== false && responseData.source !== 'error') {
       const lastSync = new Date().toISOString();
       try {
-        // Store cached data in node config
-        const currentConfig = node.config as Record<string, any> || {};
+        // Store only _cached data in PipelineNode.config — credentials live in Integration.credentials
         await prisma.pipelineNode.update({
           where: { id: nodeId },
           data: {
             config: {
-              ...currentConfig,
               _cached: {
                 data: responseData,
                 lastSync,
@@ -152,7 +155,7 @@ export async function GET(
 }
 
 // Get tables from warehouse nodes (Snowflake, BigQuery, Postgres, etc.)
-async function getWarehouseData(node: any, credentials: Record<string, any>) {
+async function getWarehouseData(node: any, credentials: Record<string, any>, session: Session) {
   // Check connection status - allow CONNECTED, HEALTHY, WARNING (exclude PENDING, TESTING, ERROR)
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   if (!validStatuses.includes(node.status)) {
@@ -218,10 +221,10 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
 
   // Try to fetch tables from scanner backend
   try {
-    console.log(`[WAREHOUSE] Fetching tables from scanner: ${SCANNER_API_URL}/api/v1/tables`);
+    console.log(`[WAREHOUSE] Fetching tables from scanner: /api/v1/tables`);
     console.log(`[WAREHOUSE] Connection type: ${connectionType}, project_id: ${scannerCredentials.project_id}, datasets: ${scannerCredentials.datasets}`);
 
-    const response = await fetch(`${SCANNER_API_URL}/api/v1/tables`, {
+    const response = await scannerClient.fetch(session, '/api/v1/tables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -277,7 +280,7 @@ async function getWarehouseData(node: any, credentials: Record<string, any>) {
 }
 
 // Get dbt models from transformation nodes
-async function getTransformationData(node: any, credentials: Record<string, any>) {
+async function getTransformationData(node: any, credentials: Record<string, any>, session: Session) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
@@ -372,7 +375,7 @@ async function getTransformationData(node: any, credentials: Record<string, any>
       }
 
       console.log(`[DBT] Fetching ${configType} models from scanner`);
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/dbt/models`, {
+      const response = await scannerClient.fetch(session, '/api/v1/dbt/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -461,14 +464,14 @@ async function getTransformationData(node: any, credentials: Record<string, any>
 }
 
 // Get connectors from ingestion nodes (Fivetran, Airbyte)
-async function getIngestionData(node: any, credentials: Record<string, any>) {
+async function getIngestionData(node: any, credentials: Record<string, any>, session: Session) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
   if (node.toolType === 'fivetran') {
     // Try to fetch from Fivetran API
     try {
-      const response = await fetch(`${SCANNER_API_URL}/api/v1/fivetran/connectors`, {
+      const response = await scannerClient.fetch(session, '/api/v1/fivetran/connectors', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -541,23 +544,64 @@ async function getIngestionData(node: any, credentials: Record<string, any>) {
   return NextResponse.json({ connectors: [], tables: [] });
 }
 
-// Get reporting tool data (Looker, Tableau, etc.)
-async function getReportingData(node: any, credentials: Record<string, any>) {
+// Get reporting tool data (Looker, Tableau, Power BI, Metabase)
+async function getReportingData(node: any, credentials: Record<string, any>, session: Session) {
   const validStatuses = ['CONNECTED', 'HEALTHY', 'WARNING'];
   const isConnected = validStatuses.includes(node.status);
 
-  const dashboards = [
-    { name: 'Executive Summary', views: 1245, lastViewed: '2 hours ago' },
-    { name: 'Sales Dashboard', views: 892, lastViewed: '30 min ago' },
-    { name: 'Marketing Analytics', views: 567, lastViewed: '1 day ago' },
-  ];
+  if (!isConnected) {
+    return NextResponse.json({
+      dashboards: [],
+      datasources: [],
+      tables: [],
+      connected: false,
+      source: 'disconnected',
+      message: `Node status is ${node.status}. Test the connection first.`,
+    });
+  }
 
-  return NextResponse.json({
-    tables: [],
-    models: [],
-    connectors: [],
-    dashboards,
-    source: 'demo',
-    connected: isConnected,
-  });
+  try {
+    const response = await scannerClient.fetch(session, '/api/v1/reporting/metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool_type: node.toolType,
+        connection_config: credentials,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      return NextResponse.json({
+        dashboards: data.dashboards || [],
+        datasources: data.datasources || [],
+        tables: [],
+        source: 'live',
+        connected: true,
+        tool_type: data.tool_type,
+      });
+    }
+
+    // Scanner returned an error — return it with empty-but-valid shape
+    return NextResponse.json({
+      dashboards: [],
+      datasources: [],
+      tables: [],
+      source: 'error',
+      connected: isConnected,
+      error: data.error || 'Unknown scanner error',
+    });
+  } catch (err: any) {
+    console.log(`[REPORTING] Scanner not available for ${node.toolType}: ${err.message}`);
+    return NextResponse.json({
+      dashboards: [],
+      datasources: [],
+      tables: [],
+      source: 'error',
+      connected: isConnected,
+      error: `Scanner unavailable: ${err.message}`,
+    });
+  }
 }

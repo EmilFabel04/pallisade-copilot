@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import { usePipeline } from '@/contexts/PipelineContext';
 
 interface AuditLog {
   id: string;
@@ -52,6 +53,8 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 export default function AuditLogsPage() {
+  const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
+  const lastPipelineIdRef = useRef<string | null>(null);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>('all');
@@ -60,18 +63,17 @@ export default function AuditLogsPage() {
   const [page, setPage] = useState(0);
   const limit = 30;
 
-  useEffect(() => {
-    fetchLogs();
-  }, [filter, page]);
-
   const fetchLogs = async () => {
+    if (!selectedPipelineId) { setLogs([]); setTotal(0); setLoading(false); return; }
     try {
+      setLoading(true);
       const params = new URLSearchParams({
         limit: limit.toString(),
         offset: (page * limit).toString(),
+        stackId: selectedPipelineId,
       });
       if (filter !== 'all') params.append('category', filter);
-      
+
       const res = await fetch(`/api/audit?${params}`);
       const data = await res.json();
       setLogs(data.logs || []);
@@ -82,6 +84,19 @@ export default function AuditLogsPage() {
       setLoading(false);
     }
   };
+
+  // Reset on pipeline switch
+  useEffect(() => {
+    if (pipelineLoading) return;
+    if (lastPipelineIdRef.current !== selectedPipelineId) {
+      lastPipelineIdRef.current = selectedPipelineId;
+      setLogs([]);
+      setTotal(0);
+      setPage(0);
+      setExpandedLog(null);
+    }
+    fetchLogs();
+  }, [selectedPipelineId, pipelineLoading, filter, page]);
 
   const formatTime = (date: string) => {
     const d = new Date(date);
@@ -139,7 +154,7 @@ export default function AuditLogsPage() {
       {/* Logs List */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin w-8 h-8 border-2 border-[var(--accent)] border-t-transparent rounded-full" />
+          <div className="w-8 h-8 red-spinner" />
         </div>
       ) : logs.length === 0 ? (
         <div className="dashboard-card p-12 text-center">

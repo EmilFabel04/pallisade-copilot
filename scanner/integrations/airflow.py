@@ -87,6 +87,13 @@ class AirflowDAGRun:
     execution_date: Optional[datetime] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    # data_interval_end is when Airflow was supposed to trigger this run
+    # (i.e. the end of the scheduled interval). Available in Airflow 2.2+.
+    # execution_date/logical_date is the interval START, which is typically
+    # one full interval behind the trigger time — use data_interval_end for
+    # trigger-delay calculations.
+    data_interval_start: Optional[datetime] = None
+    data_interval_end: Optional[datetime] = None
     external_trigger: bool = False
     conf: Dict[str, Any] = field(default_factory=dict)
     
@@ -161,26 +168,34 @@ class AirflowIntegration:
             api_key: API key for authentication
         """
         self.config = config
-        self.base_url = config.get('base_url', 'http://localhost:8080').rstrip('/')
+        self.base_url = (config.get('base_url') or config.get('host') or 'http://localhost:8080').rstrip('/')
         self.api_url = f"{self.base_url}/api/v1"
-        
-        # Setup auth
-        self._client = httpx.Client(timeout=30)
-        
-        if config.get('api_key'):
-            self._client.headers['Authorization'] = f"Bearer {config['api_key']}"
-        elif config.get('username') and config.get('password'):
-            self._auth = (config['username'], config['password'])
+
+        # Setup auth — prefer basic auth for Airflow 2.x, bearer token only if no username
+        username = config.get('username')
+        password = config.get('password')
+        api_key = config.get('api_key')
+
+        if username and password:
+            self._client = httpx.Client(
+                timeout=30,
+                auth=httpx.BasicAuth(username=str(username), password=str(password)),
+            )
+            logger.info(f"Airflow integration: using basic auth (user={username}, url={self.base_url})")
+        elif api_key:
+            self._client = httpx.Client(
+                timeout=30,
+                headers={'Authorization': f"Bearer {api_key}"},
+            )
+            logger.info(f"Airflow integration: using bearer token (url={self.base_url})")
         else:
-            self._auth = None
-    
+            self._client = httpx.Client(timeout=30)
+            logger.info(f"Airflow integration: no auth configured (url={self.base_url})")
+
     def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Make an authenticated request to Airflow API."""
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
-        
-        if hasattr(self, '_auth') and self._auth:
-            kwargs['auth'] = self._auth
-        
+
         response = self._client.request(method, url, **kwargs)
         response.raise_for_status()
         
@@ -275,6 +290,8 @@ class AirflowIntegration:
                     execution_date=self._parse_datetime(run_data.get('execution_date')),
                     start_date=self._parse_datetime(run_data.get('start_date')),
                     end_date=self._parse_datetime(run_data.get('end_date')),
+                    data_interval_start=self._parse_datetime(run_data.get('data_interval_start')),
+                    data_interval_end=self._parse_datetime(run_data.get('data_interval_end')),
                     external_trigger=run_data.get('external_trigger', False),
                     conf=run_data.get('conf', {}),
                 ))

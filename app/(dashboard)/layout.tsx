@@ -1,6 +1,6 @@
-import { getServerSession } from 'next-auth';
+import { auth } from '@/auth';
 import { redirect } from 'next/navigation';
-import { authOptions } from '../../lib/auth';
+import prisma from '@/lib/db';
 import { Sidebar } from '../../components/dashboard/Sidebar';
 import { DashboardHeader } from '../../components/dashboard/Header';
 import { SessionProvider } from '../../components/providers/SessionProvider';
@@ -14,21 +14,31 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
 
   if (!session) {
     redirect('/login');
+  }
+
+  // Check if user has completed onboarding
+  const user = await prisma.user.findUnique({
+    where: { id: (session.user as any).id },
+    select: { onboardingCompleted: true },
+  });
+
+  if (!user?.onboardingCompleted) {
+    redirect('/onboarding');
   }
 
   return (
     <SessionProvider session={session}>
       <SidebarProvider>
         <DashboardProviders>
-          <div className="min-h-screen bg-[#030303]">
+          <div className="min-h-screen h-[100dvh] bg-[var(--surface-sunken)]">
             <Sidebar />
             <DashboardMain>
               <DashboardHeader />
-              <main className="flex-1 p-6 overflow-y-auto">
+              <main className="flex-1 p-6 overflow-y-auto bg-[var(--surface-sunken)]">
                 {children}
               </main>
             </DashboardMain>

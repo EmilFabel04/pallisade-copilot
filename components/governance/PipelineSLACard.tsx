@@ -1,0 +1,124 @@
+'use client';
+
+import React from 'react';
+import { SLACardMenu, type SLAStatus } from './SLACardMenu';
+
+export interface PipelineSLAItem {
+  assignmentId: string;
+  nodeFqn: string;
+  profileId: string;
+  profileName: string | null;
+  nodeDomain: string | null;
+  overrides: Record<string, any> | null;
+  slaTier: string | null;
+  updatedAt: string | null;
+  status?: string; // 'active' | 'inactive' | 'archived'
+  archivedAt?: string | null;
+  // Enriched client-side
+  nodeName?: string;
+  platform?: string;
+  layer?: string;
+}
+
+const STATUS_STYLES: Record<string, { color: string; bg: string; label: string }> = {
+  active: { color: 'text-emerald-400', bg: 'bg-emerald-500/15', label: 'Active' },
+  inactive: { color: 'text-zinc-400', bg: 'bg-zinc-500/15', label: 'Inactive' },
+  archived: { color: 'text-amber-400', bg: 'bg-amber-500/15', label: 'Archived' },
+};
+
+const DOMAIN_COLORS: Record<string, string> = {
+  ingestion: '#10B981',
+  orchestration: '#F97316',
+  transform: '#F59E0B',
+  bi: '#3B82F6',
+  warehouse: '#8B5CF6',
+};
+
+function getKeyExpectations(overrides: Record<string, any> | null): string[] {
+  if (!overrides) return [];
+  const results: string[] = [];
+  for (const [section, config] of Object.entries(overrides)) {
+    if (typeof config !== 'object' || !config) continue;
+    for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
+      if (key === 'enabled' || value == null) continue;
+      const label = key
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/^./, s => s.toUpperCase())
+        .replace(/Minutes$/, ' (min)')
+        .replace(/Hours$/, ' (hrs)');
+      results.push(`${label}: ${value}`);
+      if (results.length >= 3) return results;
+    }
+  }
+  return results;
+}
+
+interface PipelineSLACardProps {
+  item: PipelineSLAItem;
+  onView: () => void;
+  onClick: (item: PipelineSLAItem) => void;
+  onDelete: () => void;
+  onArchive: () => void;
+  onToggleActive: () => void;
+}
+
+export function PipelineSLACard({ item, onView, onClick, onDelete, onArchive, onToggleActive }: PipelineSLACardProps) {
+  const status: SLAStatus = (item as any).status || 'active';
+  const domainColor = DOMAIN_COLORS[item.nodeDomain || ''] || '#6B7280';
+  const domainLabel = item.nodeDomain
+    ? item.nodeDomain.charAt(0).toUpperCase() + item.nodeDomain.slice(1)
+    : 'Unknown';
+  const expectations = getKeyExpectations(item.overrides);
+
+  return (
+    <div
+      className={`w-full text-left p-4 rounded-xl border border-[var(--subtle-border)] bg-[var(--surface-raised)] hover:border-[var(--accent)]/30 hover:shadow-md hover:shadow-black/5 transition-all group ${status !== 'active' ? 'opacity-60' : ''}`}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[13px] font-medium text-[var(--text)] truncate">
+          {item.nodeName || item.nodeFqn.split('.').pop() || item.nodeFqn}
+        </span>
+        <div className="flex items-center gap-2">
+          {status !== 'active' && (
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${STATUS_STYLES[status].color} ${STATUS_STYLES[status].bg}`}>
+              {STATUS_STYLES[status].label}
+            </span>
+          )}
+          <SLACardMenu
+            status={status}
+            onView={onView}
+            onEdit={() => onClick(item)}
+            onDelete={onDelete}
+            onArchive={onArchive}
+            onToggleActive={onToggleActive}
+          />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 mb-3">
+        <span
+          className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+          style={{ color: domainColor, background: `${domainColor}14`, border: `1px solid ${domainColor}20` }}
+        >
+          {domainLabel}
+        </span>
+        {item.platform && (
+          <span className="text-[10px] text-[var(--muted)] capitalize">{item.platform}</span>
+        )}
+        {item.profileName && (
+          <span className="text-[10px] text-[var(--muted)]">{item.profileName}</span>
+        )}
+      </div>
+
+      {expectations.length > 0 ? (
+        <div className="space-y-1">
+          {expectations.map((exp, i) => (
+            <p key={i} className="text-[11px] text-[var(--muted)]">{exp}</p>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-[var(--muted)] italic">Profile assigned, no custom expectations</p>
+      )}
+    </div>
+  );
+}

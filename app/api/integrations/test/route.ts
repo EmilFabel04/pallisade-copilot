@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import type { Session } from 'next-auth';
+import { auth } from '@/auth';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/integrations/test - Test credentials before creating integration
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -17,36 +18,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Integration type is required' }, { status: 400 });
     }
 
-    const result = await testConnection(type, credentials, config);
+    const result = await testConnection(session, type, credentials, config);
     return NextResponse.json(result);
   } catch (error) {
     console.error('Error testing connection:', error);
-    return NextResponse.json({ 
-      success: false, 
-      error: 'Failed to test connection' 
+    return NextResponse.json({
+      success: false,
+      error: 'Failed to test connection'
     }, { status: 500 });
   }
 }
 
 // Test connection implementations
 async function testConnection(
-  type: string, 
-  credentials: any, 
+  session: Session,
+  type: string,
+  credentials: any,
   config: any
 ): Promise<{ success: boolean; error?: string; metadata?: any }> {
   switch (type) {
     case 'SNOWFLAKE':
-      return testSnowflake(credentials);
+      return testSnowflake(session, credentials);
     case 'SQLSERVER':
     case 'AZURE_SQL':
     case 'AZURE_SYNAPSE':
-      return testSqlServer(credentials, type);
+      return testSqlServer(session, credentials, type);
     case 'AZURE_DATA_FACTORY':
       return testAzureDataFactory(credentials);
     case 'POSTGRES':
-      return testPostgres(credentials);
+      return testPostgres(session, credentials);
     case 'MYSQL':
-      return testMysql(credentials);
+      return testMysql(session, credentials);
+    case 'BIGQUERY':
+      return testBigQuery(session, credentials);
+    case 'REDSHIFT':
+      return testRedshift(session, credentials);
     case 'GITHUB':
       return testGitHub(credentials);
     case 'DBT_CLOUD':
@@ -64,7 +70,7 @@ async function testConnection(
   }
 }
 
-async function testSnowflake(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testSnowflake(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   // Validate required fields first
   if (!credentials?.account || !credentials?.user || !credentials?.password) {
     return { success: false, error: 'Missing required: account, user, password' };
@@ -76,12 +82,9 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
     return { success: false, error: 'Missing required: database' };
   }
 
-  // Try to actually connect via the Python backend
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-
   try {
     // First check if scanner backend is available
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, {
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
@@ -101,7 +104,7 @@ async function testSnowflake(credentials: any): Promise<{ success: boolean; erro
     }
 
     // Call the Python backend to test the actual connection
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/snowflake`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/snowflake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -442,7 +445,7 @@ async function testSlack(credentials: any): Promise<{ success: boolean; error?: 
 }
 
 // SQL Server / Azure SQL / Azure Synapse connection test
-async function testSqlServer(credentials: any, type: string): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testSqlServer(session: Session, credentials: any, type: string): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: server host' };
   }
@@ -456,30 +459,28 @@ async function testSqlServer(credentials: any, type: string): Promise<{ success:
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
   try {
     // Check if scanner backend is available
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
       console.log('[TEST] Scanner backend not available, using basic validation');
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: `Credentials validated (backend offline - full ${type} test skipped)`,
-        metadata: { 
+        metadata: {
           host: credentials.host,
           database: credentials.database,
           type,
-        } 
+        }
       };
     }
 
     // Call the Python backend to test the actual connection
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/sqlserver`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/sqlserver', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -631,7 +632,7 @@ async function testAzureDataFactory(credentials: any): Promise<{ success: boolea
 }
 
 // PostgreSQL connection test
-async function testPostgres(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testPostgres(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: host' };
   }
@@ -645,26 +646,24 @@ async function testPostgres(credentials: any): Promise<{ success: boolean; error
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
   try {
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: 'Credentials validated (backend offline - full test skipped)',
-        metadata: { 
+        metadata: {
           host: credentials.host,
           database: credentials.database,
-        } 
+        }
       };
     }
 
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/postgres`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/postgres', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -709,7 +708,7 @@ async function testPostgres(credentials: any): Promise<{ success: boolean; error
 }
 
 // MySQL connection test
-async function testMysql(credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+async function testMysql(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
   if (!credentials?.host) {
     return { success: false, error: 'Missing required: host' };
   }
@@ -723,26 +722,24 @@ async function testMysql(credentials: any): Promise<{ success: boolean; error?: 
     return { success: false, error: 'Missing required: password' };
   }
 
-  const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-  
   try {
-    const healthCheck = await fetch(`${SCANNER_API_URL}/health`, { 
+    const healthCheck = await scannerClient.fetch(session, '/health', {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-    
+
     if (!healthCheck.ok) {
-      return { 
-        success: true, 
+      return {
+        success: true,
         message: 'Credentials validated (backend offline - full test skipped)',
-        metadata: { 
+        metadata: {
           host: credentials.host,
           database: credentials.database,
-        } 
+        }
       };
     }
 
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/mysql`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/mysql', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -769,18 +766,156 @@ async function testMysql(credentials: any): Promise<{ success: boolean; error?: 
     } else {
       const errorData = await testResponse.json().catch(() => ({}));
       return { 
-        success: false, 
-        error: errorData.detail || errorData.error || 'Failed to connect to MySQL' 
+        success: false,
+        error: errorData.detail || errorData.error || 'Failed to connect to MySQL'
       };
     }
   } catch (error: any) {
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: 'Credentials look valid (could not verify connection)',
-      metadata: { 
+      metadata: {
         host: credentials.host,
         database: credentials.database,
-      } 
+      }
+    };
+  }
+}
+
+// BigQuery connection test
+async function testBigQuery(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+  if (!credentials?.project_id) {
+    return { success: false, error: 'Missing required: project_id' };
+  }
+  const credsJson = credentials?.credentials_json || credentials?.credentials;
+  if (!credsJson) {
+    return { success: false, error: 'Missing required: service account key (credentials)' };
+  }
+
+  try {
+    const healthCheck = await scannerClient.fetch(session, '/health', {
+      method: 'GET',
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!healthCheck.ok) {
+      return {
+        success: true,
+        message: 'Credentials validated (backend offline - full test skipped)',
+        metadata: { project_id: credentials.project_id },
+      };
+    }
+
+    const testResponse = await scannerClient.fetch(session, '/api/v1/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection_type: 'bigquery',
+        connection_config: {
+          project_id: credentials.project_id,
+          credentials: credsJson,
+          location: credentials.location,
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (testResponse.ok) {
+      const result = await testResponse.json();
+      if (result.success) {
+        return {
+          success: true,
+          message: result.message || 'Successfully connected to BigQuery!',
+          metadata: {
+            project_id: credentials.project_id,
+            location: credentials.location,
+          },
+        };
+      }
+      return { success: false, error: result.message || 'Failed to connect to BigQuery' };
+    }
+
+    const errorData = await testResponse.json().catch(() => ({}));
+    return { success: false, error: errorData.detail || errorData.error || 'Failed to connect to BigQuery' };
+  } catch (error: any) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return { success: false, error: 'Connection test timed out. Check your project and credentials.' };
+    }
+    return {
+      success: true,
+      message: 'Credentials look valid (could not verify connection)',
+      metadata: { project_id: credentials.project_id },
+    };
+  }
+}
+
+// Redshift connection test
+async function testRedshift(session: Session, credentials: any): Promise<{ success: boolean; error?: string; message?: string; metadata?: any }> {
+  if (!credentials?.host) {
+    return { success: false, error: 'Missing required: cluster endpoint (host)' };
+  }
+  if (!credentials?.database) {
+    return { success: false, error: 'Missing required: database' };
+  }
+  if (!credentials?.user) {
+    return { success: false, error: 'Missing required: username' };
+  }
+  if (!credentials?.password) {
+    return { success: false, error: 'Missing required: password' };
+  }
+
+  try {
+    const healthCheck = await scannerClient.fetch(session, '/health', {
+      method: 'GET',
+      signal: AbortSignal.timeout(3000),
+    });
+
+    if (!healthCheck.ok) {
+      return {
+        success: true,
+        message: 'Credentials validated (backend offline - full test skipped)',
+        metadata: { host: credentials.host, database: credentials.database },
+      };
+    }
+
+    const testResponse = await scannerClient.fetch(session, '/api/v1/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection_type: 'redshift',
+        connection_config: {
+          host: credentials.host,
+          port: credentials.port || 5439,
+          user: credentials.user,
+          password: credentials.password,
+          database: credentials.database,
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (testResponse.ok) {
+      const result = await testResponse.json();
+      if (result.success) {
+        return {
+          success: true,
+          message: result.message || 'Successfully connected to Redshift!',
+          metadata: { host: credentials.host, database: credentials.database },
+        };
+      }
+      return { success: false, error: result.message || 'Failed to connect to Redshift' };
+    }
+
+    const errorData = await testResponse.json().catch(() => ({}));
+    return { success: false, error: errorData.detail || errorData.error || 'Failed to connect to Redshift' };
+  } catch (error: any) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return { success: false, error: 'Connection test timed out. Check your cluster endpoint and network.' };
+    }
+    return {
+      success: true,
+      message: 'Credentials look valid (could not verify connection)',
+      metadata: { host: credentials.host, database: credentials.database },
     };
   }
 }

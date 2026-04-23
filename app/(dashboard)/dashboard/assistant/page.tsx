@@ -1,17 +1,24 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { ModeSelector, getModeFromSlashCommand } from '@/components/copilot/ModeSelector';
+import { MentionDropdown, type MentionItem } from '@/components/copilot/MentionDropdown';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { ChangePlanToolResult, isChangePlanTool, SharePlanModal } from '@/components/copilot/change-plan';
 import type { ChangePlan } from '@/types/change-plan';
+import { MessageActionMenu, MessageActionButton, SaveArtifactModal } from '@/components/artifacts';
+import { OnboardingBanner } from '@/components/copilot';
+import { useStreamingChat } from '@/hooks/useStreamingChat';
+import { ToolConfirmation } from '@/components/copilot/ToolConfirmation';
+import { ToolIcon } from '@/components/icons/ToolIcon';
+import ArtifactRenderer from '@/components/copilot/ArtifactRenderer';
+import { UIArtifact } from '@/types/artifacts';
 
 type ToolCall = {
   id?: string;
@@ -26,6 +33,7 @@ type Message = {
   content: string;
   timestamp: Date;
   toolCalls?: ToolCall[];
+  artifacts?: UIArtifact[];
 };
 
 type ChatSession = {
@@ -60,6 +68,12 @@ const THINKING_STEPS = [
   'Querying data sources...',
   'Formulating response...',
 ];
+
+// Braille animation frames for streaming pulse
+const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+// Max characters before collapsing user messages
+const MAX_MESSAGE_LENGTH = 200;
 
 // Icons as components for cleaner code
 const Icons = {
@@ -110,40 +124,165 @@ const Icons = {
   ),
 };
 
-export default function AssistantPage() {
+function AssistantPageInner() {
   const { data: session } = useSession();
   const { selectedPipelineId, selectedPipeline } = usePipeline();
-  const [messages, setMessages] = useState<Message[]>([]);
+
+  // Read deep-link data from sessionStorage (primary) or URL params (fallback).
+  // sessionStorage is set by the new RunHistoryTable navigateToScout().
+  // URL params are the fallback for when the schedule page hasn't hot-reloaded yet.
+  // Using a ref initialized inline — runs synchronously during render, so the
+  // data is available before any effects fire. sessionStorage survives React
+  // Strict Mode remounts and Suspense re-renders (unlike useSearchParams).
+  const deepLinkData = useRef<{ prompt: string; context: string; display: string } | null>(
+    typeof window !== 'undefined' ? (() => {
+      // Primary: sessionStorage (set by new RunHistoryTable code)
+      const json = sessionStorage.getItem('askScoutDeepLink');
+      if (json) {
+        try { return JSON.parse(json); } catch { /* fall through */ }
+      }
+      // Fallback: URL params (old code or direct navigation)
+      const params = new URLSearchParams(window.location.search);
+      const prompt = params.get('prompt');
+      if (prompt) {
+        const data = {
+          prompt,
+          context: params.get('context') || '',
+          display: params.get('display') || '',
+        };
+        // Store in sessionStorage so it survives Strict Mode remounts
+        sessionStorage.setItem('askScoutDeepLink', JSON.stringify(data));
+        // Clean URL immediately — no Next.js re-render
+        window.history.replaceState({}, '', '/dashboard/assistant');
+        return data;
+      }
+      return null;
+    })() : null
+  );
+
+  // Initialize messages with the deep-link user message if present.
+  // Because this is a useState lazy initializer, it runs on every mount
+  // (including Strict Mode remounts), so the message is always visible.
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (!deepLinkData.current) return [];
+    return [{
+      id: `deeplink-${Date.now()}`,
+      role: 'user',
+      content: deepLinkData.current.display || deepLinkData.current.prompt,
+      timestamp: new Date(),
+    }];
+  });
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(() => !!deepLinkData.current);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [showHistory, setShowHistory] = useState(true);
+  const sidebarWidth = 256;
   const [selectedMode, setSelectedMode] = useState('ask');
-  const [selectedModel, setSelectedModel] = useState('gpt-5.2');
+  const selectedModel = 'gpt-5.2';
   const [thinkingStep, setThinkingStep] = useState(0);
+  const [brailleFrame, setBrailleFrame] = useState(0);
   const [showSources, setShowSources] = useState(false);
   const [sourceData, setSourceData] = useState<SourceData>({ nodes: [], tables: [], models: [], connectors: [] });
   const [loadingSources, setLoadingSources] = useState(false);
+  const [llmIntegrations, setLlmIntegrations] = useState<Array<{
+    id: string; name: string; type: string; layer: string; status: string;
+    capabilities: string[]; hasCredentials: boolean;
+  }>>([]);
   const [shareModal, setShareModal] = useState<{
     plan: ChangePlan;
     targetType: 'slack' | 'jira' | 'github_issue';
   } | null>(null);
+  const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [shareToast, setShareToast] = useState<{ message: string; url?: string } | null>(null);
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [saveArtifactModal, setSaveArtifactModal] = useState<{
+    content: string;
+    messageId: string;
+  } | null>(null);
+  const [onboardingStatus, setOnboardingStatus] = useState<string>('NOT_STARTED');
+  const [onboardingLoading, setOnboardingLoading] = useState(false);
+  const [onboardingCollapsed, setOnboardingCollapsed] = useState(false);
+  const [showMentionDropdown, setShowMentionDropdown] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionStartIndex, setMentionStartIndex] = useState<number | null>(null);
+  const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastPipelineId = useRef<string | null>(null);
   const modelLoadedRef = useRef(false);
   const initialLoadDone = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const promptProcessed = useRef(false);
+  const [confirmationLoading, setConfirmationLoading] = useState(false);
 
-  // Load mode and model from localStorage on client
+
+  // Streaming chat hook
+  const {
+    streamingMessage,
+    clearStreamingMessage,
+    sendMessage: sendStreamingMessage,
+    abort: abortStreaming,
+  } = useStreamingChat();
+
+
+  // Helper to update artifact status in both streaming and finalized messages
+  const setArtifactStatus = useCallback((artifactId: string, status: UIArtifact['status']) => {
+    // Update in finalized messages
+    setMessages(prev => prev.map(msg => ({
+      ...msg,
+      artifacts: msg.artifacts?.map(a =>
+        a.artifact_id === artifactId ? { ...a, status } : a
+      ),
+    })));
+  }, []);
+
+  // Track whether we're in a background confirmation (suppress UI streaming block)
+  const confirmingArtifactRef = useRef<string | null>(null);
+
+  const handleArtifactConfirm = useCallback(async (artifactId: string, editedData?: Record<string, any>) => {
+    // Search in streaming message first, then in finalized messages
+    const artifact = streamingMessage?.artifacts.find(a => a.artifact_id === artifactId)
+      || messages.flatMap(m => m.artifacts || []).find(a => a.artifact_id === artifactId);
+    if (!artifact) return;
+
+    // Immediately update card to "executing" state
+    setArtifactStatus(artifactId, 'executing');
+    confirmingArtifactRef.current = artifactId;
+
+    const toolName = artifact.tool_name || 'create_watch';
+    const dataToSend = editedData || artifact.data;
+    const actionMessage = `__action:confirm:${artifactId}:${toolName}:${JSON.stringify(dataToSend)}`;
+
+    try {
+      await sendStreamingMessage(actionMessage, {
+        sessionId: sessionId || undefined,
+        model: selectedModel,
+        mode: selectedMode,
+        pipelineStackId: selectedPipelineId || undefined,
+      });
+      // Update card to "completed" after successful execution
+      setArtifactStatus(artifactId, 'completed');
+    } catch (err) {
+      console.error('Artifact confirm failed:', err);
+      setArtifactStatus(artifactId, 'failed');
+    } finally {
+      confirmingArtifactRef.current = null;
+    }
+  }, [streamingMessage, messages, sessionId, selectedModel, selectedMode, selectedPipelineId, sendStreamingMessage, setArtifactStatus]);
+
+  const handleArtifactCancel = useCallback(async (artifactId: string) => {
+    setArtifactStatus(artifactId, 'cancelled');
+  }, [setArtifactStatus]);
+
+
+  // Load mode from localStorage on client
   useEffect(() => {
     if (!modelLoadedRef.current) {
       const savedMode = localStorage.getItem('pallisade-copilot-mode');
-      const savedModel = localStorage.getItem('pallisade-copilot-model');
       if (savedMode) setSelectedMode(savedMode);
-      if (savedModel) setSelectedModel(savedModel);
       modelLoadedRef.current = true;
     }
   }, []);
@@ -155,25 +294,167 @@ export default function AssistantPage() {
     }
   }, [selectedMode]);
 
-  // Persist model selection to localStorage
-  useEffect(() => {
-    if (modelLoadedRef.current) {
-      localStorage.setItem('pallisade-copilot-model', selectedModel);
-    }
-  }, [selectedModel]);
-
   // Fetch sources when pipeline changes (uses cached data)
   useEffect(() => {
     if (selectedPipelineId) fetchSources(selectedPipelineId, false);
+  }, [selectedPipelineId]);
+
+  // Build @mention autocomplete items from source data
+  useEffect(() => {
+    const items: MentionItem[] = [];
+    const seen = new Set<string>();
+
+    // Full pipeline reference (always first)
+    if (sourceData.nodes.length > 0) {
+      items.push({
+        label: 'Full Pipeline',
+        value: '@pipeline',
+        category: 'integration',
+        nodeId: '__pipeline__',
+        toolType: 'pipeline',
+        detail: `${sourceData.nodes.length} integrations`,
+      });
+    }
+
+    // Integration-level mentions
+    for (const node of sourceData.nodes) {
+      const val = `@${node.name.replace(/\s+/g, '_')}`;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      items.push({
+        label: node.name,
+        value: val,
+        category: 'integration',
+        nodeId: node.id,
+        toolType: node.toolType,
+        detail: node.layer.toLowerCase(),
+      });
+    }
+
+    // Table mentions — use full qualified names as labels for clarity
+    const warehouseNodes = sourceData.nodes.filter(
+      n => ['bigquery', 'snowflake', 'postgres', 'redshift'].includes(n.toolType)
+    );
+    const defaultWarehouse = warehouseNodes[0];
+
+    for (const table of sourceData.tables) {
+      const dataset = table.dataset || table.schema || '';
+      const fqn = dataset ? `${dataset}.${table.name}` : table.name;
+      const parentNode = warehouseNodes.length === 1
+        ? defaultWarehouse
+        : warehouseNodes.find(n => n.toolType === (table.database || '').toLowerCase()) || defaultWarehouse;
+      const prefix = parentNode?.name.replace(/\s+/g, '_') || 'Warehouse';
+      const val = `@${prefix}.${fqn}`;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      items.push({
+        label: fqn,
+        value: val,
+        category: 'table',
+        nodeId: parentNode?.id || '',
+        toolType: parentNode?.toolType || 'unknown',
+        detail: parentNode?.name || 'warehouse',
+      });
+    }
+
+    // dbt model mentions
+    const dbtNode = sourceData.nodes.find(
+      n => n.toolType === 'dbt_cloud' || n.toolType === 'dbt_core'
+    );
+    const dbtPrefix = dbtNode?.name.replace(/\s+/g, '_') || 'dbt';
+
+    for (const model of sourceData.models) {
+      const val = `@${dbtPrefix}.${model.name}`;
+      if (seen.has(val)) continue;
+      seen.add(val);
+      items.push({
+        label: model.name,
+        value: val,
+        category: 'model',
+        nodeId: dbtNode?.id || '',
+        toolType: dbtNode?.toolType || 'dbt_cloud',
+        detail: `${model.schema} (${model.materialization})`,
+      });
+    }
+
+    // Connector mentions (Fivetran, Airbyte connectors)
+    const ingestionNode = sourceData.nodes.find(
+      n => ['fivetran', 'airbyte', 'stitch'].includes(n.toolType)
+    );
+    if (ingestionNode) {
+      for (const connector of sourceData.connectors) {
+        const val = `@${ingestionNode.name.replace(/\s+/g, '_')}.${connector.name.replace(/\s+/g, '_')}`;
+        if (seen.has(val)) continue;
+        seen.add(val);
+        items.push({
+          label: connector.name,
+          value: val,
+          category: 'table',
+          nodeId: ingestionNode.id,
+          toolType: ingestionNode.toolType,
+          detail: `connector (${connector.status})`,
+        });
+      }
+    }
+
+    setMentionItems(items);
+  }, [sourceData]);
+
+  // Fetch onboarding status when pipeline changes
+  useEffect(() => {
+    if (!selectedPipelineId) {
+      setOnboardingStatus('NOT_STARTED');
+      return;
+    }
+
+    // Restore collapsed state from localStorage
+    const savedCollapsed = localStorage.getItem(`onboarding-collapsed-${selectedPipelineId}`);
+    if (savedCollapsed === 'true') {
+      setOnboardingCollapsed(true);
+    } else {
+      setOnboardingCollapsed(false);
+    }
+
+    const fetchOnboardingStatus = async () => {
+      try {
+        const res = await fetch(`/api/pipeline/${selectedPipelineId}/context`);
+        if (res.ok) {
+          const data = await res.json();
+          const status = data.context?.onboardingStatus || 'NOT_STARTED';
+          setOnboardingStatus(status);
+          // Force expand when new integration is detected
+          if (status === 'NEEDS_UPDATE') {
+            setOnboardingCollapsed(false);
+            localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch onboarding status:', error);
+      }
+    };
+
+    fetchOnboardingStatus();
   }, [selectedPipelineId]);
 
   // Fetch sources - uses cached data by default, pass refresh=true for fresh discovery
   const fetchSources = async (pipelineId: string, refresh: boolean = false) => {
     setLoadingSources(true);
     try {
-      const res = await fetch(`/api/pipeline?id=${pipelineId}`);
-      if (!res.ok) return;
-      const data = await res.json();
+      // Fetch pipeline nodes + tables/models/connectors in parallel with LLM integrations
+      const [pipelineRes, llmRes] = await Promise.all([
+        fetch(`/api/pipeline?id=${pipelineId}`),
+        fetch(`/api/copilot/integrations?pipelineStackId=${pipelineId}`),
+      ]);
+
+      // LLM integrations
+      if (llmRes.ok) {
+        const llmData = await llmRes.json();
+        setLlmIntegrations(llmData.integrations || []);
+      }
+
+      // Pipeline sources
+      if (!pipelineRes.ok) return;
+      const data = await pipelineRes.json();
       const stack = data.stack;
       if (!stack?.nodes) return;
 
@@ -226,6 +507,101 @@ export default function AssistantPage() {
     }
   };
 
+  const handleStartOnboarding = async () => {
+    if (!selectedPipelineId) return;
+
+    setOnboardingLoading(true);
+    try {
+      // Start onboarding via API
+      await fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start' }),
+      });
+
+      setOnboardingStatus('IN_PROGRESS');
+
+      // Send onboarding message to start the interview
+      handleSubmit(
+        { preventDefault: () => {} } as React.FormEvent,
+        '/onboard Start onboarding - ask me questions about my pipeline setup so you can help me more effectively.'
+      );
+    } catch (error) {
+      console.error('Failed to start onboarding:', error);
+    } finally {
+      setOnboardingLoading(false);
+    }
+  };
+
+  // Deep-link effect: send the API message for Ask Scout deep-links.
+  // This runs BEFORE the fetchSessions mount effect (effects run in declaration order).
+  // The user message is already visible (set via useState initializer above).
+  // We only remove from sessionStorage AFTER the API call succeeds, so
+  // Strict Mode remounts can re-read the data and re-fire the API call.
+  useEffect(() => {
+    const data = deepLinkData.current;
+    if (!data || promptProcessed.current) return;
+    promptProcessed.current = true;
+
+    // Remove from sessionStorage — we've committed to processing
+    sessionStorage.removeItem('askScoutDeepLink');
+
+    // Build the full API message with structured context for the LLM
+    let apiMessage = data.prompt;
+    if (data.context) {
+      try {
+        const ctx = JSON.parse(data.context);
+        const lines: string[] = [
+          '--- MONITOR RUN DATA ---',
+          `Task: ${ctx.taskName}`,
+          `Monitor: ${ctx.monitorType} on ${ctx.targetFqn}`,
+          `Status: ${ctx.status}`,
+        ];
+        if (ctx.value != null) lines.push(`Value: ${ctx.value}`);
+        if (ctx.threshold != null) lines.push(`Threshold: ${ctx.threshold}`);
+        if (ctx.message) lines.push(`Message: ${ctx.message}`);
+        if (ctx.startedAt) lines.push(`Run time: ${ctx.startedAt}`);
+        if (ctx.durationMs) lines.push(`Duration: ${ctx.durationMs}ms`);
+        if (ctx.details && Object.keys(ctx.details).length > 0) {
+          lines.push('', 'Details:');
+          for (const [k, v] of Object.entries(ctx.details)) {
+            lines.push(`  ${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`);
+          }
+        }
+        if (ctx.sqlExecuted) lines.push('', `SQL: ${ctx.sqlExecuted}`);
+        if (ctx.llmValidation) {
+          lines.push('', 'AI Assessment:');
+          if (ctx.llmValidation.explanation) lines.push(`  Explanation: ${ctx.llmValidation.explanation}`);
+          if (ctx.llmValidation.original_status) lines.push(`  Original: ${ctx.llmValidation.original_status}`);
+          if (ctx.llmValidation.adjusted_status) lines.push(`  Adjusted: ${ctx.llmValidation.adjusted_status}`);
+        }
+        lines.push('--- END MONITOR DATA ---', '');
+        apiMessage = lines.join('\n') + '\n' + data.prompt;
+      } catch { /* invalid context — use prompt as-is */ }
+    }
+
+    // Call sendStreamingMessage directly — stable useCallback([]), no stale closure
+    sendStreamingMessage(apiMessage, {
+      sessionId: undefined,
+      pipelineStackId: selectedPipelineId || undefined,
+      model: selectedModel,
+      mode: 'ask',
+    }).then((result) => {
+      if (result.sessionId) {
+        setSessionId(result.sessionId);
+        fetch('/api/copilot/sessions?limit=50')
+          .then(res => res.json())
+          .then(d => setSessions(d.sessions || []))
+          .catch(() => {});
+      }
+    }).catch((error) => {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      console.error('Deep-link chat error:', error);
+    }).finally(() => {
+      setIsLoading(false);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch sessions on mount
   useEffect(() => {
     if (initialLoadDone.current) return;
@@ -249,6 +625,12 @@ export default function AssistantPage() {
         const data = await response.json();
         setSessions(data.sessions || []);
 
+        // If deep-link is active (from Ask Scout), don't load any session —
+        // the deep-link effect handles everything.
+        if (deepLinkData.current || promptProcessed.current) {
+          return;
+        }
+
         if (data.sessions && data.sessions.length > 0) {
           const pipelineSession = selectedPipelineId
             ? data.sessions.find((s: ChatSession) => s.pipelineStackId === selectedPipelineId)
@@ -271,6 +653,8 @@ export default function AssistantPage() {
   };
 
   const loadSession = async (id: string) => {
+    // Optimistic stubs aren't persisted yet — clicking one is a no-op.
+    if (id.startsWith('optimistic-')) return;
     try {
       setIsLoading(true);
       const response = await fetch(`/api/copilot/sessions/${id}`);
@@ -283,6 +667,7 @@ export default function AssistantPage() {
             role: m.role.toLowerCase() as 'user' | 'assistant',
             content: m.content,
             timestamp: new Date(m.createdAt),
+            toolCalls: m.toolCalls || undefined,
           }))
         );
       }
@@ -303,15 +688,29 @@ export default function AssistantPage() {
     e.stopPropagation();
     if (!confirm('Delete this chat?')) return;
 
+    // Optimistic stubs only live client-side — remove locally without hitting the API.
+    if (id.startsWith('optimistic-')) {
+      setSessions(prev => prev.filter(s => s.id !== id));
+      setSessionId(prev => (prev === id ? null : prev));
+      setMessages([]);
+      return;
+    }
+
     try {
       const response = await fetch(`/api/copilot/sessions/${id}`, {
         method: 'DELETE',
       });
       if (response.ok) {
         setSessions(prev => prev.filter(s => s.id !== id));
-        if (sessionId === id) {
-          startNewChat();
-        }
+        // Use functional setter to read the latest sessionId and reset if it matches
+        setSessionId(prev => {
+          if (prev === id) {
+            setMessages([]);
+            setInput('');
+            return null;
+          }
+          return prev;
+        });
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
@@ -326,6 +725,13 @@ export default function AssistantPage() {
     scrollToBottom();
   }, [messages]);
 
+  // Auto-scroll during streaming
+  useEffect(() => {
+    if (streamingMessage?.isStreaming) {
+      scrollToBottom();
+    }
+  }, [streamingMessage?.content, streamingMessage?.toolCalls.length]);
+
   // Cycle through thinking steps while loading
   useEffect(() => {
     if (!isLoading) {
@@ -335,6 +741,18 @@ export default function AssistantPage() {
     const interval = setInterval(() => {
       setThinkingStep(prev => prev + 1);
     }, 2000);
+    return () => clearInterval(interval);
+  }, [isLoading]);
+
+  // Braille animation frame cycling (fast, smooth rotation)
+  useEffect(() => {
+    if (!isLoading) {
+      setBrailleFrame(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setBrailleFrame(prev => prev + 1);
+    }, 80);
     return () => clearInterval(interval);
   }, [isLoading]);
 
@@ -369,73 +787,444 @@ export default function AssistantPage() {
     if (!customMessage) setInput('');
     setIsLoading(true);
 
+    // Optimistically add the new chat to history as soon as it starts, so the
+    // user sees it in the sidebar before the first response arrives. The real
+    // server-assigned id replaces this stub once the stream returns.
+    const isNewChat = !sessionId;
+    const optimisticId = isNewChat ? `optimistic-${Date.now()}` : null;
+    if (isNewChat && optimisticId) {
+      const now = new Date().toISOString();
+      const draftTitle = userMessage.content.slice(0, 60) || 'New chat';
+      setSessions(prev => [
+        {
+          id: optimisticId,
+          title: draftTitle,
+          createdAt: now,
+          updatedAt: now,
+          lastMessage: userMessage.content,
+          pipelineStackId: selectedPipelineId || undefined,
+        },
+        ...prev,
+      ]);
+      setSessionId(optimisticId);
+    }
+
     try {
-      const response = await fetch('/api/copilot/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: messageText,
-          sessionId,
-          pipelineStackId: selectedPipelineId,
-          model: selectedModel,
-          mode: modeToUse,
-        }),
+      const { nodeIds: mentionNodeIds, entities: mentionEntities } = parseMentions(messageText);
+
+      // Don't send the placeholder id to the server — let it create a real session.
+      const outboundSessionId = sessionId && !sessionId.startsWith('optimistic-')
+        ? sessionId
+        : undefined;
+
+      const result = await sendStreamingMessage(messageText, {
+        sessionId: outboundSessionId,
+        pipelineStackId: selectedPipelineId || undefined,
+        model: selectedModel,
+        mode: modeToUse,
+        nodeIds: mentionNodeIds.length > 0 ? mentionNodeIds : undefined,
+        referencedEntities: mentionEntities.length > 0 ? mentionEntities : undefined,
       });
 
-      if (!response.ok) throw new Error('Failed to get response');
-
-      const data = await response.json();
-
-      if (data.sessionId && data.sessionId !== sessionId) {
-        setSessionId(data.sessionId);
+      if (result.sessionId && result.sessionId !== outboundSessionId) {
+        setSessionId(result.sessionId);
         const sessionsRes = await fetch('/api/copilot/sessions?limit=50');
         if (sessionsRes.ok) {
           const sessionsData = await sessionsRes.json();
-          setSessions(sessionsData.sessions || []);
+          // Drop any optimistic stubs so they don't duplicate real sessions.
+          const real = (sessionsData.sessions || []).filter((s: ChatSession) => !s.id.startsWith('optimistic-'));
+          setSessions(real);
+        } else if (optimisticId) {
+          // API fetch failed — swap the optimistic id for the real one so the
+          // stub in history remains clickable.
+          setSessions(prev => prev.map(s => s.id === optimisticId ? { ...s, id: result.sessionId! } : s));
         }
       }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('Request aborted by user');
+        clearStreamingMessage();
+        setIsLoading(false);
+        return;
+      }
+      console.error('Chat error:', error);
+      // Error content is appended by the hook (isStreaming→false),
+      // so the finalization useEffect will handle cleanup.
+    }
+    // NOTE: isLoading is cleared by the finalization useEffect (not here)
+    // to avoid a flash of no-spinner between promise resolution and useEffect.
+  };
 
-      // Map backend tool_calls format to frontend format
-      // Backend returns { success, data: {...}, error } but frontend expects { success, ...data, error }
-      const mappedToolCalls: ToolCall[] = (data.tool_calls || []).map((tc: { tool?: string; name?: string; input?: Record<string, unknown>; arguments?: Record<string, unknown>; result?: { success?: boolean; data?: Record<string, unknown>; error?: string } }) => {
-        const result = tc.result || {};
-        // Flatten the result: merge success/error with the contents of data
-        const flattenedResult = {
-          success: result.success,
-          error: result.error,
-          ...(result.data || {}),
-        };
-        return {
-          name: tc.tool || tc.name || '',
-          arguments: tc.input || tc.arguments,
-          result: flattenedResult,
-        };
-      });
+  // Finalize streaming message into the messages array
+  useEffect(() => {
+    if (!streamingMessage || streamingMessage.isStreaming) return;
+    // Don't finalize if waiting for confirmation
+    if (streamingMessage.pendingConfirmation) return;
+
+    // Map streaming tool calls to frontend format
+    const mappedToolCalls: ToolCall[] = streamingMessage.toolCalls.map(tc => {
+      const result = (tc.result || {}) as Record<string, any>;
+      const flattenedResult = {
+        success: result.success,
+        error: result.error,
+        ...(result.data || {}),
+      };
+      return {
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+        result: flattenedResult,
+      };
+    });
+
+    // Only add to messages if there's actual content or tool calls
+    if (streamingMessage.content || mappedToolCalls.length > 0) {
+      // Filter out artifacts that already exist in prior messages (prevents duplicates from confirmation streams)
+      const existingArtifactIds = new Set(
+        messages.flatMap(m => m.artifacts || []).map(a => a.artifact_id)
+      );
+      const newArtifacts = (streamingMessage.artifacts || []).filter(
+        a => !existingArtifactIds.has(a.artifact_id)
+      );
 
       const aiMessage: Message = {
-        id: data.messageId || (Date.now() + 1).toString(),
+        id: streamingMessage.id,
         role: 'assistant',
-        content: data.message || 'Sorry, I encountered an error.',
+        content: streamingMessage.content,
         timestamp: new Date(),
         toolCalls: mappedToolCalls,
+        artifacts: newArtifacts,
       };
 
       setMessages(prev => [...prev, aiMessage]);
-    } catch (error) {
-      console.error('Chat error:', error);
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, aiMessage]);
+
+      // Handle onboarding tool calls
+      if (selectedPipelineId && mappedToolCalls.length > 0) {
+        for (const tc of mappedToolCalls) {
+          try {
+            if (tc.name === 'complete_onboarding' && (tc.result as Record<string, unknown>)?.completed) {
+              fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'complete' }),
+              }).then(res => {
+                if (res.ok) {
+                  setOnboardingStatus('COMPLETED');
+                  localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+                }
+              });
+            } else if (tc.name === 'save_onboarding_context' && (tc.result as Record<string, unknown>)?.saved) {
+              const result = tc.result as Record<string, unknown>;
+              fetch(`/api/pipeline/${selectedPipelineId}/context`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  questionKey: result.question_key,
+                  answer: result.answer,
+                  contextField: result.context_field,
+                  integrationTтype: result.integration_type,
+                }),
+              });
+              if (onboardingStatus === 'NOT_STARTED') setOnboardingStatus('IN_PROGRESS');
+            }
+          } catch (err) {
+            console.error(`Failed to persist ${tc.name}:`, err);
+          }
+        }
+      }
+    }
+
+    // Always clean up streaming state when done (even for empty responses)
+    clearStreamingMessage();
+    setIsLoading(false);
+  }, [streamingMessage, selectedPipelineId, onboardingStatus, clearStreamingMessage]);
+
+  const handleConfirmTool = async () => {
+    if (!streamingMessage?.pendingConfirmation) return;
+    setConfirmationLoading(true);
+
+    // Capture pending tool details before clearing streaming message
+    const pending = streamingMessage.pendingConfirmation;
+
+    // For apply_change_plan, use the direct endpoint (no LLM round-trip)
+    if (pending.toolName === 'apply_change_plan') {
+      const planId = pending.arguments?.plan_id as string;
+      if (planId) {
+        // Finalize partial message WITHOUT the pending apply_change_plan tool call
+        // (it would render as a stuck "Executing..." spinner otherwise)
+        const partialMessage: Message = {
+          id: streamingMessage.id,
+          role: 'assistant',
+          content: streamingMessage.content,
+          timestamp: new Date(),
+          toolCalls: streamingMessage.toolCalls
+            .filter(tc => tc.name !== 'apply_change_plan' || tc.result != null)
+            .map(tc => ({
+              id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments,
+              result: tc.result ? { success: tc.result.success, error: tc.result.error, ...(tc.result.data || {}) } : undefined,
+            })),
+        };
+        setMessages(prev => [...prev, partialMessage]);
+        clearStreamingMessage();
+        setConfirmationLoading(false);
+        setIsLoading(false);
+        // Pass repo args from the LLM's original tool call if available
+        await handleApplyPlan(planId, {
+          repoOwner: pending.arguments?.repo_owner as string | undefined,
+          repoName: pending.arguments?.repo_name as string | undefined,
+          baseBranch: pending.arguments?.base_branch as string | undefined,
+        });
+        return;
+      }
+    }
+
+    // Finalize current streaming message (partial) into messages
+    const partialMessage: Message = {
+      id: streamingMessage.id,
+      role: 'assistant',
+      content: streamingMessage.content,
+      timestamp: new Date(),
+      toolCalls: streamingMessage.toolCalls.map(tc => ({
+        id: tc.id,
+        name: tc.name,
+        arguments: tc.arguments,
+        result: tc.result ? { success: tc.result.success, error: tc.result.error, ...(tc.result.data || {}) } : undefined,
+      })),
+    };
+    setMessages(prev => [...prev, partialMessage]);
+    clearStreamingMessage();
+
+    // For all other tools, re-send with the pending tool call details
+    try {
+      await sendStreamingMessage(
+        `[SYSTEM] User confirmed execution of tool ${pending.toolName}. Execute it now.`,
+        {
+          sessionId: sessionId || undefined,
+          pipelineStackId: selectedPipelineId || undefined,
+          model: selectedModel,
+          mode: selectedMode,
+          confirmedToolIds: [pending.toolName],
+          pendingToolCall: {
+            toolUseId: pending.toolUseId,
+            toolName: pending.toolName,
+            arguments: pending.arguments,
+          },
+        },
+      );
+    } catch (err) {
+      console.error('Confirm tool error:', err);
     } finally {
+      setConfirmationLoading(false);
       setIsLoading(false);
     }
   };
 
+  const handleDenyTool = async () => {
+    if (!streamingMessage?.pendingConfirmation) return;
+    const toolName = streamingMessage.pendingConfirmation.toolName;
+
+    // Finalize partial message
+    const partialMessage: Message = {
+      id: streamingMessage.id,
+      role: 'assistant',
+      content: streamingMessage.content,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, partialMessage]);
+    clearStreamingMessage();
+
+    // Send denial as new user message
+    handleSubmit(
+      { preventDefault: () => {} } as React.FormEvent,
+      `I declined to execute ${toolName}. Please explain what would have happened and suggest alternatives.`,
+    );
+  };
+
+  // "Create PR" — direct call, no LLM round-trip
+  const [applyingPlanId, setApplyingPlanId] = useState<string | null>(null);
+
+  const handleApplyPlan = async (
+    planId: string,
+    repoArgs?: { repoOwner?: string; repoName?: string; baseBranch?: string },
+  ) => {
+    if (applyingPlanId) return;
+    setApplyingPlanId(planId);
+
+    try {
+      const res = await fetch('/api/copilot/apply-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan_id: planId,
+          repo_owner: repoArgs?.repoOwner,
+          repo_name: repoArgs?.repoName,
+          base_branch: repoArgs?.baseBranch,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        // Show error as an assistant message
+        setMessages(prev => [...prev, {
+          id: `apply_err_${Date.now()}`,
+          role: 'assistant',
+          content: `Failed to create PR: ${data.error || 'Unknown error'}`,
+          timestamp: new Date(),
+        }]);
+        return;
+      }
+
+      // Success — add a message with the PR link and auto-open
+      const prUrl = data.pr_url;
+      setMessages(prev => [...prev, {
+        id: `apply_ok_${Date.now()}`,
+        role: 'assistant',
+        content: `Pull Request created: [#${data.pr_number} — ${data.branch}](${prUrl})\n\n${data.files_changed || 0} file(s) changed.`,
+        timestamp: new Date(),
+      }]);
+
+      if (prUrl) {
+        window.open(prUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err: any) {
+      console.error('Apply plan error:', err);
+      setMessages(prev => [...prev, {
+        id: `apply_err_${Date.now()}`,
+        role: 'assistant',
+        content: `Failed to create PR: ${err.message || 'Network error'}`,
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setApplyingPlanId(null);
+    }
+  };
+
+  const handleStop = () => {
+    abortStreaming();
+    setIsLoading(false);
+  };
+
+  // @mention helpers
+  const getFilteredMentionItems = useCallback((): MentionItem[] => {
+    if (!mentionQuery) return mentionItems.slice(0, 12);
+    const q = mentionQuery.toLowerCase();
+    return mentionItems.filter(item =>
+      item.label.toLowerCase().includes(q) ||
+      item.value.toLowerCase().includes(q) ||
+      (item.detail && item.detail.toLowerCase().includes(q))
+    ).slice(0, 12);
+  }, [mentionQuery, mentionItems]);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    const cursorPos = e.target.selectionStart || 0;
+    setInput(value);
+
+    // Detect @mention trigger
+    const textBeforeCursor = value.slice(0, cursorPos);
+    const atIndex = textBeforeCursor.lastIndexOf('@');
+
+    if (atIndex >= 0) {
+      const charBefore = atIndex > 0 ? value[atIndex - 1] : ' ';
+      if (charBefore === ' ' || charBefore === '\n' || atIndex === 0) {
+        const query = textBeforeCursor.slice(atIndex + 1);
+        if (!query.includes(' ')) {
+          setShowMentionDropdown(true);
+          setMentionQuery(query);
+          setMentionStartIndex(atIndex);
+          setSelectedMentionIndex(0);
+          return;
+        }
+      }
+    }
+
+    setShowMentionDropdown(false);
+    setMentionQuery('');
+    setMentionStartIndex(null);
+  };
+
+  const handleMentionSelect = (item: MentionItem) => {
+    if (mentionStartIndex === null) return;
+    const cursorPos = textareaRef.current?.selectionStart || input.length;
+    const before = input.slice(0, mentionStartIndex);
+    const after = input.slice(cursorPos);
+    const newValue = `${before}${item.value} ${after}`;
+    setInput(newValue);
+    setShowMentionDropdown(false);
+    setMentionQuery('');
+    setMentionStartIndex(null);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const newCursorPos = mentionStartIndex + item.value.length + 1;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    }, 0);
+  };
+
+  const parseMentions = (text: string): { nodeIds: string[]; entities: string[] } => {
+    const mentionRegex = /@(\S+)/g;
+    const nodeIds = new Set<string>();
+    const entities: string[] = [];
+    let match;
+
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const mentionValue = `@${match[1]}`;
+
+      // @pipeline → include all node IDs + "pipeline" entity
+      if (mentionValue === '@pipeline') {
+        for (const node of sourceData.nodes) {
+          nodeIds.add(node.id);
+        }
+        entities.push('pipeline');
+        continue;
+      }
+
+      const item = mentionItems.find(m => m.value === mentionValue);
+      if (item) {
+        if (item.nodeId) nodeIds.add(item.nodeId);
+        if (item.category === 'table' || item.category === 'model') {
+          entities.push(match[1]); // Without @ prefix
+        } else {
+          entities.push(match[1]); // Integration name too
+        }
+      }
+    }
+
+    return { nodeIds: Array.from(nodeIds), entities };
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (showMentionDropdown) {
+      const filtered = getFilteredMentionItems();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedMentionIndex(prev => Math.min(prev + 1, filtered.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedMentionIndex(prev => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (filtered.length > 0) {
+          e.preventDefault();
+          handleMentionSelect(filtered[selectedMentionIndex]);
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowMentionDropdown(false);
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
@@ -456,25 +1245,31 @@ export default function AssistantPage() {
 
   return (
     <TooltipProvider>
-      <div className="h-[calc(100vh-120px)] flex">
+      <div className="-m-6 h-[calc(100vh-56px)] flex">
         {/* Chat History Sidebar */}
-        <div className={cn(
-          'flex-shrink-0 transition-all duration-300 overflow-hidden',
-          showHistory ? 'w-72' : 'w-0'
-        )}>
-          <div className="h-full flex flex-col border-r border-white/[0.06] pr-4">
+        <div
+          className={cn(
+            'flex-shrink-0 overflow-hidden relative transition-[width] duration-200',
+            !showHistory && 'w-0',
+          )}
+          style={{ width: showHistory ? sidebarWidth : 0 }}
+        >
+          <div
+            className="h-full flex flex-col border-r border-[var(--subtle-border)] px-3 pt-4"
+            style={{ width: sidebarWidth }}
+          >
             {/* New Chat Button */}
-            <Button onClick={startNewChat} className="mb-4 gap-2">
+            <Button variant="secondary" onClick={startNewChat} className="mb-4 gap-2">
               {Icons.plus}
               <span>New Chat</span>
             </Button>
 
             {/* Sessions List */}
             <ScrollArea className="flex-1">
-              <div className="space-y-1 pr-2">
+              <div className="space-y-1">
                 {loadingSessions ? (
                   <div className="flex items-center justify-center py-8">
-                    <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                    <div className="w-5 h-5 red-spinner" />
                   </div>
                 ) : sessions.length === 0 ? (
                   <div className="text-center py-8 text-sm text-[var(--muted)]">
@@ -489,22 +1284,22 @@ export default function AssistantPage() {
                       onClick={() => loadSession(s.id)}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') loadSession(s.id); }}
                       className={cn(
-                        'w-full text-left px-3 py-2.5 rounded-xl transition-all group cursor-pointer',
+                        'w-full text-left px-2.5 py-2 rounded-lg transition-all group cursor-pointer',
                         sessionId === s.id
-                          ? 'bg-white/[0.08] text-white'
-                          : 'hover:bg-white/[0.04] text-[var(--muted)] hover:text-white'
+                          ? 'bg-[var(--hover-bg)] text-[var(--text)]'
+                          : 'hover:bg-[var(--overlay-bg)] text-[var(--muted)] hover:text-[var(--text)]'
                       )}
                     >
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{s.title}</div>
-                          <div className="text-xs opacity-50 mt-0.5">{formatDate(s.updatedAt)}</div>
+                          <div className="text-sm font-medium truncate leading-tight">{s.title}</div>
+                          <div className="text-[10px] opacity-50 mt-0.5">{formatDate(s.updatedAt)}</div>
                         </div>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <button
                               onClick={(e) => deleteSession(s.id, e)}
-                              className="p-1 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:text-red-400 transition-all rounded"
+                              className="p-1 flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:text-red-400 transition-all rounded"
                             >
                               {Icons.trash}
                             </button>
@@ -518,32 +1313,26 @@ export default function AssistantPage() {
               </div>
             </ScrollArea>
           </div>
+
         </div>
 
         {/* Main Chat Area */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Compact Header */}
-          <div className="flex items-center justify-between py-2 px-4 border-b border-white/[0.06]">
-            <div className="flex items-center gap-2">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowHistory(!showHistory)}
-                    className="p-1.5 h-8 w-8"
-                  >
-                    {Icons.menu}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>{showHistory ? 'Hide history' : 'Show history'}</TooltipContent>
-              </Tooltip>
-              <Avatar className="w-7 h-7">
-                <AvatarImage src="/pallisade_scout.svg" alt="Scout" />
-                <AvatarFallback className="text-xs">AI</AvatarFallback>
-              </Avatar>
-              <h1 className="text-sm font-semibold">Pallisade Scout</h1>
-            </div>
+        <div className="flex-1 flex flex-col min-w-0 relative">
+          {/* Compact Toolbar */}
+          <div className="flex items-center justify-between py-1 px-3 border-b border-[var(--subtle-border)]">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowHistory(!showHistory)}
+                  className="p-1.5 h-7 w-7"
+                >
+                  {Icons.menu}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{showHistory ? 'Hide history' : 'Show history'}</TooltipContent>
+            </Tooltip>
 
             {/* Sources */}
             <Button
@@ -551,8 +1340,8 @@ export default function AssistantPage() {
               size="sm"
               onClick={() => setShowSources(!showSources)}
               className={cn(
-                'gap-1.5 px-2.5 h-8 text-xs',
-                showSources && 'bg-white/[0.08]'
+                'gap-1.5 px-2.5 h-7 text-xs',
+                showSources && 'bg-[var(--hover-bg)]'
               )}
             >
               {Icons.cube}
@@ -565,14 +1354,39 @@ export default function AssistantPage() {
             </Button>
           </div>
 
-          {/* Messages */}
-          <ScrollArea className="flex-1 px-4 py-3">
+          {/* Messages + floating onboarding — fills entire remaining space */}
+          <div className="flex-1 relative min-h-0 overflow-hidden">
+            {/* Floating Onboarding Banner */}
+            {selectedPipelineId && onboardingStatus !== 'COMPLETED' && (
+              <div className="absolute top-3 left-4 right-4 z-20">
+                <OnboardingBanner
+                  status={onboardingStatus as 'NOT_STARTED' | 'IN_PROGRESS' | 'NEEDS_UPDATE'}
+                  onStart={handleStartOnboarding}
+                  isLoading={onboardingLoading}
+                  collapsed={onboardingCollapsed}
+                  onToggleCollapse={() => {
+                    const next = !onboardingCollapsed;
+                    setOnboardingCollapsed(next);
+                    if (selectedPipelineId) {
+                      if (next) {
+                        localStorage.setItem(`onboarding-collapsed-${selectedPipelineId}`, 'true');
+                      } else {
+                        localStorage.removeItem(`onboarding-collapsed-${selectedPipelineId}`);
+                      }
+                    }
+                  }}
+                />
+              </div>
+            )}
+
+            <ScrollArea className="h-full px-4 py-3">
             {messages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center px-4">
-                <Avatar className="w-14 h-14 mb-3">
-                  <AvatarImage src="/pallisade_scout.svg" alt="Scout" />
-                  <AvatarFallback className="text-xl">AI</AvatarFallback>
-                </Avatar>
+                <div className="w-14 h-14 mb-3 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                  <svg className="w-7 h-7 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                  </svg>
+                </div>
                 <h2 className="text-base font-semibold mb-1">How can I help?</h2>
                 <p className="text-xs text-[var(--muted)] max-w-sm mb-4">
                   Query your warehouse, explore lineage, debug pipelines.
@@ -590,7 +1404,7 @@ export default function AssistantPage() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent, prompt)}
-                      className="text-xs text-[var(--muted)] hover:text-white h-7 px-2.5"
+                      className="text-xs text-[var(--muted)] hover:text-[var(--text)] h-7 px-2.5"
                     >
                       {prompt}
                     </Button>
@@ -598,84 +1412,253 @@ export default function AssistantPage() {
                 </div>
               </div>
             ) : (
-              <div className="space-y-3 pb-2">
+              <div className="space-y-3 pb-36">
                 {messages.map((message) => (
-                  <div key={message.id} className={cn('flex gap-2', message.role === 'user' && 'justify-end')}>
-                    {message.role === 'assistant' && (
-                      <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                        <AvatarImage src="/pallisade_scout.svg" alt="AI" />
-                        <AvatarFallback className="text-[10px]">AI</AvatarFallback>
-                      </Avatar>
-                    )}
+                  <div key={message.id} className={cn('flex gap-2 min-w-0', message.role === 'user' && 'justify-end')}>
                     <div className={cn(
-                      'max-w-[85%]',
+                      'max-w-[85%] min-w-0',
                       message.role === 'user' ? '' : 'space-y-2'
                     )}>
-                      <div className={cn(
-                        'px-3 py-2',
-                        message.role === 'user'
-                          ? 'bg-[var(--accent)] text-white rounded-xl rounded-tr-sm'
-                          : 'bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm'
-                      )}>
-                        <MessageContent content={message.content} />
-                      </div>
-                      {/* Render change plan tool results */}
-                      {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (
-                        <div className="space-y-2 mt-2">
-                          {message.toolCalls.filter(tc => isChangePlanTool(tc.name)).map((toolCall, idx) => (
-                            <ChangePlanToolResult
-                              key={toolCall.id || idx}
-                              toolName={toolCall.name}
-                              result={toolCall.result as any}
-                              onValidate={(planId, level) => {
-                                handleSubmit(
-                                  { preventDefault: () => {} } as React.FormEvent,
-                                  `Validate change plan ${planId} at ${level} level`
-                                );
-                              }}
-                              onApply={(planId) => {
-                                handleSubmit(
-                                  { preventDefault: () => {} } as React.FormEvent,
-                                  `Apply change plan ${planId} to create a GitHub PR`
-                                );
-                              }}
-                              onShare={(planId, targetType) => {
-                                // Extract plan from tool result
-                                const result = toolCall.result as any;
-                                const plan = result?.plan || result;
-                                if (plan && plan.id) {
-                                  setShareModal({ plan, targetType });
-                                }
+                      {message.role === 'assistant' ? (
+                        <div className="relative group min-w-0">
+                          <div className="px-1 py-1">
+                            <MessageContent content={message.content} />
+                          </div>
+                          {/* Three-dot menu button */}
+                          <div className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <MessageActionButton
+                              onClick={() => setActiveMenuId(activeMenuId === message.id ? null : message.id)}
+                            />
+                            <MessageActionMenu
+                              content={message.content}
+                              messageId={message.id}
+                              sessionId={sessionId}
+                              isOpen={activeMenuId === message.id}
+                              onClose={() => setActiveMenuId(null)}
+                              onSaveToArtifacts={() => {
+                                setSaveArtifactModal({ content: message.content, messageId: message.id });
+                                setActiveMenuId(null);
                               }}
                             />
-                          ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="px-3 py-2 bg-[var(--hover-bg)] border border-[var(--accent)]/50 text-[var(--text)] rounded-xl rounded-tr-sm">
+                          {message.content.length > MAX_MESSAGE_LENGTH ? (
+                            <div>
+                              <div className="text-sm whitespace-pre-wrap break-words">
+                                {expandedMessages.has(message.id)
+                                  ? message.content
+                                  : message.content.slice(0, MAX_MESSAGE_LENGTH) + '...'}
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedMessages(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(message.id)) {
+                                      next.delete(message.id);
+                                    } else {
+                                      next.add(message.id);
+                                    }
+                                    return next;
+                                  });
+                                }}
+                                className="text-xs opacity-70 hover:opacity-100 mt-1.5 underline"
+                              >
+                                {expandedMessages.has(message.id) ? 'Show less' : 'Show more'}
+                              </button>
+                            </div>
+                          ) : (
+                            <MessageContent content={message.content} />
+                          )}
                         </div>
                       )}
+                      {/* Render change plan tool results + compact tool summary */}
+                      {message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0 && (() => {
+                        const changePlanTools = message.toolCalls.filter(tc => isChangePlanTool(tc.name));
+                        const regularTools = message.toolCalls.filter(tc => !isChangePlanTool(tc.name));
+                        return (
+                          <div className="space-y-2 mt-2">
+                            {changePlanTools.map((toolCall, idx) => {
+                              const associatedPlan = message.toolCalls?.find(
+                                tc => (tc.name === 'create_change_plan' || tc.name === 'get_change_plan') &&
+                                      (tc.result as any)?.plan
+                              )?.result as any;
+
+                              return (
+                                <ChangePlanToolResult
+                                  key={toolCall.id || idx}
+                                  toolName={toolCall.name}
+                                  result={toolCall.result as any}
+                                  onValidate={(planId, level) => {
+                                    handleSubmit(
+                                      { preventDefault: () => {} } as React.FormEvent,
+                                      `Validate change plan ${planId} at ${level} level`
+                                    );
+                                  }}
+                                  onApply={(planId) => handleApplyPlan(planId)}
+                                  isApplying={!!applyingPlanId}
+                                  onShare={(planId, targetType) => {
+                                    const result = toolCall.result as any;
+                                    const plan = result?.plan || result;
+                                    if (plan && plan.id) {
+                                      setShareModal({ plan, targetType });
+                                    }
+                                  }}
+                                  onSaveToArtifacts={(content) => {
+                                    setSaveArtifactModal({ content, messageId: message.id });
+                                  }}
+                                  associatedPlan={associatedPlan?.plan}
+                                />
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                      {/* Artifacts on completed messages */}
+                      {message.artifacts && message.artifacts.length > 0 && (
+                        <ArtifactRenderer
+                          artifacts={message.artifacts}
+                          onConfirm={handleArtifactConfirm}
+                          onCancel={handleArtifactCancel}
+
+                        />
+                      )}
                     </div>
-                    {message.role === 'user' && (
-                      <Avatar className="w-6 h-6 flex-shrink-0 mt-0.5">
-                        <AvatarFallback className="bg-gradient-to-br from-violet-500 to-purple-600 text-white text-[10px]">
-                          {session?.user?.name?.[0] || 'U'}
-                        </AvatarFallback>
-                      </Avatar>
-                    )}
                   </div>
                 ))}
 
-                {isLoading && (
+                {/* Streaming message display (hidden during background artifact confirmation) */}
+                {streamingMessage && !confirmingArtifactRef.current && (
                   <div className="flex gap-2">
-                    <Avatar className="w-6 h-6 flex-shrink-0">
-                      <AvatarImage src="/pallisade_scout.svg" alt="AI" />
-                      <AvatarFallback className="text-[10px]">AI</AvatarFallback>
-                    </Avatar>
-                    <div className="bg-white/[0.03] border border-white/[0.06] rounded-xl rounded-tl-sm px-3 py-2.5">
+                    <div className="w-6 h-6 flex-shrink-0 mt-0.5 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="px-1 py-1">
+                        {streamingMessage.content ? (
+                          <div>
+                            <MessageContent content={streamingMessage.content} />
+                            {streamingMessage.isStreaming && (
+                              <span className="inline-block w-1.5 h-4 bg-violet-400 animate-pulse ml-0.5 align-text-bottom" />
+                            )}
+                          </div>
+                        ) : streamingMessage.isStreaming ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-violet-400 text-sm font-mono">
+                              {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
+                            </span>
+                            <span className="text-[12px] text-[var(--muted)]">
+                              {streamingMessage.toolCalls.length > 0
+                                ? 'Formulating response...'
+                                : THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
+                            </span>
+                          </div>
+                        ) : streamingMessage.toolCalls.length > 0 ? (
+                          <div className="text-[12px] text-[var(--muted)] italic">
+                            Analysis complete.
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-violet-400 text-sm font-mono">
+                              {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
+                            </span>
+                            <span className="text-[12px] text-[var(--muted)]">
+                              {THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Tool calls in progress */}
+                      {streamingMessage.toolCalls.length > 0 && (() => {
+                        const changePlanCalls = streamingMessage.toolCalls.filter(tc => isChangePlanTool(tc.name));
+                        const regularCalls = streamingMessage.toolCalls.filter(tc => !isChangePlanTool(tc.name));
+                        const hiddenCount = Math.max(0, regularCalls.length - 5);
+                        const visibleCalls = regularCalls.slice(-5);
+
+                        return (
+                          <div className="mt-2 space-y-2">
+                            {/* Change plan tools render as full cards */}
+                            {changePlanCalls.map((tc) => {
+                              if (tc.result && !tc.isExecuting) {
+                                const flatResult = {
+                                  success: tc.result.success,
+                                  error: tc.result.error,
+                                  ...(tc.result.data || {}),
+                                };
+                                return (
+                                  <ChangePlanToolResult
+                                    key={tc.id}
+                                    toolName={tc.name}
+                                    result={flatResult as any}
+                                    onValidate={(planId, level) => {
+                                      handleSubmit(
+                                        { preventDefault: () => {} } as React.FormEvent,
+                                        `Validate change plan ${planId} at ${level} level`
+                                      );
+                                    }}
+                                    onApply={(planId) => handleApplyPlan(planId)}
+                                    isApplying={!!applyingPlanId}
+                                  />
+                                );
+                              }
+                              return null;
+                            })}
+
+                            {/* Regular tool calls as compact status */}
+                            {regularCalls.length > 0 && (
+                              <div className="text-[10px] text-[var(--text-faint)]">
+                                {regularCalls.some(tc => tc.isExecuting)
+                                  ? 'Working...'
+                                  : `Completed ${regularCalls.length} step${regularCalls.length !== 1 ? 's' : ''}`
+                                }
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Tool confirmation UI */}
+                      {streamingMessage.pendingConfirmation && (
+                        <ToolConfirmation
+                          confirmation={streamingMessage.pendingConfirmation}
+                          onConfirm={handleConfirmTool}
+                          onDeny={handleDenyTool}
+                          isLoading={confirmationLoading}
+                        />
+                      )}
+
+                      {/* Artifact cards */}
+                      {streamingMessage.artifacts && streamingMessage.artifacts.length > 0 && (
+                        <ArtifactRenderer
+                          artifacts={streamingMessage.artifacts}
+                          onConfirm={handleArtifactConfirm}
+                          onCancel={handleArtifactCancel}
+
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Fallback: show old spinner if loading but no streaming message yet */}
+                {isLoading && !streamingMessage && !confirmingArtifactRef.current && (
+                  <div className="flex gap-2">
+                    <div className="w-6 h-6 flex-shrink-0 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+                      <svg className="w-3.5 h-3.5 text-[var(--text)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                      </svg>
+                    </div>
+                    <div className="px-1 py-1">
                       <div className="flex items-center gap-2">
-                        <div className="flex gap-1">
-                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                          <div className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" style={{ animationDelay: '0.4s' }} />
-                        </div>
-                        <span className="text-[12px] text-[var(--muted)] animate-pulse">
+                        <span className="text-violet-400 text-sm font-mono">
+                          {BRAILLE_FRAMES[brailleFrame % BRAILLE_FRAMES.length]}
+                        </span>
+                        <span className="text-[12px] text-[var(--muted)]">
                           {THINKING_STEPS[thinkingStep % THINKING_STEPS.length]}
                         </span>
                       </div>
@@ -687,51 +1670,64 @@ export default function AssistantPage() {
             )}
           </ScrollArea>
 
-          {/* Input - Cursor style */}
-          <div className="px-4 pb-4 pt-2">
+            {/* Input - floating at bottom of chat area */}
+            <div className="absolute bottom-0 left-0 right-0 z-10 px-4 pb-4 pt-10 bg-gradient-to-t from-[var(--bg)] from-75% to-transparent pointer-events-none">
+              <div className="pointer-events-auto">
             <div className="max-w-2xl mx-auto">
               <form onSubmit={handleSubmit}>
-                <div className="relative bg-[#1a1a24] border border-white/[0.1] rounded-xl focus-within:border-white/[0.2] transition-colors">
+                <div className="relative bg-[var(--surface-raised)] border border-[var(--border-medium)] rounded-xl focus-within:border-[var(--overlay-strong)] transition-colors">
+                  {/* @mention autocomplete dropdown */}
+                  {showMentionDropdown && (
+                    <MentionDropdown
+                      items={getFilteredMentionItems()}
+                      selectedIndex={selectedMentionIndex}
+                      onSelect={handleMentionSelect}
+                      onClose={() => setShowMentionDropdown(false)}
+                    />
+                  )}
                   {/* Textarea */}
                   <Textarea
                     ref={textareaRef}
                     value={input}
-                    onChange={(e) => setInput(e.target.value)}
+                    onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask about your data pipeline..."
-                    className="w-full min-h-[80px] max-h-[200px] bg-transparent border-0 focus:ring-0 resize-none px-4 pt-3 pb-14 text-sm placeholder:text-white/30 rounded-xl"
+                    placeholder="Ask about your data pipeline... (type @ to reference integrations)"
+                    className="w-full min-h-[80px] max-h-[200px] bg-transparent border-0 focus:ring-0 resize-none px-4 pt-3 pb-14 text-sm placeholder:text-[var(--text-faint)] rounded-xl"
                     rows={2}
                   />
 
                   {/* Bottom bar with mode selector, model selector, and send button */}
-                  <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[#1a1a24] border-t border-white/[0.06] rounded-b-xl">
+                  <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between px-3 py-2 bg-[var(--surface-raised)] border-t border-[var(--subtle-border)] rounded-b-xl">
                     <div className="flex items-center gap-2">
                       <ModeSelector selected={selectedMode} onSelect={setSelectedMode} />
-                      <select
-                        value={selectedModel}
-                        onChange={(e) => setSelectedModel(e.target.value)}
-                        className="px-2 py-1 text-[11px] rounded-lg bg-white/[0.04] border border-white/[0.08] text-white/70 focus:outline-none focus:border-white/[0.15] cursor-pointer"
-                      >
-                        <option value="gpt-5.2">GPT-5.2</option>
-                        <option value="gpt-5.2-mini">GPT-5.2 Mini</option>
-                        <option value="claude-sonnet">Claude Sonnet</option>
-                        <option value="claude-haiku">Claude Haiku</option>
-                      </select>
-                      <span className="text-[10px] text-white/30 hidden sm:inline">Enter to send</span>
+                      <span className="text-[10px] text-[var(--text-faint)] hidden sm:inline">Enter to send</span>
                     </div>
-                    <Button
-                      type="submit"
-                      disabled={!input.trim() || isLoading}
-                      size="sm"
-                      className="h-7 px-3 gap-1.5"
-                    >
-                      {Icons.send}
-                      <span className="text-xs hidden sm:inline">Send</span>
-                    </Button>
+                    {isLoading ? (
+                      <Button
+                        type="button"
+                        onClick={handleStop}
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        variant="ghost"
+                      >
+                        <div className="w-4 h-4 red-spinner" />
+                      </Button>
+                    ) : (
+                      <Button
+                        type="submit"
+                        disabled={!input.trim()}
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                      >
+                        {Icons.send}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </form>
+              </div>
             </div>
+          </div>
           </div>
         </div>
 
@@ -740,7 +1736,7 @@ export default function AssistantPage() {
           'flex-shrink-0 transition-all duration-300 overflow-hidden',
           showSources ? 'w-80' : 'w-0'
         )}>
-          <div className="h-full flex flex-col border-l border-white/[0.06] pl-4 pr-2">
+          <div className="h-full flex flex-col border-l border-[var(--subtle-border)] pl-4 pr-2">
             <div className="py-3 mb-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Sources</h3>
@@ -791,11 +1787,11 @@ export default function AssistantPage() {
             <ScrollArea className="flex-1 pb-4">
               {loadingSources ? (
                 <div className="flex items-center justify-center py-8">
-                  <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                  <div className="w-5 h-5 red-spinner" />
                 </div>
-              ) : sourceData.nodes.length === 0 ? (
+              ) : llmIntegrations.length === 0 && sourceData.tables.length === 0 && sourceData.models.length === 0 ? (
                 <div className="text-center py-8">
-                  <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto mb-3">
+                  <div className="w-12 h-12 rounded-xl bg-[var(--overlay-bg)] border border-[var(--subtle-border)] flex items-center justify-center mx-auto mb-3">
                     {Icons.cube}
                   </div>
                   <p className="text-xs text-[var(--muted)]">No connected sources</p>
@@ -803,31 +1799,64 @@ export default function AssistantPage() {
                 </div>
               ) : (
                 <div className="space-y-4 pr-2">
-                  {/* Connected Stack */}
-                  <div>
-                    <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connected Stack</h4>
-                    <div className="space-y-1.5">
-                      {sourceData.nodes.map((node) => (
-                        <div key={node.id} className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06]">
-                          <SourceIcon toolType={node.toolType} />
-                          <div className="flex-1 min-w-0">
-                            <div className="text-xs font-medium truncate">{node.name}</div>
-                            <div className="text-[10px] text-[var(--muted)] capitalize">{node.layer.toLowerCase()}</div>
-                          </div>
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" title="Connected" />
+                  {/* Tools — LLM capabilities derived from connected integrations */}
+                  {(() => {
+                    const types = new Set(llmIntegrations.map((i) => i.type.toLowerCase()));
+                    const tools: { label: string; icon: string; match: string[] }[] = [
+                      { label: 'Query warehouse', icon: '⌕', match: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'] },
+                      { label: 'Browse schemas', icon: '⊞', match: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks'] },
+                      { label: 'Trace lineage', icon: '⤮', match: ['bigquery', 'snowflake', 'postgres', 'redshift', 'databricks', 'dbt_cloud', 'dbt_core'] },
+                      { label: 'dbt models & tests', icon: '◈', match: ['dbt_cloud', 'dbt_core'] },
+                      { label: 'Sync status', icon: '⇄', match: ['fivetran', 'airbyte', 'stitch'] },
+                      { label: 'Dashboards', icon: '▦', match: ['looker', 'tableau', 'metabase', 'powerbi'] },
+                      { label: 'Orchestration', icon: '⟳', match: ['airflow', 'dagster', 'prefect'] },
+                    ];
+                    const available = tools.filter((t) => t.match.some((m) => types.has(m)));
+                    if (available.length === 0) return null;
+                    return (
+                      <div>
+                        <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Tools</h4>
+                        <div className="flex flex-wrap gap-1.5">
+                          {available.map((t) => (
+                            <span key={t.label} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--overlay-bg)] border border-[var(--subtle-border)] text-[10px] text-[var(--text-secondary)]">
+                              <span className="opacity-60">{t.icon}</span> {t.label}
+                            </span>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </div>
+                      </div>
+                    );
+                  })()}
 
-                  {/* dbt Models */}
+                  {/* Integrations — what the LLM can actually call */}
+                  {llmIntegrations.length > 0 && (
+                    <div>
+                      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Integrations</h4>
+                      <div className="space-y-1.5">
+                        {llmIntegrations.map((intg) => (
+                          <div key={intg.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
+                            <SourceIcon toolType={intg.type} />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium truncate">{intg.name}</div>
+                              <div className="text-[10px] text-[var(--muted)] capitalize">{intg.layer.toLowerCase()}</div>
+                            </div>
+                            <span className={cn(
+                              'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                              intg.hasCredentials ? 'bg-emerald-400' : 'bg-amber-400'
+                            )} title={intg.hasCredentials ? 'Connected' : 'No credentials'} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Models */}
                   {sourceData.models.length > 0 && (
                     <SourceSection
-                      title="dbt Models"
+                      title="Models"
                       count={sourceData.models.length}
                       items={sourceData.models}
                       renderItem={(model) => (
-                        <div key={model.name} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                        <div key={model.name} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
                           <div className="flex items-center gap-2 min-w-0">
                             <span className={cn(
                               'w-1.5 h-1.5 rounded-full flex-shrink-0',
@@ -844,39 +1873,20 @@ export default function AssistantPage() {
                     />
                   )}
 
-                  {/* Warehouse Tables */}
+                  {/* Tables */}
                   {sourceData.tables.length > 0 && (
                     <SourceSection
                       title="Tables"
                       count={sourceData.tables.length}
                       items={sourceData.tables}
-                      renderItem={(table) => (
-                        <div key={`${table.schema}.${table.name}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
+                      renderItem={(table, index) => (
+                        <div key={`${table.schema}.${table.name}.${index}`} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-[var(--overlay-bg)] transition-colors">
                           <span className="text-[var(--muted)]">{Icons.table}</span>
                           <span className="text-xs truncate">{table.name}</span>
                         </div>
                       )}
                       groupBy={(table) => table.dataset || table.schema}
                     />
-                  )}
-
-                  {/* Connectors */}
-                  {sourceData.connectors.length > 0 && (
-                    <div>
-                      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">Connectors</h4>
-                      <div className="space-y-1">
-                        {sourceData.connectors.map((c) => (
-                          <div key={c.name} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/[0.03] transition-colors">
-                            <span className="text-xs">{c.name}</span>
-                            <span className={cn(
-                              'text-[10px]',
-                              c.status === 'active' ? 'text-emerald-400' :
-                              c.status === 'failed' ? 'text-red-400' : 'text-[var(--muted)]'
-                            )}>{c.status}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   )}
                 </div>
               )}
@@ -898,6 +1908,15 @@ export default function AssistantPage() {
           }}
         />
       )}
+
+      {/* Save Artifact Modal */}
+      <SaveArtifactModal
+        isOpen={!!saveArtifactModal}
+        onClose={() => setSaveArtifactModal(null)}
+        content={saveArtifactModal?.content || ''}
+        sessionId={sessionId}
+        messageId={saveArtifactModal?.messageId || ''}
+      />
 
       {/* Share Toast */}
       {shareToast && (
@@ -926,7 +1945,7 @@ export default function AssistantPage() {
           </div>
           <button
             onClick={() => setShareToast(null)}
-            className="p-1 hover:bg-white/10 rounded transition-colors"
+            className="p-1 hover:bg-[var(--overlay-medium)] rounded transition-colors"
           >
             <svg className="w-4 h-4 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -939,30 +1958,7 @@ export default function AssistantPage() {
 }
 
 function SourceIcon({ toolType }: { toolType: string }) {
-  const icons: Record<string, string> = {
-    bigquery: 'BQ', snowflake: 'SF', postgres: 'PG', redshift: 'RS',
-    dbt_cloud: 'dbt', dbt_core: 'dbt',
-    fivetran: 'FT', airbyte: 'AB', stitch: 'ST',
-    looker: 'LK', tableau: 'TB', metabase: 'MB',
-    airflow: 'AF', dagster: 'DG', prefect: 'PF',
-  };
-  const colors: Record<string, string> = {
-    bigquery: 'from-blue-500 to-blue-600',
-    snowflake: 'from-cyan-400 to-cyan-500',
-    postgres: 'from-indigo-500 to-indigo-600',
-    dbt_cloud: 'from-orange-500 to-orange-600',
-    dbt_core: 'from-orange-500 to-orange-600',
-    fivetran: 'from-pink-500 to-pink-600',
-    airbyte: 'from-violet-500 to-violet-600',
-  };
-  return (
-    <div className={cn(
-      'w-7 h-7 rounded-lg bg-gradient-to-br flex items-center justify-center flex-shrink-0',
-      colors[toolType] || 'from-gray-500 to-gray-600'
-    )}>
-      <span className="text-[9px] font-bold text-white">{icons[toolType] || toolType.slice(0, 2).toUpperCase()}</span>
-    </div>
-  );
+  return <ToolIcon toolType={toolType} size={28} />;
 }
 
 function SourceSection<T>({
@@ -975,7 +1971,7 @@ function SourceSection<T>({
   title: string;
   count: number;
   items: T[];
-  renderItem: (item: T) => React.ReactNode;
+  renderItem: (item: T, index: number) => React.ReactNode;
   groupBy: (item: T) => string;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -1022,7 +2018,7 @@ function MessageContent({ content }: { content: string }) {
   const segments = parseContentSegments(displayContent);
 
   return (
-    <div className="text-[13px] space-y-2">
+    <div className="text-[13px] space-y-2 break-words">
       {segments.map((segment, i) => {
         if (segment.type === 'code') {
           return (
@@ -1138,12 +2134,12 @@ function TableBlock({ content }: { content: string }) {
   );
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
+    <div className="overflow-x-auto rounded-lg border border-[var(--subtle-border)]">
       <table className="w-full text-[12px]">
         <thead>
-          <tr className="bg-white/[0.04] border-b border-white/[0.08]">
+          <tr className="bg-[var(--overlay-bg)] border-b border-[var(--subtle-border)]">
             {headerCells.map((cell, i) => (
-              <th key={i} className="px-3 py-2 text-left font-semibold text-white/80">
+              <th key={i} className="px-3 py-2 text-left font-semibold text-[var(--text-secondary)]">
                 {cell}
               </th>
             ))}
@@ -1151,9 +2147,9 @@ function TableBlock({ content }: { content: string }) {
         </thead>
         <tbody>
           {dataRows.map((row, rowIdx) => (
-            <tr key={rowIdx} className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.02]">
+            <tr key={rowIdx} className="border-b border-[var(--border-faint)] last:border-0 hover:bg-[var(--overlay-faint)]">
               {row.map((cell, cellIdx) => (
-                <td key={cellIdx} className="px-3 py-2 text-white/70">
+                <td key={cellIdx} className="px-3 py-2 text-[var(--text-tertiary)]">
                   <span dangerouslySetInnerHTML={{ __html: formatInline(cell) }} />
                 </td>
               ))}
@@ -1191,8 +2187,8 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   };
 
   return (
-    <div className="rounded-lg overflow-hidden bg-[#0d0d12] border border-white/[0.08]">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-white/[0.02] border-b border-white/[0.06]">
+    <div className="rounded-lg overflow-hidden bg-[var(--surface)] border border-[var(--subtle-border)]">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--overlay-faint)] border-b border-[var(--subtle-border)]">
         <span className="text-[10px] font-medium text-[var(--muted)]">
           {languageLabels[language.toLowerCase()] || language.toUpperCase()}
         </span>
@@ -1272,10 +2268,60 @@ function TextBlock({ content }: { content: string }) {
   );
 }
 
+// Domains that should NOT be rendered as warehouse FQNs even though they
+// technically match the dotted-identifier pattern.
+const NON_FQN_TLDS = /\.(com|io|ai|dev|org|net|gov|edu|co|me|xyz|app|cloud)$/i;
+const CODE_CHIP_EMERALD = 'px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[11px] font-mono text-emerald-300';
+
+function wrapPlainFqns(html: string): string {
+  // Leave any already-tagged <code>...</code> spans untouched; only scan plain text.
+  return html.split(/(<code[^>]*>[^<]*<\/code>)/g).map((part) => {
+    if (part.startsWith('<code')) return part;
+    // 3+ part warehouse identifier: project.dataset.table (BigQuery, Snowflake, etc.)
+    return part.replace(
+      /\b([a-zA-Z][\w-]*(?:\.[\w-]+){2,})\b/g,
+      (fqn) => {
+        if (NON_FQN_TLDS.test(fqn)) return fqn;
+        return `<code class="${CODE_CHIP_EMERALD}">${fqn}</code>`;
+      },
+    );
+  }).join('');
+}
+
 function formatInline(text: string): string {
-  return text
-    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 bg-black/30 border border-white/10 rounded text-[11px] font-mono text-emerald-300">$1</code>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank">$1</a>');
+  const withInlineMarkup = text
+    // Bold - make it white for emphasis
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold" style="color:var(--text)">$1</strong>')
+    // Italic - subtle emphasis with opacity
+    .replace(/\*([^*]+)\*/g, '<em class="italic" style="color:var(--text-secondary)">$1</em>')
+    // Inline code with smart detection
+    .replace(/`([^`]+)`/g, (_match, code) => {
+      // File paths (contains / or common extensions)
+      if (code.includes('/') || /\.(sql|py|yml|yaml|json|ts|tsx|js|md)$/.test(code)) {
+        return `<code class="px-1.5 py-0.5 bg-blue-500/10 border border-blue-500/20 rounded text-[11px] font-mono text-blue-400">${code}</code>`;
+      }
+      // Table/schema names (uppercase, snake_case with data prefixes, or schema.table pattern)
+      if (/^[A-Z][A-Z0-9_]+$/.test(code) || /^[\w-]+\.[\w-]+$/.test(code) || /^(stg_|fct_|dim_|raw_|int_|src_)/.test(code)) {
+        return `<code class="px-1.5 py-0.5 bg-purple-500/10 border border-purple-500/20 rounded text-[11px] font-mono text-purple-300">${code}</code>`;
+      }
+      // Default code styling (data/values) - emerald
+      return `<code class="${CODE_CHIP_EMERALD}">${code}</code>`;
+    })
+    // Links
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-[var(--accent-2)] hover:underline" target="_blank" rel="noopener">$1</a>');
+  // Finally, auto-wrap plain warehouse FQNs (project.dataset.table) that weren't
+  // already in backticks.
+  return wrapPlainFqns(withInlineMarkup);
+}
+
+export default function AssistantPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-full bg-[var(--surface-inset)]">
+        <div className="w-6 h-6 red-spinner" />
+      </div>
+    }>
+      <AssistantPageInner />
+    </Suspense>
+  );
 }

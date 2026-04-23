@@ -9,6 +9,7 @@ interface Finding {
   severity: string;
   table?: string;
   column?: string;
+  dataset?: string;
   description?: string;
   scan_type?: string;
 }
@@ -70,7 +71,7 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h3 className="text-sm font-medium text-white/80">Alerts</h3>
+          <h3 className="text-sm font-medium text-[var(--text-secondary)]">Alerts</h3>
           {alerts.filter(a => a.status === 'active').length > 0 && (
             <span className="px-2 py-0.5 rounded-full text-xs bg-red-500/20 text-red-400 animate-pulse">
               {alerts.filter(a => a.status === 'active').length} active
@@ -79,7 +80,7 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
         </div>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="text-xs text-white/40 hover:text-white/60 flex items-center gap-1.5"
+          className="text-xs text-[var(--muted)] hover:text-[var(--text-tertiary)] flex items-center gap-1.5"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -96,7 +97,7 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
               key={status}
               onClick={() => setFilter(status)}
               className={`px-2.5 py-1 rounded-lg capitalize transition-colors ${
-                filter === status ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/60'
+                filter === status ? 'bg-[var(--overlay-medium)] text-[var(--text)]' : 'text-[var(--muted)] hover:text-[var(--text-tertiary)]'
               }`}
             >
               {status}
@@ -112,14 +113,14 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
 
       {/* Alerts List */}
       {alerts.length === 0 ? (
-        <div className="bg-white/[0.02] border border-white/5 rounded-xl p-6 text-center">
-          <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-white/5 flex items-center justify-center">
-            <svg className="w-5 h-5 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="bg-[var(--overlay-faint)] border border-[var(--subtle-border)] rounded-xl p-6 text-center">
+          <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-[var(--subtle-bg)] flex items-center justify-center">
+            <svg className="w-5 h-5 text-[var(--text-faint)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
             </svg>
           </div>
-          <p className="text-white/40 text-sm mb-2">No alerts created</p>
-          <p className="text-white/30 text-xs">
+          <p className="text-[var(--muted)] text-sm mb-2">No alerts created</p>
+          <p className="text-[var(--text-faint)] text-xs">
             Create alerts from critical or high severity findings to track and resolve issues
           </p>
         </div>
@@ -128,12 +129,12 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
           {filteredAlerts.map(alert => (
             <div
               key={alert.id}
-              className={`bg-white/[0.02] border rounded-xl p-4 transition-colors ${
-                alert.status === 'active' 
-                  ? alert.severity === 'critical' 
-                    ? 'border-red-500/30 bg-red-500/5' 
+              className={`bg-[var(--overlay-faint)] border rounded-xl p-4 transition-colors ${
+                alert.status === 'active'
+                  ? alert.severity === 'critical'
+                    ? 'border-red-500/30 bg-red-500/5'
                     : 'border-amber-500/30 bg-amber-500/5'
-                  : 'border-white/5'
+                  : 'border-[var(--subtle-border)]'
               }`}
             >
               <div className="flex items-start gap-3">
@@ -162,14 +163,14 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <h4 className="text-sm font-medium text-white/90 truncate">{alert.title}</h4>
+                    <h4 className="text-sm font-medium text-[var(--text-secondary)] truncate">{alert.title}</h4>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase ${
                       alert.severity === 'critical' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'
                     }`}>
                       {alert.severity}
                     </span>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-white/40">
+                  <div className="flex items-center gap-3 text-xs text-[var(--muted)]">
                     {alert.table && <span className="font-mono">{alert.table}</span>}
                     <span>{new Date(alert.createdAt).toLocaleString()}</span>
                   </div>
@@ -195,7 +196,7 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
                   )}
                   <button
                     onClick={() => onViewFinding?.(alert.findingId)}
-                    className="p-1.5 rounded hover:bg-white/5 text-white/40 hover:text-white/60"
+                    className="p-1.5 rounded hover:bg-[var(--subtle-bg)] text-[var(--muted)] hover:text-[var(--text-tertiary)]"
                     title="View Finding"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -213,12 +214,12 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
       {/* Create Alert Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-lg mx-4 overflow-hidden">
-            <div className="px-6 py-4 border-b border-white/5 flex items-center justify-between">
+          <div className="bg-[var(--surface)] border border-[var(--border-medium)] rounded-2xl w-full max-w-lg mx-4 overflow-hidden">
+            <div className="px-6 py-4 border-b border-[var(--subtle-border)] flex items-center justify-between">
               <h3 className="font-medium">Create Alert from Finding</h3>
               <button
                 onClick={() => { setShowCreateModal(false); setSelectedFinding(null); }}
-                className="text-white/40 hover:text-white/60"
+                className="text-[var(--muted)] hover:text-[var(--text-tertiary)]"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -228,12 +229,12 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
 
             <div className="p-6 max-h-96 overflow-y-auto">
               {alertableFindings.length === 0 ? (
-                <p className="text-center text-white/40 py-8">
+                <p className="text-center text-[var(--muted)] py-8">
                   No critical or high severity findings to create alerts from
                 </p>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-xs text-white/40 mb-4">
+                  <p className="text-xs text-[var(--muted)] mb-4">
                     Select a critical or high severity finding to create an alert:
                   </p>
                   {alertableFindings.map(finding => {
@@ -246,11 +247,11 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
                         onClick={() => setSelectedFinding(finding)}
                         disabled={alreadyHasAlert}
                         className={`w-full p-3 rounded-xl text-left transition-colors ${
-                          alreadyHasAlert 
-                            ? 'bg-white/[0.02] opacity-50 cursor-not-allowed' 
-                            : isSelected 
-                              ? 'bg-white/10 border border-white/20' 
-                              : 'bg-white/[0.02] border border-white/5 hover:border-white/10'
+                          alreadyHasAlert
+                            ? 'bg-[var(--overlay-faint)] opacity-50 cursor-not-allowed'
+                            : isSelected
+                              ? 'bg-[var(--overlay-medium)] border border-[var(--overlay-strong)]'
+                              : 'bg-[var(--overlay-faint)] border border-[var(--subtle-border)] hover:border-[var(--border-medium)]'
                         }`}
                       >
                         <div className="flex items-center gap-3">
@@ -258,8 +259,8 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
                             finding.severity === 'critical' ? 'bg-red-500' : 'bg-amber-500'
                           }`} />
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm text-white/80 truncate">{finding.title}</div>
-                            <div className="text-xs text-white/40 flex items-center gap-2">
+                            <div className="text-sm text-[var(--text-secondary)] truncate">{finding.title}</div>
+                            <div className="text-xs text-[var(--muted)] flex items-center gap-2">
                               {finding.dataset && <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 text-[10px]">{finding.dataset}</span>}
                               {finding.table && <span className="font-mono">{finding.table}</span>}
                               {alreadyHasAlert && <span className="ml-2 text-amber-400">Alert exists</span>}
@@ -279,16 +280,16 @@ export function AlertsPanel({ findings, onCreateAlert, onViewFinding }: AlertsPa
             </div>
 
             {selectedFinding && (
-              <div className="px-6 py-4 border-t border-white/5 flex justify-end gap-3">
+              <div className="px-6 py-4 border-t border-[var(--subtle-border)] flex justify-end gap-3">
                 <button
                   onClick={() => { setShowCreateModal(false); setSelectedFinding(null); }}
-                  className="px-4 py-2 text-sm text-white/60 hover:text-white/80"
+                  className="px-4 py-2 text-sm text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => handleCreateAlert(selectedFinding)}
-                  className="px-4 py-2 text-sm bg-white text-black rounded-lg hover:bg-white/90"
+                  className="px-4 py-2 text-sm bg-[var(--accent)] text-white rounded-lg hover:bg-[var(--accent-2)]"
                 >
                   Create Alert
                 </button>

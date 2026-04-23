@@ -1,0 +1,344 @@
+---
+title: "Self-Hosting Guide"
+description: "Environment variables, database setup, running the frontend and backend, and Docker considerations for self-hosted Pallisade."
+section: "reference"
+order: 7
+---
+
+## Prerequisites
+
+- **Node.js** 18+ (for the Next.js frontend)
+- **Python** 3.11+ (for the FastAPI backend)
+- **PostgreSQL** 14+ (application database)
+- **npm** or **pnpm** (package manager)
+
+---
+
+## Environment Variables
+
+Pallisade requires environment variables set in two locations: the project root `.env` (for Next.js and Prisma) and `scanner/.env` (for the FastAPI backend).
+
+### Root `.env` (Next.js + Prisma)
+
+```bash
+# Database
+DATABASE_URL="postgresql://user:password@localhost:5432/pallisade?sslmode=require"
+
+# NextAuth
+NEXTAUTH_SECRET="your-random-secret-here"  # Generate with: openssl rand -base64 32
+NEXTAUTH_URL="http://localhost:3000"
+
+# LLM API Keys (at least one required)
+OPENAI_API_KEY="sk-..."
+ANTHROPIC_API_KEY="sk-ant-..."
+
+# Scanner backend URL
+SCANNER_API_URL="http://127.0.0.1:8000"
+
+# GitHub OAuth (for GitHub integration)
+GITHUB_INTEGRATION_CLIENT_ID="your-github-client-id"
+GITHUB_INTEGRATION_CLIENT_SECRET="your-github-client-secret"
+```
+
+### Scanner `.env` (FastAPI Backend)
+
+```bash
+# LLM API Keys (same as root or different keys for rate limiting)
+ANTHROPIC_API_KEY="sk-ant-..."
+OPENAI_API_KEY="sk-..."
+```
+
+<Callout>
+Never commit `.env` files to version control. The `.gitignore` already excludes them.
+</Callout>
+
+### Variable Reference
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string. Supports Neon, Supabase, RDS, or any Postgres-compatible host. |
+| `NEXTAUTH_SECRET` | Yes | Random string for session encryption. Generate with `openssl rand -base64 32`. |
+| `NEXTAUTH_URL` | Yes | Public URL of the frontend (e.g., `http://localhost:3000` for dev). |
+| `OPENAI_API_KEY` | One of | OpenAI API key. Required if using GPT models. |
+| `ANTHROPIC_API_KEY` | One of | Anthropic API key. Required if using Claude models. |
+| `SCANNER_API_URL` | Yes | URL where the FastAPI backend is running. Default: `http://127.0.0.1:8000`. |
+| `GITHUB_INTEGRATION_CLIENT_ID` | No | GitHub OAuth app client ID for the GitHub integration. |
+| `GITHUB_INTEGRATION_CLIENT_SECRET` | No | GitHub OAuth app client secret. |
+
+---
+
+## Database Setup
+
+### 1. Create the Database
+
+```bash
+createdb pallisade
+# Or use your cloud provider's console (Neon, Supabase, RDS)
+```
+
+### 2. Set DATABASE_URL
+
+```bash
+# Local PostgreSQL
+DATABASE_URL="postgresql://postgres:password@localhost:5432/pallisade"
+
+# Neon (serverless)
+DATABASE_URL="postgresql://user:pass@ep-xxx.us-east-1.aws.neon.tech/neondb?sslmode=require"
+
+# Supabase
+DATABASE_URL="postgresql://postgres:pass@db.xxx.supabase.co:5432/postgres"
+```
+
+### 3. Run Migrations
+
+```bash
+# Generate the Prisma client
+npx prisma generate
+
+# Apply all migrations
+npx prisma migrate deploy
+
+# (Development only) Create and apply a new migration
+npx prisma migrate dev --name init
+```
+
+### 4. Verify
+
+```bash
+# Open Prisma Studio to inspect the database
+npx prisma studio
+```
+
+---
+
+## Running the Frontend
+
+### Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run the development server (hot-reload)
+npm run dev
+```
+
+The frontend starts on `http://localhost:3000` by default.
+
+### Production Build
+
+```bash
+# Build the optimized production bundle
+npm run build
+
+# Start the production server
+npm run start
+```
+
+<Callout>
+The production build requires all environment variables to be set at build time. `NEXTAUTH_SECRET` and `DATABASE_URL` are especially important.
+</Callout>
+
+---
+
+## Running the Backend
+
+### Development
+
+```bash
+cd scanner
+
+# Create a virtual environment
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+# or: venv\Scripts\activate  # Windows
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start the FastAPI server
+uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+The backend starts on `http://localhost:8000`. API docs are at `http://localhost:8000/docs`.
+
+### Production
+
+```bash
+cd scanner
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start with multiple workers
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+For production, consider using `gunicorn` with uvicorn workers:
+
+```bash
+gunicorn api.main:app \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --workers 4 \
+  --bind 0.0.0.0:8000 \
+  --timeout 120
+```
+
+---
+
+## Docker Deployment
+
+### Dockerfile (Frontend)
+
+```dockerfile
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+
+FROM node:18-alpine AS runner
+WORKDIR /app
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/public ./public
+
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["npm", "run", "start"]
+```
+
+### Dockerfile (Backend)
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY scanner/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY scanner/ .
+
+ENV PYTHONPATH=/app
+EXPOSE 8000
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+```
+
+### Docker Compose
+
+```yaml
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pallisade
+      POSTGRES_USER: pallisade
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile.scanner
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      DATABASE_URL: postgresql://pallisade:${POSTGRES_PASSWORD}@postgres:5432/pallisade
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXTAUTH_URL: http://localhost:3000
+      SCANNER_API_URL: http://scanner:8000
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+      - scanner
+
+volumes:
+  pgdata:
+```
+
+---
+
+## Health Checks
+
+Once both services are running, verify they are healthy:
+
+```bash
+# Frontend
+curl http://localhost:3000
+
+# Backend health endpoint
+curl http://localhost:8000/health
+# Expected: {"status":"healthy","version":"1.0.0","service":"pallisade-copilot",...}
+
+# Backend API docs
+open http://localhost:8000/docs
+```
+
+---
+
+## Common Issues
+
+### Prisma Migration Fails
+
+If `prisma migrate deploy` fails with "database does not exist", create the database first:
+
+```bash
+createdb pallisade
+```
+
+If it fails with "migration already applied", the database may be ahead of your local migration files. Run `prisma migrate resolve` to mark migrations as applied.
+
+### Scanner Cannot Connect to Database
+
+The FastAPI backend does not use Prisma directly -- it communicates with the frontend's API routes for database operations. Ensure `SCANNER_API_URL` in the frontend `.env` points to the running backend.
+
+### LLM API Errors
+
+If copilot responses fail, check that at least one LLM API key is set:
+
+```bash
+# Test Anthropic
+curl -H "x-api-key: $ANTHROPIC_API_KEY" \
+  https://api.anthropic.com/v1/messages \
+  -d '{"model":"claude-sonnet-4-20250514","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
+
+# Test OpenAI
+curl -H "Authorization: Bearer $OPENAI_API_KEY" \
+  https://api.openai.com/v1/chat/completions \
+  -d '{"model":"gpt-4o","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+### Port Conflicts
+
+If port 3000 or 8000 is already in use:
+
+```bash
+# Frontend: use a different port
+PORT=3001 npm run dev
+
+# Backend: use a different port
+uvicorn api.main:app --port 8001
+# Then update SCANNER_API_URL in .env
+```

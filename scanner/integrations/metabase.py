@@ -232,6 +232,14 @@ class MetabaseClient:
     def get_database_metadata(self, database_id: int) -> Dict:
         """Get database tables/fields metadata."""
         return self._request("GET", f"/database/{database_id}/metadata")
+
+    def get_table(self, table_id: int) -> Dict:
+        """Get table metadata by Metabase internal table ID."""
+        return self._request("GET", f"/table/{table_id}")
+
+    def get_field(self, field_id: int) -> Dict:
+        """Get field metadata by Metabase internal field ID."""
+        return self._request("GET", f"/field/{field_id}")
     
     # =========================================================================
     # CARD (QUESTION) METHODS

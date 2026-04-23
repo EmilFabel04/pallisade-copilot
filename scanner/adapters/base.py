@@ -472,7 +472,40 @@ class DatabaseAdapter(ABC):
         
         # Fall back to any timestamp column
         return timestamp_columns[0] if timestamp_columns else None
-    
+
+    def get_freshness_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return modification timestamps over the lookback window.
+
+        Returns:
+            List of dicts with key 'timestamp' (datetime).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_freshness_history")
+
+    def get_row_count_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return daily row counts over the lookback window.
+
+        Returns:
+            List of dicts with keys 'date' (date) and 'row_count' (int).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_row_count_history")
+
+    def get_daily_null_rates(self, table: str, timestamp_column: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return daily null rates over the lookback window, partitioned by timestamp_column.
+
+        Returns:
+            List of dicts with keys 'date' (date) and 'null_rate' (float, 0.0-1.0).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_daily_null_rates")
+
+    def get_schema_change_history(self, table: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Return schema changes over the lookback window.
+
+        Returns:
+            List of dicts with keys 'date' (date), 'change_type' ('added'|'removed'),
+            and 'column_name' (str).
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support get_schema_change_history")
+
     # =========================================================================
     # DATA SAMPLING
     # =========================================================================
@@ -573,16 +606,71 @@ class DatabaseAdapter(ABC):
     def get_row_count(self, table: str) -> int:
         """
         Get row count for a table.
-        
+
         Args:
             table: Fully qualified table name
-            
+
         Returns:
             Number of rows
         """
         query = f"SELECT COUNT(*) as cnt FROM {self.quote_identifier(table)}"
         result = self.execute_query(query)
         return result[0]['cnt'] if result else 0
+
+    # =========================================================================
+    # COMPREHENSIVE TABLE STATS
+    # =========================================================================
+
+    def get_table_stats(self, table: str) -> Dict[str, Any]:
+        """
+        Get comprehensive stats for a table including row count, freshness, and columns.
+
+        This is a convenience method that combines multiple metadata queries.
+
+        Args:
+            table: Fully qualified table name
+
+        Returns:
+            Dict with:
+                - table_name: str
+                - row_count: int
+                - freshness: dict (from get_table_freshness)
+                - columns: list (from get_table_metadata)
+                - last_modified: datetime or None
+        """
+        errors = []
+
+        try:
+            metadata = self.get_table_metadata(table)
+        except Exception as e:
+            errors.append(f"metadata: {e}")
+            metadata = None
+
+        try:
+            freshness = self.get_table_freshness(table)
+        except Exception as e:
+            errors.append(f"freshness: {e}")
+            freshness = None
+
+        try:
+            row_count = self.get_row_count(table)
+        except Exception as e:
+            errors.append(f"row_count: {e}")
+            row_count = None
+
+        if errors:
+            logger.warning(f"get_table_stats({table}) — {'; '.join(errors)}")
+
+        return {
+            "table_name": table,
+            "row_count": row_count,
+            "freshness": freshness,
+            "columns": [
+                {"name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
+                for c in (metadata.columns if metadata else [])
+            ],
+            "last_modified": metadata.last_modified if metadata else None,
+        }
     
     # =========================================================================
     # CONTEXT MANAGER

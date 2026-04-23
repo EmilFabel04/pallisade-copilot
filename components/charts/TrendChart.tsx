@@ -47,7 +47,7 @@ export function TrendChart({
 
   if (!chartData || data.length === 0) {
     return (
-      <div className="flex items-center justify-center text-white/30 text-xs" style={{ height }}>
+      <div className="flex items-center justify-center text-[var(--text-faint)] text-xs" style={{ height }}>
         No historical data
       </div>
     );
@@ -61,7 +61,7 @@ export function TrendChart({
     <div>
       {title && (
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-white/40">{title}</span>
+          <span className="text-xs text-[var(--muted)]">{title}</span>
           <div className="flex items-center gap-2">
             <span className="text-sm font-mono font-medium">{valueFormatter(latest.value)}</span>
             {change !== null && (
@@ -81,7 +81,7 @@ export function TrendChart({
           <circle key={i} cx={p.x} cy={p.y} r="3" fill={color} className="opacity-0 hover:opacity-100 transition-opacity" />
         ))}
       </svg>
-      <div className="flex justify-between mt-1 text-[10px] text-white/30 font-mono">
+      <div className="flex justify-between mt-1 text-[10px] text-[var(--text-faint)] font-mono">
         <span>{data[0]?.label || new Date(data[0]?.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
         <span>{latest?.label || new Date(latest?.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
       </div>

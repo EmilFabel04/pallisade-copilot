@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { Prisma } from '@prisma/client';
 import { encrypt } from '@/lib/crypto';
+import { notifyEvents } from '@/lib/notifications';
 
 // GET /api/integrations/[id] - Get a specific integration
 export async function GET(
@@ -11,7 +12,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -63,7 +64,7 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -126,7 +127,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -148,9 +149,26 @@ export async function DELETE(
       return NextResponse.json({ error: 'Integration not found' }, { status: 404 });
     }
 
+    // Clear config, integrationId, and reset status on PipelineNodes that reference
+    // this integration so they immediately reflect the disconnected state
+    await prisma.pipelineNode.updateMany({
+      where: { integrationId: id },
+      data: {
+        integrationId: null,
+        config: Prisma.JsonNull,
+        status: 'PENDING',
+      },
+    });
+
     await prisma.integration.delete({
       where: { id },
     });
+
+    // Fire-and-forget notification
+    notifyEvents.integrationDeleted(
+      user?.organizationId || '', (session.user as any).id,
+      existing.name, id,
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

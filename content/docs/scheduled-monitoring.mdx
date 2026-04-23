@@ -1,0 +1,221 @@
+---
+title: Scheduled Monitoring
+description: Create automated data quality and infrastructure checks that run on a schedule and alert your team when something breaks.
+section: guides
+order: 5
+---
+
+# Scheduled Monitoring
+
+Pallisade lets you create automated quality checks that run on a cron schedule. When a check fails or detects an anomaly, it alerts your team through Slack, Microsoft Teams, PagerDuty, or OpsGenie.
+
+## Creating a Monitor
+
+1. Go to the **Schedule** page and click **New Monitor**.
+2. Select a **monitor type** (e.g., Freshness, Volume, Schema Change).
+3. Choose the **target table** from your connected warehouse.
+4. Configure **thresholds** and parameters (or accept the auto-configured defaults).
+5. Set a **cron schedule** (e.g., `0 */1 * * *` for every hour).
+6. Optionally assign an **alert channel**.
+7. Click **Create**.
+
+<Callout type="tip">
+Pallisade auto-configures sensible defaults for most monitors. It discovers timestamp columns, computes baseline statistics from the last 30 days, and sets initial thresholds. You can adjust these at any time.
+</Callout>
+
+## Data Quality Monitors
+
+### Freshness
+
+Checks the time since the last row was written to a table. Alerts when a table has not been updated within the expected window.
+
+| Parameter | Description |
+|-----------|-------------|
+| Timestamp column | The column used to determine the last update time (auto-detected) |
+| Warning threshold | Hours of staleness before a WARN status |
+| Failure threshold | Hours of staleness before a FAIL status |
+
+### Volume
+
+Detects row count anomalies by comparing the current row count against a historical baseline using Z-score analysis.
+
+| Parameter | Description |
+|-----------|-------------|
+| Lookback period | Days of history for baseline computation (default: 30) |
+| Z-score threshold | Standard deviations from the mean to trigger an alert (default: 3.0) |
+
+### Schema Change
+
+Detects structural changes to a table: column additions, column removals, and data type changes.
+
+| Change Type | Default Severity |
+|-------------|-----------------|
+| Column added | WARN |
+| Column removed | FAIL |
+| Type changed | FAIL |
+
+### Null Rate
+
+Measures the null percentage per column and flags anomalies using Z-score detection against historical baselines.
+
+| Parameter | Description |
+|-----------|-------------|
+| Columns | Specific columns to check, or "all columns" for automatic scanning |
+| Z-score threshold | Standard deviations from the mean null rate to trigger an alert |
+
+### Uniqueness
+
+Checks the distinct value rate per column. Useful for detecting unexpected duplicate values in columns that should be unique (primary keys, email addresses, etc.).
+
+| Parameter | Description |
+|-----------|-------------|
+| Columns | Columns to check for uniqueness |
+| Minimum distinct rate | Percentage below which the monitor triggers (e.g., 0.99 for 99% unique) |
+
+### Distribution
+
+Detects statistical distribution shifts in numeric columns by tracking mean and standard deviation over time.
+
+| Parameter | Description |
+|-----------|-------------|
+| Columns | Numeric columns to monitor |
+| Z-score threshold | Deviation threshold for mean or stddev shifts |
+
+### Anomaly
+
+A general-purpose Z-score detector that works on any metric/column combination. Use this when the specialized monitors do not fit your use case.
+
+| Parameter | Description |
+|-----------|-------------|
+| Metric expression | SQL expression that returns a numeric value |
+| Lookback period | Historical window for baseline computation |
+| Z-score threshold | Standard deviations to trigger an alert |
+| Seasonality | Enable day-of-week baseline comparison for metrics with weekly patterns |
+
+### Custom SQL
+
+Define your own SQL query that returns a value. The monitor evaluates the result against a threshold you specify.
+
+```sql
+-- Example: check that the orders-to-payments ratio stays within bounds
+SELECT COUNT(DISTINCT o.id)::float / NULLIF(COUNT(DISTINCT p.id), 0)
+FROM orders o
+LEFT JOIN payments p ON o.id = p.order_id
+WHERE o.created_at > CURRENT_DATE - INTERVAL '1 day'
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| SQL query | Must return a single numeric value |
+| Operator | `>`, `<`, `>=`, `<=`, `=`, `!=` |
+| Threshold | The value to compare against |
+
+<Callout type="info">
+Custom SQL monitors are dialect-aware. Write your query in standard SQL, and Pallisade transpiles it to the target warehouse's dialect automatically using sqlglot.
+</Callout>
+
+## Infrastructure Monitors
+
+Infrastructure monitors connect to Linux servers via SSH to check operational health.
+
+### Certificate Monitor
+
+Checks TLS/SSL certificate expiry on servers.
+
+| Parameter | Description |
+|-----------|-------------|
+| Host | Server hostname or IP |
+| Port | TLS port (default: 443) |
+| Warning days | Days before expiry to trigger WARN |
+| Failure days | Days before expiry to trigger FAIL |
+
+### Server Health
+
+Monitors CPU, memory, and disk usage on Linux servers.
+
+| Metric | Default Threshold |
+|--------|-----------------|
+| CPU usage | WARN at 80%, FAIL at 95% |
+| Memory usage | WARN at 85%, FAIL at 95% |
+| Disk usage | WARN at 80%, FAIL at 90% |
+
+### Log Analysis
+
+Scans server log files for error patterns.
+
+| Parameter | Description |
+|-----------|-------------|
+| Log file path | Absolute path to the log file on the server |
+| Error patterns | Regular expressions to match (e.g., `ERROR`, `FATAL`, `OOM`) |
+| Lookback | Time window to scan (e.g., last 1 hour) |
+
+## Monitor Features
+
+### Adaptive Lookback
+
+If the default 30-day lookback window has too few data points for reliable baseline computation, Pallisade automatically retries with shorter windows (25 days, 20 days, 14 days, 7 days) without falling back to unbounded scans that could include irrelevant historical data.
+
+### LLM Validation
+
+Optionally, monitors can send FAIL or WARN results to an LLM for false-positive review. The LLM can downgrade severity (e.g., FAIL to WARN, or WARN to PASS) but can never upgrade it. This reduces alert fatigue without missing real issues.
+
+### Multi-Column Mode
+
+Null rate, uniqueness, and distribution monitors can scan all columns in a table automatically. Pallisade generates separate checks for each column and reports results individually.
+
+### Dialect-Aware SQL
+
+All monitors generate SQL in a neutral dialect and then transpile to the target warehouse using sqlglot. This means the same monitor definition works across BigQuery, Snowflake, PostgreSQL, and Redshift without modification.
+
+### Seasonality Support
+
+Enable day-of-week baseline comparison for metrics with weekly patterns. Instead of comparing against the overall 30-day average, the monitor compares against the average for the same day of the week, reducing false positives on weekends or low-traffic days.
+
+## Alert Channels
+
+Configure alert channels per monitor or pipeline-wide.
+
+| Channel | Setup |
+|---------|-------|
+| **Slack** | Add a Slack webhook or app integration. Choose the target channel. |
+| **Microsoft Teams** | Add an incoming webhook URL for your Teams channel. |
+| **PagerDuty** | Add your PagerDuty integration key for incident creation. |
+| **OpsGenie** | Add your OpsGenie API key for alert routing. |
+
+**Status filters:** Configure each alert channel to trigger on specific statuses:
+- FAIL only (recommended for PagerDuty)
+- FAIL + WARN (recommended for Slack)
+- All statuses
+
+<Callout type="warning">
+Start with conservative alert settings (FAIL only) and expand to WARN alerts after you have tuned your thresholds. Too many WARN alerts lead to alert fatigue.
+</Callout>
+
+## Run History
+
+Every monitor execution is logged with full details:
+
+| Field | Description |
+|-------|-------------|
+| Status | PASS, WARN, or FAIL |
+| Value | The measured metric value |
+| Threshold | The threshold it was compared against |
+| Z-score | The computed Z-score (for anomaly-based monitors) |
+| SQL executed | The exact query that was run |
+| Duration | How long the check took to execute |
+| Detail JSON | Full raw output for debugging |
+
+### Investigating a Run
+
+From any run in the history, click **Ask Scout** to start a conversation with the run context pre-filled. Scout can:
+
+- Explain why the monitor failed
+- Verify whether the failure is a true positive or false alarm
+- Investigate the root cause by querying upstream tables
+- Suggest threshold adjustments based on historical patterns
+
+## Next Steps
+
+- [AI Copilot (Scout)](/docs/copilot) -- Use Scout to investigate monitor failures
+- [Data Lineage](/docs/lineage) -- Trace the impact of a failing table upstream and downstream
+- [Change Plans](/docs/change-plans) -- Apply fixes for issues discovered by monitors

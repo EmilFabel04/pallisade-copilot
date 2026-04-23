@@ -134,7 +134,7 @@ export function PatternConfirmationCard({
       <div className="p-4 space-y-4">
         {/* Pattern Type & Confidence */}
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[rgba(255,255,255,0.05)]">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--subtle-bg)]">
             <span className="text-amber-400">
               {PATTERN_ICONS[patternType] || <HelpCircle className="w-4 h-4" />}
             </span>
@@ -145,7 +145,7 @@ export function PatternConfirmationCard({
           
           <div className="flex items-center gap-2">
             <span className="text-xs text-[var(--muted)]">Confidence:</span>
-            <div className="w-24 h-2 bg-[rgba(255,255,255,0.1)] rounded-full overflow-hidden">
+            <div className="w-24 h-2 bg-[var(--overlay-medium)] rounded-full overflow-hidden">
               <div 
                 className={`h-full transition-all ${
                   confidencePercent >= 80 ? 'bg-emerald-500' : 
@@ -164,7 +164,7 @@ export function PatternConfirmationCard({
         </div>
         
         {/* Explanation */}
-        <div className="p-3 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.06)]">
+        <div className="p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
           <div className="text-xs text-[var(--muted)] uppercase tracking-wider mb-1">Pattern Detected</div>
           <p className="text-sm">{pattern?.explanation || 'Pattern analysis detected a potential expected behavior.'}</p>
           
@@ -254,7 +254,7 @@ export function PatternConfirmationCard({
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="Help us improve: explain why this pattern is actually a problem..."
-                className="w-full px-3 py-2 rounded-lg bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.1)] focus:border-red-500/50 focus:outline-none text-sm resize-none"
+                className="w-full px-3 py-2 rounded-lg bg-[var(--overlay-bg)] border border-[var(--border-medium)] focus:border-red-500/50 focus:outline-none text-sm resize-none"
                 rows={2}
               />
             </div>
@@ -276,7 +276,7 @@ export function PatternConfirmationCard({
                   setShowRejectInput(false);
                   setRejectReason('');
                 }}
-                className="px-4 py-2 rounded-lg bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] transition-all text-sm"
+                className="px-4 py-2 rounded-lg bg-[var(--subtle-bg)] hover:bg-[var(--overlay-medium)] transition-all text-sm"
               >
                 Cancel
               </button>
@@ -372,7 +372,7 @@ export function PatternConfirmationPanel({
         {onRefresh && (
           <button
             onClick={onRefresh}
-            className="p-2 rounded-lg hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+            className="p-2 rounded-lg hover:bg-[var(--subtle-bg)] transition-colors"
           >
             <RefreshCw className="w-4 h-4 text-[var(--muted)]" />
           </button>

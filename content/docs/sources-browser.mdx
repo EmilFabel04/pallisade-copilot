@@ -1,0 +1,146 @@
+---
+title: Sources Browser
+description: Browse tables, dbt models, and connectors across all your connected warehouses and integrations.
+section: guides
+order: 6
+---
+
+# Sources Browser
+
+The Sources Browser gives you a unified view of all data assets across your connected warehouses and integrations. Use it to explore table schemas, check model metadata, verify connector status, and jump directly into lineage or a Scout conversation.
+
+## Accessing the Sources Browser
+
+Open the **Sources** page from the dashboard sidebar. The browser is organized into three tabs: **Tables**, **Models**, and **Connectors**.
+
+## Tables
+
+The Tables tab lists every table and view discovered across your connected warehouses.
+
+### Table List
+
+Each table entry shows:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | Fully qualified table name (e.g., `project.dataset.orders`) |
+| **Warehouse** | Which warehouse the table belongs to (BigQuery, Snowflake, etc.) |
+| **Schema/Dataset** | The schema or dataset containing the table |
+| **Row count** | Current number of rows |
+| **Last updated** | Timestamp of the most recent row (based on detected timestamp columns) |
+| **Column count** | Number of columns in the table |
+
+### Table Detail View
+
+Click a table to see its full details:
+
+- **Columns** -- Name, data type, nullable, and description for each column
+- **Sample data** -- Preview of the first rows (if permissions allow)
+- **Statistics** -- Row count, size on disk, partitioning info
+- **Monitors** -- Active monitors targeting this table, with their latest status
+- **Lineage** -- Quick link to view the table in the lineage graph
+
+<Callout type="tip">
+Use the search bar to find tables by name. The search matches across all connected warehouses, so you can find `orders` whether it lives in BigQuery or Snowflake.
+</Callout>
+
+### Column Details
+
+Each column in the detail view shows:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | Column name |
+| **Data type** | The warehouse-specific data type (e.g., `STRING`, `INT64`, `TIMESTAMP`) |
+| **Nullable** | Whether the column allows null values |
+| **Description** | Column description from dbt docs or warehouse comments, if available |
+
+## Models
+
+The Models tab shows dbt models from your connected dbt Cloud or dbt Core integration.
+
+### Model List
+
+Each model entry shows:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | Model name (e.g., `stg_orders`, `fct_revenue`) |
+| **Materialization** | How the model is materialized: `table`, `view`, `incremental`, or `ephemeral` |
+| **Description** | Model description from `schema.yml` |
+| **Test count** | Number of dbt tests defined for this model |
+| **Last run** | Timestamp of the most recent dbt run that built this model |
+
+### Model Detail View
+
+Click a model to see:
+
+- **SQL** -- The compiled SQL for the model
+- **Dependencies** -- Which models and sources it references via `ref()` and `source()`
+- **Tests** -- List of tests with their latest pass/fail status
+- **Documentation** -- Full model and column descriptions from your dbt docs
+- **Lineage** -- Quick link to view the model in the lineage graph
+
+<Callout type="info">
+Model metadata is pulled from your dbt manifest. Make sure your dbt Cloud integration is connected or your dbt Core manifest path is configured correctly to see models here.
+</Callout>
+
+## Connectors
+
+The Connectors tab shows integration connectors from Fivetran, Airbyte, and Stitch.
+
+### Connector List
+
+Each connector entry shows:
+
+| Field | Description |
+|-------|-------------|
+| **Name** | Connector name (e.g., `salesforce_production`, `stripe_payments`) |
+| **Source** | The source system being synced (e.g., Salesforce, Stripe, PostgreSQL) |
+| **Destination** | The target warehouse and schema |
+| **Status** | Current sync status: active, paused, broken |
+| **Last sync** | Timestamp of the most recent completed sync |
+| **Sync frequency** | How often the connector runs |
+
+### Connector Detail View
+
+Click a connector to see:
+
+- **Sync history** -- List of recent syncs with status, rows synced, and duration
+- **Tables synced** -- Which destination tables this connector populates
+- **Configuration** -- Source and destination configuration details
+- **Errors** -- Recent error messages if the connector is in a broken state
+
+## Search and Filtering
+
+The search bar at the top of the Sources Browser works across all three tabs:
+
+- **Global search** -- Type a name to search tables, models, and connectors simultaneously
+- **Warehouse filter** -- Filter tables by warehouse when multiple warehouses are connected
+- **Status filter** -- On the Connectors tab, filter by sync status (active, paused, broken)
+
+## Linking to Lineage
+
+Every table and model in the Sources Browser has a **View in Lineage** link that opens the [lineage viewer](/docs/lineage) centered on that node. This is the fastest way to see what depends on a table or where its data comes from.
+
+## Asking Scout About a Source
+
+From any table, model, or connector detail view, click **Ask Scout** to start a conversation with context pre-filled. Example questions Scout can answer:
+
+```
+What is the null rate on each column in this table?
+```
+
+```
+Show me the row count trend for this table over the last 30 days.
+```
+
+```
+Which downstream models would break if I dropped this column?
+```
+
+## Next Steps
+
+- [Data Lineage](/docs/lineage) -- Explore dependencies from any source
+- [Scheduled Monitoring](/docs/scheduled-monitoring) -- Set up monitors on discovered tables
+- [AI Copilot (Scout)](/docs/copilot) -- Ask questions about any source

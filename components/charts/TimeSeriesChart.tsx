@@ -106,7 +106,7 @@ export function TimeSeriesChart({
   return (
     <div className="bg-[var(--card-bg)] rounded-lg border border-[var(--border-dim)] p-4">
       {title && (
-        <h3 className="text-sm font-medium text-white mb-3">{title}</h3>
+        <h3 className="text-sm font-medium text-[var(--text)] mb-3">{title}</h3>
       )}
       
       <div className="overflow-x-auto">

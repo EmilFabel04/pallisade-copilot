@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import type { Session } from 'next-auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
+import { scannerClient } from '@/lib/scanner-client';
 
 // POST /api/integrations/[id]/test - Test an integration connection
 export async function POST(
@@ -11,7 +12,7 @@ export async function POST(
 ) {
   try {
     const { id } = await params;
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -46,7 +47,7 @@ export async function POST(
     }
 
     // Test connection based on type
-    const result = await testConnection(integration.type, credentials, integration.config as any);
+    const result = await testConnection(session, integration.type, credentials, integration.config as any);
 
     // Update integration with test result
     await prisma.integration.update({
@@ -71,13 +72,14 @@ export async function POST(
 
 // Test connection for each integration type
 async function testConnection(
-  type: string, 
-  credentials: any, 
+  session: Session,
+  type: string,
+  credentials: any,
   config: any
 ): Promise<{ success: boolean; error?: string; metadata?: any }> {
   switch (type) {
     case 'SNOWFLAKE':
-      return testSnowflake(credentials);
+      return testSnowflake(session, credentials);
     case 'BIGQUERY':
       return testBigQuery(credentials);
     case 'POSTGRES':
@@ -96,14 +98,13 @@ async function testConnection(
 }
 
 // Snowflake connection test
-async function testSnowflake(credentials: any): Promise<{ success: boolean; error?: string; metadata?: any }> {
+async function testSnowflake(session: Session, credentials: any): Promise<{ success: boolean; error?: string; metadata?: any }> {
   if (!credentials?.account || !credentials?.user || !credentials?.password) {
     return { success: false, error: 'Missing required credentials (account, user, password)' };
   }
 
   try {
-    const SCANNER_API_URL = process.env.SCANNER_API_URL || 'http://127.0.0.1:8080';
-    const testResponse = await fetch(`${SCANNER_API_URL}/api/test/snowflake`, {
+    const testResponse = await scannerClient.fetch(session, '/api/test/snowflake', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

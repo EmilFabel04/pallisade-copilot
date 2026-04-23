@@ -1,0 +1,191 @@
+---
+title: Team & Access Control
+description: Manage organization roles, pipeline permissions, team invitations, and the audit log.
+section: guides
+order: 9
+---
+
+# Team & Access Control
+
+Pallisade uses role-based access control (RBAC) to manage what each team member can do. Roles are assigned at two levels: the organization level and the pipeline level.
+
+## Organization Roles
+
+Every team member has exactly one organization role that determines their base permissions across all pipelines.
+
+| Role | Description |
+|------|-------------|
+| **Owner** | Full control over the organization, billing, and all settings. Can transfer ownership. Only one Owner per organization. |
+| **Admin** | Manage team members, integrations, and settings. Cannot delete the organization or manage billing. |
+| **Manager** | Run scans, configure monitors, and approve fixes. Cannot manage team members or organization settings. |
+| **Engineer** | Run scans, use the copilot, and apply fixes. Day-to-day operations access. |
+| **Viewer** | Read-only access to reports, findings, dashboards, and the copilot chat history. |
+
+### Permission Matrix
+
+The table below shows which permissions each organization role has:
+
+| Permission Area | Owner | Admin | Manager | Engineer | Viewer |
+|-----------------|-------|-------|---------|----------|--------|
+| View organization | Yes | Yes | Yes | Yes | Yes |
+| Edit organization | Yes | Yes | No | No | No |
+| Delete organization | Yes | No | No | No | No |
+| Transfer ownership | Yes | No | No | No | No |
+| View team | Yes | Yes | Yes | Yes | Yes |
+| Invite members | Yes | Yes | No | No | No |
+| Remove members | Yes | Yes | No | No | No |
+| Edit roles | Yes | Yes | No | No | No |
+| View integrations | Yes | Yes | Yes | Yes | Yes |
+| Create/edit integrations | Yes | Yes | No | No | No |
+| Delete integrations | Yes | Yes | No | No | No |
+| Test connections | Yes | Yes | Yes | Yes | No |
+| Create pipelines | Yes | Yes | Yes | Yes | No |
+| Edit pipelines | Yes | Yes | Yes | Yes | No |
+| Delete pipelines | Yes | Yes | No | No | No |
+| Manage pipeline access | Yes | Yes | No | No | No |
+| Manage API tokens | Yes | Yes | No | No | No |
+| Run scans/monitors | Yes | Yes | Yes | Yes | No |
+| Schedule monitors | Yes | Yes | Yes | No | No |
+| Configure monitors | Yes | Yes | Yes | No | No |
+| View reports | Yes | Yes | Yes | Yes | Yes |
+| Create/export reports | Yes | Yes | Yes | Yes | No |
+| View findings | Yes | Yes | Yes | Yes | Yes |
+| Respond to findings | Yes | Yes | Yes | Yes | No |
+| Configure rules | Yes | Yes | Yes | No | No |
+| Apply fixes | Yes | Yes | Yes | Yes | No |
+| Approve fixes | Yes | Yes | Yes | No | No |
+| Use copilot (Scout) | Yes | Yes | Yes | Yes | No |
+| View settings | Yes | Yes | Yes | Yes | Yes |
+| Edit settings | Yes | Yes | No | No | No |
+| View billing | Yes | Yes | No | No | No |
+| Manage billing | Yes | No | No | No | No |
+| View audit log | Yes | Yes | Yes | No | No |
+
+<Callout type="info">
+The role hierarchy determines which roles a user can manage. Owners can manage everyone. Admins can manage Managers, Engineers, and Viewers. Managers cannot manage other team members.
+</Callout>
+
+## Pipeline Roles
+
+In addition to organization roles, you can assign per-pipeline roles to control access to specific pipelines.
+
+| Pipeline Role | Permissions |
+|---------------|-------------|
+| **Owner** | Full control over the pipeline, including settings, integrations, and access management |
+| **Editor** | Run monitors, use Scout, apply fixes, and edit pipeline configuration |
+| **Viewer** | Read-only access to the pipeline's data, monitors, and lineage |
+
+Pipeline roles work alongside organization roles. A team member's effective permissions are the union of their organization role and their pipeline role.
+
+<Callout type="tip">
+Use pipeline roles to restrict sensitive pipelines. For example, give an Engineer organization-wide access but restrict them to Viewer on the production-finance pipeline.
+</Callout>
+
+## Inviting Team Members
+
+### Sending an Invitation
+
+1. Go to the **Team** page from the dashboard sidebar.
+2. Click **Invite Member**.
+3. Enter the person's email address.
+4. Select an organization role (Admin, Manager, Engineer, or Viewer).
+5. Click **Send Invitation**.
+
+The invitee receives an email with a link to join your organization. The invitation expires after 7 days.
+
+### Invitation States
+
+| State | Meaning |
+|-------|---------|
+| **Pending** | Invitation sent, not yet accepted |
+| **Accepted** | User has joined the organization |
+| **Expired** | Invitation was not accepted within 7 days |
+
+You can resend or revoke pending invitations from the Team page.
+
+<Callout type="warning">
+Only Owners and Admins can invite new members. The invitee's role cannot exceed the inviter's role -- an Admin cannot invite someone as an Owner.
+</Callout>
+
+## Managing Team Members
+
+### Changing a Member's Role
+
+1. Go to the **Team** page.
+2. Find the member in the list.
+3. Click their current role to open the role selector.
+4. Select the new role.
+5. Confirm the change.
+
+**Restrictions:**
+- You can only assign roles below your own level.
+- You cannot change the Owner's role (ownership must be transferred instead).
+- Downgrading your own role is irreversible unless an Owner upgrades you.
+
+### Removing a Member
+
+1. Go to the **Team** page.
+2. Find the member in the list.
+3. Click **Remove**.
+4. Confirm the removal.
+
+Removed members immediately lose access to all pipelines and data. Their past activity remains in the audit log.
+
+### Transferring Ownership
+
+Only the current Owner can transfer ownership:
+
+1. Go to the **Team** page.
+2. Click **Transfer Ownership**.
+3. Select the team member to receive ownership.
+4. Confirm the transfer.
+
+After transfer, the previous Owner is downgraded to Admin. There can only be one Owner at a time.
+
+## Audit Log
+
+The audit log records significant actions across your organization for compliance and security review.
+
+### What Gets Logged
+
+| Event Type | Examples |
+|------------|---------|
+| **Team changes** | Member invited, role changed, member removed, ownership transferred |
+| **Integration changes** | Integration created, edited, deleted, connection tested |
+| **Pipeline changes** | Pipeline created, deleted, access changed |
+| **Monitor changes** | Monitor created, edited, deleted, schedule changed |
+| **Fix applications** | Change plan created, validated, applied, PR opened |
+| **Settings changes** | Alert channels configured, organization settings updated |
+
+### Viewing the Audit Log
+
+1. Go to **Settings** from the dashboard sidebar.
+2. Select the **Audit Log** tab.
+3. Browse events by date, type, or actor.
+
+Each log entry shows:
+
+| Field | Description |
+|-------|-------------|
+| **Timestamp** | When the action occurred |
+| **Actor** | Who performed the action (name and email) |
+| **Action** | What was done (e.g., "Invited member", "Created monitor") |
+| **Target** | What was affected (e.g., member email, pipeline name, monitor name) |
+| **Details** | Additional context (e.g., role assigned, old vs. new values) |
+
+<Callout type="info">
+The audit log is available to Owners, Admins, and Managers. Engineers and Viewers do not have access.
+</Callout>
+
+## Best Practices
+
+1. **Use the least-privilege principle.** Assign Viewer to team members who only need to read dashboards and reports. Promote to Engineer when they need to run queries and use Scout.
+2. **Restrict production pipelines.** Use pipeline-level Viewer roles for sensitive production data pipelines, even for team members who have Engineer access organization-wide.
+3. **Review the audit log regularly.** Check for unexpected role changes, integration modifications, or fix applications.
+4. **Use separate service accounts.** Connect warehouses with dedicated service accounts rather than personal credentials. This way, removing a team member does not break warehouse connections.
+
+## Next Steps
+
+- [Getting Started](/docs/getting-started) -- Set up your first pipeline and invite your team
+- [Pipeline Builder](/docs/pipeline-builder) -- Configure integrations and manage pipeline settings
+- [AI Copilot (Scout)](/docs/copilot) -- Learn what Scout can do with your role's permissions

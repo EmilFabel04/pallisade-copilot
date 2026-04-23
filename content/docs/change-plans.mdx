@@ -1,0 +1,165 @@
+---
+title: Change Plans
+description: Create structured change plans with impact analysis, validation, and GitHub PR integration for safe pipeline modifications.
+section: guides
+order: 7
+---
+
+# Change Plans
+
+Change Plans are Scout's mechanism for applying structured, validated changes to your data pipeline. Instead of making ad-hoc edits, Scout traces the lineage graph to identify every affected object, generates file patches, validates the changes, and opens a GitHub PR -- all from a conversation.
+
+## When to Use Change Plans
+
+Use change plans for:
+
+- **Schema migrations** -- Renaming columns, changing data types, adding or removing fields
+- **dbt model refactors** -- Restructuring models, updating materializations, changing `ref()` targets
+- **Pipeline modifications** -- Changing source definitions, updating transformation logic
+- **Bug fixes** -- Correcting broken SQL, fixing test definitions, updating YAML configs
+
+<Callout type="info">
+Change plans are available in **Fix** mode and **Plan** mode. Switch to Fix mode when you want Scout to generate and apply a fix. Switch to Plan mode when you want a comprehensive plan before making changes.
+</Callout>
+
+## Workflow
+
+### Step 1: Impact Analysis
+
+Before proposing any changes, Scout traces the lineage graph to identify all affected objects. This is mandatory and happens automatically.
+
+Scout runs `get_downstream` and `get_upstream` on every object being modified and reports:
+
+**Upstream sources** -- What feeds into the objects being changed.
+
+**Downstream dependencies** -- Every table, model, dashboard, or report that depends on the changed objects, with an assessment of whether each will break.
+
+| Object | Type | Will Break? | Required Fix |
+|--------|------|-------------|--------------|
+| `stg_orders` | dbt model | Yes | Update `ref()` target |
+| `fct_revenue` | dbt model | Yes | Update column reference |
+| `revenue_dashboard` | Looker | Yes | Update source query |
+| `dim_customers` | dbt model | No | No changes needed |
+
+**Breaking changes summary** -- A count of items that need attention beyond the original change.
+
+<Callout type="warning">
+If Scout skips the impact analysis, the change plan is incomplete and potentially dangerous. Always verify that downstream dependencies are listed before approving a plan.
+</Callout>
+
+### Step 2: Plan Creation
+
+Scout generates file patches for every affected file. Each patch includes:
+
+| Field | Description |
+|-------|-------------|
+| **File path** | Relative path from the project root (e.g., `models/staging/stg_orders.sql`) |
+| **Change type** | `SQL_MODEL`, `YAML_CONFIG`, or `PYTHON_SCRIPT` |
+| **Before** | The original code |
+| **After** | The modified code |
+| **Description** | What this patch does and why |
+
+Scout also provides:
+
+- **Root cause summary** -- One paragraph explaining the underlying issue
+- **Risk assessment** -- LOW, MEDIUM, or HIGH risk rating with justification
+
+### Step 3: Validation
+
+Change plans go through three levels of validation:
+
+| Level | What It Checks |
+|-------|----------------|
+| **Static analysis** | Syntax correctness, lint checks, valid SQL |
+| **CI pipeline** | dbt compile, dbt test on affected models |
+| **Sandbox execution** | Run the changed models in a sandbox environment to verify output |
+
+You can run validation at any level. Each level provides pass/fail results with details on what failed and why.
+
+### Step 4: Application (GitHub PR)
+
+Once the plan is validated, Scout creates a GitHub PR with:
+
+- All file patches as commits
+- A PR description linking back to the change plan
+- The impact analysis summary
+- Validation results
+
+To apply a change plan, tell Scout:
+
+```
+Go ahead and create the PR.
+```
+
+Scout will immediately create the PR and report the URL.
+
+### Step 5: Rollback
+
+Every change plan includes rollback instructions -- numbered steps to revert the changes if something goes wrong after merging. The rollback plan is included in the PR description for reference.
+
+## Creating a Change Plan Step by Step
+
+Here is a typical conversation flow:
+
+**You:** Fix the broken `customer_id` reference in `stg_orders`. The column was renamed to `cust_id` in the source table.
+
+**Scout:**
+1. Runs `get_downstream` on `stg_orders` to find all dependent objects.
+2. Identifies that `fct_revenue` and `dim_customers` reference `customer_id`.
+3. Generates patches for `stg_orders.sql`, `fct_revenue.sql`, and `schema.yml`.
+4. Presents the complete change plan with before/after code.
+
+**You:** Go ahead.
+
+**Scout:** Creates the change plan, runs validation, and opens a GitHub PR.
+
+## Reviewing a Change Plan
+
+Before approving, check:
+
+1. **All downstream objects are listed** -- Compare the impact analysis against your knowledge of the pipeline.
+2. **Patches are complete** -- Every affected file should have a before/after diff.
+3. **No placeholders** -- All code should be production-ready with real table and column names.
+4. **Rollback plan exists** -- Verify you can revert if needed.
+
+## Validation Details
+
+### Static Analysis
+
+Checks that the generated SQL is syntactically valid and follows linting rules. Catches issues like:
+
+- Missing commas or parentheses
+- Invalid column references
+- Incorrect Jinja syntax in dbt models
+
+### CI Pipeline
+
+Runs `dbt compile` and `dbt test` on the affected models to verify that the changes integrate correctly with the rest of your project. This catches:
+
+- Broken `ref()` or `source()` references
+- Failed schema tests
+- Compilation errors
+
+### Sandbox Execution
+
+Executes the changed models in an isolated sandbox environment to verify output. This catches:
+
+- Runtime errors (e.g., division by zero, type mismatches)
+- Unexpected output (e.g., empty result sets, row count changes)
+
+## Connecting GitHub
+
+To use the PR creation feature, connect a GitHub integration in your pipeline settings:
+
+1. Go to **Settings** and add a GitHub integration.
+2. Authenticate with your GitHub account.
+3. Select the repository that contains your dbt project or SQL files.
+4. Specify the default branch (e.g., `main`).
+
+Once connected, Scout will create PRs against your default branch with a dedicated branch for each change plan.
+
+## Next Steps
+
+- [AI Copilot (Scout)](/docs/copilot) -- Learn about Fix mode and Plan mode
+- [Data Lineage](/docs/lineage) -- Understand how impact analysis uses the lineage graph
+- [Scheduled Monitoring](/docs/scheduled-monitoring) -- Discover issues that need fixing

@@ -4,7 +4,8 @@ const config: Config = {
   content: [
     './app/**/*.{ts,tsx}',
     './components/**/*.{ts,tsx}',
-    './lib/**/*.{ts,tsx}'
+    './lib/**/*.{ts,tsx}',
+    './content/**/*.mdx',
   ],
   theme: {
     extend: {

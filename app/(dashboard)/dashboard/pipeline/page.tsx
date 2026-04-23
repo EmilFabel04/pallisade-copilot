@@ -1,637 +1,788 @@
 'use client';
 
-/**
- * Pipeline Canvas Page
- * 
- * Visual builder for mapping your complete data pipeline
- * n8n / Make.com style - add nodes, connect them, then configure
- * Features: Auto-layout, keyboard shortcuts, templates
- */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { Check, ChevronDown, CircleAlert, Info, Loader2, Pencil, Search, Trash2, Unplug, X } from 'lucide-react';
+import { ToolIcon } from '@/components/icons/ToolIcon';
+import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
-import PipelineCanvas from '@/components/pipeline/PipelineCanvas';
-import NodeSidebar from '@/components/pipeline/NodeSidebar';
+import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
+import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
 import { IntegrationConfigModal } from '@/components/pipeline/IntegrationConfigModal';
 import {
-  PipelineStack,
-  PipelineNode,
+  INTEGRATIONS,
+  IntegrationDefinition,
+  LAYER_COLORS,
+  MULTI_ROLE_TOOLS,
   PipelineEdge,
   PipelineLayer,
+  PipelineNode,
+  PipelineStack,
+  TOOLS,
   getToolById,
-  INTEGRATIONS,
-  INTEGRATION_COLORS,
-  INTEGRATION_LABELS,
-  IntegrationType,
-  IntegrationDefinition,
+  isMultiRoleTool,
 } from '@/components/pipeline/types';
-import { BookTemplate, ChevronDown, Bell, Ticket, Eye, Plus, Check } from 'lucide-react';
 
-// Pipeline templates for quick start
-const PIPELINE_TEMPLATES = [
-  {
-    id: 'modern-stack',
-    name: 'Modern Data Stack',
-    description: 'Fivetran → dbt Cloud → Snowflake → Looker',
-    nodes: [
-      { id: 'tpl-1', name: 'Fivetran', layer: 'INGESTION' as PipelineLayer, toolType: 'fivetran' },
-      { id: 'tpl-2', name: 'dbt Cloud', layer: 'TRANSFORMATION' as PipelineLayer, toolType: 'dbt_cloud' },
-      { id: 'tpl-3', name: 'Snowflake', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'snowflake' },
-      { id: 'tpl-4', name: 'Looker', layer: 'REPORTING' as PipelineLayer, toolType: 'looker' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-      { id: 'tpl-e2', sourceId: 'tpl-2', targetId: 'tpl-3' },
-      { id: 'tpl-e3', sourceId: 'tpl-3', targetId: 'tpl-4' },
-    ],
-  },
-  {
-    id: 'azure-stack',
-    name: 'Azure Data Stack',
-    description: 'Airbyte → dbt Core → Azure SQL → Power BI',
-    nodes: [
-      { id: 'tpl-1', name: 'Airbyte', layer: 'INGESTION' as PipelineLayer, toolType: 'airbyte' },
-      { id: 'tpl-2', name: 'dbt Core', layer: 'TRANSFORMATION' as PipelineLayer, toolType: 'dbt_core' },
-      { id: 'tpl-3', name: 'Azure SQL', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'azure_sql' },
-      { id: 'tpl-4', name: 'Power BI', layer: 'REPORTING' as PipelineLayer, toolType: 'powerbi' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-      { id: 'tpl-e2', sourceId: 'tpl-2', targetId: 'tpl-3' },
-      { id: 'tpl-e3', sourceId: 'tpl-3', targetId: 'tpl-4' },
-    ],
-  },
-  {
-    id: 'gcp-stack',
-    name: 'GCP Data Stack',
-    description: 'Stitch → dbt Cloud → BigQuery → Tableau',
-    nodes: [
-      { id: 'tpl-1', name: 'Stitch', layer: 'INGESTION' as PipelineLayer, toolType: 'stitch' },
-      { id: 'tpl-2', name: 'dbt Cloud', layer: 'TRANSFORMATION' as PipelineLayer, toolType: 'dbt_cloud' },
-      { id: 'tpl-3', name: 'BigQuery', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'bigquery' },
-      { id: 'tpl-4', name: 'Tableau', layer: 'REPORTING' as PipelineLayer, toolType: 'tableau' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-      { id: 'tpl-e2', sourceId: 'tpl-2', targetId: 'tpl-3' },
-      { id: 'tpl-e3', sourceId: 'tpl-3', targetId: 'tpl-4' },
-    ],
-  },
-  {
-    id: 'warehouse-only',
-    name: 'Warehouse + BI',
-    description: 'Start with just warehouse and reporting',
-    nodes: [
-      { id: 'tpl-1', name: 'Snowflake', layer: 'WAREHOUSE' as PipelineLayer, toolType: 'snowflake' },
-      { id: 'tpl-2', name: 'Metabase', layer: 'REPORTING' as PipelineLayer, toolType: 'metabase' },
-    ],
-    edges: [
-      { id: 'tpl-e1', sourceId: 'tpl-1', targetId: 'tpl-2' },
-    ],
-  },
+type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
+type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
+
+interface ConnectorCard {
+  id: string;
+  name: string;
+  description: string;
+  group: ConnectorGroup;
+  mode: 'pipeline' | 'integration';
+  layer?: PipelineLayer;
+  integration?: IntegrationDefinition;
+}
+
+interface IntegrationRecord {
+  id: string;
+  connectorId: string;
+  status: string;
+  source: 'pipeline' | 'legacy';
+  lastError?: string | null;
+}
+
+const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
+const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
+
+const CONNECTION_STATUS_CATEGORIES: Array<{ key: string; label: string; connectorIds: string[] }> = [
+  { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'] },
+  { key: 'transform', label: 'Transform', connectorIds: ['dbt_cloud', 'dbt_core'] },
+  { key: 'orchestration', label: 'Orchestration', connectorIds: ['airflow', 'dagster', 'prefect'] },
+  { key: 'version_control', label: 'Version Control', connectorIds: ['github', 'gitlab', 'bitbucket'] },
+  { key: 'bi', label: 'BI', connectorIds: ['looker', 'tableau', 'powerbi', 'metabase'] },
+  { key: 'ingestion', label: 'Ingestion', connectorIds: ['fivetran', 'airbyte', 'stitch'] },
+  { key: 'storage', label: 'Storage', connectorIds: ['amazon_s3', 'gcs', 'adls'] },
+  { key: 'alerts', label: 'Alerts', connectorIds: ['slack', 'teams', 'pagerduty', 'opsgenie', 'jira', 'linear', 'asana', 'github_issues'] },
 ];
 
-// Grid positions for each layer (X positions)
-const LAYER_X_POSITIONS: Record<PipelineLayer, number> = {
-  INGESTION: 100,
-  TRANSFORMATION: 400,
-  WAREHOUSE: 700,
-  REPORTING: 1000,
-  VERSION_CONTROL: 250,  // Between Ingestion and Transformation (connects to dbt)
+const VCS_PROVIDERS = [
+  { id: 'github', name: 'GitHub' },
+  { id: 'gitlab', name: 'GitLab' },
+  { id: 'bitbucket', name: 'Bitbucket' },
+];
+
+const GROUP_COLORS: Record<ConnectorGroup, string> = {
+  WAREHOUSE: LAYER_COLORS.WAREHOUSE,
+  TRANSFORM: LAYER_COLORS.TRANSFORMATION,
+  ORCHESTRATION: LAYER_COLORS.ORCHESTRATION,
+  BI: LAYER_COLORS.REPORTING,
+  INGESTION: LAYER_COLORS.INGESTION,
+  STORAGE: LAYER_COLORS.STORAGE,
+  VERSION_CONTROL: LAYER_COLORS.VERSION_CONTROL,
+  INFRASTRUCTURE: LAYER_COLORS.INFRASTRUCTURE,
+  ALERTS: '#EF4444',
 };
 
-// Category icons for integrations
-const CATEGORY_ICONS: Record<IntegrationType, React.ReactNode> = {
-  NOTIFICATIONS: <Bell className="w-4 h-4" />,
-  TICKETING: <Ticket className="w-4 h-4" />,
-  OBSERVABILITY: <Eye className="w-4 h-4" />,
-};
+function normalizeConnectorId(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
 
-// Track how many nodes are in each layer for Y positioning
-function getNextYPosition(nodes: PipelineNode[], layer: PipelineLayer): number {
-  const layerNodes = nodes.filter(n => n.layer === layer);
-  const baseY = 80;
-  const spacing = 200;
-  return baseY + (layerNodes.length * spacing);
+function mapIntegrationTypeToConnectorId(type: string): string {
+  const map: Record<string, string> = {
+    SNOWFLAKE: 'snowflake', BIGQUERY: 'bigquery', REDSHIFT: 'redshift', POSTGRES: 'postgres',
+    SQLSERVER: 'sqlserver', AZURE_SQL: 'azure_sql', DATABRICKS: 'databricks',
+    FIVETRAN: 'fivetran', AIRBYTE: 'airbyte', STITCH: 'stitch',
+    DBT_CLOUD: 'dbt_cloud', DBT_CORE: 'dbt_core',
+    AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect', N8N: 'n8n',
+    LOOKER: 'looker', TABLEAU: 'tableau', POWERBI: 'powerbi', METABASE: 'metabase',
+    AMAZON_S3: 'amazon_s3', GCS: 'gcs', ADLS: 'adls',
+    GITHUB: 'github', GITLAB: 'gitlab', BITBUCKET: 'bitbucket',
+    LINUX_SERVER: 'linux_server',
+    SLACK: 'slack', TEAMS: 'teams', PAGERDUTY: 'pagerduty', OPSGENIE: 'opsgenie',
+    JIRA: 'jira', LINEAR: 'linear', ASANA: 'asana', GITHUB_ISSUES: 'github_issues',
+  };
+  return map[type] || normalizeConnectorId(type);
+}
+
+function categoryToGroup(category: string): ConnectorGroup {
+  switch (category) {
+    case 'NOTIFICATIONS': case 'TICKETING': return 'ALERTS';
+    default: return 'ALERTS';
+  }
+}
+
+function groupLabel(group: ConnectorGroup): string {
+  const labels: Record<ConnectorGroup, string> = {
+    WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration', VERSION_CONTROL: 'Version Control',
+    BI: 'BI / Reporting', INGESTION: 'Ingestion', STORAGE: 'Storage', INFRASTRUCTURE: 'Infrastructure', ALERTS: 'Alerts & Integrations',
+  };
+  return labels[group];
+}
+
+function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: PipelineNode[]): PipelineNode {
+  const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
+  const layerX: Record<PipelineLayer, number> = {
+    INGESTION: 120, VERSION_CONTROL: 300, ORCHESTRATION: 300, TRANSFORMATION: 480,
+    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040, INFRASTRUCTURE: 1160, UNCATEGORIZED: 0,
+  };
+  return {
+    id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: getToolById(toolId)?.name || toolId,
+    layer, toolType: toolId,
+    positionX: layerX[layer], positionY: 80 + sameLayerCount * 170,
+    status: 'PENDING', config: null, healthScore: null,
+    findingsCount: 0, criticalCount: 0, highCount: 0,
+  };
+}
+
+function buildAutoEdges(nodes: PipelineNode[], existingEdges: PipelineEdge[]): PipelineEdge[] {
+  if (existingEdges.length > 0) return existingEdges;
+  const nodesByLayer = new Map<PipelineLayer, PipelineNode[]>();
+  LAYER_ORDER.forEach((layer) => nodesByLayer.set(layer, nodes.filter((n) => n.layer === layer)));
+  const generated: PipelineEdge[] = [];
+  for (let i = 0; i < LAYER_ORDER.length - 1; i += 1) {
+    const current = nodesByLayer.get(LAYER_ORDER[i]) || [];
+    const next = nodesByLayer.get(LAYER_ORDER[i + 1]) || [];
+    if (current.length === 0 || next.length === 0) continue;
+    current.forEach((sourceNode, sourceIndex) => {
+      const target = next[sourceIndex % next.length];
+      generated.push({ id: `edge-auto-${sourceNode.id}-${target.id}`, sourceId: sourceNode.id, targetId: target.id });
+    });
+  }
+  return generated;
 }
 
 export default function PipelinePage() {
-  const [stack, setStack] = useState<PipelineStack>({
-    id: 'new',
-    name: 'My Data Pipeline',
-    description: '',
-    status: 'DRAFT',
-    nodes: [],
-    edges: [],
-  });
+  const searchParams = useSearchParams();
+  const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
+  const lastPipelineIdRef = useRef<string | null>(null);
+  const saveInFlightRef = useRef<Promise<void> | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [showTemplates, setShowTemplates] = useState(false);
-  const [configModal, setConfigModal] = useState<{ integration: IntegrationDefinition } | null>(null);
-  const [integrationsRefreshKey, setIntegrationsRefreshKey] = useState(0);
-  const searchParams = useSearchParams();
+  const [stack, setStack] = useState<PipelineStack>({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
+  const [integrationRecords, setIntegrationRecords] = useState<IntegrationRecord[]>([]);
+  const [search, setSearch] = useState('');
+  const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set(CORE_GROUP_ORDER));
+  const [nodeModal, setNodeModal] = useState<PipelineNode | null>(null);
+  const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
 
-  // Handle OAuth callback URL parameters
+  // ─── Derived data ─────────────────────────────────────────
+  const connectorCatalog = useMemo<ConnectorCard[]>(() => {
+    const coreConnectors: ConnectorCard[] = [
+      ...TOOLS.WAREHOUSE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.TRANSFORMATION.filter((t) => ['dbt_cloud', 'dbt_core'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.TRANSFORMATION.filter((t) => ['airflow', 'dagster', 'prefect'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),
+      ...TOOLS.ORCHESTRATION.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.REPORTING.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'BI' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.INGESTION.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INGESTION' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.STORAGE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'STORAGE' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.INFRASTRUCTURE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'INFRASTRUCTURE' as const, mode: 'pipeline' as const, layer: t.layer })),
+      ...TOOLS.VERSION_CONTROL.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'VERSION_CONTROL' as const, mode: 'pipeline' as const, layer: t.layer })),
+    ];
+    const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS).flat().map((i) => ({
+      id: i.id, name: i.name, description: i.description, group: categoryToGroup(i.category), mode: 'integration' as const, integration: i,
+    }));
+    return [...coreConnectors, ...alertConnectors];
+  }, []);
+
+  const connectedFromStack = useMemo(() => new Set(
+    stack.nodes.filter((n) => n.config || ['CONNECTED', 'ACTIVE'].includes(n.status)).map((n) => n.toolType)
+  ), [stack.nodes]);
+
+  const connectorStatusById = useMemo(() => {
+    const m = new Map<string, ConnectorStatus>();
+    connectorCatalog.forEach((c) => m.set(c.id, 'NOT_CONNECTED'));
+    connectedFromStack.forEach((id) => { if (m.has(id)) m.set(id, 'CONNECTED'); });
+    integrationRecords.forEach((r) => {
+      if (!m.has(r.connectorId)) return;
+      if (r.status === 'ACTIVE') m.set(r.connectorId, 'CONNECTED');
+      else if (r.status === 'ERROR' || !!r.lastError) m.set(r.connectorId, 'NEEDS_ATTENTION');
+    });
+    return m;
+  }, [connectorCatalog, connectedFromStack, integrationRecords]);
+
+  const filteredConnectors = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return connectorCatalog.filter((c) => {
+      if (selectedGroup !== 'ALL' && c.group !== selectedGroup) return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) || c.id.toLowerCase().includes(q);
+    });
+  }, [connectorCatalog, search, selectedGroup]);
+
+  const hasVcsConnected = useMemo(() => VCS_PROVIDERS.some((p) => connectorStatusById.get(p.id) === 'CONNECTED'), [connectorStatusById]);
+
+
+  // ─── Actions ──────────────────────────────────────────────
+  const savePipeline = useCallback(async (nextStack: PipelineStack, silent = false) => {
+    // Wait for any in-flight save to finish before starting a new one
+    if (saveInFlightRef.current) {
+      try { await saveInFlightRef.current; } catch { /* ignore */ }
+    }
+    setSaving(true);
+    const doSave = async () => {
+      try {
+        const res = await fetch('/api/pipeline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nextStack) });
+        if (!res.ok) throw new Error('save failed');
+        const data = await res.json();
+        setStack((prev) => ({ ...nextStack, id: data.stack?.id || data.id || prev.id }));
+        invalidateCache('/api/pipeline');
+        invalidateCache('/api/integrations');
+        if (!silent) toast.success('Pipeline saved');
+      } catch { toast.error('Failed to save pipeline'); }
+      finally { setSaving(false); saveInFlightRef.current = null; }
+    };
+    saveInFlightRef.current = doSave();
+    return saveInFlightRef.current;
+  }, []);
+
+  const fetchIntegrations = useCallback(async () => {
+    if (!selectedPipelineId) return;
+    try {
+      const res = await cachedFetch(`/api/integrations?stackId=${selectedPipelineId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setIntegrationRecords((data.integrations || []).map((row: any) => ({
+        id: row.id,
+        connectorId: mapIntegrationTypeToConnectorId(row.type || row.id),
+        status: row.status || 'INACTIVE', source: row.source || 'legacy', lastError: row.lastError,
+      })));
+    } catch (e) { console.error('Failed to fetch integrations', e); }
+  }, [selectedPipelineId]);
+
+  const handleDisconnect = useCallback(async (connector: ConnectorCard) => {
+    if (connector.mode === 'integration') {
+      const record = integrationRecords.find((r) => r.connectorId === connector.id);
+      if (!record) return;
+      setDisconnecting(connector.id);
+      // Optimistic: immediately remove from UI
+      setIntegrationRecords(prev => prev.filter(r => r.connectorId !== connector.id));
+      try {
+        const res = await fetch(`/api/integrations/${record.id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('delete failed');
+        // Clear config on nodes that referenced this integration so they show as disconnected
+        setStack(prev => ({
+          ...prev,
+          nodes: prev.nodes.map(n =>
+            (n as any).integrationId === record.id || n.toolType === connector.id
+              ? { ...n, config: null, status: 'PENDING' as const }
+              : n
+          ),
+        }));
+        await fetchIntegrations();
+        toast.success(`${connector.name} disconnected`);
+      } catch {
+        // Rollback on failure
+        setIntegrationRecords(prev => [...prev, record]);
+        toast.error(`Failed to disconnect ${connector.name}`);
+      }
+      finally { setDisconnecting(null); }
+    } else {
+      const node = stack.nodes.find((n) => n.toolType === connector.id);
+      if (!node) return;
+      setDisconnecting(connector.id);
+      const nextNodes = stack.nodes.filter((n) => n.id !== node.id);
+      const nextEdges = stack.edges.filter((e) => e.sourceId !== node.id && e.targetId !== node.id);
+      const nextStack: PipelineStack = { ...stack, nodes: nextNodes, edges: nextEdges };
+      setStack(nextStack);
+      // Delete the associated integration record if one exists — await to ensure
+      // it's gone before the pipeline save invalidates cache and triggers refetch
+      const intRecord = integrationRecords.find((r) => r.connectorId === connector.id);
+      if (intRecord) {
+        setIntegrationRecords(prev => prev.filter(r => r.connectorId !== connector.id));
+        try {
+          await fetch(`/api/integrations/${intRecord.id}`, { method: 'DELETE' });
+        } catch {}
+      }
+      await savePipeline(nextStack, true);
+      setDisconnecting(null);
+      toast.success(`${connector.name} removed from pipeline`);
+    }
+    setExpandedConnector(null);
+  }, [fetchIntegrations, integrationRecords, savePipeline, stack]);
+
+  // ─── Effects ──────────────────────────────────────────────
+  // Re-load when pipeline profile changes
+  useEffect(() => {
+    if (pipelineLoading) return;
+    if (!selectedPipelineId) {
+      setStack({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
+      setIntegrationRecords([]);
+      setLoading(false);
+      return;
+    }
+    // Skip if pipeline hasn't changed
+    if (lastPipelineIdRef.current === selectedPipelineId) return;
+    lastPipelineIdRef.current = selectedPipelineId;
+
+    const load = async () => {
+      setLoading(true);
+      initialLoadRef.current = false;
+      // Reset state for new pipeline
+      setStack({ id: 'new', name: 'My Data Pipeline', description: '', status: 'DRAFT', nodes: [], edges: [] });
+      setIntegrationRecords([]);
+      setExpandedConnector(null);
+      try {
+        const [pipelineRes] = await Promise.all([
+          cachedFetch(`/api/pipeline?stackId=${selectedPipelineId}`),
+          fetchIntegrations(),
+        ]);
+        if (pipelineRes.ok) {
+          const data = await pipelineRes.json();
+          if (data.stack) {
+            // Deduplicate nodes by toolType — auto-discovery race may have created duplicates.
+            // Keep the node with real config (not _autoDiscovered) when duplicates exist.
+            const seen = new Map<string, any>();
+            const dedupedNodes: any[] = [];
+            for (const node of data.stack.nodes) {
+              const existing = seen.get(node.toolType);
+              if (!existing) {
+                seen.set(node.toolType, node);
+                dedupedNodes.push(node);
+              } else {
+                const hasRealConfig = node.config && !node.config._autoDiscovered;
+                const existingHasReal = existing.config && !existing.config._autoDiscovered;
+                if (hasRealConfig && !existingHasReal) {
+                  const idx = dedupedNodes.indexOf(existing);
+                  dedupedNodes[idx] = node;
+                  seen.set(node.toolType, node);
+                }
+              }
+            }
+
+            // Filter edges to only reference surviving node IDs
+            const survivingIds = new Set(dedupedNodes.map((n: any) => n.id));
+            const dedupedEdges = (data.stack.edges || []).filter(
+              (e: any) => survivingIds.has(e.sourceId) && survivingIds.has(e.targetId)
+            );
+
+            const deduped = { ...data.stack, nodes: dedupedNodes, edges: dedupedEdges };
+            setStack(deduped);
+
+            // Pre-populate autoDiscoveredRef so auto-discovery won't re-create these
+            deduped.nodes.forEach((n: any) => autoDiscoveredRef.current.add(n.toolType));
+
+            // If duplicates were removed, persist the clean stack
+            if (dedupedNodes.length < data.stack.nodes.length) {
+              void savePipeline(deduped, true);
+            }
+          }
+        }
+      } catch (e) { console.error('Failed to load pipeline map', e); }
+      finally { setLoading(false); initialLoadRef.current = true; }
+    };
+    load();
+  }, [selectedPipelineId, pipelineLoading, fetchIntegrations]);
+
   useEffect(() => {
     const success = searchParams.get('success');
     const error = searchParams.get('error');
-
     if (success === 'github') {
-      toast.success('GitHub connected successfully!');
-      setIntegrationsRefreshKey(prev => prev + 1);
-
-      // Update any GitHub nodes on the canvas to mark as connected and auto-save
-      setStack(prev => {
-        const updatedStack = {
-          ...prev,
-          nodes: prev.nodes.map(node => {
-            if (node.toolType === 'github') {
-              return {
-                ...node,
-                status: 'CONNECTED' as const,
-                config: { ...node.config, _oauth_linked: true },
-              };
-            }
-            return node;
-          }),
-        };
-
-        // Auto-save if there are GitHub nodes
-        if (prev.nodes.some(n => n.toolType === 'github') && prev.id && prev.id !== 'new') {
-          fetch('/api/pipeline', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedStack),
-          }).catch(e => console.error('Failed to save GitHub node status:', e));
-        }
-
-        return updatedStack;
-      });
-
-      // Clean up URL
-      window.history.replaceState({}, '', '/dashboard/pipeline');
-    } else if (error) {
-      const errorMessages: Record<string, string> = {
-        invalid_state: 'GitHub authentication failed: Invalid state',
-        no_code: 'GitHub authentication failed: No authorization code',
-        callback_failed: 'GitHub authentication failed: Callback error',
-      };
-      toast.error(errorMessages[error] || `GitHub authentication failed: ${error}`);
-      window.history.replaceState({}, '', '/dashboard/pipeline');
-    }
-  }, [searchParams]);
-
-  // Load existing pipeline stack
-  useEffect(() => {
-    const loadStack = async () => {
-      try {
-        const res = await fetch('/api/pipeline');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.stack) {
-            setStack(data.stack);
+      toast.success('GitHub connected successfully');
+      fetchIntegrations();
+      // Re-open the dbt Core config modal if GitHub was connected from there
+      const pending = sessionStorage.getItem('pending_github_node');
+      if (pending) {
+        try {
+          const { nodeId } = JSON.parse(pending);
+          sessionStorage.removeItem('pending_github_node');
+          const targetNode = stack.nodes.find((n) => n.id === nodeId);
+          if (targetNode) {
+            // Small delay to let integrations refresh before opening modal
+            setTimeout(() => setNodeModal(targetNode), 300);
           }
-        }
-      } catch (error) {
-        console.error('Failed to load pipeline:', error);
-      } finally {
-        setLoading(false);
+        } catch { /* ignore parse errors */ }
       }
-    };
-
-    loadStack();
-  }, []);
-
-  // Save pipeline changes
-  const savePipeline = useCallback(async () => {
-    setSaving(true);
-    try {
-      const res = await fetch('/api/pipeline', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(stack),
-      });
-      
-      if (res.ok) {
-        const data = await res.json();
-        setStack(prev => ({ ...prev, id: data.id }));
-        toast.success('Pipeline saved successfully');
-      } else {
-        throw new Error('Failed to save');
-      }
-    } catch (error) {
-      toast.error('Failed to save pipeline');
-    } finally {
-      setSaving(false);
+      window.history.replaceState({}, '', '/dashboard/pipeline');
     }
-  }, [stack]);
+    else if (success === 'slack') { toast.success('Slack connected successfully'); fetchIntegrations(); window.history.replaceState({}, '', '/dashboard/pipeline'); }
+    else if (error) { toast.error(`Authentication error: ${error}`); window.history.replaceState({}, '', '/dashboard/pipeline'); }
+  }, [fetchIntegrations, searchParams, stack.nodes]);
 
-  // Handle node changes from canvas
-  const onNodesChange = useCallback((nodes: PipelineNode[]) => {
-    setStack(prev => ({ ...prev, nodes }));
-  }, []);
+  // Deep-link: open a specific tool's config modal via ?openConfig=<toolType>
+  useEffect(() => {
+    if (loading) return;
+    const openConfig = searchParams.get('openConfig');
+    if (!openConfig) return;
+    // Expand the group containing this connector so it's visible behind the modal
+    const connector = connectorCatalog.find((c) => c.id === openConfig);
+    if (connector) {
+      setCollapsedGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(connector.group);
+        return next;
+      });
+    }
+    const existingNode = stack.nodes.find((n) => n.toolType === openConfig);
+    if (existingNode) {
+      setNodeModal(existingNode);
+    } else {
+      // Check if it's an integration (Slack, etc.)
+      const integrationDef = Object.values(INTEGRATIONS).flat().find((i) => i.id === openConfig);
+      if (integrationDef) {
+        setIntegrationModal(integrationDef);
+      }
+    }
+    window.history.replaceState({}, '', '/dashboard/pipeline');
+  }, [loading, searchParams, stack.nodes, connectorCatalog]);
 
-  // Handle edge changes from canvas
-  const onEdgesChange = useCallback((edges: PipelineEdge[]) => {
-    setStack(prev => ({ ...prev, edges }));
-  }, []);
+  // Track which tool types have already been auto-discovered to avoid re-running on every refetch
+  const autoDiscoveredRef = useRef<Set<string>>(new Set());
+  // Gate auto-discovery: don't run until the initial pipeline load is complete
+  const initialLoadRef = useRef(false);
 
-  // Handle adding a new node from sidebar - NO MODAL, just add to canvas
-  const onAddNode = useCallback((toolId: string, layer: string) => {
-    const layerKey = layer as PipelineLayer;
-    const tool = getToolById(toolId);
-    
-    // Calculate position in grid
-    const xPos = LAYER_X_POSITIONS[layerKey];
-    const yPos = getNextYPosition(stack.nodes, layerKey);
-    
-    const newNode: PipelineNode = {
-      id: `node-${Date.now()}`,
-      name: tool?.name || toolId,
-      layer: layerKey,
-      toolType: toolId,
-      positionX: xPos,
-      positionY: yPos,
-      status: 'PENDING',
-      config: null,
-      healthScore: null,
-      findingsCount: 0,
-      criticalCount: 0,
-      highCount: 0,
-    };
+  // Reset when pipeline changes
+  useEffect(() => { autoDiscoveredRef.current = new Set(); initialLoadRef.current = false; }, [selectedPipelineId]);
 
-    // Add node to canvas immediately
-    setStack(prev => ({
-      ...prev,
-      nodes: [...prev.nodes, newNode],
-    }));
-    
-    toast.success(`Added ${tool?.name || toolId} to canvas`);
+  useEffect(() => {
+    // Don't run until the initial pipeline load is complete — prevents creating
+    // duplicate nodes if the integrations API responds before the pipeline API.
+    if (!initialLoadRef.current) return;
+    const discoveredIds = new Set(
+      integrationRecords.filter((r) => r.status === 'ACTIVE' && !!getToolById(r.connectorId)).map((r) => r.connectorId)
+    );
+    if (discoveredIds.size === 0) return;
+    // Only process tool types we haven't already auto-discovered
+    const newIds = [...discoveredIds].filter((id) => !autoDiscoveredRef.current.has(id));
+    if (newIds.length === 0) return;
+    setStack((prev) => {
+      const existing = new Set(prev.nodes.map((n) => n.toolType));
+      const missing = newIds.filter((id) => !existing.has(id));
+      // Mark all as discovered regardless (they exist either via prior load or just now)
+      newIds.forEach((id) => autoDiscoveredRef.current.add(id));
+      if (missing.length === 0) return prev;
+      const appended = [...prev.nodes];
+      missing.forEach((toolId) => { const tool = getToolById(toolId); if (!tool) return; appended.push({ ...createNodeForTool(toolId, tool.layer, appended), status: 'CONNECTED', config: { _autoDiscovered: true } }); });
+      return { ...prev, nodes: appended, edges: buildAutoEdges(appended, prev.edges) };
+    });
+  }, [integrationRecords]);
+
+
+  // ─── Handlers ─────────────────────────────────────────────
+  const handleConnect = useCallback((connector: ConnectorCard) => {
+    if (connector.mode === 'integration' && connector.integration) { setIntegrationModal(connector.integration); return; }
+    const existingNode = stack.nodes.find((n) => n.toolType === connector.id);
+    if (existingNode) { setNodeModal(existingNode); return; }
+    const layer = connector.layer || getToolById(connector.id)?.layer;
+    if (!layer) return;
+    const newNode = createNodeForTool(connector.id, layer, stack.nodes);
+    setStack((prev) => ({ ...prev, nodes: [...prev.nodes, newNode], edges: buildAutoEdges([...prev.nodes, newNode], prev.edges) }));
+    setNodeModal(newNode);
   }, [stack.nodes]);
 
-  // Scan the entire pipeline
-  const scanPipeline = useCallback(async () => {
-    if (stack.nodes.length === 0) {
-      toast.error('Add some nodes to your pipeline first');
-      return;
-    }
-
-    const configuredNodes = stack.nodes.filter(n => n.config !== null);
-    if (configuredNodes.length === 0) {
-      toast.error('Configure at least one node before scanning');
-      return;
-    }
-
-    toast.info('Starting pipeline scan...');
-    
-    try {
-      const res = await fetch('/api/pipeline/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stackId: stack.id }),
-      });
-      
-      if (res.ok) {
-        toast.success('Pipeline scan started');
-      } else {
-        throw new Error('Failed to start scan');
-      }
-    } catch (error) {
-      toast.error('Failed to start pipeline scan');
-    }
-  }, [stack]);
-
-  // Apply a template
-  const applyTemplate = useCallback((templateId: string) => {
-    const template = PIPELINE_TEMPLATES.find(t => t.id === templateId);
-    if (!template) return;
-
-    // Generate new IDs and positions
-    const nodeIdMap = new Map<string, string>();
-    const newNodes: PipelineNode[] = template.nodes.map((node, idx) => {
-      const newId = `node-${Date.now()}-${idx}`;
-      nodeIdMap.set(node.id, newId);
-      
-      const xPos = LAYER_X_POSITIONS[node.layer];
-      const yPos = 80 + (idx % 2) * 180; // Stagger vertically
-      
-      return {
-        id: newId,
-        name: node.name,
-        layer: node.layer,
-        toolType: node.toolType,
-        positionX: xPos,
-        positionY: yPos,
-        status: 'PENDING' as const,
-        config: null,
-        healthScore: null,
-        findingsCount: 0,
-        criticalCount: 0,
-        highCount: 0,
-      };
+  const handleNodeConfigSaved = useCallback((config: Record<string, any>) => {
+    if (!nodeModal) return;
+    setStack((prev) => {
+      const hasNode = prev.nodes.some((n) => n.id === nodeModal.id);
+      const nextNodes = hasNode
+        ? prev.nodes.map((n) => (n.id === nodeModal.id ? { ...n, config, status: 'CONNECTED' as const } : n))
+        : [...prev.nodes, { ...nodeModal, config, status: 'CONNECTED' as const }];
+      const nextStack: PipelineStack = { ...prev, nodes: nextNodes, edges: buildAutoEdges(nextNodes, prev.edges) };
+      void savePipeline(nextStack, true);
+      return nextStack;
     });
+    setNodeModal(null);
+    toast.success('Connector configured');
+  }, [nodeModal, savePipeline]);
 
-    const newEdges: PipelineEdge[] = template.edges.map((edge, idx) => ({
-      id: `edge-${Date.now()}-${idx}`,
-      sourceId: nodeIdMap.get(edge.sourceId) || edge.sourceId,
-      targetId: nodeIdMap.get(edge.targetId) || edge.targetId,
-    }));
-
-    setStack(prev => ({
-      ...prev,
-      nodes: [...prev.nodes, ...newNodes],
-      edges: [...prev.edges, ...newEdges],
-    }));
-
-    setShowTemplates(false);
-    toast.success(`Applied "${template.name}" template`);
-  }, []);
-
-  // These hooks must be before any conditional returns
-  const openConfigModal = useCallback((integration: IntegrationDefinition) => {
-    setConfigModal({ integration });
-  }, []);
-
-  const handleIntegrationSuccess = useCallback(() => {
-    setIntegrationsRefreshKey(prev => prev + 1);
-  }, []);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[600px]">
-        <div className="flex flex-col items-center gap-4">
-          <div className="relative w-16 h-16">
-            <div className="absolute inset-0 rounded-full border-2 border-[var(--accent)]/20"></div>
-            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-[var(--accent)] animate-spin"></div>
-          </div>
-          <p className="text-sm text-[var(--muted)]">Loading pipeline...</p>
-        </div>
+      <div className="flex items-center justify-center min-h-[520px]">
+        <div className="w-8 h-8 red-spinner" />
       </div>
     );
   }
 
-  const unconfiguredCount = stack.nodes.filter(n => !n.config).length;
-
   return (
-    <div className="flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4 px-1">
-        <div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-white to-white/60 bg-clip-text text-transparent">
-            Pipeline Canvas
-          </h1>
-          <p className="text-sm text-[var(--muted)] mt-1">
-            Build your data flow • {stack.nodes.length} nodes
-            {unconfiguredCount > 0 && (
-              <span className="ml-2 text-amber-400">• {unconfiguredCount} need configuration</span>
-            )}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {/* Templates Dropdown */}
-          <div className="relative">
-            <button
-              onClick={() => setShowTemplates(!showTemplates)}
-              className="btn btn-secondary flex items-center gap-2"
-            >
-              <BookTemplate className="w-4 h-4" />
-              Templates
-              <ChevronDown className={`w-4 h-4 transition-transform ${showTemplates ? 'rotate-180' : ''}`} />
-            </button>
-
-            {showTemplates && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setShowTemplates(false)} />
-                <div className="absolute right-0 top-full mt-2 w-80 rounded-xl bg-[#1a1a24] border border-[rgba(255,255,255,0.1)] shadow-xl z-20 overflow-hidden">
-                  <div className="p-3 border-b border-[rgba(255,255,255,0.06)]">
-                    <h4 className="text-sm font-medium">Quick Start Templates</h4>
-                    <p className="text-xs text-[var(--muted)] mt-1">Choose a template to get started</p>
-                  </div>
-                  <div className="max-h-[300px] overflow-y-auto">
-                    {PIPELINE_TEMPLATES.map(template => (
-                      <button
-                        key={template.id}
-                        onClick={() => applyTemplate(template.id)}
-                        className="w-full p-3 text-left hover:bg-[rgba(255,255,255,0.03)] transition-colors border-b border-[rgba(255,255,255,0.04)] last:border-b-0"
-                      >
-                        <div className="font-medium text-sm">{template.name}</div>
-                        <div className="text-xs text-[var(--muted)] mt-1">{template.description}</div>
-                        <div className="text-xs text-[var(--accent-2)] mt-1.5">{template.nodes.length} nodes</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
+    <div className="space-y-6 pb-8">
+      {/* ── Connectors Section ─────────────────────────────── */}
+      <section className="dashboard-card p-6 space-y-5">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">Connectors</h1>
+            <p className="text-sm text-[var(--muted)] mt-1">
+              Connect tools first. Pallisade auto-discovers and renders your pipeline map.
+            </p>
           </div>
-
-          <button
-            onClick={savePipeline}
-            disabled={saving}
-            className="btn btn-secondary"
-          >
-            {saving ? (
-              <>
-                <svg className="w-4 h-4 mr-2 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                </svg>
-                Saving...
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                </svg>
-                Save Pipeline
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={scanPipeline}
-            disabled={stack.nodes.length === 0}
-            className="btn btn-primary"
-          >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* Main Content - Pipeline Canvas */}
-      <div className="flex gap-4 h-[600px]">
-        {/* Sidebar */}
-        <NodeSidebar onAddNode={onAddNode} />
-
-        {/* Canvas */}
-        <div className="flex-1 dashboard-card overflow-hidden">
-          <PipelineCanvas
-            nodes={stack.nodes}
-            edges={stack.edges}
-            stackId={stack.id}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onSave={savePipeline}
-          />
-        </div>
-      </div>
-
-      {/* Integrations Section */}
-      <div className="mt-8 pb-8">
-        <div className="mb-4">
-          <h2 className="text-xl font-semibold">Integrations</h2>
-          <p className="text-sm text-[var(--muted)] mt-1">
-            Connect notifications, ticketing, and observability tools
-          </p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => savePipeline(stack)} className="btn btn-primary !py-2 !px-4 !text-sm" disabled={saving}>
+              {saving ? <><Loader2 className="w-4 h-4 mr-1.5 animate-spin" />Saving...</> : 'Save'}
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {(Object.keys(INTEGRATIONS) as IntegrationType[]).map((category) => (
-            <IntegrationCategory
-              key={`${category}-${integrationsRefreshKey}`}
-              category={category}
-              integrations={INTEGRATIONS[category]}
-              onConfigureIntegration={openConfigModal}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Integration Config Modal */}
-      <IntegrationConfigModal
-        integration={configModal?.integration || null}
-        isOpen={configModal !== null}
-        onClose={() => setConfigModal(null)}
-        onSuccess={handleIntegrationSuccess}
-      />
-    </div>
-  );
-}
-
-// Integration Category Component
-function IntegrationCategory({
-  category,
-  integrations,
-  onConfigureIntegration,
-}: {
-  category: IntegrationType;
-  integrations: IntegrationDefinition[];
-  onConfigureIntegration: (integration: IntegrationDefinition) => void;
-}) {
-  const [connectedIds, setConnectedIds] = useState<string[]>([]);
-
-  // Fetch connected integrations on mount
-  useEffect(() => {
-    const fetchConnected = async () => {
-      try {
-        const res = await fetch('/api/integrations');
-        if (res.ok) {
-          const data = await res.json();
-          const connected = data.integrations
-            ?.filter((i: any) => i.status === 'ACTIVE')
-            .map((i: any) => i.type.toLowerCase()) || [];
-          setConnectedIds(connected);
-        }
-      } catch (error) {
-        console.error('Failed to fetch integrations:', error);
-      }
-    };
-    fetchConnected();
-  }, []);
-
-  return (
-    <div
-      className="dashboard-card p-4"
-      style={{
-        borderTop: `3px solid ${INTEGRATION_COLORS[category]}`,
-      }}
-    >
-      <div className="flex items-center gap-2 mb-4">
-        <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center"
-          style={{
-            backgroundColor: `${INTEGRATION_COLORS[category]}20`,
-            color: INTEGRATION_COLORS[category],
-          }}
-        >
-          {CATEGORY_ICONS[category]}
-        </div>
-        <div>
-          <h3 className="font-medium">{INTEGRATION_LABELS[category]}</h3>
-          <p className="text-xs text-[var(--muted)]">{integrations.length} available</p>
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        {integrations.map((integration) => {
-          const isConnected = connectedIds.includes(integration.id);
-          return (
-            <div
-              key={integration.id}
-              className="flex items-center justify-between p-3 rounded-lg bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.04)] transition-colors cursor-pointer"
-              onClick={() => onConfigureIntegration(integration)}
-            >
-              <div className="flex items-center gap-3">
-                <IntegrationIcon id={integration.id} />
-                <div>
-                  <div className="text-sm font-medium">{integration.name}</div>
-                  <div className="text-xs text-[var(--muted)]">{integration.description}</div>
-                </div>
+        {/* Connected Status */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {CONNECTION_STATUS_CATEGORIES.map((cat) => {
+            const connected = cat.connectorIds.some((id) => connectorStatusById.get(id) === 'CONNECTED');
+            return (
+              <div
+                key={cat.key}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-all ${
+                  connected
+                    ? 'border-emerald-500/30 bg-emerald-500/10'
+                    : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] text-[var(--muted)]'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-[var(--muted)]'}`} />
+                <span>{cat.label}</span>
               </div>
-              {isConnected ? (
-                <div className="flex items-center gap-1 text-xs text-emerald-400">
-                  <Check className="w-3 h-3" />
-                  Connected
-                </div>
-              ) : (
+            );
+          })}
+        </div>
+
+        {/* VCS Integration Callout */}
+        <div className={`rounded-xl border p-4 ${hasVcsConnected ? 'border-emerald-500/25 bg-emerald-500/[0.04]' : 'border-blue-500/25 bg-blue-500/[0.06]'}`}>
+          <div className="flex items-start gap-3">
+            <Info className={`w-5 h-5 flex-shrink-0 mt-0.5 ${hasVcsConnected ? 'text-emerald-400' : 'text-blue-400'}`} />
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-medium">
+                {hasVcsConnected ? 'Version control connected' : 'Connect version control for richer tool context'}
+              </h3>
+              <p className="text-xs text-[var(--muted)] mt-1 leading-relaxed">
+                {hasVcsConnected
+                  ? 'Your VCS is linked — open source tools like dbt, Airflow, and Dagster can access their code repos. Configure repo paths here as a universal source instead of reconfiguring in each tool.'
+                  : 'Link your VCS to give open source tools like dbt, Airflow, and Dagster access to their code repos. This acts as a universal source — configure repo paths here instead of reconfiguring version control in each tool separately.'}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+            {VCS_PROVIDERS.map((provider) => {
+              const connector = connectorCatalog.find((c) => c.id === provider.id);
+              const isConnected = connectorStatusById.get(provider.id) === 'CONNECTED';
+              return (
                 <button
-                  className="p-1.5 rounded-lg hover:bg-[rgba(255,255,255,0.06)] transition-colors text-[var(--muted)] hover:text-white"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onConfigureIntegration(integration);
-                  }}
+                  key={provider.id}
+                  onClick={() => connector && handleConnect(connector)}
+                  className={`flex items-center gap-3 rounded-lg border p-3 text-left transition-all ${
+                    isConnected
+                      ? 'border-emerald-500/30 bg-emerald-500/[0.06] hover:bg-emerald-500/[0.1]'
+                      : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--overlay-bg)] hover:border-[var(--overlay-strong)]'
+                  }`}
                 >
-                  <Plus className="w-4 h-4" />
+                  <ToolIcon toolType={provider.id} className="w-8 h-8" />
+                  <div>
+                    <div className="text-sm font-medium">{provider.name}</div>
+                    {isConnected ? (
+                      <div className="text-[10px] text-emerald-400 flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Connected
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-blue-400">Connect →</div>
+                    )}
+                  </div>
                 </button>
-              )}
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Search + Filters */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-[240px]">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search connectors..."
+              className="form-input !pl-9 !py-2 !text-sm !rounded-lg"
+            />
+          </div>
+          {(['ALL', ...CORE_GROUP_ORDER] as const).map((group) => {
+            const active = selectedGroup === group;
+            const color = group === 'ALL' ? 'var(--accent-2)' : GROUP_COLORS[group as ConnectorGroup];
+            return (
+              <button
+                key={group}
+                onClick={() => setSelectedGroup(group as ConnectorGroup | 'ALL')}
+                className={`px-3 py-2 rounded-lg text-xs border transition-all ${
+                  active
+                    ? 'text-[var(--text)] font-medium'
+                    : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--overlay-strong)]'
+                }`}
+                style={active ? { borderColor: `${color}50`, backgroundColor: `${color}18`, color: 'var(--text)' } : undefined}
+              >
+                {group === 'ALL' ? 'All' : groupLabel(group as ConnectorGroup)}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Connector Cards by Group */}
+        {CORE_GROUP_ORDER.map((group) => {
+          const connectors = filteredConnectors.filter((c) => c.group === group);
+          if (connectors.length === 0) return null;
+          const gColor = GROUP_COLORS[group];
+          return (
+            <div key={group} className="space-y-2">
+              <button
+                onClick={() => setCollapsedGroups(prev => {
+                  const next = new Set(prev);
+                  next.has(group) ? next.delete(group) : next.add(group);
+                  return next;
+                })}
+                className="flex items-center gap-2 w-full text-left group/hdr"
+              >
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: gColor }} />
+                <h3 className="text-sm font-medium">{groupLabel(group)}</h3>
+                <span className="text-[10px] text-[var(--muted)]">({connectors.length})</span>
+                <ChevronDown className={`w-3.5 h-3.5 text-[var(--muted)] ml-auto transition-transform ${collapsedGroups.has(group) ? '-rotate-90' : ''}`} />
+              </button>
+              {!collapsedGroups.has(group) && <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {connectors.map((connector) => {
+                  const status = connectorStatusById.get(connector.id) || 'NOT_CONNECTED';
+                  const isExpanded = expandedConnector === connector.id;
+                  const isDisconnecting = disconnecting === connector.id;
+
+                  return (
+                    <div
+                      key={connector.id}
+                      className={`rounded-xl border p-4 transition-all cursor-pointer group ${
+                        status === 'CONNECTED'
+                          ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07]'
+                          : status === 'NEEDS_ATTENTION'
+                          ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07]'
+                          : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)]'
+                      }`}
+                      onClick={() => setExpandedConnector(isExpanded ? null : connector.id)}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <ToolIcon toolType={connector.id} size={36} />
+                          <div className="min-w-0">
+                            <h4 className="font-medium text-sm truncate">{connector.name}</h4>
+                            <p className="text-xs text-[var(--muted)] mt-0.5 truncate">{connector.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          {isMultiRoleTool(connector.id) && status !== 'CONNECTED' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20" title="Supports multiple pipeline roles">
+                              Multi-role
+                            </span>
+                          )}
+                          {status === 'CONNECTED' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                              <Check className="w-3 h-3" />
+                              Connected
+                            </span>
+                          ) : status === 'NEEDS_ATTENTION' ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                              <CircleAlert className="w-3 h-3" />
+                              Error
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* Action buttons — always visible at bottom */}
+                      <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] flex items-center gap-2">
+                        {status === 'CONNECTED' ? (
+                          <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}
+                              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] hover:bg-[var(--hover-bg)] hover:border-[var(--overlay-strong)] transition-all"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              Edit config
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDisconnect(connector); }}
+                              disabled={isDisconnecting}
+                              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-red-500/20 text-red-400 hover:bg-red-500/10 hover:border-red-500/30 transition-all disabled:opacity-50"
+                            >
+                              {isDisconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Unplug className="w-3 h-3" />}
+                              Disconnect
+                            </button>
+                          </>
+                        ) : status === 'NEEDS_ATTENTION' ? (
+                          <>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}
+                              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-amber-500/10 border border-amber-500/20 text-amber-300 hover:bg-amber-500/20 transition-all"
+                            >
+                              <Pencil className="w-3 h-3" />
+                              Fix connection
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleDisconnect(connector); }}
+                              disabled={isDisconnecting}
+                              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all disabled:opacity-50"
+                            >
+                              {isDisconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}
+                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] text-[var(--text)] hover:bg-[var(--hover-bg)] hover:border-[var(--overlay-strong)] transition-all"
+                          >
+                            Connect
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Multi-role badges — shown for connected multi-role tools */}
+                      {status === 'CONNECTED' && isMultiRoleTool(connector.id) && (
+                        <div className="mt-3 pt-3 border-t border-[var(--subtle-border)]">
+                          <div className="text-[10px] text-[var(--muted)] mb-2 uppercase tracking-wider font-medium">Detected Roles</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {MULTI_ROLE_TOOLS[connector.id].map((role) => (
+                              <span
+                                key={role.layer}
+                                className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border"
+                                style={{
+                                  borderColor: `${role.color}40`,
+                                  backgroundColor: `${role.color}15`,
+                                  color: role.color,
+                                }}
+                                title={role.description}
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: role.color }} />
+                                {role.label}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Expanded details */}
+                      {isExpanded && status === 'CONNECTED' && (
+                        <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] text-xs text-[var(--muted)]">
+                          <div className="flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Active connection — credentials stored securely</span>
+                          </div>
+                          {isMultiRoleTool(connector.id) && (
+                            <div className="mt-2 text-[var(--muted)]">
+                              This tool serves multiple roles in your pipeline. Roles are auto-detected based on your workspace configuration.
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>}
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
 
-// Integration Icon Component
-function IntegrationIcon({ id }: { id: string }) {
-  const icons: Record<string, { icon: string; color: string }> = {
-    slack: { icon: 'S', color: '#4A154B' },
-    teams: { icon: 'T', color: '#6264A7' },
-    pagerduty: { icon: 'PD', color: '#06AC38' },
-    opsgenie: { icon: 'OG', color: '#2684FF' },
-    jira: { icon: 'J', color: '#0052CC' },
-    linear: { icon: 'L', color: '#5E6AD2' },
-    asana: { icon: 'A', color: '#F06A6A' },
-    github_issues: { icon: 'GH', color: '#24292e' },
-    monte_carlo: { icon: 'MC', color: '#00D4AA' },
-    bigeye: { icon: 'BE', color: '#FF6B35' },
-    soda: { icon: 'SD', color: '#00C7B7' },
-    elementary: { icon: 'EL', color: '#FF914D' },
-  };
+      </section>
 
-  const config = icons[id] || { icon: id.slice(0, 2).toUpperCase(), color: '#6B7280' };
 
-  return (
-    <div
-      className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0"
-      style={{ backgroundColor: config.color }}
-    >
-      {config.icon}
+      {/* ── Modals ─────────────────────────────────────────── */}
+      {nodeModal && (
+        <NodeConfigModal
+          node={nodeModal}
+          stackId={stack.id === 'new' ? undefined : stack.id}
+          onSave={handleNodeConfigSaved}
+          onClose={() => setNodeModal(null)}
+        />
+      )}
+      <IntegrationConfigModal
+        integration={integrationModal}
+        isOpen={integrationModal !== null}
+        onClose={() => setIntegrationModal(null)}
+        onSuccess={fetchIntegrations}
+      />
     </div>
   );
 }

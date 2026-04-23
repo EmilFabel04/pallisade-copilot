@@ -159,7 +159,7 @@ export function BlogContent({ posts, categories, tags }: BlogContentProps) {
       {featuredPost && (
         <Link 
           href={`/blog/${featuredPost.slug}`} 
-          className="rounded-2xl border border-[var(--border)] bg-[#0a0a0a] block hover:border-[var(--accent)]/30 transition-colors"
+          className="rounded-2xl border border-[var(--border)] bg-[var(--surface-inset)] block hover:border-[var(--accent)]/30 transition-colors"
           style={{ padding: '2.5rem', marginBottom: '3rem' }}
         >
           <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -190,7 +190,7 @@ export function BlogContent({ posts, categories, tags }: BlogContentProps) {
             <Link 
               key={post.slug} 
               href={`/blog/${post.slug}`} 
-              className="rounded-xl border border-[var(--border)] bg-[#0a0a0a] p-7 group hover:border-[var(--accent)]/30 transition-colors"
+              className="rounded-xl border border-[var(--border)] bg-[var(--surface-inset)] p-7 group hover:border-[var(--accent)]/30 transition-colors"
             >
               <div className="flex flex-wrap items-center gap-2 mb-3">
                 {post.category && <Badge className="text-xs border border-[var(--border-dim)]">{post.category}</Badge>}

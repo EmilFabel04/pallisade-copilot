@@ -158,56 +158,96 @@ class AirbyteJob:
 class AirbyteClient:
     """
     Airbyte API client.
-    
+
     Supports both Airbyte OSS and Airbyte Cloud.
+
+    Airbyte Cloud uses client credentials (client_id/client_secret) to
+    obtain a short-lived Bearer token via /v1/applications/token.
     """
-    
+
     def __init__(self,
                  host: str,
+                 client_id: Optional[str] = None,
+                 client_secret: Optional[str] = None,
                  api_key: Optional[str] = None,
                  username: Optional[str] = None,
                  password: Optional[str] = None,
                  workspace_id: Optional[str] = None):
         """
         Initialize Airbyte client.
-        
+
         For Airbyte OSS:
             host: API host (e.g., http://localhost:8000)
             username/password: Basic auth (if enabled)
-            
+
         For Airbyte Cloud:
             host: https://api.airbyte.com
-            api_key: Airbyte Cloud API key
+            client_id/client_secret: From Settings → Applications
         """
-        self.host = host.rstrip('/')
-        self.api_key = api_key
+        # Auto-correct common mistake: dashboard URL instead of API URL
+        clean_host = host.rstrip('/')
+        if "cloud.airbyte.com" in clean_host and "api.airbyte.com" not in clean_host:
+            clean_host = "https://api.airbyte.com"
+
+        self.host = clean_host
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.api_key = api_key  # Legacy: direct Bearer token
         self.username = username
         self.password = password
         self.workspace_id = workspace_id
-        
+
         # Detect API version
-        self.is_cloud = "api.airbyte.com" in host
-        
+        self.is_cloud = "api.airbyte.com" in self.host or "airbyte.com" in self.host
+
         self._client = None
-    
+        self._access_token: Optional[str] = None
+
+    def _fetch_access_token(self) -> str:
+        """Exchange client credentials for a short-lived Bearer token."""
+        url = f"{self.host}/v1/applications/token"
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(url, json={
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+                "grant_type": "client_credentials",
+            })
+            if resp.status_code >= 400:
+                raise Exception(
+                    f"Airbyte token exchange failed: {resp.status_code} - {resp.text}"
+                )
+            data = resp.json()
+            token = data.get("access_token")
+            if not token:
+                raise Exception(f"No access_token in token response: {data}")
+            return token
+
     def _get_client(self) -> httpx.Client:
-        """Get HTTP client."""
+        """Get HTTP client with current auth."""
+        # For Cloud with client credentials, always fetch a fresh token
+        # (tokens are short-lived: 3 min on Cloud, 24h on Enterprise)
+        if self.is_cloud and self.client_id and self.client_secret:
+            self._access_token = self._fetch_access_token()
+            self._client = None  # Force new client with new token
+
         if self._client is None:
             headers = {}
             auth = None
-            
-            if self.api_key:
+
+            if self._access_token:
+                headers["Authorization"] = f"Bearer {self._access_token}"
+            elif self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             elif self.username and self.password:
                 auth = (self.username, self.password)
-            
+
             self._client = httpx.Client(
                 timeout=60.0,
                 headers=headers,
                 auth=auth,
             )
         return self._client
-    
+
     def _get_api_url(self, endpoint: str) -> str:
         """Build API URL."""
         if self.is_cloud:
@@ -215,11 +255,11 @@ class AirbyteClient:
         else:
             # OSS uses different API structure
             return f"{self.host}/api/v1/{endpoint.lstrip('/')}"
-    
+
     def _request(self, method: str, endpoint: str, **kwargs) -> Any:
         """Make request to Airbyte API."""
         client = self._get_client()
-        
+
         response = client.request(
             method,
             self._get_api_url(endpoint),
@@ -408,6 +448,8 @@ class AirbyteScanner:
         """
         self.client = AirbyteClient(
             host=config.get("host"),
+            client_id=config.get("client_id"),
+            client_secret=config.get("client_secret"),
             api_key=config.get("api_key"),
             username=config.get("username"),
             password=config.get("password"),

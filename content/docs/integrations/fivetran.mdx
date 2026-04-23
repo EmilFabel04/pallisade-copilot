@@ -1,0 +1,74 @@
+---
+title: Fivetran
+description: Connect Fivetran to Pallisade for connector sync monitoring, data freshness tracking, schema change detection, and failure alerting.
+section: integrations
+order: 12
+---
+
+# Fivetran
+
+## Overview
+
+The Fivetran integration connects Pallisade to your Fivetran account via the REST API v1. Pallisade monitors connector sync status, tracks data freshness across all connectors, detects schema changes, and surfaces sync failures before they impact downstream pipelines.
+
+Key capabilities:
+
+- **Connector health** -- status (connected/paused/broken), sync state, and staleness detection
+- **Sync freshness** -- hours since last successful sync per connector, compared to expected frequency
+- **Schema metadata** -- tables and columns synced per connector, enabled/disabled status
+- **Failure analysis** -- error messages, warning details, consecutive failure tracking
+- **Group management** -- organize and filter connectors by Fivetran group
+- **Sync triggering** -- manually trigger syncs from Pallisade when needed
+
+## Prerequisites
+
+- A Fivetran account with at least one configured connector
+- Fivetran API key and API secret (generated from Fivetran account settings)
+
+<Callout type="tip">
+Generate your API credentials at **Fivetran Dashboard > Account Settings > API Config**. The API key and secret are used together for Basic authentication against the Fivetran API.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Fivetran** from the Ingestion layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `api_key` | Yes | Your Fivetran API key |
+| `api_secret` | Yes | Your Fivetran API secret |
+| `group_id` | No | Filter to a specific Fivetran group |
+
+3. Click **Test Connection**. Pallisade authenticates and verifies API access.
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Connectors** | ID, name, service type, destination schema, status, sync state, frequency |
+| **Sync timing** | succeeded_at, failed_at, last_sync_started timestamps |
+| **Freshness** | Hours since last success, staleness flag based on sync frequency |
+| **Tables** | Per-connector table list with enabled/disabled status and sync state |
+| **Columns** | Column names, enabled status, hashed flag, primary key flag |
+| **Groups** | Group ID, name, creation date, associated connectors |
+| **Sync logs** | Recent sync messages and error details |
+| **Schema changes** | Table/column additions and removals detected by Fivetran |
+| **Failure details** | Error severity, warnings, pending tasks, recent error messages |
+
+## Troubleshooting
+
+**"401 Unauthorized"**
+The API key or secret is incorrect. Regenerate them in Fivetran under **Account Settings > API Config**. Ensure you are using the key and secret together (not the key alone).
+
+**No connectors found**
+If `group_id` is set, verify it matches an existing Fivetran group. Clear the field to scan all groups.
+
+**Connector shows as "broken"**
+A broken connector has a configuration or credential issue in Fivetran itself. Check the connector settings in the Fivetran dashboard. Pallisade reports this status but cannot fix the underlying issue.
+
+**Stale connector despite recent sync**
+Staleness is calculated by comparing hours since last success against 1.5x the configured sync frequency. If the sync frequency was recently changed in Fivetran, the staleness threshold adjusts accordingly.
+
+**Schema changes not appearing**
+Schema change tracking depends on Fivetran's internal change detection. Not all Fivetran API versions expose a schema-changes endpoint. Table and column metadata is always available.

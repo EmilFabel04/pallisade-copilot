@@ -37,7 +37,26 @@ DATABASE_URL=your_postgres_connection_string
 NEXTAUTH_SECRET=your_secret
 NEXTAUTH_URL=http://localhost:3002
 SCANNER_API_URL=http://127.0.0.1:8000
+SCANNER_SHARED_SECRET=generate_with_openssl_rand_hex_32
 ANTHROPIC_API_KEY=your_anthropic_key
+```
+
+| Variable | Description |
+|---|---|
+| `SCANNER_SHARED_SECRET` | Shared secret for the Next.js ↔ FastAPI trust boundary. Generate with `openssl rand -hex 32`. Required (min 32 bytes) in production; a dev default is used otherwise. Must match between the Next.js `.env` and `scanner/.env`. |
+
+### Security
+
+FastAPI (`scanner/`) accepts requests only from Next.js, authenticated via the
+`X-Internal-Auth: $SCANNER_SHARED_SECRET` header. FastAPI also binds to
+loopback (`127.0.0.1`) in production and refuses to start on a non-loopback
+interface. To call FastAPI directly during development (e.g., with curl):
+
+```
+curl -H "X-Internal-Auth: $SCANNER_SHARED_SECRET" \
+     -H "X-Acting-User: $YOUR_USER_ID" \
+     -H "X-Acting-Org: $YOUR_ORG_ID" \
+     http://127.0.0.1:8000/api/v1/drivers
 ```
 
 ## Tech Stack

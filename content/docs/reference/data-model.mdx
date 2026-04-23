@@ -1,0 +1,345 @@
+---
+title: "Data Model"
+description: "Reference for key Prisma models and their relationships: auth, organizations, pipelines, lineage, quality, and AI."
+section: "reference"
+order: 6
+---
+
+## Overview
+
+The Pallisade database schema is defined in `prisma/schema.prisma` using PostgreSQL as the backing store. The schema contains 40+ models organized into functional groups. This reference covers the key models and their relationships.
+
+<Callout>
+All IDs use CUID format (`@default(cuid())`). Timestamps use `@default(now())` for creation and `@updatedAt` for modification tracking.
+</Callout>
+
+---
+
+## Auth and Users
+
+### User
+
+The central user model. Linked to an organization and all user-owned resources.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | CUID primary key |
+| `email` | String | Unique email address |
+| `name` | String? | Display name |
+| `passwordHash` | String? | Hashed password (null for OAuth users) |
+| `image` | String? | Avatar URL |
+| `emailVerified` | DateTime? | Email verification timestamp |
+| `organizationId` | String? | FK to Organization |
+
+**Relations:** `accounts` (OAuth providers), `sessions`, `teamMemberships`, `reports`, `tasks`, `copilotSessions`, `artifacts`, `auditLogs`.
+
+### Account
+
+OAuth provider accounts (Google, GitHub, etc.) linked to a User via NextAuth.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `provider` | String | OAuth provider name |
+| `providerAccountId` | String | Provider-specific user ID |
+| `access_token` / `refresh_token` | String? | OAuth tokens |
+
+**Unique constraint:** `(provider, providerAccountId)`.
+
+### Session
+
+Active user sessions managed by NextAuth.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sessionToken` | String | Unique session token |
+| `userId` | String | FK to User |
+| `expires` | DateTime | Session expiry |
+
+---
+
+## Organization
+
+### Organization
+
+Multi-tenant container. All resources are scoped to an organization.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Organization name |
+| `domain` | String? | Unique domain for SSO |
+| `plan` | Plan | STARTER, PROFESSIONAL, or ENTERPRISE |
+| `sloDefaults` | Json? | Default SLO thresholds (`{ default: 24, realtime: 1 }`) |
+| `sloEnabled` | Boolean | Enable SLO monitoring |
+
+**Relations:** `users`, `integrations`, `pipelineStacks`, `monitors`, `lineageNodes`, `lineageEdges`, `copilotSessions`, `artifacts`, `coverageSnapshots`, `findings`, `auditLogs`.
+
+### TeamMember
+
+Explicit team membership with role-based access.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `userId` | String | FK to User |
+| `organizationId` | String | FK to Organization |
+| `role` | TeamRole | OWNER, ADMIN, MANAGER, ENGINEER, VIEWER |
+| `status` | MemberStatus | ACTIVE, INACTIVE, SUSPENDED |
+| `title` | String? | Job title |
+| `department` | String? | Team or department |
+
+**Unique constraint:** `(userId, organizationId)`.
+
+### TeamInvite
+
+Pending invitations with token-based acceptance.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `email` | String | Invitee email |
+| `token` | String | Unique invite token |
+| `role` | TeamRole | Assigned role |
+| `status` | InviteStatus | PENDING, ACCEPTED, DECLINED, EXPIRED, REVOKED |
+| `expiresAt` | DateTime | Invite expiry |
+
+---
+
+## Pipeline
+
+### PipelineStack
+
+A user's complete data pipeline. Contains nodes (tools) and edges (data flows).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Pipeline name |
+| `status` | PipelineStackStatus | DRAFT, CONFIGURING, READY, SCANNING, ERROR |
+| `healthScore` | Float? | 0--100 overall health |
+| `tokenLimitMonthly` | Int? | Monthly token budget |
+| `tokensUsedThisMonth` | Int | Current month usage |
+
+**Relations:** `nodes` (PipelineNode[]), `edges` (PipelineEdge[]), `scans`, `accessList`, `context` (PipelineContext).
+
+### PipelineNode
+
+A tool in the pipeline (Fivetran, dbt, Snowflake, Tableau, etc.).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | User-friendly name |
+| `layer` | PipelineLayer | INGESTION, TRANSFORMATION, WAREHOUSE, REPORTING, STORAGE, ORCHESTRATION, INFRASTRUCTURE |
+| `toolType` | String | `fivetran`, `dbt_cloud`, `snowflake`, `tableau`, etc. |
+| `config` | Json? | Encrypted connection credentials |
+| `status` | PipelineNodeStatus | PENDING, TESTING, CONNECTED, HEALTHY, WARNING, ERROR |
+| `integrationId` | String? | FK to Integration (shared credentials) |
+
+### PipelineEdge
+
+Data flow connection between two pipeline nodes.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sourceId` / `targetId` | String | FK to PipelineNode |
+| `label` | String? | Edge label |
+| `dataFlow` | String? | Description of data flowing through |
+
+**Unique constraint:** `(sourceId, targetId)`.
+
+### Integration
+
+A connected external tool with credentials, health tracking, and metadata.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Display name ("Production Snowflake") |
+| `type` | IntegrationType | 30+ types: SNOWFLAKE, BIGQUERY, DBT_CLOUD, AIRFLOW, LOOKER, etc. |
+| `status` | IntegrationStatus | ACTIVE, INACTIVE, ERROR |
+| `credentials` | Json? | Encrypted connection credentials |
+| `accessToken` / `refreshToken` | String? | OAuth tokens |
+| `config` | Json? | Type-specific configuration |
+| `metadata` | Json? | Discovered metadata (tables, jobs) |
+
+**Unique constraint:** `(organizationId, type, name)`.
+
+### PipelineContext
+
+Stores learned knowledge from the onboarding flow.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `onboardingStatus` | OnboardingStatus | NOT_STARTED, IN_PROGRESS, COMPLETED, NEEDS_UPDATE |
+| `environmentContext` | Json? | Deployment method, team size, environments |
+| `integrationContexts` | Json? | Per-integration learned context |
+| `conventionsContext` | Json? | Naming conventions, folder structures |
+
+---
+
+## Lineage
+
+### LineageNode
+
+A data asset in the lineage graph (persisted to the database).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Fully qualified name (`database.schema.table`) |
+| `database` / `schema` / `tableName` | String | Parsed components |
+| `nodeType` | String | `table`, `view`, `source`, `model` |
+| `criticality` | Criticality | CRITICAL, HIGH, MEDIUM, LOW |
+| `rowCount` | Int? | Row count |
+| `upstreamCount` / `downstreamCount` | Int | Cached edge counts |
+
+**Unique constraint:** `(organizationId, name)`.
+
+### LineageEdge
+
+A relationship between two lineage nodes.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sourceId` / `targetId` | String | FK to LineageNode |
+| `edgeType` | String | `depends_on`, `derived_from`, `joins` |
+| `columns` | String[] | Columns involved |
+| `transformation` | String? | SQL snippet |
+
+**Unique constraint:** `(sourceId, targetId)`.
+
+### LineageSnapshot
+
+A point-in-time snapshot of the full lineage graph.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `source` | String | `query_history`, `dbt_manifest`, `manual` |
+| `dialect` | String | `snowflake`, `bigquery`, `postgres` |
+| `nodeCount` / `edgeCount` | Int | Graph size |
+| `graphData` | Json? | Serialized graph for fast retrieval |
+| `status` | String | `building`, `ready`, `failed` |
+
+---
+
+## Quality and Monitoring
+
+### Monitor
+
+A scheduled quality check definition.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | String | Monitor name |
+| `monitorType` | MonitorKind? | FRESHNESS, VOLUME, SCHEMA_CHANGE, NULL_RATE, UNIQUENESS, DISTRIBUTION, ANOMALY, CUSTOM_SQL, CERTIFICATE, SERVER_HEALTH, LOG_ANALYSIS |
+| `targetFqn` | String? | `database.schema.table` |
+| `config` | Json? | Monitor-specific config |
+| `schedule` | String? | Cron expression |
+| `enabled` | Boolean | Active or paused |
+| `lastStatus` | MonitorRunStatus? | PASS, WARN, FAIL, ERROR, SKIPPED |
+| `baselineMean` / `baselineStddev` / `baselineCount` | Float? / Int? | Persisted statistical baseline |
+| `taskMode` | String? | `prompt` or `structured` |
+| `alertChannels` | String[] | `["slack", "pagerduty"]` |
+| `alertOnStatus` | String[] | `["FAIL", "WARN"]` |
+
+**Unique constraint:** `(organizationId, targetFqn, monitorType)`.
+
+### MonitorRun
+
+A single execution result.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | MonitorRunStatus | PASS, WARN, FAIL, ERROR, SKIPPED, RUNNING |
+| `value` | Float? | Measured value |
+| `threshold` | Float? | Threshold used |
+| `message` | String? | Human-readable result |
+| `details` | Json? | Full result details |
+| `sqlExecuted` | String? | SQL that was run |
+| `durationMs` | Int? | Execution time |
+
+### CoverageSnapshot
+
+Point-in-time coverage analysis.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `overallScore` | Float | 0--100 coverage score |
+| `totalNodes` | Int | Total graph nodes |
+| `nodesWithFullCoverage` / `nodesWithPartialCoverage` / `nodesWithNoCoverage` | Int | Coverage breakdown |
+| `criticalGaps` / `highGaps` / `mediumGaps` / `lowGaps` | Int | Gap counts by severity |
+
+### DataContract
+
+SLA definitions for tables covering freshness, quality, schema, and volume.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fullName` | String | `database.schema.table` |
+| `status` | ContractStatus | DRAFT, ACTIVE, VIOLATED, DEPRECATED |
+| `freshnessHours` | Int? | Max acceptable staleness |
+| `maxNullRate` | Float? | Max null rate (0.0--1.0) |
+| `requiredColumns` | String[] | Must-exist columns |
+| `dataTier` | DataTier | GOLD, SILVER, BRONZE |
+| `criticality` | Criticality | CRITICAL, HIGH, MEDIUM, LOW |
+
+---
+
+## AI and Copilot
+
+### CopilotSession
+
+An AI chat session with token tracking and context.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | String | Session title |
+| `contextType` | CopilotContextType | GENERAL, PIPELINE, DEBUGGING, BUILDING |
+| `pipelineStackId` | String? | Focused pipeline |
+| `model` | String | LLM model used |
+| `totalInputTokens` / `totalOutputTokens` | Int | Token usage |
+| `memorySummary` | String? | Conversation summary for long chats |
+
+**Relations:** `messages` (CopilotMessage[]), `debugSession`, `changePlans`, `artifacts`.
+
+### CopilotMessage
+
+A single message in a copilot session.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `role` | MessageRole | USER, ASSISTANT, SYSTEM |
+| `content` | String | Message text |
+| `toolCalls` | Json? | Tool calls made by the AI |
+| `toolResults` | Json? | Results returned from tools |
+| `inputTokens` / `outputTokens` | Int? | Per-message token usage |
+
+### Artifact
+
+A saved copilot response for team reference.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | String | Artifact title |
+| `content` | String | Full content |
+| `type` | ArtifactType | QUERY, FIX, INSIGHT, CODE, PLAN |
+| `tags` | String[] | Categorization tags |
+| `isPinned` | Boolean | Pinned for quick access |
+| `sourceSessionId` | String? | Link to source chat |
+
+### ChangePlan
+
+A structured fix proposal with patches and validation.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | String | Plan title |
+| `patches` | Json | Array of file patches |
+| `validations` | Json? | Validation results by level |
+| `status` | ChangePlanStatus | DRAFT, VALIDATING, VALIDATED, APPLYING, APPLIED, FAILED, REJECTED |
+| `prUrl` | String? | GitHub PR URL |
+
+### DebugSession
+
+Tracks investigation progress and MTTR.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `issueType` | String | `sync_failure`, `test_failed`, `stale_data`, etc. |
+| `status` | DebugStatus | INVESTIGATING, ROOT_CAUSE_FOUND, FIXING, RESOLVED, WONT_FIX |
+| `rootCauseNodeId` | String? | Node where root cause was found |
+| `mttr` | Int? | Mean time to resolution in minutes |

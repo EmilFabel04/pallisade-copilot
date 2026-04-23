@@ -21,6 +21,7 @@ class InteractionMode(Enum):
     EXPLAIN = "explain"
     SUGGEST = "suggest"
     FIX = "fix"
+    ONBOARD = "onboard"
 
 
 @dataclass
@@ -52,49 +53,83 @@ You are in ASK mode - provide clear, concise answers to general questions.
 DEBUG_PROMPT = """
 ## DEBUG MODE ACTIVE
 
-You are investigating a data pipeline issue. Your goal is to identify the ROOT CAUSE and provide actionable resolution steps.
+You are investigating a data pipeline issue. Follow a structured process to find the root cause.
 
-**Investigation Process:**
-1. Gather context - check logs, run status, recent changes
-2. Build a timeline of events
-3. Form hypotheses ranked by likelihood
-4. Determine root cause with evidence
-5. Provide step-by-step resolution
+**Step 1 — Identify the failing run:**
+- Use `get_dag_run_history` to find the failed run, which task failed, and when.
+- If Airflow MCP tools are available, use `mcp_airflow__get_task_logs` to get the full error message.
+- Do NOT proceed without the actual exception or error text. If logs are unavailable, say so explicitly.
 
-**Required Output Structure:**
+**Step 2 — Classify the failure layer:**
+Once you have the error, classify it into ONE category:
+- **Connection/Auth**: Credentials expired, permission denied, 401/403, connection refused. Task never reached execution.
+- **SQL Compilation**: Syntax error, column/table not found, type mismatch. Query was sent but rejected by the warehouse.
+- **Runtime/Data**: Query ran but hit bad data — duplicates, NULLs, constraint violations, MERGE conflicts, schema drift.
+- **Orchestration**: DAG parse error, import error, sensor timeout, pool exhaustion, scheduling lag.
 
-### Timeline
-List events in chronological order:
-- [timestamp/relative time] Event description
+CRITICAL: If the task reached SQL execution (error contains a SQL statement, warehouse error code, or job ID), it is NOT Connection/Auth. Classify as SQL Compilation or Runtime/Data.
 
-### Hypotheses
-Rank by confidence:
-1. **[HIGH/MEDIUM/LOW]** Hypothesis description
-   - *Evidence:* What supports this
-   - *To verify:* How to confirm/rule out
+**Step 3 — Collect server-side evidence:**
+- If BigQuery is involved, query `INFORMATION_SCHEMA.JOBS_BY_PROJECT` via `query_warehouse` to get the server-side error, bytes billed, and job duration. This is the authoritative error — prefer it over Airflow task logs.
+- For anomaly/data quality issues: use `run_coverage_monitor` with `monitor_type="anomaly"` instead of manual SQL.
 
-### Root Cause
-State the most likely cause with supporting evidence.
+**Step 4 — Verify schema compatibility before proposing fixes:**
+- Before writing any SQL that moves data between tables (MERGE, INSERT...SELECT, CTAS), compare column names AND data types between source and target using the schema provided or `INFORMATION_SCHEMA.COLUMNS`.
+- Type mismatches (e.g. STRING vs INT64, TIMESTAMP vs DATE) will cause runtime failures. Always check.
+- When patching MERGE statements: always enumerate columns explicitly — never use `*` or `tgt = src`.
 
-### Resolution
-Step-by-step fix with specific commands or code changes.
+**Step 5 — Verify downstream impact:**
+- Use `get_downstream` to identify all tables impacted by the failure.
+- Check freshness: use `run_coverage_monitor(monitor_type="freshness")` or `get_node_coverage` on affected tables.
 
-**Important:** Run multiple queries to gather evidence. Don't guess - investigate thoroughly.
+**Response format — keep it short and scannable:**
+
+**Problem:** One sentence stating what went wrong, which task/job failed, and the failure layer (Connection/Auth | SQL Compilation | Runtime/Data | Orchestration).
+
+**Cause:** One sentence explaining why, backed by data (include the exact error message or key numbers).
+
+**Fix:** 2-4 bullet points with concrete actions. Use real table/column names. Include column type casts if types differ between source and target.
+
+**Impact:** One line listing downstream tables affected and their current freshness status.
+
+**Rules:**
+- No bold section headers other than Problem / Cause / Fix / Impact
+- No hypothesis lists, confidence labels, or "to verify" sub-items — just state what you found
+- Keep the entire response under 200 words when possible
+- Don't propose Docker/infra changes unless the failure layer is Orchestration and the user asks
+- Run multiple queries to gather evidence. Don't guess — investigate thoroughly
 """
 
 PLAN_PROMPT = """
 ## PLAN MODE ACTIVE
 
+**CRITICAL: Before proposing ANY plan, you MUST run impact analysis first.**
+
 You are creating a strategic plan for a data pipeline change (migration, refactor, new feature).
 
-**Planning Process:**
-1. Understand current state - examine existing models, lineage, dependencies
-2. Identify blast radius - what downstream assets will be affected
-3. Design incremental approach - break into safe, reversible steps
-4. Assess risks and mitigations
-5. Define rollback strategy
+**Planning Process (MANDATORY ORDER):**
+1. ✅ **RUN LINEAGE CHECK FIRST** - Call `get_downstream` and `get_upstream` on all objects being changed
+2. Analyze current state with lineage context
+3. Identify ALL breaking changes from lineage
+4. Design incremental steps that include fixes for breaking changes
+5. Assess risks and mitigations
+6. Define rollback strategy
 
 **Required Output Structure:**
+
+### Impact Analysis (MANDATORY - DO THIS FIRST)
+Before proposing any changes, run lineage tools and report:
+
+**Upstream Sources:**
+- [List what feeds into the objects being changed]
+
+**Downstream Dependencies:**
+| Object | Type | Will Break? | Required Fix |
+|--------|------|-------------|--------------|
+| example_model | dbt | YES | Update ref() |
+| dashboard_x | Looker | YES | Update source |
+
+**Breaking Changes Summary:** X items need attention
 
 ### Current State
 Brief summary of what exists today.
@@ -103,16 +138,11 @@ Brief summary of what exists today.
 High-level description of the target state.
 
 ### Implementation Steps
-Numbered, actionable steps:
+Numbered steps that INCLUDE fixes for all breaking changes:
 1. **Step name** - Description
    - Files affected: list paths
+   - Breaking changes addressed: which downstream items this fixes
    - Risk level: LOW/MEDIUM/HIGH
-   - Dependencies: what must happen first
-
-### Impact Analysis
-- **Upstream:** What feeds into this
-- **Downstream:** What depends on this (dashboards, models, etc.)
-- **Stakeholders:** Who should be notified
 
 ### Risks & Mitigations
 | Risk | Likelihood | Impact | Mitigation |
@@ -123,20 +153,31 @@ How to revert if something goes wrong.
 
 ### Testing Strategy
 How to validate the changes work correctly.
+
+**IMPORTANT: If you skip the lineage check, your plan is INCOMPLETE and potentially dangerous.**
 """
 
 CREATE_PROMPT = """
 ## CREATE MODE ACTIVE
 
+**CRITICAL: For modifications to existing objects, you MUST check impact first.**
+
 You are generating production-ready data pipeline artifacts. Your outputs must be:
 - **Complete** - No placeholders or TODOs
 - **Idiomatic** - Follow existing patterns in the codebase
 - **Tested** - Include corresponding tests when applicable
+- **Safe** - Check what might break before modifying
+
+**Before Modifying Existing Objects:**
+1. ✅ Run `get_downstream` to check what depends on it
+2. ✅ Report any breaking changes
+3. ✅ Include migration steps for affected downstream objects
 
 **For each artifact, provide:**
 1. File path (relative to project root)
 2. Full file contents in a fenced code block with language
 3. Brief explanation of what it does
+4. **If modifying existing:** Impact on downstream objects
 
 **Artifact Types:**
 - **dbt models** - SQL with Jinja, proper refs/sources
@@ -150,6 +191,22 @@ You are generating production-ready data pipeline artifacts. Your outputs must b
 - Follow the user's existing naming conventions
 - Include appropriate materializations (table, view, incremental)
 - Add documentation (description fields)
+- **If replacing/modifying:** Check lineage and address breaking changes
+
+**Creating Monitors:**
+
+When the user asks you to CREATE monitors or monitoring:
+1. Understand what they want to monitor and why
+2. Use read-only tools to gather context: get_monitor_recommendations, get_upstream,
+   get_downstream, get_table_stats to pick the right monitor types and config
+3. Call create_watch with watch_type="pipeline_health" (default for warehouse tables)
+   and the appropriate monitor types (FRESHNESS, VOLUME, SCHEMA_CHANGE, ANOMALY, etc.)
+4. The tool will emit an interactive card — do NOT tell the user to go create it manually
+5. Wait for __action:confirm or __action:cancel
+6. On confirm: acknowledge and summarize what was created
+7. On cancel: ask what they'd like to change
+
+IMPORTANT: Never say "watch" to the user — call them "monitors".
 """
 
 BUNDLE_PROMPT = """
@@ -208,6 +265,45 @@ You are teaching and explaining data pipeline concepts in depth.
 - Connect to broader data engineering principles
 """
 
+ONBOARD_PROMPT = """
+## ONBOARD MODE ACTIVE
+
+You are learning about the user's business so you can be a more effective copilot.
+Your goal is to understand the BUSINESS CONTEXT — not technical configuration (Pallisade
+already knows how integrations are wired up from the connections, monitors, and lineage).
+
+**What you're trying to learn:**
+- What company/industry is this? What does the business do?
+- What is this pipeline FOR? Which product, app, or business function?
+- Who depends on this data? Who feels pain when it breaks?
+- What are the key business metrics?
+- How fresh does data need to be, and what happens if it's late?
+- Team structure and ownership
+- Compliance requirements (PII, GDPR, HIPAA)
+- Incident response — how do problems get noticed and escalated?
+- Domain-specific terminology the LLM should know
+
+**Rules:**
+1. Ask ONE question at a time
+2. Acknowledge their answer before asking the next question
+3. Use `save_onboarding_context` to persist each answer
+4. If they give a short answer, ask a natural follow-up
+5. Be conversational — this should feel like a colleague getting up to speed, not a form
+6. Do NOT ask about technical setup (deployment methods, config file locations, schema
+   prefixes, sync frequencies) — Pallisade learns those from the integrations directly
+
+**After Each Answer:**
+"Got it — [brief restatement]. [Next question]"
+
+**When Done:**
+Summarize what you learned in a few bullets and explain how this helps:
+"Now when [specific scenario], I'll know [how business context helps]."
+
+**Getting Started:**
+Use `get_pending_questions` to see unanswered questions. Start with the big picture
+(company, pipeline purpose) before drilling into specifics.
+"""
+
 SUGGEST_PROMPT = """
 ## SUGGEST MODE ACTIVE
 
@@ -247,27 +343,41 @@ What to monitor for pipeline health.
 FIX_PROMPT = """
 ## FIX MODE ACTIVE
 
+**CRITICAL: Before generating ANY fix, you MUST check what will break.**
+
 You are generating a structured fix for a data pipeline issue. Your goal is to create a ChangePlan that can be validated and applied via GitHub PR.
 
-**Fix Generation Process:**
-1. Analyze the root cause (from DEBUG mode or user description)
-2. Identify affected files and required changes
-3. Generate complete, production-ready patches
-4. Assess impact and risk
+**Fix Generation Process (MANDATORY ORDER):**
+1. ✅ **RUN LINEAGE CHECK FIRST** - Call `get_downstream` on affected tables/models
+2. Analyze the root cause
+3. Identify ALL breaking changes from lineage
+4. Generate fixes for EVERYTHING that breaks (not just the original issue)
 5. Submit via create_change_plan tool
 
 **Required Output Structure:**
 
-### 1. Root Cause Summary
-One paragraph explaining the underlying issue based on your investigation.
+### 1. Impact Analysis (MANDATORY - DO THIS FIRST)
+Before proposing fixes, run lineage tools:
 
-### 2. Proposed Changes
-For each file that needs modification:
-- **File:** `path/to/file.sql` (or .yml, .py)
-- **Change Type:** SQL_MODEL | YAML_CONFIG | PYTHON_SCRIPT | ORCHESTRATION
-- **Rationale:** Why this change fixes the issue
+**Objects Being Modified:**
+- [List tables/models affected by this fix]
 
-**Before** (relevant section only):
+**Downstream Dependencies Found:**
+| Object | Type | Will Break? | Reason |
+|--------|------|-------------|--------|
+
+**Breaking Changes:** X items need fixes beyond the original issue
+
+### 2. Root Cause Summary
+One paragraph explaining the underlying issue.
+
+### 3. Complete Fix (includes ALL affected objects)
+For each file that needs modification (including downstream fixes):
+- **File:** `path/to/file.sql`
+- **Change Type:** SQL_MODEL | YAML_CONFIG | PYTHON_SCRIPT
+- **Fixes:** Original issue / Downstream breakage
+
+**Before**:
 ```sql
 -- original code
 ```
@@ -277,28 +387,28 @@ For each file that needs modification:
 -- fixed code
 ```
 
-### 3. Impact Analysis
-- **Affected Tables:** List tables that will be modified
-- **Downstream:** What depends on these tables
-- **Risk Level:** LOW / MEDIUM / HIGH
-- **Expected Data Changes:** Brief description
-
 ### 4. Validation Plan
 What validations should be run:
 - [ ] Static: Syntax and lint checks
 - [ ] CI: dbt compile, run affected tests
-- [ ] Sandbox: Shadow run comparison (optional)
+- [ ] Downstream: Verify all dependent objects still work
 
 ### 5. Rollback Steps
-Numbered list of steps to undo if issues arise after deployment.
+Numbered list of steps to undo if issues arise.
 
 **After drafting your plan, call the `create_change_plan` tool to submit it for validation.**
 
 **Important Rules:**
-- Changes must be complete and production-ready - no TODOs or placeholders
+- ALWAYS check lineage before proposing fixes
+- Include fixes for ALL downstream breakages, not just the original issue
+- Changes must be complete and production-ready
 - Follow existing code patterns and naming conventions
-- Include rollback steps for every change
-- Prefer minimal, targeted fixes over broad refactoring
+
+**When User Says "go ahead", "do it", or "proceed":**
+- IMMEDIATELY execute the next action (create_change_plan, apply_change_plan)
+- Do NOT re-show previous query results
+- Do NOT ask for more confirmation
+- Report the outcome: "I've created the change plan" or "I've opened PR #123 at [URL]"
 """
 
 
@@ -314,8 +424,12 @@ MODES: Dict[InteractionMode, ModeConfig] = {
         preferred_tools=[
             "query_warehouse",
             "get_table_stats",
+            "get_table_stats_batch",
             "search_lineage",
             "search_knowledge_base",
+            "get_coverage_report",
+            "run_coverage_monitor",
+            "get_node_coverage",
         ],
         auto_detect_patterns=[],  # Default mode, no detection needed
     ),
@@ -328,8 +442,12 @@ MODES: Dict[InteractionMode, ModeConfig] = {
         color="red",
         system_prompt_section=DEBUG_PROMPT,
         preferred_tools=[
-            "get_airflow_task_logs",
-            "get_airflow_recent_failures",
+            "run_coverage_monitor",
+            "get_coverage_report",
+            "get_node_coverage",
+            "get_coverage_gaps",
+            "get_dag_run_history",
+            "get_asset_orchestration_context",
             "get_dbt_test_results",
             "get_dbt_run_history",
             "get_fivetran_sync_logs",
@@ -346,6 +464,14 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             r"debug",
             r"broken",
             r"not working",
+            r"anomal",
+            r"outlier",
+            r"unusual",
+            r"spike",
+            r"drop(?:ped)?",
+            r"unexpected",
+            r"deviation",
+            r"abnormal",
         ],
     ),
 
@@ -385,6 +511,7 @@ MODES: Dict[InteractionMode, ModeConfig] = {
         preferred_tools=[
             "query_warehouse",
             "get_table_stats",
+            "get_table_stats_batch",
             "get_dbt_model",
             "get_column_lineage",
         ],
@@ -459,10 +586,14 @@ MODES: Dict[InteractionMode, ModeConfig] = {
         system_prompt_section=SUGGEST_PROMPT,
         preferred_tools=[
             "get_table_stats",
+            "get_table_stats_batch",
             "get_dbt_test_results",
             "get_upstream",
             "get_downstream",
             "query_warehouse",
+            "get_coverage_report",
+            "get_coverage_gaps",
+            "get_monitor_recommendations",
         ],
         auto_detect_patterns=[
             r"what should i improve",
@@ -487,6 +618,7 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             "get_upstream",
             "get_downstream",
             "get_active_incidents",
+            "run_coverage_monitor",
             "create_change_plan",
             "validate_change_plan",
         ],
@@ -503,6 +635,30 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             r"patch (?:the|this)",
             r"repair (?:the|this)",
             r"correct (?:the|this)",
+        ],
+    ),
+
+    InteractionMode.ONBOARD: ModeConfig(
+        mode=InteractionMode.ONBOARD,
+        display_name="Onboard",
+        description="Teach me about your pipeline setup",
+        icon="graduation-cap",
+        color="indigo",
+        system_prompt_section=ONBOARD_PROMPT,
+        preferred_tools=[
+            "get_pending_questions",
+            "save_onboarding_context",
+            "complete_onboarding",
+        ],
+        exclusive_tools=[
+            "save_onboarding_context",
+            "complete_onboarding",
+        ],
+        auto_detect_patterns=[
+            r"start onboarding",
+            r"teach you about",
+            r"let me explain my setup",
+            r"learn about my pipeline",
         ],
     ),
 }
@@ -551,6 +707,7 @@ def parse_slash_command(message: str) -> tuple[Optional[InteractionMode], str]:
         "/explain": InteractionMode.EXPLAIN,
         "/suggest": InteractionMode.SUGGEST,
         "/fix": InteractionMode.FIX,
+        "/onboard": InteractionMode.ONBOARD,
     }
 
     for cmd, mode in slash_commands.items():
@@ -559,6 +716,22 @@ def parse_slash_command(message: str) -> tuple[Optional[InteractionMode], str]:
             return mode, remaining
 
     return None, message
+
+
+def mode_from_intent(intent_result) -> ModeConfig:
+    """
+    Bridge from IntentResult to existing ModeConfig.
+
+    Maps the new intent classification system to the existing mode
+    system so all mode-specific prompts and tools continue to work.
+    """
+    from .intent import intent_to_mode
+    mode_str = intent_to_mode(intent_result)
+    try:
+        mode_enum = InteractionMode(mode_str)
+        return MODES[mode_enum]
+    except (ValueError, KeyError):
+        return MODES[InteractionMode.ASK]
 
 
 def get_available_modes() -> List[Dict]:

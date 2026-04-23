@@ -1,0 +1,158 @@
+---
+title: AI Copilot (Scout)
+description: Use Scout to query your warehouse, debug pipeline failures, generate dbt models, and plan migrations — all through natural language.
+section: guides
+order: 2
+---
+
+# AI Copilot (Scout)
+
+Scout is an AI assistant purpose-built for data engineering. It connects directly to your warehouses, transformation layer, and orchestration tools so it can answer questions with real data rather than guesswork.
+
+Every time you send a message, Scout fetches your current warehouse schema so it always has accurate table names, column names, and data types. Responses stream token-by-token via Server-Sent Events for real-time feedback.
+
+## Interaction Modes
+
+Scout has eight interaction modes that tailor its behavior, system prompt, and preferred tools to the task. Select a mode from the mode picker in the chat interface, or let Scout auto-detect the right mode from your message.
+
+| Mode | Purpose | Auto-detected when you say... |
+|------|---------|------------------------------|
+| **Ask** | General questions -- Scout runs queries and gives direct answers | _(default mode)_ |
+| **Debug** | Root cause analysis with structured Problem / Cause / Fix output | "why did X fail", "investigate", "root cause", "broken" |
+| **Plan** | Strategic migration/refactoring plans with lineage impact analysis | "how should I", "migrate", "refactor", "strategy" |
+| **Create** | Generate production-ready SQL, dbt models, tests, or documentation | "create a", "generate a", "write a", "build a model" |
+| **Explain** | Deep-dive explanations of tables, models, or pipeline behavior | "what is", "how does X work", "explain", "walk me through" |
+| **Suggest** | Improvement recommendations for performance, quality, or structure | "suggest", "recommend", "optimize", "best practices" |
+| **Fix** | Apply validated changes via GitHub PRs with impact analysis | "fix the", "apply a fix", "patch the", "repair" |
+| **Bundle** | Package deliverables (reports, migration bundles, handoff docs) | "bundle", "package", "export", "download" |
+
+### Ask Mode
+
+The default mode. Scout answers general questions, runs warehouse queries, and returns direct results. Use it for ad-hoc exploration, schema questions, and data checks.
+
+```
+What are the top 10 customers by revenue this month?
+```
+
+### Debug Mode
+
+Scout investigates pipeline failures and data quality issues. It runs multiple queries to gather evidence and returns a structured response:
+
+- **Problem:** What went wrong and how it was detected.
+- **Cause:** Why it happened, backed by data.
+- **Fix:** Concrete actions to resolve it with real table and column names.
+
+```
+Why did the daily_orders model fail last night?
+```
+
+### Plan Mode
+
+Scout creates strategic plans for migrations, refactors, or new features. It always runs lineage analysis first to identify all affected downstream objects, then produces an implementation plan with risk assessment and rollback strategy.
+
+```
+Plan a migration from the legacy_users table to the new user_profiles schema.
+```
+
+<Callout type="info">
+Plan mode always runs `get_downstream` and `get_upstream` before proposing changes. If you skip this, downstream tables could silently break.
+</Callout>
+
+### Create Mode
+
+Scout generates production-ready artifacts: SQL queries, dbt models, dbt tests, macros, and YAML configs. It uses real table and column names from your warehouse and follows your existing naming conventions.
+
+```
+Create a dbt model that calculates monthly recurring revenue from the subscriptions table.
+```
+
+### Explain Mode
+
+Scout provides deep-dive explanations with concrete examples from your data. It references your actual tables and models, explains the "why" behind design decisions, and anticipates follow-up questions.
+
+```
+Explain how the order_items table flows through to the revenue dashboard.
+```
+
+### Suggest Mode
+
+Scout proactively identifies improvements, ranked by impact and effort. It looks at test coverage gaps, missing documentation, performance issues, data quality risks, and best practice violations.
+
+```
+What should I improve in my dbt project?
+```
+
+### Fix Mode
+
+Scout generates structured fixes and applies them via GitHub PRs. It checks lineage to find all downstream breakages, generates patches for every affected file, and submits a change plan for validation.
+
+```
+Fix the broken ref in the stg_orders model.
+```
+
+### Bundle Mode
+
+Scout packages multiple artifacts into a downloadable bundle. Useful for migration handoffs, audit documentation, or sharing a set of generated models with your team.
+
+```
+Bundle the three new staging models we created, with tests and documentation.
+```
+
+## @Mentions
+
+Reference specific tables, models, and columns in your messages using `@` mentions. Scout resolves these to the correct objects in your pipeline and includes their metadata in the context.
+
+```
+What is the null rate on @orders.customer_id?
+```
+
+Mentions work in any mode and help Scout target the right objects without ambiguity.
+
+## Tool Confirmation
+
+Scout uses tools to interact with your data stack -- querying warehouses, fetching lineage, running monitors, and more. Read-only operations (queries, schema lookups) execute automatically. Destructive operations (creating change plans, applying fixes, opening PRs) pause for your confirmation before executing.
+
+When a tool requires confirmation, you will see a prompt with the action details. Type "go ahead" or "proceed" to continue.
+
+## Onboarding
+
+Onboarding is a guided conversation where Scout learns about your specific setup. It asks questions about each connected integration -- one at a time -- and saves the context so it can help you more effectively in future conversations.
+
+**Topics covered during onboarding:**
+
+| Integration Type | Questions |
+|-----------------|-----------|
+| Warehouses (BigQuery, Snowflake, Postgres) | Project structure, datasets/schemas, roles, access patterns |
+| Transformation (dbt) | Deployment method, profiles location, naming conventions |
+| Orchestration (Airflow, Dagster, Prefect) | How DAGs are deployed and triggered |
+| Ingestion (Fivetran, Airbyte) | Destination, schema prefixes, sync frequency |
+| Version Control (GitHub) | Default branch, PR review process, CI/CD workflows |
+
+To start onboarding, select **Onboard** mode or type:
+
+```
+Start onboarding
+```
+
+<Callout type="tip">
+Run onboarding after connecting new integrations. Scout will only ask about topics it does not already have context for.
+</Callout>
+
+## Supported Models
+
+Scout can use the following LLM backends:
+
+- GPT-5.2
+- GPT-5.2 Mini
+- Claude Sonnet
+- Claude Haiku
+
+Select your preferred model in the pipeline settings. All modes and tools work with every model.
+
+## Tips for Effective Prompts
+
+1. **Be specific.** "What is the null rate on `orders.customer_id` for the last 7 days?" is better than "Check my data quality."
+2. **Use the right mode.** Debug mode runs deeper investigations than Ask mode. Fix mode generates actionable patches.
+3. **Reference objects with @mentions.** This removes ambiguity when you have similarly named tables across schemas.
+4. **Let Scout investigate.** For complex questions, Scout may run 5-8 queries. Let the investigation complete before asking follow-ups.
+5. **Save useful responses.** Click **Save as Artifact** on any response to store it in your [Artifacts Library](/docs/artifacts) for your team.

@@ -1,0 +1,83 @@
+---
+title: PostgreSQL
+description: Connect PostgreSQL to Pallisade for schema discovery, pg_stats-based column profiling, query history from pg_stat_statements, and freshness monitoring.
+section: integrations
+order: 3
+---
+
+# PostgreSQL
+
+## Overview
+
+The PostgreSQL integration connects Pallisade to any PostgreSQL 9.5+ database. It reads metadata from `information_schema`, leverages `pg_stats` for efficient column profiling, and optionally uses `pg_stat_statements` for query history. Pallisade also detects table partitioning (PostgreSQL 10+) and computes table sizes including indexes and TOAST data.
+
+Key capabilities:
+
+- **Schema discovery** -- tables, views, columns, data types, defaults, and comments
+- **Column statistics** -- combines `pg_stats` histograms with live queries for null rates, distinct counts, percentiles
+- **Query history** -- via `pg_stat_statements` extension (if installed)
+- **Table sizes** -- total relation size including indexes and TOAST
+- **Partition detection** -- PostgreSQL 10+ declarative partitioning
+- **Primary keys and constraints** -- from `pg_index` catalog
+
+## Prerequisites
+
+- PostgreSQL 9.5 or later
+- A database user with `SELECT` access to target schemas
+- (Optional) `pg_stat_statements` extension installed for query history
+
+<Callout type="tip">
+Install `pg_stat_statements` to enable query-based lineage: `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` (requires superuser). This gives Pallisade access to aggregated query patterns.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **PostgreSQL** from the Warehouse layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Database host (e.g., `localhost` or `db.example.com`) |
+| `port` | Yes | Port number (default: `5432`) |
+| `database` | Yes | Database name |
+| `username` | Yes | Database user |
+| `password` | Yes | Password |
+| `ssl` | No | SSL mode: `disable`, `require`, or `verify-ca` |
+
+3. Click **Test Connection**. Pallisade runs `SELECT version()` and checks for `pg_stat_statements`.
+4. Scanning begins on the `public` schema by default.
+
+<Callout type="warning">
+For cloud-hosted PostgreSQL (RDS, Cloud SQL, Azure Database), SSL is typically required. Set the SSL mode to `require` or `verify-ca`. The default `prefer` mode may not work with all cloud providers.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Tables and views** | From `information_schema.tables` with type and schema |
+| **Columns** | Name, data type, nullability, default, precision, scale, comments via `col_description()` |
+| **Table sizes** | `pg_total_relation_size()` including indexes and TOAST |
+| **Row estimates** | From `pg_class.reltuples` (updated by `ANALYZE`) |
+| **Primary keys** | From `pg_index` catalog |
+| **Partition info** | Partition strategy and columns via `pg_get_partkeydef()` (PostgreSQL 10+) |
+| **Column statistics** | From `pg_stats` (null_frac, n_distinct, histograms, most_common_vals) plus live aggregation queries |
+| **Freshness** | MAX of detected timestamp column with hours-since calculation |
+| **Query history** | From `pg_stat_statements` -- query text, total execution time, rows produced |
+
+## Troubleshooting
+
+**"pg_stat_statements not available"**
+This is a warning, not an error. Pallisade works without it but cannot provide query-based lineage. Install the extension and restart PostgreSQL to enable it.
+
+**Connection refused**
+Check that the host allows connections from Pallisade's IP. For RDS, verify the security group rules. For local PostgreSQL, check `pg_hba.conf`.
+
+**SSL errors with cloud databases**
+Set SSL mode to `require`. If you need certificate verification, use `verify-ca` and ensure the CA certificate is accessible.
+
+**Row estimates are inaccurate**
+`pg_class.reltuples` is only updated when `ANALYZE` runs. If auto-vacuum is disabled or tables were recently loaded, run `ANALYZE schema.table;` to refresh estimates.
+
+**Slow column stats on large tables**
+Pallisade uses `TABLESAMPLE BERNOULLI` for tables larger than the requested sample size. If stats are still slow, the table may have many columns. The adapter profiles each column individually.

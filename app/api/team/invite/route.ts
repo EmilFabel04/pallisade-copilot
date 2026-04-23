@@ -6,14 +6,17 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { getSlackOrgConfig, getSlackClient } from '@/lib/slack-helpers';
+import { notifyEvents } from '@/lib/notifications';
+import { sendInviteEmail } from '@/lib/email/invite';
+import { getBillingState } from '@/lib/billing';
 
 // POST - Send invite
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -33,11 +36,26 @@ export async function POST(request: NextRequest) {
           organizationId,
         },
       },
-      include: { user: true },
+      include: {
+        user: true,
+        organization: { select: { name: true } },
+      },
     });
 
     if (!currentMember || (currentMember.role !== 'OWNER' && currentMember.role !== 'ADMIN')) {
       return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
+
+    // Member limit enforcement
+    const billingState = await getBillingState(organizationId);
+    if (billingState.subscription) {
+      const currentCount = await prisma.teamMember.count({ where: { organizationId } });
+      if (currentCount >= billingState.subscription.memberAllowance) {
+        return NextResponse.json(
+          { error: `Team member limit reached (${billingState.subscription.memberAllowance}). Upgrade your plan to add more members.` },
+          { status: 402 },
+        );
+      }
     }
 
     const body = await request.json();
@@ -132,8 +150,39 @@ export async function POST(request: NextRequest) {
     const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const inviteLink = `${baseUrl}/signup?invite=${invite.token}`;
 
-    // TODO: Send invite email
-    // await sendInviteEmail(email, inviteLink, currentMember.user.name || 'Your team', personalNote);
+    // Fire-and-forget email send (don't block the API response)
+    sendInviteEmail({
+      recipientEmail: email,
+      inviterName: currentMember.user.name || currentMember.user.email,
+      organizationName: currentMember.organization?.name || 'your team',
+      role,
+      personalNote: personalNote || undefined,
+      inviteLink,
+    }).then((sent) => {
+      if (sent) {
+        prisma.teamInvite.update({
+          where: { id: invite.id },
+          data: { emailSentAt: new Date() },
+        }).catch((err) => console.error('[invite-email] Failed to update emailSentAt:', err));
+      }
+    }).catch((err) => console.error('[invite-email] Failed to send:', err));
+
+    // Fire-and-forget notification
+    notifyEvents.teamInviteSent(organizationId, currentUserId, email);
+
+    // Fire-and-forget Slack notification
+    const inviterName = currentMember.user.name || currentMember.user.email;
+    getSlackOrgConfig(organizationId).then(async (cfg) => {
+      if (!cfg.connected || !cfg.preferences.alertOnTeamInvite) return;
+      const client = await getSlackClient(organizationId);
+      if (!client) return;
+      await client.sendMessage({
+        title: 'Team Invite Sent',
+        text: `*${inviterName}* invited *${email}* to join the team as *${role}*`,
+        severity: 'low',
+        footer: `Pallisade Team`,
+      });
+    }).catch(err => console.error('[team-invite] Slack notification failed:', err));
 
     return NextResponse.json({
       success: true,
@@ -153,7 +202,7 @@ export async function POST(request: NextRequest) {
 // DELETE - Revoke invite
 export async function DELETE(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await auth();
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -211,6 +260,98 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json(
       { error: 'Failed to revoke invite' },
       { status: 500 }
+    );
+  }
+}
+
+// PATCH - Resend invite email
+export async function PATCH(request: NextRequest) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const currentUserId = session.user.id;
+    const organizationId = (session.user as any).organizationId;
+
+    if (!organizationId) {
+      return NextResponse.json({ error: 'No organization' }, { status: 400 });
+    }
+
+    // Check if user is admin
+    const currentMember = await prisma.teamMember.findUnique({
+      where: {
+        userId_organizationId: {
+          userId: currentUserId,
+          organizationId,
+        },
+      },
+      include: {
+        user: true,
+        organization: { select: { name: true } },
+      },
+    });
+
+    if (!currentMember || (currentMember.role !== 'OWNER' && currentMember.role !== 'ADMIN')) {
+      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+    }
+
+    const body = await request.json();
+    const { inviteId } = body;
+
+    if (!inviteId) {
+      return NextResponse.json({ error: 'inviteId is required' }, { status: 400 });
+    }
+
+    // Verify invite belongs to org and is resendable
+    const invite = await prisma.teamInvite.findUnique({
+      where: { id: inviteId },
+    });
+
+    if (!invite || invite.organizationId !== organizationId) {
+      return NextResponse.json({ error: 'Invite not found' }, { status: 404 });
+    }
+
+    if (invite.status !== 'PENDING') {
+      return NextResponse.json({ error: 'Can only resend pending invites' }, { status: 400 });
+    }
+
+    // Reset expiry to 7 days from now
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    await prisma.teamInvite.update({
+      where: { id: inviteId },
+      data: { expiresAt, status: 'PENDING' },
+    });
+
+    // Generate invite link and send email
+    const baseUrl = process.env.NEXTAUTH_URL || 'http://localhost:3000';
+    const inviteLink = `${baseUrl}/signup?invite=${invite.token}`;
+
+    const sent = await sendInviteEmail({
+      recipientEmail: invite.email,
+      inviterName: currentMember.user.name || currentMember.user.email,
+      organizationName: currentMember.organization?.name || 'your team',
+      role: invite.role,
+      inviteLink,
+    });
+
+    if (sent) {
+      await prisma.teamInvite.update({
+        where: { id: inviteId },
+        data: { emailSentAt: new Date() },
+      });
+    }
+
+    return NextResponse.json({ success: true, emailSent: sent });
+
+  } catch (error) {
+    console.error('Failed to resend invite:', error);
+    return NextResponse.json(
+      { error: 'Failed to resend invite' },
+      { status: 500 },
     );
   }
 }

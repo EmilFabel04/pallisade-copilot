@@ -8,6 +8,7 @@
 
 import { useState } from 'react';
 import { TOOLS, LAYER_COLORS, PipelineLayer } from './types';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 interface NodeSidebarProps {
   onAddNode: (toolType: string, layer: string) => void;
@@ -72,11 +73,11 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
   const layers: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'];
 
   return (
-    <div className="w-72 flex flex-col bg-[#0F0F14] border border-[rgba(255,255,255,0.08)] rounded-xl overflow-hidden flex-shrink-0">
+    <div className="w-72 flex flex-col bg-[var(--surface-inset)] border border-[var(--subtle-border)] rounded-xl overflow-hidden flex-shrink-0">
       {/* Header */}
-      <div className="px-4 py-4 border-b border-[rgba(255,255,255,0.08)]">
-        <h2 className="font-semibold text-white text-sm">Pipeline Tools</h2>
-        <p className="text-xs text-gray-500 mt-1">Click to add to canvas</p>
+      <div className="px-4 py-4 border-b border-[var(--subtle-border)]">
+        <h2 className="font-semibold text-[var(--text)] text-sm">Pipeline Tools</h2>
+        <p className="text-xs text-[var(--muted)] mt-1">Click to add to canvas</p>
       </div>
 
       {/* Tool List */}
@@ -86,7 +87,7 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
             {/* Layer Header */}
             <button
               onClick={() => toggleLayer(layer)}
-              className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-[rgba(255,255,255,0.04)] transition-colors rounded-lg"
+              className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-[var(--overlay-bg)] transition-colors rounded-lg"
             >
               <div className="flex items-center gap-3">
                 <div
@@ -96,16 +97,16 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
                   <LayerIcon layer={layer} />
                 </div>
                 <div className="text-left">
-                  <div className="text-sm font-medium text-white">
+                  <div className="text-sm font-medium text-[var(--text)]">
                     {layer === 'TRANSFORMATION' ? 'Transform' :
                      layer === 'VERSION_CONTROL' ? 'Version Control' :
                      layer.charAt(0) + layer.slice(1).toLowerCase()}
                   </div>
-                  <div className="text-[10px] text-gray-500">{TOOLS[layer]?.length || 0} tools</div>
+                  <div className="text-[10px] text-[var(--muted)]">{TOOLS[layer]?.length || 0} tools</div>
                 </div>
               </div>
               <svg
-                className={`w-4 h-4 text-gray-500 transition-transform ${expandedLayers.has(layer) ? 'rotate-180' : ''}`}
+                className={`w-4 h-4 text-[var(--muted)] transition-transform ${expandedLayers.has(layer) ? 'rotate-180' : ''}`}
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -125,21 +126,16 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
                       console.log('Sidebar: Adding tool', tool.id, layer);
                       onAddNode(tool.id, layer);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-[rgba(255,255,255,0.02)] hover:bg-[rgba(255,255,255,0.06)] border border-transparent hover:border-[rgba(255,255,255,0.1)] transition-all group"
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-[var(--overlay-faint)] hover:bg-[var(--hover-bg)] border border-transparent hover:border-[var(--border-medium)] transition-all group"
                   >
-                    {/* Tool Icon Circle */}
-                    <div
-                      className="w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold group-hover:scale-105 transition-transform"
-                      style={{ backgroundColor: `${LAYER_COLORS[layer]}20`, color: LAYER_COLORS[layer] }}
-                    >
-                      {tool.name.charAt(0)}
-                    </div>
+                    {/* Tool Icon */}
+                    <ToolIcon toolType={tool.id} size={36} className="group-hover:scale-105 transition-transform" />
                     <div className="flex-1 text-left min-w-0">
-                      <div className="text-sm font-medium text-white truncate">{tool.name}</div>
-                      <div className="text-[10px] text-gray-500 truncate">{tool.description}</div>
+                      <div className="text-sm font-medium text-[var(--text)] truncate">{tool.name}</div>
+                      <div className="text-[10px] text-[var(--muted)] truncate">{tool.description}</div>
                     </div>
                     <svg 
-                      className="w-4 h-4 text-gray-600 group-hover:text-white group-hover:translate-x-0.5 transition-all flex-shrink-0" 
+                      className="w-4 h-4 text-[var(--muted)] group-hover:text-[var(--text)] group-hover:translate-x-0.5 transition-all flex-shrink-0" 
                       viewBox="0 0 24 24" 
                       fill="none" 
                       stroke="currentColor" 
@@ -156,8 +152,8 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
       </div>
 
       {/* Footer - Data Flow Legend */}
-      <div className="px-4 py-3 border-t border-[rgba(255,255,255,0.08)] bg-[rgba(0,0,0,0.2)]">
-        <div className="text-[10px] text-gray-500 mb-2 uppercase tracking-wider">Data Flow</div>
+      <div className="px-4 py-3 border-t border-[var(--subtle-border)] bg-[var(--overlay-bg)]">
+        <div className="text-[10px] text-[var(--muted)] mb-2 uppercase tracking-wider">Data Flow</div>
         <div className="flex items-center gap-1.5 flex-wrap">
           {['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING'].map((layer, i, arr) => (
             <div key={layer} className="flex items-center gap-1.5">
@@ -166,7 +162,7 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
                 style={{ backgroundColor: LAYER_COLORS[layer as PipelineLayer] }}
               />
               {i < arr.length - 1 && (
-                <svg className="w-3 h-3 text-gray-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg className="w-3 h-3 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M5 12h14M12 5l7 7-7 7" />
                 </svg>
               )}
@@ -178,7 +174,7 @@ export default function NodeSidebar({ onAddNode }: NodeSidebarProps) {
             className="w-2 h-2 rounded-full"
             style={{ backgroundColor: LAYER_COLORS['VERSION_CONTROL'] }}
           />
-          <span className="text-[9px] text-gray-500">Version Control</span>
+          <span className="text-[9px] text-[var(--muted)]">Version Control</span>
         </div>
       </div>
     </div>

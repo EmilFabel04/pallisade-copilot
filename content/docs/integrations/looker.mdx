@@ -1,0 +1,80 @@
+---
+title: Looker
+description: Connect Looker to Pallisade for dashboard health checks, query performance monitoring, schedule failure detection, and LookML validation.
+section: integrations
+order: 14
+---
+
+# Looker
+
+## Overview
+
+The Looker integration connects Pallisade to your Looker instance via the API 4.0. Pallisade monitors dashboard health (broken tiles, slow queries), tracks schedule delivery failures, validates LookML models, and identifies stale or unused content.
+
+Key capabilities:
+
+- **Dashboard health** -- detect broken tiles, slow-loading elements, and stale dashboards
+- **Query performance** -- slow query tracking and failure pattern analysis
+- **Schedule monitoring** -- delivery failures for PDF/email/SFTP scheduled plans
+- **LookML validation** -- model-level syntax and configuration error detection
+- **Content staleness** -- dashboards not viewed in 90+ days flagged for review
+- **Usage analytics** -- view counts, favorite counts, and last-viewed timestamps
+- **Health scoring** -- composite score across dashboards, schedules, and queries
+
+## Prerequisites
+
+- A Looker instance (self-hosted or Looker Cloud)
+- API3 credentials (Client ID and Client Secret)
+- The user associated with the API credentials needs Admin or equivalent read access
+
+<Callout type="tip">
+Create API3 credentials in Looker under **Admin > Users > [Your User] > API3 Keys > Edit Keys > New API3 Key**. The client ID and secret are shown once -- save them securely.
+</Callout>
+
+## Setup
+
+1. Navigate to **Pipeline > Add Node** and select **Looker** from the Reporting layer.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `host` | Yes | Looker instance URL (e.g., `https://your-company.cloud.looker.com`) |
+| `client_id` | Yes | API3 client ID |
+| `client_secret` | Yes | API3 client secret |
+
+3. Click **Test Connection**. Pallisade authenticates via `/api/4.0/login` and fetches the current user.
+
+<Callout type="warning">
+For Looker Cloud instances, the API uses port 443 automatically. For self-hosted Looker, the API default port is 19999 -- ensure it is accessible from Pallisade's network.
+</Callout>
+
+## What Gets Extracted
+
+| Category | Details |
+|---|---|
+| **Dashboards** | ID, title, folder, element count, filter count, view/favorite counts, last viewed/updated |
+| **Dashboard elements** | Per-tile validation: query status, runtime, error messages |
+| **Scheduled plans** | Plan name, cron schedule, destination type (email/sftp/s3), enabled status |
+| **Schedule history** | Run status per delivery attempt, consecutive failure count |
+| **LookML models** | Model name, project, connection, explores list, validation errors |
+| **Queries** | Recent query history: model, view, runtime, status, error messages |
+| **Slow queries** | Queries exceeding 30s threshold (configurable) |
+| **Failed queries** | Queries with error status, grouped by error message |
+| **Health score** | 100 - (critical * 25) - (high * 10) - (medium * 3) |
+
+## Troubleshooting
+
+**"Authentication failed"**
+Check that the Client ID and Client Secret are correct and not expired. API3 keys can be regenerated in the Looker Admin panel.
+
+**Dashboard validation returns errors for all tiles**
+If the Looker instance has strict content validation enabled, some tiles may fail due to temporary database issues. Retry the scan after confirming the underlying database is healthy.
+
+**No scheduled plans found**
+The API user needs Admin access to view all users' scheduled plans. Without it, only the authenticated user's plans are visible.
+
+**Stale dashboards flagged incorrectly**
+The default staleness threshold is 90 days since last view. If dashboards are accessed via embedded URLs that don't register views, they may be flagged as stale despite active usage.
+
+**LookML validation errors**
+These reflect real issues in your LookML code. Common causes include references to deleted fields, incorrect join relationships, or syntax errors introduced in recent commits.

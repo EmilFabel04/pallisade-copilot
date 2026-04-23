@@ -1,0 +1,77 @@
+---
+title: PagerDuty
+description: Connect PagerDuty to Pallisade for automated incident creation when critical data quality or pipeline issues are detected.
+section: integrations
+order: 20
+---
+
+# PagerDuty
+
+## Overview
+
+The PagerDuty integration enables Pallisade to create incidents in PagerDuty when critical data quality issues, pipeline failures, or SLA violations are detected. This brings data reliability into your existing on-call rotation, ensuring the right people are alerted at the right time.
+
+Key capabilities:
+
+- **Automatic incident creation** -- critical and high-severity findings trigger PagerDuty incidents
+- **Service-level routing** -- incidents are created on a specific PagerDuty service, respecting its escalation policy
+- **Severity mapping** -- Pallisade finding severity maps to PagerDuty urgency levels
+- **Deduplication** -- repeated findings for the same resource do not create duplicate incidents
+- **Resolution** -- incidents are auto-resolved when the underlying finding is resolved in Pallisade
+
+## Prerequisites
+
+- A PagerDuty account with at least one service configured
+- A PagerDuty **API key** (v2) with write access
+- The **Service ID** for the target service
+
+<Callout type="tip">
+To find your Service ID, go to **PagerDuty > Services > [Your Service]** and look at the URL -- it contains the service ID (e.g., `P1ABC2D`). The API key is generated under **Integrations > API Access Keys > Create New API Key**.
+</Callout>
+
+## Setup
+
+1. Navigate to **Settings > Integrations** and select **PagerDuty** from the Notifications category.
+2. Fill in the connection fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `api_key` | Yes | PagerDuty API key (v2) |
+| `service_id` | Yes | PagerDuty Service ID to create incidents on |
+
+3. Click **Test Connection** to verify API access.
+
+## What Gets Created
+
+| Finding Severity | PagerDuty Action |
+|---|---|
+| **Critical** | High-urgency incident with full finding details and suggested remediation |
+| **High** | Low-urgency incident with finding summary |
+| **Medium** | No incident (logged in Pallisade only, unless configured otherwise) |
+| **Low** | No incident |
+
+Each incident includes:
+
+- Finding title as the incident title
+- Affected resource (table, connector, DAG, etc.)
+- Finding details and context
+- Suggested fix actions
+- Link back to Pallisade for full investigation
+
+## Troubleshooting
+
+**"401 Unauthorized"**
+The API key is invalid or has been revoked. Generate a new one in PagerDuty under **Integrations > API Access Keys**.
+
+**Incidents not appearing**
+Verify the `service_id` is correct. If the service has suppression rules or event rules configured, they may be filtering Pallisade events.
+
+**Duplicate incidents**
+Pallisade includes a deduplication key based on the finding type and resource. If you see duplicates, the finding may have been resolved and re-detected, creating a new incident.
+
+**Too many incidents during initial scan**
+The first scan of a new integration may surface many findings at once. Consider starting with a single integration and tuning alert thresholds before connecting PagerDuty.
+
+<Callout type="warning">
+Configure PagerDuty alert thresholds carefully. It is recommended to only route critical-severity findings to PagerDuty and use Slack or Teams for high/medium findings to avoid alert fatigue.
+</Callout>
