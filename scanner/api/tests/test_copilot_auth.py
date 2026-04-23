@@ -61,7 +61,7 @@ class TestCopilotPrincipalEnforcement:
         with patch(
             "copilot.context_builder.CopilotContextBuilder.build_context",
             new=AsyncMock(return_value=fake_context),
-        ), patch(
+        ) as mock_build, patch(
             "copilot.tools.get_tool_registry"
         ) as mock_registry:
             mock_registry.return_value.get_available_tools.return_value = []
@@ -71,6 +71,8 @@ class TestCopilotPrincipalEnforcement:
             )
             r = client.get("/api/v1/copilot/tools", headers=headers)
             assert r.status_code == 200
+            # build_context must have been called with the principal's org
+            assert mock_build.await_args.kwargs["org_id"] == "org_from_principal"
 
     def test_openlineage_uses_principal_not_header(self):
         client = _client()
@@ -91,7 +93,7 @@ class TestCopilotPrincipalEnforcement:
                 "run": {"runId": "r1"},
             }
             r = client.post("/api/v1/copilot/openlineage/events", headers=headers, json=body)
-            assert r.status_code in (200, 500)  # 500 if event shape incomplete; we still assert the arg
+            assert r.status_code == 200
             assert mock_proc.await_args.kwargs["org_id"] == "org_from_principal"
 
 
