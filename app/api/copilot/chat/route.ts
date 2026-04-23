@@ -173,7 +173,6 @@ export async function POST(request: Request) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Organization-Id': user.organizationId,
       },
       body: JSON.stringify({
         message,
@@ -533,7 +532,6 @@ async function handleStreamingChat(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Organization-Id': user.organizationId,
     },
     body: JSON.stringify({
       message,
