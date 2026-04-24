@@ -9,6 +9,7 @@ import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { scannerClient } from '@/lib/scanner-client';
+import { assertExternalUrl } from '@/lib/net/safe-url';
 
 /**
  * Resolve the GitHub access token from the GitHub connector node in the same stack.
@@ -800,7 +801,16 @@ export async function POST(request: NextRequest) {
           }
 
           // Test GitLab API with the token
-          const glResponse = await fetch(`${host}/api/v4/user`, {
+          let glUrl: URL;
+          try {
+            glUrl = await assertExternalUrl(`${host}/api/v4/user`);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid GitLab host: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const glResponse = await fetch(glUrl, {
             headers: {
               'PRIVATE-TOKEN': token,
             },
