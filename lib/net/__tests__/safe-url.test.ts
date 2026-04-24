@@ -76,7 +76,15 @@ describe('assertExternalUrl', () => {
       'https://[fe80::1]/',
       'https://[fc00::1]/',
       'https://[::ffff:127.0.0.1]/',
+      'https://[::]/',
     ])('rejects %s', async (url) => {
+      await expect(assertExternalUrl(url)).rejects.toThrow('Private IP not allowed');
+    });
+
+    test.each([
+      'https://[::ffff:7f00:1]/',      // hex form of ::ffff:127.0.0.1
+      'https://[::ffff:a9fe:a9fe]/',   // hex form of ::ffff:169.254.169.254 (IMDS)
+    ])('rejects IPv4-mapped hex form %s', async (url) => {
       await expect(assertExternalUrl(url)).rejects.toThrow('Private IP not allowed');
     });
   });

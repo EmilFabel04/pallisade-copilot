@@ -38,9 +38,9 @@ function isPrivateV4(ip: string): boolean {
   const n = ipv4ToInt(ip);
   if (n === null) return false;
   for (const [a, b, c, d, prefix] of PRIVATE_V4_RANGES) {
-    const net = (((a << 24) | (b << 16) | (c << 8) | d) >>> 0);
+    const networkInt = (((a << 24) | (b << 16) | (c << 8) | d) >>> 0);
     const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
-    if ((n & mask) === (net & mask)) return true;
+    if ((n & mask) === (networkInt & mask)) return true;
   }
   return false;
 }
@@ -48,10 +48,12 @@ function isPrivateV4(ip: string): boolean {
 function isPrivateV6(ip: string): boolean {
   const lower = ip.toLowerCase();
   if (lower === "::1" || lower === "::") return true;                 // loopback / unspecified
-  if (lower.startsWith("fe80:") || lower.startsWith("fe80::")) return true; // link-local
+  if (lower.startsWith("fe80:")) return true; // link-local
   // Unique local addresses: fc00::/7 → first byte in [0xfc, 0xfd]
   if (/^f[cd]/.test(lower)) return true;
-  // IPv4-mapped dotted-decimal form (::ffff:a.b.c.d)
+  // IPv4-mapped dotted-decimal form (::ffff:a.b.c.d). Unreachable when the guard
+  // is called with a URL-parsed hostname (WHATWG normalises to hex), but kept
+  // for defence in depth if isPrivateV6 is ever called directly with a raw string.
   const mDotted = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mDotted) return isPrivateV4(mDotted[1]);
   // IPv4-mapped hex form (::ffff:hhhh:hhhh) — as produced by the WHATWG URL parser
