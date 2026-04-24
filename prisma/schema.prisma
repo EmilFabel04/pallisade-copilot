@@ -2070,6 +2070,10 @@ enum MonitorKind {
   CERTIFICATE // Infrastructure: TLS/SSL cert expiry
   SERVER_HEALTH // Infrastructure: CPU, memory, disk
   LOG_ANALYSIS // Infrastructure: log file error scanning
+  // Warehouse observability
+  QUERY_PERFORMANCE
+  COST_ANOMALY
+  STORAGE_GROWTH
   // Ingestion monitors (Fivetran, Airbyte)
   SYNC_LAG
   FAILED_SYNCS
@@ -2082,6 +2086,8 @@ enum MonitorKind {
   DBT_TEST_FAILURES
   DBT_MODEL_FRESHNESS
   DBT_SOURCE_FRESHNESS
+  DBT_CORE_SOURCE_VALIDATION
+  DBT_CORE_REF_INTEGRITY
   // BI / Reporting monitors
   BI_FRESHNESS_PROXY
   BI_UPSTREAM_BREAK_RISK

@@ -65,3 +65,21 @@ curl -H "X-Internal-Auth: $SCANNER_SHARED_SECRET" \
 - **Backend**: FastAPI, Python
 - **AI**: Anthropic Claude
 - **Database**: PostgreSQL (via Prisma)
+
+## Database schema changes
+
+This project uses `prisma db push` to sync schema changes to the database.
+There is no migration history — `prisma/migrations/` is intentionally absent.
+
+```bash
+# after editing prisma/schema.prisma
+npm run db:push
+```
+
+To move to proper migrations later (e.g. when team size justifies it), baseline
+from the current schema state:
+
+```bash
+npx prisma migrate dev --name baseline --create-only
+npx prisma migrate resolve --applied baseline
+```
