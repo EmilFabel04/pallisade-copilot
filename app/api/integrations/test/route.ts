@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { Session } from 'next-auth';
 import { auth } from '@/auth';
 import { scannerClient } from '@/lib/scanner-client';
+import { assertExternalUrl } from '@/lib/net/safe-url';
 
 // POST /api/integrations/test - Test credentials before creating integration
 export async function POST(request: NextRequest) {
@@ -388,11 +389,17 @@ async function testAirflow(credentials: any): Promise<{ success: boolean; error?
   }
 
   try {
-    const auth = credentials?.username && credentials?.password 
+    let safeUrl: URL;
+    try {
+      safeUrl = await assertExternalUrl(`${baseUrl}/api/v1/health`);
+    } catch (e) {
+      return { success: false, error: `Invalid Airflow base URL: ${e instanceof Error ? e.message : 'not allowed'}` };
+    }
+    const auth = credentials?.username && credentials?.password
       ? `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`).toString('base64')}`
       : undefined;
 
-    const response = await fetch(`${baseUrl}/api/v1/health`, {
+    const response = await fetch(safeUrl, {
       headers: auth ? { 'Authorization': auth } : {},
     });
 
