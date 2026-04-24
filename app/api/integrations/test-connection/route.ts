@@ -160,8 +160,17 @@ export async function POST(request: NextRequest) {
         }
 
         try {
+          let safeUrl: URL;
+          try {
+            safeUrl = await assertExternalUrl(`${siteUrl}/rest/api/3/myself`);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid Jira site URL: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
           const credentials = Buffer.from(`${email}:${apiToken}`).toString('base64');
-          const response = await fetch(`${siteUrl}/rest/api/3/myself`, {
+          const response = await fetch(safeUrl, {
             headers: {
               'Authorization': `Basic ${credentials}`,
               'Accept': 'application/json',
