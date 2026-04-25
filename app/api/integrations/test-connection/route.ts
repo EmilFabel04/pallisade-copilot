@@ -288,7 +288,16 @@ export async function POST(request: NextRequest) {
         try {
           // Clean host URL (remove trailing slash, ensure no protocol duplication)
           const cleanHost = host.replace(/\/+$/, '').replace(/^https?:\/\//, '');
-          const response = await fetch(`https://${cleanHost}/api/2.0/sql/statements`, {
+          let dbxUrl: URL;
+          try {
+            dbxUrl = await assertExternalUrl(`https://${cleanHost}/api/2.0/sql/statements`);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid Databricks workspace URL: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const response = await fetch(dbxUrl, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -299,6 +308,7 @@ export async function POST(request: NextRequest) {
               statement: 'SELECT 1',
               wait_timeout: '10s',
             }),
+            redirect: 'manual',
           });
 
           if (response.ok) {
@@ -328,7 +338,16 @@ export async function POST(request: NextRequest) {
 
         try {
           const cleanServer = server.replace(/\/+$/, '');
-          const response = await fetch(`${cleanServer}/api/3.21/auth/signin`, {
+          let tableauUrl: URL;
+          try {
+            tableauUrl = await assertExternalUrl(`${cleanServer}/api/3.21/auth/signin`);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid Tableau server URL: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const response = await fetch(tableauUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -338,6 +357,7 @@ export async function POST(request: NextRequest) {
                 site: { contentUrl: siteId },
               },
             }),
+            redirect: 'manual',
           });
 
           if (response.ok) {
