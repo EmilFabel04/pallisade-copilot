@@ -107,10 +107,14 @@ def create_app() -> FastAPI:
     async def global_exception_handler(request: Request, exc: Exception):
         """Global exception handler for unhandled errors."""
         logger.error("unhandled_exception", error=str(exc), path=request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Internal server error", "detail": str(exc)}
-        )
+        # Only echo the exception message back to the client in development —
+        # exception messages from drivers can include credentials, file paths,
+        # or internal hostnames.
+        environment = (os.environ.get("ENVIRONMENT") or "").strip().lower()
+        body = {"error": "Internal server error"}
+        if environment == "development":
+            body["detail"] = str(exc)
+        return JSONResponse(status_code=500, content=body)
     
     # Register all integration drivers
     from scanner.drivers.loader import register_all_drivers
