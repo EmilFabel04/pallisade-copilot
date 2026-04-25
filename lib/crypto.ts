@@ -3,17 +3,36 @@ import crypto from 'crypto';
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
+const KEY_BYTES = 32;
 
-// Get encryption key from environment or generate a default for development
+let warnedAboutDevKey = false;
+
 function getEncryptionKey(): Buffer {
   const key = process.env.ENCRYPTION_KEY;
   if (key) {
-    // If provided, should be 32 bytes (64 hex chars)
-    return Buffer.from(key, 'hex');
+    const buf = Buffer.from(key, 'hex');
+    if (buf.length !== KEY_BYTES) {
+      throw new Error(
+        `ENCRYPTION_KEY must be ${KEY_BYTES} bytes / ${KEY_BYTES * 2} hex chars; got ${buf.length} bytes.`,
+      );
+    }
+    return buf;
   }
-  // Development fallback - DO NOT use in production
-  console.warn('⚠️  Using development encryption key. Set ENCRYPTION_KEY in production!');
-  return crypto.scryptSync('pallisade-dev-key', 'salt', 32);
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'ENCRYPTION_KEY is not set. Refusing to use the deterministic dev key in production. ' +
+        'Generate with: openssl rand -hex 32',
+    );
+  }
+  if (!warnedAboutDevKey) {
+    console.warn(
+      '[security] ENCRYPTION_KEY is unset — using deterministic dev key. ' +
+        'Generate with `openssl rand -hex 32`. Anything encrypted with the dev ' +
+        'key will be unreadable after you set ENCRYPTION_KEY.',
+    );
+    warnedAboutDevKey = true;
+  }
+  return crypto.scryptSync('pallisade-dev-key', 'salt', KEY_BYTES);
 }
 
 /**
