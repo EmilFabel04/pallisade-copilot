@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import { decrypt } from '@/lib/crypto';
+import { assertExternalUrl } from '@/lib/net/safe-url';
 
 // POST /api/integrations/test-connection - Test an integration connection
 export async function POST(request: NextRequest) {
@@ -64,7 +65,16 @@ export async function POST(request: NextRequest) {
         }
 
         try {
-          const response = await fetch(webhookUrl, {
+          let safeUrl: URL;
+          try {
+            safeUrl = await assertExternalUrl(webhookUrl);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid Teams webhook URL: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const response = await fetch(safeUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -150,8 +160,17 @@ export async function POST(request: NextRequest) {
         }
 
         try {
+          let safeUrl: URL;
+          try {
+            safeUrl = await assertExternalUrl(`${siteUrl}/rest/api/3/myself`);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid Jira site URL: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
           const credentials = Buffer.from(`${email}:${apiToken}`).toString('base64');
-          const response = await fetch(`${siteUrl}/rest/api/3/myself`, {
+          const response = await fetch(safeUrl, {
             headers: {
               'Authorization': `Basic ${credentials}`,
               'Accept': 'application/json',

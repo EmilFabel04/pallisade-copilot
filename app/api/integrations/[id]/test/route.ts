@@ -4,6 +4,7 @@ import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { scannerClient } from '@/lib/scanner-client';
+import { assertExternalUrl } from '@/lib/net/safe-url';
 
 // POST /api/integrations/[id]/test - Test an integration connection
 export async function POST(
@@ -316,17 +317,24 @@ async function testAirflow(credentials: any): Promise<{ success: boolean; error?
   }
 
   try {
-    const auth = username && password 
+    let baseUrlSafe: URL;
+    try {
+      baseUrlSafe = await assertExternalUrl(baseUrl);
+    } catch (e) {
+      return { success: false, error: `Invalid Airflow base URL: ${e instanceof Error ? e.message : 'not allowed'}` };
+    }
+    const baseOrigin = baseUrlSafe.origin;
+    const auth = username && password
       ? `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
       : undefined;
 
-    const response = await fetch(`${baseUrl}/api/v1/health`, {
+    const response = await fetch(`${baseOrigin}/api/v1/health`, {
       headers: auth ? { 'Authorization': auth } : {},
     });
 
     if (response.ok) {
       // Fetch DAGs
-      const dagsResponse = await fetch(`${baseUrl}/api/v1/dags?limit=100`, {
+      const dagsResponse = await fetch(`${baseOrigin}/api/v1/dags?limit=100`, {
         headers: auth ? { 'Authorization': auth } : {},
       });
 

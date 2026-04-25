@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -14,6 +14,67 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# Absolute paths that project_path must live under. Comma-separated env var.
+# If unset, dbt Core config is disabled entirely (dbt Cloud still works).
+def _allowed_project_roots() -> List[Path]:
+    raw = os.environ.get("DBT_ALLOWED_PROJECT_ROOTS", "").strip()
+    if not raw:
+        return []
+    out: List[Path] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            out.append(Path(entry).expanduser().resolve(strict=False))
+        except Exception:
+            continue
+    return out
+
+
+def _resolve_dbt_core_paths(config: Dict[str, Any]) -> Tuple[Optional[Path], Optional[str]]:
+    """
+    Validate dbt Core paths against the allow-list. Returns (manifest_path, error).
+    Rejects any path outside of DBT_ALLOWED_PROJECT_ROOTS and any symlinked manifest.
+    Error messages are intentionally coarse — don't reveal filesystem structure.
+    """
+    roots = _allowed_project_roots()
+    if not roots:
+        return None, "dbt Core is not enabled on this server (DBT_ALLOWED_PROJECT_ROOTS unset)."
+
+    project_path_raw = config.get("project_path")
+    if not project_path_raw or not isinstance(project_path_raw, str):
+        return None, "project_path is required for dbt Core."
+
+    try:
+        project_path = Path(project_path_raw).expanduser().resolve(strict=True)
+    except (FileNotFoundError, RuntimeError, OSError):
+        return None, "project_path is invalid."
+
+    # Containment: project_path must equal or be under an allowed root.
+    if not any(project_path == r or r in project_path.parents for r in roots):
+        return None, "project_path is not in an allowed location."
+
+    # Only permit a hardcoded relative manifest location inside the project.
+    candidates = [
+        project_path / "target" / "manifest.json",
+        project_path / "manifest.json",
+    ]
+    for c in candidates:
+        try:
+            resolved = c.resolve(strict=True)
+        except (FileNotFoundError, RuntimeError, OSError):
+            continue
+        # Re-check containment after resolving (defeats symlinks pointing outside).
+        if not any(resolved == r or r in resolved.parents for r in roots):
+            continue
+        if not resolved.is_file():
+            continue
+        return resolved, None
+
+    return None, "No manifest.json found under the project's target/ directory."
 
 
 class DbtCoreConfig(BaseModel):
@@ -36,10 +97,10 @@ class DbtModelsRequest(BaseModel):
     config: Dict[str, Any]
 
 
-def parse_manifest(manifest_path: str) -> Dict[str, Any]:
+def parse_manifest(manifest_path: Path) -> Dict[str, Any]:
     """Parse a dbt manifest.json file and extract models."""
     try:
-        with open(manifest_path, 'r') as f:
+        with manifest_path.open("r") as f:
             manifest = json.load(f)
 
         models = []
@@ -85,28 +146,8 @@ def parse_manifest(manifest_path: str) -> Dict[str, Any]:
             'sources': sources,
             'metadata': manifest.get('metadata', {}),
         }
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Manifest not found at {manifest_path}")
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid manifest JSON: {e}")
-
-
-def find_manifest(project_path: str) -> Optional[str]:
-    """Find manifest.json in common dbt target locations."""
-    project = Path(project_path)
-
-    # Common manifest locations
-    locations = [
-        project / 'target' / 'manifest.json',
-        project / 'manifest.json',
-        project / 'dbt_packages' / 'manifest.json',
-    ]
-
-    for loc in locations:
-        if loc.exists():
-            return str(loc)
-
-    return None
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        raise HTTPException(status_code=400, detail="Could not read dbt manifest.")
 
 
 @router.post("/dbt/models")
@@ -121,23 +162,16 @@ async def get_dbt_models(request: DbtModelsRequest) -> Dict[str, Any]:
         config = request.config
 
         if config_type == 'core':
-            # dbt Core - read from manifest.json
-            manifest_path = config.get('manifest_path')
-            project_path = config.get('project_path')
-
-            if not manifest_path and project_path:
-                manifest_path = find_manifest(project_path)
-
-            if not manifest_path:
-                # Return empty if no manifest found - might not be compiled yet
-                logger.warning("No dbt manifest found")
+            manifest_path, err = _resolve_dbt_core_paths(config)
+            if err or manifest_path is None:
+                logger.warning("dbt Core manifest resolution refused")
                 return {
                     'success': False,
                     'models': [],
-                    'error': 'No manifest.json found. Run `dbt compile` or `dbt run` first.',
+                    'error': err or 'No manifest available.',
                 }
 
-            logger.info(f"Reading dbt manifest from {manifest_path}")
+            logger.info("Reading dbt manifest (path elided)")
             result = parse_manifest(manifest_path)
 
             return {
@@ -260,33 +294,28 @@ async def test_dbt_connection(request: DbtModelsRequest) -> Dict[str, Any]:
         config = request.config
 
         if config_type == 'core':
-            manifest_path = config.get('manifest_path')
-            project_path = config.get('project_path')
-
-            if not manifest_path and project_path:
-                manifest_path = find_manifest(project_path)
-
-            if manifest_path and Path(manifest_path).exists():
-                # Try to parse it
-                try:
-                    with open(manifest_path, 'r') as f:
-                        manifest = json.load(f)
-                    model_count = len([n for n in manifest.get('nodes', {}).values()
-                                      if n.get('resource_type') == 'model'])
-                    return {
-                        'success': True,
-                        'message': f'Found manifest with {model_count} models',
-                        'manifest_path': manifest_path,
-                    }
-                except Exception as e:
-                    return {
-                        'success': False,
-                        'error': f'Could not parse manifest: {e}',
-                    }
-            else:
+            manifest_path, err = _resolve_dbt_core_paths(config)
+            if err or manifest_path is None:
                 return {
                     'success': False,
-                    'error': 'No manifest.json found. Run `dbt compile` first.',
+                    'error': err or 'Could not locate a valid dbt manifest.',
+                }
+            try:
+                with manifest_path.open("r") as f:
+                    manifest = json.load(f)
+                model_count = len([
+                    n for n in manifest.get('nodes', {}).values()
+                    if n.get('resource_type') == 'model'
+                ])
+                return {
+                    'success': True,
+                    'message': f'Found manifest with {model_count} models',
+                }
+            except Exception:
+                # Intentionally opaque — don't confirm path existence / contents.
+                return {
+                    'success': False,
+                    'error': 'Could not parse dbt manifest.',
                 }
 
         elif config_type == 'cloud':

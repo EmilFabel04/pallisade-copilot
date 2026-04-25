@@ -9,6 +9,7 @@ import { auth } from '@/auth';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { scannerClient } from '@/lib/scanner-client';
+import { assertExternalUrl } from '@/lib/net/safe-url';
 
 /**
  * Resolve the GitHub access token from the GitHub connector node in the same stack.
@@ -159,6 +160,18 @@ export async function POST(request: NextRequest) {
 
         const isCloud = abHost.includes('api.airbyte.com') || abHost.includes('airbyte.com');
 
+        // Validate the host once; reuse the normalised origin for every subsequent fetch.
+        let abHostSafe: URL;
+        try {
+          abHostSafe = await assertExternalUrl(abHost);
+        } catch (e) {
+          return NextResponse.json({
+            success: false,
+            message: `Invalid Airbyte host: ${e instanceof Error ? e.message : 'not allowed'}`,
+          });
+        }
+        const abHostOrigin = abHostSafe.origin;
+
         try {
           if (isCloud) {
             // Airbyte Cloud uses client credentials → short-lived Bearer token
@@ -173,7 +186,7 @@ export async function POST(request: NextRequest) {
             }
 
             // Step 1: Exchange client credentials for access token
-            const tokenRes = await fetch(`${abHost}/v1/applications/token`, {
+            const tokenRes = await fetch(`${abHostOrigin}/v1/applications/token`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -205,8 +218,8 @@ export async function POST(request: NextRequest) {
             };
 
             const abUrl = config.workspace_id
-              ? `${abHost}/v1/workspaces/${config.workspace_id}`
-              : `${abHost}/v1/workspaces`;
+              ? `${abHostOrigin}/v1/workspaces/${config.workspace_id}`
+              : `${abHostOrigin}/v1/workspaces`;
             const abRes = await fetch(abUrl, {
               headers: abHeaders,
               signal: AbortSignal.timeout(10000),
@@ -237,7 +250,7 @@ export async function POST(request: NextRequest) {
               abHeaders['Authorization'] = `Basic ${Buffer.from(`${config.username}:${config.password}`).toString('base64')}`;
             }
 
-            const healthRes = await fetch(`${abHost}/api/v1/health`, {
+            const healthRes = await fetch(`${abHostOrigin}/api/v1/health`, {
               headers: { 'Accept': 'application/json' },
               signal: AbortSignal.timeout(10000),
             });
@@ -249,7 +262,7 @@ export async function POST(request: NextRequest) {
 
             // If workspace_id provided, verify it exists
             if (config.workspace_id) {
-              const wsRes = await fetch(`${abHost}/api/v1/workspaces/get`, {
+              const wsRes = await fetch(`${abHostOrigin}/api/v1/workspaces/get`, {
                 method: 'POST',
                 headers: { ...abHeaders, 'Content-Type': 'application/json' },
                 body: JSON.stringify({ workspaceId: config.workspace_id }),
@@ -800,7 +813,16 @@ export async function POST(request: NextRequest) {
           }
 
           // Test GitLab API with the token
-          const glResponse = await fetch(`${host}/api/v4/user`, {
+          let glUrl: URL;
+          try {
+            glUrl = await assertExternalUrl(`${host}/api/v4/user`);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid GitLab host: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const glResponse = await fetch(glUrl, {
             headers: {
               'PRIVATE-TOKEN': token,
             },
