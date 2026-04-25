@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
+from scanner.internal_auth import get_internal_api_key, INTERNAL_API_KEY_HEADER
+
 logger = structlog.get_logger()
 
 
@@ -246,9 +248,7 @@ class SchedulerService:
             )
 
             nextauth_url = os.environ.get("NEXTAUTH_URL", "http://localhost:3000")
-            internal_key = os.environ.get(
-                "INTERNAL_API_KEY", "dev-internal-key-not-for-production"
-            )
+            internal_key = get_internal_api_key()
 
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(620.0)
@@ -767,6 +767,7 @@ class SchedulerService:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
                     alert_url,
+                    headers={INTERNAL_API_KEY_HEADER: get_internal_api_key()},
                     json={
                         "taskId": group_id,
                         "taskName": plan_name,
@@ -898,6 +899,7 @@ class SchedulerService:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
                     alert_url,
+                    headers={INTERNAL_API_KEY_HEADER: get_internal_api_key()},
                     json={
                         "taskId": task["id"],
                         "taskName": task["name"],

@@ -567,10 +567,20 @@ export async function POST(request: NextRequest) {
         if (!mbHost || !mbApiKey) {
           return NextResponse.json({ success: false, message: 'Metabase URL and API Key are required' });
         }
+        let mbUrl: URL;
         try {
-          const mbRes = await fetch(`${mbHost}/api/user/current`, {
+          mbUrl = await assertExternalUrl(`${mbHost}/api/user/current`);
+        } catch (e) {
+          return NextResponse.json({
+            success: false,
+            message: `Invalid Metabase URL: ${e instanceof Error ? e.message : 'not allowed'}`,
+          });
+        }
+        try {
+          const mbRes = await fetch(mbUrl, {
             method: 'GET',
             headers: { 'X-Api-Key': mbApiKey },
+            redirect: 'manual',
           });
           if (mbRes.ok) {
             const mbUser = await mbRes.json();
@@ -640,10 +650,22 @@ export async function POST(request: NextRequest) {
           const password = config.password;
           const cleanHost = host.replace(/\/+$/, '');
 
+          let cleanHostSafe: URL;
+          try {
+            cleanHostSafe = await assertExternalUrl(cleanHost);
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid Airflow host: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const cleanHostOrigin = cleanHostSafe.origin;
+
           // Step 1: Health check (no auth needed on most setups)
-          const healthResponse = await fetch(`${cleanHost}/api/v1/health`, {
+          const healthResponse = await fetch(`${cleanHostOrigin}/api/v1/health`, {
             headers: { 'Accept': 'application/json' },
             signal: AbortSignal.timeout(10000),
+            redirect: 'manual',
           });
 
           if (!healthResponse.ok) {
@@ -663,12 +685,13 @@ export async function POST(request: NextRequest) {
           }
 
           const auth = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
-          const dagsResponse = await fetch(`${cleanHost}/api/v1/dags?limit=1`, {
+          const dagsResponse = await fetch(`${cleanHostOrigin}/api/v1/dags?limit=1`, {
             headers: {
               'Authorization': auth,
               'Accept': 'application/json',
             },
             signal: AbortSignal.timeout(10000),
+            redirect: 'manual',
           });
 
           if (dagsResponse.ok) {
@@ -709,13 +732,24 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ success: false, message: 'Instance URL and API key are required' });
           }
 
-          const n8nUrl = `${host.replace(/\/$/, '')}/api/v1/workflows?limit=1`;
-          const n8nResponse = await fetch(n8nUrl, {
+          let n8nSafeUrl: URL;
+          try {
+            n8nSafeUrl = await assertExternalUrl(
+              `${host.replace(/\/$/, '')}/api/v1/workflows?limit=1`,
+            );
+          } catch (e) {
+            return NextResponse.json({
+              success: false,
+              message: `Invalid n8n host: ${e instanceof Error ? e.message : 'not allowed'}`,
+            });
+          }
+          const n8nResponse = await fetch(n8nSafeUrl, {
             headers: {
               'X-N8N-API-KEY': apiKey,
               'Accept': 'application/json',
             },
             signal: AbortSignal.timeout(10000),
+            redirect: 'manual',
           });
 
           if (n8nResponse.ok) {
