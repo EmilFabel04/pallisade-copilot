@@ -34,6 +34,28 @@ def _allowed_project_roots() -> List[Path]:
     return out
 
 
+def resolve_dbt_manifest_file(raw_path: str) -> Tuple[Optional[Path], Optional[str]]:
+    """
+    Validate a user-supplied path to a dbt manifest file against the allow-list.
+    Returns (resolved_path, error). For lineage's `manifest_path` config branch,
+    where the user names the manifest directly rather than a project root.
+    """
+    roots = _allowed_project_roots()
+    if not roots:
+        return None, "dbt Core is not enabled on this server (DBT_ALLOWED_PROJECT_ROOTS unset)."
+    if not raw_path or not isinstance(raw_path, str):
+        return None, "manifest_path is required."
+    try:
+        resolved = Path(raw_path).expanduser().resolve(strict=True)
+    except (FileNotFoundError, RuntimeError, OSError):
+        return None, "manifest_path is invalid."
+    if not any(resolved == r or r in resolved.parents for r in roots):
+        return None, "manifest_path is not in an allowed location."
+    if not resolved.is_file():
+        return None, "manifest_path is not a file."
+    return resolved, None
+
+
 def _resolve_dbt_core_paths(config: Dict[str, Any]) -> Tuple[Optional[Path], Optional[str]]:
     """
     Validate dbt Core paths against the allow-list. Returns (manifest_path, error).

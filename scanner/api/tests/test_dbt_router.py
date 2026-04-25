@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from scanner.api.routers.dbt import _resolve_dbt_core_paths
+from scanner.api.routers.dbt import _resolve_dbt_core_paths, resolve_dbt_manifest_file
 
 
 @pytest.fixture
@@ -74,4 +74,76 @@ def test_accepts_valid_project(allowed_project: Path) -> None:
 def test_rejects_missing_project_path(allowed_project: Path) -> None:
     manifest, err = _resolve_dbt_core_paths({})
     assert manifest is None
+    assert err is not None
+
+
+# ---------------------------------------------------------------------------
+# resolve_dbt_manifest_file — used by lineage's manifest_path branch
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_file_rejects_when_allowlist_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("DBT_ALLOWED_PROJECT_ROOTS", raising=False)
+    f = tmp_path / "manifest.json"
+    f.write_text("{}")
+    path, err = resolve_dbt_manifest_file(str(f))
+    assert path is None
+    assert err is not None
+    assert "not enabled" in err.lower()
+
+
+def test_manifest_file_rejects_outside_allowlist(
+    allowed_project: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "evil.json"
+    outside.write_text("{}")
+    path, err = resolve_dbt_manifest_file(str(outside))
+    assert path is None
+    assert err is not None
+
+
+def test_manifest_file_rejects_dotdot_traversal(
+    allowed_project: Path, tmp_path: Path
+) -> None:
+    manifest = allowed_project / "target" / "manifest.json"
+    traversal = f"{manifest}/../../../../etc/passwd"
+    path, err = resolve_dbt_manifest_file(traversal)
+    assert path is None
+    assert err is not None
+
+
+def test_manifest_file_rejects_directory(allowed_project: Path) -> None:
+    path, err = resolve_dbt_manifest_file(str(allowed_project / "target"))
+    assert path is None
+    assert err is not None
+    assert "not a file" in err.lower()
+
+
+def test_manifest_file_rejects_missing_arg(allowed_project: Path) -> None:
+    path, err = resolve_dbt_manifest_file("")
+    assert path is None
+    assert err is not None
+
+
+def test_manifest_file_accepts_valid(allowed_project: Path) -> None:
+    target = allowed_project / "target" / "manifest.json"
+    path, err = resolve_dbt_manifest_file(str(target))
+    assert err is None
+    assert path is not None
+    assert path.is_file()
+    assert path.name == "manifest.json"
+
+
+def test_manifest_file_rejects_symlink_outside(
+    allowed_project: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "secret.json"
+    outside.write_text("{}")
+    link = allowed_project / "target" / "rogue.json"
+    link.symlink_to(outside)
+    path, err = resolve_dbt_manifest_file(str(link))
+    # Symlink resolves outside the allow-list, must be rejected.
+    assert path is None
     assert err is not None

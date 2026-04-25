@@ -337,8 +337,18 @@ async def extract_dbt_lineage(
                     manifest = None
         elif config.get("manifest_path"):
             import json
-            with open(config["manifest_path"]) as f:
-                manifest = json.load(f)
+            from scanner.api.routers.dbt import resolve_dbt_manifest_file
+            safe_path, err = resolve_dbt_manifest_file(config["manifest_path"])
+            if err or safe_path is None:
+                logger.warning(f"[dbt] manifest_path rejected: {err}")
+                manifest = None
+            else:
+                try:
+                    with safe_path.open() as f:
+                        manifest = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    logger.warning("[dbt] manifest_path could not be read")
+                    manifest = None
 
     # If dbt Cloud, try to fetch manifest from API
     if not manifest and integration_type == "DBT_CLOUD":
