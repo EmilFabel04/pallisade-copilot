@@ -4,6 +4,7 @@ import prisma from '@/lib/db';
 import { notifyEvents } from '@/lib/notifications';
 import { detectHighImpactEvents } from '@/lib/high-impact-events';
 import { routeNotification } from '@/lib/notification-router';
+import { getInternalApiKey, INTERNAL_API_KEY_HEADER } from '@/lib/internal-api-key';
 
 // ---------------------------------------------------------------------------
 // Health aggregation (mirrors scanner/monitors/health.py)
@@ -279,10 +280,14 @@ export async function POST(
     const alertSignals = signals.filter((s) => s.status === 'FAIL' || s.status === 'ERROR' || s.status === 'WARN');
     if (alertSignals.length > 0) {
       const baseUrl = process.env.NEXTAUTH_URL || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      const internalKey = getInternalApiKey();
       for (const sig of alertSignals) {
         fetch(`${baseUrl}/api/schedule/alert`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            [INTERNAL_API_KEY_HEADER]: internalKey,
+          },
           body: JSON.stringify({
             taskId: sig.monitorId,
             taskName: sig.monitorName,

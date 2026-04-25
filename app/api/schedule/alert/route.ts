@@ -7,6 +7,7 @@ import { OpsgenieClient } from '@/lib/integrations/opsgenie';
 import prisma from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { notify } from '@/lib/notifications';
+import { verifyInternalApiKey, INTERNAL_API_KEY_HEADER } from '@/lib/internal-api-key';
 
 /**
  * Dispatch alert notifications for a monitor run.
@@ -31,6 +32,11 @@ interface DestinationSpec {
 }
 
 export async function POST(request: NextRequest) {
+  // Trusted server-to-server only (Python scheduler, internal route hops).
+  // No browser/user calls — auth via static shared secret.
+  if (!verifyInternalApiKey(request.headers.get(INTERNAL_API_KEY_HEADER))) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await request.json();
     const {

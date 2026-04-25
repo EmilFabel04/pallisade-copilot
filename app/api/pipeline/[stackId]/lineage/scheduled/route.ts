@@ -2,16 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { Session } from 'next-auth';
 import prisma from '@/lib/db';
 import { extractLineageForStack } from '../extract-lineage';
-
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || 'dev-internal-key-not-for-production';
+import { verifyInternalApiKey, INTERNAL_API_KEY_HEADER } from '@/lib/internal-api-key';
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ stackId: string }> }
 ) {
   // Authenticate via internal API key
-  const apiKey = request.headers.get('x-internal-api-key');
-  if (apiKey !== INTERNAL_API_KEY) {
+  if (!verifyInternalApiKey(request.headers.get(INTERNAL_API_KEY_HEADER))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
