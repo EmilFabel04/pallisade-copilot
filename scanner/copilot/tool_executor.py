@@ -4693,7 +4693,7 @@ class ToolExecutor:
             token_type = "oauth"
         elif token.startswith("ghu_"):
             token_type = "user-to-server"
-        logger.info(f"[GitHub] Using {token_type} token (prefix: {token[:10]}...)")
+        logger.info(f"[GitHub] Using {token_type} token")
 
         try:
             async with aiohttp.ClientSession() as session:
