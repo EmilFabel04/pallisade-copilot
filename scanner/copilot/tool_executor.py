@@ -3960,6 +3960,28 @@ class ToolExecutor:
             return ToolResult(success=False, error=str(exc))
         return ToolResult(success=True, data=data)
 
+    async def _execute_get_monitor_run_history(self, args: Dict[str, Any]) -> ToolResult:
+        """Fetch the recent run history for one saved monitor."""
+        monitor_id = args.get("monitor_id")
+        if not isinstance(monitor_id, str) or not monitor_id.strip():
+            return ToolResult(
+                success=False,
+                error="monitor_id is required. Call list_configured_monitors first to find the right id.",
+            )
+
+        body: Dict[str, Any] = {"monitor_id": monitor_id}
+        if "limit" in args and args["limit"] is not None:
+            body["limit"] = args["limit"]
+
+        try:
+            data = await self._call_nextjs(
+                "/api/copilot/internal/get-monitor-run-history",
+                body,
+            )
+        except Exception as exc:
+            return ToolResult(success=False, error=str(exc))
+        return ToolResult(success=True, data=data)
+
     async def _execute_run_coverage_monitor(self, args: Dict[str, Any]) -> ToolResult:
         """Execute a specific monitor against a data asset."""
         import asyncio
