@@ -1387,8 +1387,21 @@ class TaskExecutor:
         from scanner.scheduler.service import _get_connection
 
         integration_id = (task or {}).get("integrationId")
+        organization_id = (task or {}).get("organizationId")
         tool_cfg = (task or {}).get("config") or {}
-        node_id = tool_cfg.get("toolNodeId") or tool_cfg.get("nodeId") if isinstance(tool_cfg, dict) else None
+        # The monitor's config blob may carry the dbt node id…
+        node_id = (
+            tool_cfg.get("toolNodeId") or tool_cfg.get("nodeId")
+            if isinstance(tool_cfg, dict) else None
+        )
+        # …but the dbt integration's own config (passed in dbt_config) usually
+        # carries it under "id". When the monitor was created from the
+        # Integrations page (no FK on the Monitor row), this is the only
+        # link back to the pipeline.
+        if not node_id and isinstance(dbt_config, dict):
+            cand = dbt_config.get("id") or dbt_config.get("nodeId") or dbt_config.get("toolNodeId")
+            if isinstance(cand, str) and cand:
+                node_id = cand
 
         warehouse_types = ("bigquery", "snowflake", "postgres", "redshift")
 
@@ -1415,34 +1428,83 @@ class TaskExecutor:
                         if row:
                             stack_id = row[0]
 
-                    if not stack_id:
-                        logger.warning("[Executor] dbt_core monitor: no stackId resolved; skipping warehouse adapter")
-                        return None
+                    # 2a. Stack-scoped warehouse lookup (preferred).
+                    row = None
+                    if stack_id:
+                        cur.execute(
+                            """
+                            SELECT pn."toolType", i.credentials AS int_creds, pn.config
+                            FROM "PipelineNode" pn
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE pn."stackId" = %s
+                              AND pn."toolType" = ANY(%s)
+                              AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                            ORDER BY pn."updatedAt" DESC
+                            LIMIT 1
+                            """,
+                            (stack_id, list(warehouse_types)),
+                        )
+                        row = cur.fetchone()
+                        if not row:
+                            logger.warning(
+                                "[Executor] dbt_core monitor: no warehouse sibling in stack %s",
+                                stack_id,
+                            )
 
-                    # 2. Find a CONNECTED warehouse node in the same stack.
-                    cur.execute(
-                        """
-                        SELECT pn."toolType", i.credentials AS int_creds, pn.config
-                        FROM "PipelineNode" pn
-                        LEFT JOIN "Integration" i ON pn."integrationId" = i.id
-                        WHERE pn."stackId" = %s
-                          AND pn."toolType" = ANY(%s)
-                          AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
-                        ORDER BY pn."updatedAt" DESC
-                        LIMIT 1
-                        """,
-                        (stack_id, list(warehouse_types)),
-                    )
-                    row = cur.fetchone()
+                    # 2b. Org-scoped fallback. When the monitor was created
+                    # outside any pipeline (no stackId resolvable), but the
+                    # org has exactly one connected warehouse, validating
+                    # against that warehouse is what the user means.
+                    if not row and organization_id:
+                        cur.execute(
+                            """
+                            SELECT pn."toolType", i.credentials AS int_creds, pn.config
+                            FROM "PipelineNode" pn
+                            JOIN "PipelineStack" ps ON pn."stackId" = ps.id
+                            LEFT JOIN "Integration" i ON pn."integrationId" = i.id
+                            WHERE ps."organizationId" = %s
+                              AND pn."toolType" = ANY(%s)
+                              AND pn.status IN ('CONNECTED', 'HEALTHY', 'WARNING')
+                            ORDER BY pn."updatedAt" DESC
+                            LIMIT 1
+                            """,
+                            (organization_id, list(warehouse_types)),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            logger.info(
+                                "[Executor] dbt_core monitor: resolved warehouse via org-scope fallback (no stackId)",
+                            )
+
                     if not row:
-                        logger.warning("[Executor] dbt_core monitor: no warehouse sibling in stack %s", stack_id)
+                        logger.warning(
+                            "[Executor] dbt_core monitor: no warehouse adapter resolvable "
+                            "(integration_id=%s, node_id=%s, stack_id=%s, org_id=%s)",
+                            bool(integration_id), bool(node_id), bool(stack_id), bool(organization_id),
+                        )
                         return None
 
                     warehouse_type, int_creds, node_cfg = row
                     merged_cfg: Dict[str, Any] = {}
                     if isinstance(node_cfg, dict):
                         merged_cfg.update(node_cfg)
+                    # Integration.credentials may be a plaintext dict OR a
+                    # {"encrypted": <hex>} envelope from lib/crypto.ts; both
+                    # need flattening to the adapter-expected shape.
+                    if isinstance(int_creds, str):
+                        try:
+                            import json as _json
+                            int_creds = _json.loads(int_creds)
+                        except Exception:
+                            int_creds = None
                     if isinstance(int_creds, dict):
+                        if "encrypted" in int_creds:
+                            try:
+                                import json as _json
+                                int_creds = _json.loads(_decrypt(int_creds["encrypted"]))
+                            except Exception as e:
+                                logger.warning(f"[Executor] failed to decrypt warehouse credentials: {e}")
+                                int_creds = {}
                         merged_cfg.update(int_creds)
                     # Map common alt field names adapters expect.
                     if merged_cfg.get("username") and not merged_cfg.get("user"):
