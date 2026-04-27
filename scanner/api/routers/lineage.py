@@ -475,9 +475,10 @@ async def engine_upstream(
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
     plane: Optional[str] = Query(None, description="Edge plane filter: data,control,cross"),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Get upstream lineage for an asset with filtering."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -496,9 +497,10 @@ async def engine_downstream(
     kind: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Get downstream lineage for an asset with filtering."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -516,9 +518,10 @@ async def engine_blast_radius(
     kind: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Compute the downstream blast radius of an asset."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -532,9 +535,10 @@ async def engine_recommend_monitors(
     depth: int = Query(3, ge=1, le=10),
     existing_fqns: Optional[str] = Query(None, description="Comma-separated MONITOR_KEY:fqn strings for dedup"),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Recommend monitors for a lineage node based on its type and upstream context."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built. Call /lineage/engine/build first.")
 
@@ -609,9 +613,13 @@ async def engine_recommend_monitors(
 
 
 @router.get("/lineage/engine/explain-edge/{edge_id}")
-async def engine_explain_edge(edge_id: str, stack_id: Optional[str] = Query(None)):
+async def engine_explain_edge(
+    edge_id: str,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Show evidence and reasoning for a specific edge."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -626,9 +634,10 @@ async def engine_search(
     q: str = Query(..., min_length=1, description="Search query (substring match on name/fqn)"),
     limit: int = Query(10, ge=1, le=100),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Search lineage nodes by name or FQN substring match."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         return {"results": []}
 
@@ -652,13 +661,16 @@ async def engine_search(
 
 
 @router.get("/lineage/engine/auto-anchor")
-async def engine_auto_anchor(stack_id: Optional[str] = Query(None)):
+async def engine_auto_anchor(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Pick the best anchor node for full-pipeline protection.
 
     Strategy: find the leaf node with the most upstream ancestors.
     Falls back to any leaf, then any node.
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return {"anchor": None}
 
@@ -696,9 +708,10 @@ async def engine_auto_anchor(stack_id: Optional[str] = Query(None)):
 async def engine_full_graph(
     plane: Optional[str] = Query(None, description="Filter edges by plane: data,control,cross"),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Return the full engine graph (nodes + edges with confidence/evidence)."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         return {"nodes": [], "edges": []}
 
@@ -718,14 +731,17 @@ async def engine_full_graph(
 
 
 @router.get("/lineage/engine/snapshot")
-async def engine_snapshot(stack_id: Optional[str] = Query(None)):
+async def engine_snapshot(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return the engine graph serialized for persistence (to store in DB).
 
     The response includes the full graph dict (nodes + edges with all metadata
     including raw_metadata / dbt_resource_type) so the frontend can save it
     to LineageSnapshot.graphData and restore on server restart.
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return {"has_graph": False, "graph_data": None}
     graph_data = store.graph.to_dict()
@@ -779,13 +795,17 @@ async def engine_restore(
 
 
 @router.get("/lineage/engine/control-plane/{dag_id}")
-async def engine_control_plane(dag_id: str, stack_id: Optional[str] = Query(None)):
+async def engine_control_plane(
+    dag_id: str,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return the control-plane subgraph for a specific DAG.
 
     Returns the DAG node, its tasks, internal dependency edges, and
     cross-link edges to data-plane assets.
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -807,9 +827,12 @@ async def engine_control_plane(dag_id: str, stack_id: Optional[str] = Query(None
 
 
 @router.get("/lineage/engine/control-plane")
-async def engine_control_plane_all(stack_id: Optional[str] = Query(None)):
+async def engine_control_plane_all(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return the full control-plane subgraph (all DAGs and tasks)."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         return {"nodes": [], "edges": [], "stats": {}}
 
@@ -825,9 +848,13 @@ async def engine_control_plane_all(stack_id: Optional[str] = Query(None)):
 
 
 @router.get("/lineage/engine/cross-links/{asset_id}")
-async def engine_cross_links(asset_id: str, stack_id: Optional[str] = Query(None)):
+async def engine_cross_links(
+    asset_id: str,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return cross-plane edges for a data asset (links to orchestration)."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -851,13 +878,14 @@ async def engine_run_history(
     dag_id: str,
     limit: int = Query(10, ge=1, le=100),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Get recent run history for an Airflow DAG.
 
     Delegates to AirflowIntegration if an adapter is available. Otherwise
     returns whatever run_summary data is stored on the DAG node.
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
 
     # Try to find run_summary from the DAG node's raw_metadata
     dag_node = None
@@ -877,9 +905,12 @@ async def engine_run_history(
 
 
 @router.get("/lineage/engine/stats", response_model=CoverageStatsResponse)
-async def engine_stats(stack_id: Optional[str] = Query(None)):
+async def engine_stats(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Get coverage statistics for the built lineage graph."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         return CoverageStatsResponse()
 
@@ -894,9 +925,10 @@ async def engine_export(
     system: Optional[str] = Query(None),
     min_confidence: float = Query(0.0, ge=0.0, le=1.0),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Export the lineage graph in various formats."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(status_code=404, detail="No graph built.")
 
@@ -924,7 +956,10 @@ async def engine_export(
 
 
 @router.get("/lineage/engine/control-plane-overview")
-async def engine_control_plane_overview(stack_id: Optional[str] = Query(None)):
+async def engine_control_plane_overview(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Return the derived control plane graph showing tool/integration sequence.
 
@@ -933,7 +968,7 @@ async def engine_control_plane_overview(stack_id: Optional[str] = Query(None)):
 
     Example: Fivetran → Snowflake → dbt → Snowflake → Looker
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return {"nodes": [], "edges": [], "stats": {"tool_count": 0, "flow_count": 0}}
 
@@ -1009,7 +1044,10 @@ class RenderedViewResponse(BaseModel):
 
 
 @router.get("/lineage/engine/views/pipeline-overview")
-async def view_pipeline_overview(stack_id: Optional[str] = Query(None)):
+async def view_pipeline_overview(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Return the pre-rendered Pipeline Overview view.
 
@@ -1020,14 +1058,14 @@ async def view_pipeline_overview(stack_id: Optional[str] = Query(None)):
     falls back to on-demand computation.
     """
     # Try pre-computed view from run registry
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     if registry.current_run_id:
         record = registry.get_run(registry.current_run_id)
         if record and "pipeline_overview" in record.artifacts.views:
             return record.artifacts.views["pipeline_overview"]
 
     # Fallback: compute on-demand
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return RenderedViewResponse(
             viewType="pipeline_overview",
@@ -1053,7 +1091,10 @@ async def view_pipeline_overview(stack_id: Optional[str] = Query(None)):
 
 
 @router.get("/lineage/engine/views/lane-pipeline-overview")
-async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
+async def view_lane_pipeline_overview(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Return the lane-based Pipeline Overview view.
 
@@ -1069,7 +1110,7 @@ async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
     import logging as _logging
     _log = _logging.getLogger(__name__)
     _log.info("[Engine] lane-pipeline-overview: computing on-demand (v2 — evidence-based edges)")
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         _log.info("[Engine] lane-pipeline-overview: empty graph, returning empty response")
         return RenderedViewResponse(
@@ -1110,6 +1151,7 @@ async def view_lane_pipeline_overview(stack_id: Optional[str] = Query(None)):
 async def view_tool_details(
     tool_view_id: str,
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Return detailed inspection data for a single tool in the Pipeline Overview.
@@ -1117,7 +1159,7 @@ async def view_tool_details(
     The tool_view_id is the ViewNode.id from the lane-pipeline-overview response
     (e.g. "tool:bigquery" or "tool:fivetran:abc123").
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return {"error": "No graph loaded", "toolId": tool_view_id}
 
@@ -1138,7 +1180,10 @@ async def view_tool_details(
 
 
 @router.get("/lineage/engine/views/data-plane")
-async def view_data_plane(stack_id: Optional[str] = Query(None)):
+async def view_data_plane(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Return the pre-rendered Data Plane view.
 
@@ -1149,14 +1194,14 @@ async def view_data_plane(stack_id: Optional[str] = Query(None)):
     falls back to on-demand computation.
     """
     # Try pre-computed view from run registry
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     if registry.current_run_id:
         record = registry.get_run(registry.current_run_id)
         if record and "data_plane" in record.artifacts.views:
             return record.artifacts.views["data_plane"]
 
     # Fallback: compute on-demand
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return RenderedViewResponse(
             viewType="data_plane",
@@ -1193,6 +1238,7 @@ async def data_plane_neighbors(
     depth: int = Query(3, ge=1, le=5),
     limit: int = Query(50, ge=1, le=200),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Get neighbors of a node in the pre-computed data_plane view.
@@ -1209,7 +1255,7 @@ async def data_plane_neighbors(
         from lineage.engine.views import compute_neighbors_from_view
 
     # 1) Try pre-computed data_plane view from current run
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     if registry.current_run_id:
         record = registry.get_run(registry.current_run_id)
         if record and "data_plane" in record.artifacts.views:
@@ -1219,7 +1265,7 @@ async def data_plane_neighbors(
             )
 
     # 2) Fallback: compute data_plane view on-demand from engine graph
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return {
             "nodeId": node_id,
@@ -1265,9 +1311,12 @@ async def data_plane_neighbors(
 
 
 @router.get("/lineage/runs/current")
-async def get_current_run(stack_id: Optional[str] = Query(None)):
+async def get_current_run(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return the current (published) run_id and its status."""
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     if not registry.current_run_id:
         return {"current_run_id": None, "status": None}
     record = registry.get_run(registry.current_run_id)
@@ -1277,9 +1326,13 @@ async def get_current_run(stack_id: Optional[str] = Query(None)):
 
 
 @router.get("/lineage/runs/{run_id}/status")
-async def get_run_status(run_id: str, stack_id: Optional[str] = Query(None)):
+async def get_run_status(
+    run_id: str,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Lightweight status for polling a specific run."""
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     status = registry.get_run_status(run_id)
     if not status:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1287,9 +1340,14 @@ async def get_run_status(run_id: str, stack_id: Optional[str] = Query(None)):
 
 
 @router.get("/lineage/runs/{run_id}/views/{view_type}")
-async def get_run_view(run_id: str, view_type: str, stack_id: Optional[str] = Query(None)):
+async def get_run_view(
+    run_id: str,
+    view_type: str,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return a pre-computed view from a specific run."""
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     record = registry.get_run(run_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
@@ -1304,9 +1362,13 @@ async def get_run_view(run_id: str, view_type: str, stack_id: Optional[str] = Qu
 
 
 @router.get("/lineage/runs")
-async def list_runs(limit: int = Query(5, ge=1, le=20), stack_id: Optional[str] = Query(None)):
+async def list_runs(
+    limit: int = Query(5, ge=1, le=20),
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return recent extraction runs."""
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(principal.organization_id, stack_id)
     return {
         "runs": registry.list_runs(limit),
         "current_run_id": registry.current_run_id,
@@ -1348,13 +1410,16 @@ class ReconcileResponse(BaseModel):
 
 
 @router.get("/lineage/engine/reconcile/diagnostics")
-async def engine_reconcile_diagnostics(stack_id: Optional[str] = Query(None)):
+async def engine_reconcile_diagnostics(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Return graph diagnostics without calling the LLM.
 
     Useful for showing the user what issues exist before they
     decide to run the (potentially expensive) LLM reconciliation.
     """
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         return {"diagnostics": {"dataset_roots": [], "disconnected_components": [],
                                 "suspected_duplicates": [], "missing_links_hints": []}}
