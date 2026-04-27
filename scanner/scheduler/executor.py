@@ -1916,24 +1916,33 @@ class TaskExecutor:
     def _get_workspace_github_token(self, organization_id: Optional[str]) -> Optional[str]:
         """Look up the workspace-level GITHUB integration's OAuth access token.
 
-        Used as a fallback when a per-tool integration (e.g. dbt Core in
-        GitHub mode) doesn't carry its own github_token field — the user has
-        a separately-connected GitHub OAuth integration whose accessToken
-        column holds the credential. Returns None if the org has no active
-        GitHub integration or the lookup fails.
+        Token storage location varies by how the integration was connected:
+          1. ``Integration.accessToken`` column (NextAuth-style OAuth flow).
+          2. ``Integration.config`` JSON's ``access_token`` / ``token`` keys
+             (the path used by the copilot at runtime — see
+             ``lib/integration-credentials.ts`` resolution).
+          3. ``Integration.credentials`` JSON's ``access_token`` / ``token``
+             keys, possibly encrypted.
+
+        Returns None only if all three storage paths fail or no active
+        GITHUB integration exists for the org.
         """
         if not organization_id:
             logger.info("[GitHub] workspace token lookup skipped — no organization_id on task")
             return None
         try:
             from scanner.scheduler.service import _get_connection
+            import json as _json
 
             conn = _get_connection()
             try:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT id, status, "accessToken" IS NOT NULL AS has_token
+                        SELECT id, status,
+                               "accessToken" IS NOT NULL AS has_column_token,
+                               config IS NOT NULL AS has_config,
+                               credentials IS NOT NULL AS has_credentials
                         FROM "Integration"
                         WHERE type = 'GITHUB'
                           AND "organizationId" = %s
@@ -1947,29 +1956,80 @@ class TaskExecutor:
                         "[GitHub] candidate integrations for org",
                         org_id=organization_id,
                         rows=[
-                            {"id": r[0], "status": r[1], "has_token": bool(r[2])}
+                            {
+                                "id": r[0], "status": r[1],
+                                "has_column_token": bool(r[2]),
+                                "has_config": bool(r[3]),
+                                "has_credentials": bool(r[4]),
+                            }
                             for r in diag_rows
                         ],
                     )
 
                     cur.execute(
                         """
-                        SELECT "accessToken"
+                        SELECT "accessToken", config, credentials
                         FROM "Integration"
                         WHERE type = 'GITHUB'
                           AND "organizationId" = %s
                           AND status = 'ACTIVE'
-                          AND "accessToken" IS NOT NULL
                         ORDER BY "updatedAt" DESC
                         LIMIT 1
                         """,
                         (organization_id,),
                     )
                     row = cur.fetchone()
-                    if row and row[0]:
-                        logger.info("[GitHub] resolved workspace token from active GITHUB integration")
-                        return row[0]
-                    logger.info("[GitHub] no ACTIVE GITHUB integration with accessToken found for org")
+                    if not row:
+                        logger.info("[GitHub] no ACTIVE GITHUB integration found for org")
+                        return None
+                    column_token, config_json, credentials_json = row
+
+                    # 1. Column.
+                    if column_token:
+                        logger.info("[GitHub] resolved token from Integration.accessToken column")
+                        return column_token
+
+                    # 2. config JSON (plaintext OAuth merge — see
+                    # lib/integration-credentials.ts resolveStackIntegrations).
+                    config = config_json
+                    if isinstance(config, str):
+                        try:
+                            config = _json.loads(config)
+                        except Exception:
+                            config = None
+                    if isinstance(config, dict):
+                        token = config.get("access_token") or config.get("token")
+                        if token:
+                            logger.info("[GitHub] resolved token from Integration.config")
+                            return token
+
+                    # 3. credentials JSON. May be either {access_token: ...}
+                    # or {encrypted: <hex>} (lib/crypto.ts envelope).
+                    credentials = credentials_json
+                    if isinstance(credentials, str):
+                        try:
+                            credentials = _json.loads(credentials)
+                        except Exception:
+                            credentials = None
+                    if isinstance(credentials, dict):
+                        if "encrypted" in credentials:
+                            try:
+                                decoded = _json.loads(_decrypt(credentials["encrypted"]))
+                                token = decoded.get("access_token") or decoded.get("token")
+                                if token:
+                                    logger.info("[GitHub] resolved token from Integration.credentials (encrypted)")
+                                    return token
+                            except Exception as e:
+                                logger.warning(
+                                    f"[GitHub] failed to decrypt Integration.credentials: {e}"
+                                )
+                        else:
+                            token = credentials.get("access_token") or credentials.get("token")
+                            if token:
+                                logger.info("[GitHub] resolved token from Integration.credentials (plain)")
+                                return token
+
+                    logger.info("[GitHub] active GITHUB integration row exists but no token found in column / config / credentials")
             finally:
                 try:
                     conn.close()

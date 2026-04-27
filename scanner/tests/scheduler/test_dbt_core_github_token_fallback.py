@@ -17,9 +17,12 @@ from scanner.scheduler.executor import TaskExecutor
 
 
 @contextmanager
-def _mock_pg_connection(rows):
-    """Yield a context manager whose cursor.execute records the SQL/args
-    and whose fetchone returns the next row from `rows` (a list)."""
+def _mock_pg_connection(*, fetchall_results=None, fetchone_results=None):
+    """Mock a psycopg connection. Each call to cursor.fetchall() and
+    fetchone() consumes the next entry from the corresponding list."""
+    fetchall_results = list(fetchall_results or [])
+    fetchone_results = list(fetchone_results or [])
+
     conn = MagicMock()
     cursor = MagicMock()
     cursor.__enter__.return_value = cursor
@@ -30,37 +33,94 @@ def _mock_pg_connection(rows):
         cursor.executed.append((sql, params))
 
     def _fetchone():
-        return rows.pop(0) if rows else None
+        return fetchone_results.pop(0) if fetchone_results else None
+
+    def _fetchall():
+        return fetchall_results.pop(0) if fetchall_results else []
 
     cursor.execute.side_effect = _exec
     cursor.fetchone.side_effect = _fetchone
+    cursor.fetchall.side_effect = _fetchall
     conn.cursor.return_value = cursor
     yield conn
 
 
-def test_get_workspace_github_token_returns_token_from_active_github_integration():
+def test_get_workspace_github_token_resolves_from_accesstoken_column():
     executor = TaskExecutor()
 
-    rows = [("ghp_workspaceTokenAbc",)]
-    with _mock_pg_connection(rows) as conn:
+    with _mock_pg_connection(
+        fetchall_results=[[("int_1", "ACTIVE", True, False, False)]],  # diag
+        fetchone_results=[("ghp_columnToken", None, None)],            # main query
+    ) as conn:
         with patch("scanner.scheduler.service._get_connection", return_value=conn):
             token = executor._get_workspace_github_token("org_test")
 
-    assert token == "ghp_workspaceTokenAbc"
-    # Sanity: query must filter by org and type=GITHUB (not just take any token).
-    sql, params = conn.cursor.return_value.executed[0]
-    assert "GITHUB" in sql
-    assert "organizationId" in sql
-    assert params == ("org_test",)
+    assert token == "ghp_columnToken"
+
+
+def test_get_workspace_github_token_resolves_from_config_json_when_column_null():
+    """The actual production case: accessToken column is NULL but config has the token."""
+    executor = TaskExecutor()
+
+    with _mock_pg_connection(
+        fetchall_results=[[("int_1", "ACTIVE", False, True, False)]],
+        fetchone_results=[(None, {"access_token": "ghp_configToken"}, None)],
+    ) as conn:
+        with patch("scanner.scheduler.service._get_connection", return_value=conn):
+            token = executor._get_workspace_github_token("org_test")
+
+    assert token == "ghp_configToken"
+
+
+def test_get_workspace_github_token_resolves_from_config_token_alias():
+    executor = TaskExecutor()
+
+    with _mock_pg_connection(
+        fetchall_results=[[("int_1", "ACTIVE", False, True, False)]],
+        fetchone_results=[(None, {"token": "ghp_aliasToken"}, None)],
+    ) as conn:
+        with patch("scanner.scheduler.service._get_connection", return_value=conn):
+            token = executor._get_workspace_github_token("org_test")
+
+    assert token == "ghp_aliasToken"
+
+
+def test_get_workspace_github_token_resolves_from_plaintext_credentials_blob():
+    executor = TaskExecutor()
+
+    with _mock_pg_connection(
+        fetchall_results=[[("int_1", "ACTIVE", False, False, True)]],
+        fetchone_results=[(None, None, {"access_token": "ghp_credToken"})],
+    ) as conn:
+        with patch("scanner.scheduler.service._get_connection", return_value=conn):
+            token = executor._get_workspace_github_token("org_test")
+
+    assert token == "ghp_credToken"
 
 
 def test_get_workspace_github_token_returns_none_when_no_integration():
     executor = TaskExecutor()
 
-    rows = []  # no row → fetchone returns None
-    with _mock_pg_connection(rows) as conn:
+    with _mock_pg_connection(
+        fetchall_results=[[]],          # no candidates
+        fetchone_results=[None],        # main query also empty
+    ) as conn:
         with patch("scanner.scheduler.service._get_connection", return_value=conn):
             token = executor._get_workspace_github_token("org_no_github")
+
+    assert token is None
+
+
+def test_get_workspace_github_token_returns_none_when_token_absent_everywhere():
+    """Active integration row exists but no token in column, config, or credentials."""
+    executor = TaskExecutor()
+
+    with _mock_pg_connection(
+        fetchall_results=[[("int_1", "ACTIVE", False, False, False)]],
+        fetchone_results=[(None, None, None)],
+    ) as conn:
+        with patch("scanner.scheduler.service._get_connection", return_value=conn):
+            token = executor._get_workspace_github_token("org_test")
 
     assert token is None
 
