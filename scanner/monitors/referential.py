@@ -66,7 +66,7 @@ class ReferentialIntegrityMonitor(BaseMonitor):
                 "'parent_column', and 'child_column' in config."
             )
 
-        child_fqn = self._fqn(database, schema, table)
+        child_fqn = self._fqn(database, schema, table, dialect)
 
         # Build the orphan detection query
         sample_clause = ""

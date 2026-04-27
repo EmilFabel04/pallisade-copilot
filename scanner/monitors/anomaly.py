@@ -208,7 +208,7 @@ class AnomalyMonitor(BaseMonitor):
             raise ValueError(
                 "AnomalyMonitor distribution mode requires a 'column' in config."
             )
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
         col = self.column
         mult = self.iqr_multiplier
 
@@ -439,7 +439,7 @@ class AnomalyMonitor(BaseMonitor):
                 "AnomalyMonitor trend mode requires a 'column' for "
                 "column-level metrics."
             )
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
         metric_expr = self._metric_expression(dialect)
 
         if self.timestamp_column:

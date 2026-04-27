@@ -117,12 +117,12 @@ class TestUniquenessCheckBuildQuery:
     def test_build_query_postgres_fqn(self):
         m = UniquenessCheckMonitor({"columns": ["id"]})
         sql = m.build_query("mydb", "public", "orders", dialect="postgres")
-        assert "mydb.public.orders" in sql
+        assert '"mydb"."public"."orders"' in sql
 
     def test_build_query_bigquery(self):
         m = UniquenessCheckMonitor({"columns": ["id"]})
         sql = m.build_query("project", "dataset", "events", dialect="bigquery")
-        assert "project.dataset.events" in sql
+        assert "`project`.`dataset`.`events`" in sql
         assert "distinct_id" in sql
         assert "total_rows" in sql
 

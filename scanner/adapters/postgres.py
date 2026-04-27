@@ -695,11 +695,9 @@ class PostgresAdapter(DatabaseAdapter):
     # =========================================================================
     
     def quote_identifier(self, identifier: str) -> str:
-        """Quote PostgreSQL identifier."""
-        if '.' in identifier:
-            parts = identifier.split('.')
-            return '.'.join(f'"{p}"' for p in parts)
-        return f'"{identifier}"'
+        """Quote PostgreSQL identifier (validated + escaped)."""
+        from .sql_safety import quote_identifier as _q
+        return _q(identifier, "postgres")
     
     def get_current_timestamp_sql(self) -> str:
         """PostgreSQL current timestamp."""

@@ -499,8 +499,9 @@ class SQLServerAdapter(DatabaseAdapter):
     
     # SQL dialect helpers (required abstract methods)
     def quote_identifier(self, identifier: str) -> str:
-        """Quote identifier with brackets for SQL Server."""
-        return f"[{identifier}]"
+        """Quote SQL Server identifier (validated + escaped)."""
+        from .sql_safety import quote_identifier as _q
+        return _q(identifier, "sqlserver")
     
     def get_current_timestamp_sql(self) -> str:
         """Get current timestamp SQL."""

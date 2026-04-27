@@ -77,7 +77,14 @@ class NullCheckMonitor(BaseMonitor):
         table: str,
         dialect: str = "postgres",
     ) -> str:
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
+        # Reject any user-supplied column with SQL metacharacters before they
+        # reach the f-string interpolation below.
+        for c in self.columns:
+            if c != "*":
+                self._validate_column(c)
+        if self.timestamp_column:
+            self._validate_column(self.timestamp_column)
 
         if self.columns == ["*"]:
             # Wildcard mode: query INFORMATION_SCHEMA to discover columns,

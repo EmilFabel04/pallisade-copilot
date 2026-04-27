@@ -626,12 +626,9 @@ class SnowflakeAdapter(DatabaseAdapter):
     # =========================================================================
     
     def quote_identifier(self, identifier: str) -> str:
-        """Quote Snowflake identifier."""
-        # Already qualified with dots
-        if '.' in identifier:
-            parts = identifier.split('.')
-            return '.'.join(f'"{p}"' for p in parts)
-        return f'"{identifier}"'
+        """Quote Snowflake identifier (validated + escaped)."""
+        from .sql_safety import quote_identifier as _q
+        return _q(identifier, "snowflake")
     
     def get_current_timestamp_sql(self) -> str:
         """Snowflake current timestamp."""

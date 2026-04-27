@@ -702,12 +702,9 @@ class DatabricksAdapter(DatabaseAdapter):
     # =========================================================================
 
     def quote_identifier(self, identifier: str) -> str:
-        """Quote identifier with backticks for Databricks."""
-        # Handle already-qualified multi-part names
-        if '.' in identifier:
-            parts = identifier.split('.')
-            return '.'.join(f'`{p}`' for p in parts)
-        return f'`{identifier}`'
+        """Quote Databricks identifier (validated + escaped)."""
+        from .sql_safety import quote_identifier as _q
+        return _q(identifier, "databricks")
 
     def get_current_timestamp_sql(self) -> str:
         """Get current timestamp SQL."""
