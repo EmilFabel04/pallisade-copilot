@@ -74,7 +74,7 @@ These are the live endpoints (have a Next.js caller, internal caller, or test):
 - `GET /lineage/engine/data-plane/neighbors/{id}`
 - `GET /lineage/engine/reconcile/diagnostics`
 - `GET /lineage/runs/current`, `/runs/{id}/status`, `/runs/{id}/views/{type}`, `/runs`
-- `POST /api/v1/discovery/node`, `POST /api/v1/discovery/all-nodes` (in `scanner/api/routers/discovery.py`)
+- `POST /api/v1/discovery/node`, `POST /api/v1/discovery/bulk` (in `scanner/api/routers/discovery.py`) — both read `_get_engine_store` and `_engine_tool_configs_map`. The other two discovery endpoints (`/discovery/direct`, `/discovery/direct-bulk`) take credentials in the request body and do not touch the lineage cache, so they are not affected by this leak.
 
 Every active endpoint above gains `Depends(require_principal)` and uses the principal's `organization_id` as the outer cache key.
 
@@ -159,7 +159,9 @@ async def engine_upstream(
 
 ### `discovery.py` changes
 
-Both endpoints (`/api/v1/discovery/node`, `/api/v1/discovery/all-nodes`) currently import `_get_engine_store` and `_engine_tool_configs_map` and use a `cache_key` that maps to the legacy `stack_id`-only scheme. They gain `Depends(require_principal)` and pass `principal.organization_id` through the same helper changes.
+Two endpoints (`/api/v1/discovery/node`, `/api/v1/discovery/bulk`) currently import `_get_engine_store` and `_engine_tool_configs_map` and use a `cache_key = stack_id or "default"` (lines 119, 172-173, 236, 251-252) that maps to the legacy `stack_id`-only scheme. They gain `Depends(require_principal)` and pass `principal.organization_id` through the same helper changes.
+
+The two `direct` endpoints (`/discovery/direct`, `/discovery/direct-bulk`) take credentials in the request body and never read the lineage caches, so they are unchanged by this PR.
 
 ## Data flow after the change
 
