@@ -184,64 +184,85 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
 # yourself touching it, fix the call site instead.
 _current_stack_id: str = "default"
 
+# Sentinel org_id used when a writer/reader has not yet been migrated
+# to pass principal.organization_id explicitly. The compound cache key
+# becomes f"__legacy_default_org__:{stack_id}". Removed in a later
+# commit once every call site is migrated.
+_LEGACY_ORG: str = "__legacy_default_org__"
+
 
 def _get_engine_store(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    """Transition wrapper. Accepts either (stack_id) [legacy] or
+    (org_id, stack_id) [new — preferred]. Removed in a later commit
+    once every call site passes (org_id, stack_id)."""
     if len(args) == 1:
-        stack_id = args[0]
-        return _lineage_cache.get_engine_store("__legacy_default_org__", stack_id)
-    org_id, stack_id = args
-    return _lineage_cache.get_engine_store(org_id, stack_id)
+        return _lineage_cache.get_engine_store(_LEGACY_ORG, args[0])
+    if len(args) == 2:
+        return _lineage_cache.get_engine_store(args[0], args[1])
+    raise TypeError(
+        f"_get_engine_store expected 1 or 2 args, got {len(args)}"
+    )
 
 
 def _get_run_registry(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    """Transition wrapper. Accepts either (stack_id) [legacy] or
+    (org_id, stack_id) [new — preferred]. Removed in a later commit
+    once every call site passes (org_id, stack_id)."""
     if len(args) == 1:
-        stack_id = args[0]
-        return _lineage_cache.get_run_registry("__legacy_default_org__", stack_id)
-    org_id, stack_id = args
-    return _lineage_cache.get_run_registry(org_id, stack_id)
+        return _lineage_cache.get_run_registry(_LEGACY_ORG, args[0])
+    if len(args) == 2:
+        return _lineage_cache.get_run_registry(args[0], args[1])
+    raise TypeError(
+        f"_get_run_registry expected 1 or 2 args, got {len(args)}"
+    )
 
 
 def _get_collected_results(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    """Transition wrapper. Accepts either (stack_id) [legacy] or
+    (org_id, stack_id) [new — preferred]. Removed in a later commit
+    once every call site passes (org_id, stack_id)."""
     if len(args) == 1:
-        stack_id = args[0]
-        return _lineage_cache.get_collected_results("__legacy_default_org__", stack_id)
-    org_id, stack_id = args
-    return _lineage_cache.get_collected_results(org_id, stack_id)
+        return _lineage_cache.get_collected_results(_LEGACY_ORG, args[0])
+    if len(args) == 2:
+        return _lineage_cache.get_collected_results(args[0], args[1])
+    raise TypeError(
+        f"_get_collected_results expected 1 or 2 args, got {len(args)}"
+    )
 
 
 def _clear_engine_cache(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    """Transition wrapper. Accepts either (stack_id) [legacy] or
+    (org_id, stack_id) [new — preferred]. Removed in a later commit
+    once every call site passes (org_id, stack_id)."""
     if len(args) == 1:
-        stack_id = args[0]
-        _lineage_cache.clear_engine_cache("__legacy_default_org__", stack_id)
+        _lineage_cache.clear_engine_cache(_LEGACY_ORG, args[0])
+    elif len(args) == 2:
+        _lineage_cache.clear_engine_cache(args[0], args[1])
     else:
-        org_id, stack_id = args
-        _lineage_cache.clear_engine_cache(org_id, stack_id)
+        raise TypeError(
+            f"_clear_engine_cache expected 1 or 2 args, got {len(args)}"
+        )
 
 
 class _CollectedResultsProxy:
     """TRANSITION-ONLY proxy. Delegates to the (default-org, current-stack)
     bucket via the legacy _current_stack_id global. Removed in a later
     task once every writer passes (org_id, stack_id) directly."""
-    _LEGACY_ORG = "__legacy_default_org__"
 
     def __getitem__(self, key):
-        return _lineage_cache.get_collected_results(self._LEGACY_ORG, _current_stack_id)[key]
+        return _lineage_cache.get_collected_results(_LEGACY_ORG, _current_stack_id)[key]
 
     def __setitem__(self, key, value):
-        _lineage_cache.get_collected_results(self._LEGACY_ORG, _current_stack_id)[key] = value
+        _lineage_cache.get_collected_results(_LEGACY_ORG, _current_stack_id)[key] = value
 
     def get(self, key, default=None):
-        return _lineage_cache.get_collected_results(self._LEGACY_ORG, _current_stack_id).get(key, default)
+        return _lineage_cache.get_collected_results(_LEGACY_ORG, _current_stack_id).get(key, default)
 
 
 _engine_collected_results = _CollectedResultsProxy()
 
 
-def _rebuild_engine_from_cache(org_id: str, stack_id) -> None:
+def _rebuild_engine_from_cache(org_id: str, stack_id: Optional[str]) -> None:
     """
     Run the resolver pipeline on cached adapter results (no re-parsing).
 
@@ -2011,9 +2032,11 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         store.pipeline_edges = _pipeline_edges
 
         # Cache tool configs for on-demand SLA discovery
-        _engine_tool_configs_map[_current_stack_id] = {
-            tc.tool_type: tc.config for tc in request.tool_configs if tc.config
-        }
+        _lineage_cache.set_tool_configs(
+            _LEGACY_ORG,
+            _current_stack_id,
+            {tc.tool_type: tc.config for tc in request.tool_configs if tc.config},
+        )
 
         # Build response from run record
         record = registry.get_run(run_id)
