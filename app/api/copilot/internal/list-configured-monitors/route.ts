@@ -19,8 +19,20 @@ function authorize(request: NextRequest): { ok: true; orgId: string } | { ok: fa
 function normalizeList(value: unknown): string[] | undefined {
   if (value == null) return undefined;
   const arr = Array.isArray(value) ? value : [value];
-  return arr.filter((v): v is string => typeof v === 'string' && v.length > 0)
-            .map((v) => v.toUpperCase());
+  // Each item may itself be a comma-separated string (the tool description
+  // tells the LLM to pass values that way, e.g.
+  // "DBT_CORE_SOURCE_VALIDATION,DBT_CORE_REF_INTEGRITY"). Split before
+  // handing the list to Prisma's `in` clause; otherwise Prisma rejects the
+  // whole concatenated string as a single invalid enum value.
+  const flat: string[] = [];
+  for (const v of arr) {
+    if (typeof v !== 'string') continue;
+    for (const piece of v.split(',')) {
+      const trimmed = piece.trim();
+      if (trimmed) flat.push(trimmed.toUpperCase());
+    }
+  }
+  return flat;
 }
 
 export async function POST(request: NextRequest) {
@@ -48,36 +60,44 @@ export async function POST(request: NextRequest) {
   if (targetFqn) where.targetFqn = targetFqn;
   if (typeof enabled === 'boolean') where.enabled = enabled;
 
-  const monitors = await prisma.monitor.findMany({
-    where,
-    select: {
-      id: true,
-      name: true,
-      monitorType: true,
-      targetFqn: true,
-      targetDatabase: true,
-      targetSchema: true,
-      targetTable: true,
-      enabled: true,
-      schedule: true,
-      lastRunAt: true,
-      lastStatus: true,
-      nextRunAt: true,
-      description: true,
-    },
-    orderBy: [
-      { lastStatus: 'desc' },
-      { lastRunAt: 'desc' },
-    ],
-    take: limit,
-  });
+  try {
+    const monitors = await prisma.monitor.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        monitorType: true,
+        targetFqn: true,
+        targetDatabase: true,
+        targetSchema: true,
+        targetTable: true,
+        enabled: true,
+        schedule: true,
+        lastRunAt: true,
+        lastStatus: true,
+        nextRunAt: true,
+        description: true,
+      },
+      orderBy: [
+        { lastStatus: { sort: 'desc', nulls: 'last' } },
+        { lastRunAt: { sort: 'desc', nulls: 'last' } },
+      ],
+      take: limit,
+    });
 
-  return NextResponse.json({
-    monitors: monitors.map((m) => ({
-      ...m,
-      lastRunAt: m.lastRunAt ? m.lastRunAt.toISOString() : null,
-      nextRunAt: m.nextRunAt ? m.nextRunAt.toISOString() : null,
-    })),
-    total: monitors.length,
-  });
+    return NextResponse.json({
+      monitors: monitors.map((m) => ({
+        ...m,
+        lastRunAt: m.lastRunAt ? m.lastRunAt.toISOString() : null,
+        nextRunAt: m.nextRunAt ? m.nextRunAt.toISOString() : null,
+      })),
+      total: monitors.length,
+    });
+  } catch (err) {
+    console.error('[list-configured-monitors] prisma query failed', { where, limit, err });
+    return NextResponse.json(
+      { error: 'failed to query monitors', detail: String((err as Error).message ?? err) },
+      { status: 500 },
+    );
+  }
 }

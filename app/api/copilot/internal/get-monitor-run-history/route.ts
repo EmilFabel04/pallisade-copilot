@@ -30,42 +30,50 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'monitor_id is required' }, { status: 400 });
   }
 
-  const monitor = await prisma.monitor.findFirst({
-    where: { id: monitorId, organizationId: auth.orgId },
-    select: { id: true, name: true, monitorType: true, targetFqn: true },
-  });
-  if (!monitor) {
-    return NextResponse.json({ error: 'monitor not found' }, { status: 404 });
+  try {
+    const monitor = await prisma.monitor.findFirst({
+      where: { id: monitorId, organizationId: auth.orgId },
+      select: { id: true, name: true, monitorType: true, targetFqn: true },
+    });
+    if (!monitor) {
+      return NextResponse.json({ error: 'monitor not found' }, { status: 404 });
+    }
+
+    const limitRaw = Number.isFinite(body?.limit) ? Number(body.limit) : 10;
+    const limit = Math.max(1, Math.min(50, Math.trunc(limitRaw)));
+
+    const runs = await prisma.monitorRun.findMany({
+      where: { monitorId: monitor.id },
+      select: {
+        id: true,
+        status: true,
+        value: true,
+        threshold: true,
+        message: true,
+        details: true,
+        sqlExecuted: true,
+        startedAt: true,
+        completedAt: true,
+        durationMs: true,
+      },
+      orderBy: { startedAt: 'desc' },
+      take: limit,
+    });
+
+    return NextResponse.json({
+      monitor,
+      runs: runs.map((r) => ({
+        ...r,
+        startedAt: r.startedAt.toISOString(),
+        completedAt: r.completedAt ? r.completedAt.toISOString() : null,
+      })),
+      total: runs.length,
+    });
+  } catch (err) {
+    console.error('[get-monitor-run-history] prisma query failed', { monitorId, err });
+    return NextResponse.json(
+      { error: 'failed to query monitor history', detail: String((err as Error).message ?? err) },
+      { status: 500 },
+    );
   }
-
-  const limitRaw = Number.isFinite(body?.limit) ? Number(body.limit) : 10;
-  const limit = Math.max(1, Math.min(50, Math.trunc(limitRaw)));
-
-  const runs = await prisma.monitorRun.findMany({
-    where: { monitorId: monitor.id },
-    select: {
-      id: true,
-      status: true,
-      value: true,
-      threshold: true,
-      message: true,
-      details: true,
-      sqlExecuted: true,
-      startedAt: true,
-      completedAt: true,
-      durationMs: true,
-    },
-    orderBy: { startedAt: 'desc' },
-    take: limit,
-  });
-
-  return NextResponse.json({
-    monitor,
-    runs: runs.map((r) => ({
-      ...r,
-      startedAt: r.startedAt.toISOString(),
-      completedAt: r.completedAt ? r.completedAt.toISOString() : null,
-    })),
-    total: runs.length,
-  });
 }

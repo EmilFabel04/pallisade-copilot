@@ -102,6 +102,40 @@ describe('list-configured-monitors POST', () => {
     });
   });
 
+  test('splits comma-separated monitor_type string into array', async () => {
+    // The LLM sends comma-separated strings (per tool description). The
+    // endpoint must split them before passing to Prisma's `in` clause —
+    // otherwise Prisma rejects "FOO,BAR" as a single invalid enum value.
+    mockedPrisma.monitor.findMany.mockResolvedValue([]);
+    const req = makeRequest({
+      monitor_type: 'DBT_CORE_SOURCE_VALIDATION,DBT_CORE_REF_INTEGRITY',
+    });
+    await POST(req);
+
+    const where = (mockedPrisma.monitor.findMany.mock.calls[0][0] as any).where;
+    expect(where.monitorType).toEqual({
+      in: ['DBT_CORE_SOURCE_VALIDATION', 'DBT_CORE_REF_INTEGRITY'],
+    });
+  });
+
+  test('splits comma-separated status string into array', async () => {
+    mockedPrisma.monitor.findMany.mockResolvedValue([]);
+    const req = makeRequest({ status: 'FAIL,ERROR' });
+    await POST(req);
+
+    const where = (mockedPrisma.monitor.findMany.mock.calls[0][0] as any).where;
+    expect(where.lastStatus).toEqual({ in: ['FAIL', 'ERROR'] });
+  });
+
+  test('handles whitespace and blanks around comma-separated values', async () => {
+    mockedPrisma.monitor.findMany.mockResolvedValue([]);
+    const req = makeRequest({ monitor_type: 'FRESHNESS, ,VOLUME ' });
+    await POST(req);
+
+    const where = (mockedPrisma.monitor.findMany.mock.calls[0][0] as any).where;
+    expect(where.monitorType).toEqual({ in: ['FRESHNESS', 'VOLUME'] });
+  });
+
   test('applies status filter and target_fqn filter', async () => {
     mockedPrisma.monitor.findMany.mockResolvedValue([]);
     const req = makeRequest({
