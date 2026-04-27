@@ -173,93 +173,14 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
     )
 
 
-# All cache state lives in _lineage_cache. The wrappers below take the
-# explicit (org_id, stack_id) form. They exist as a transition layer
-# while individual writer/reader endpoints are migrated to pass
-# principal.organization_id directly. Removed in a subsequent task once
-# every endpoint passes through _lineage_cache directly.
-
-# Temporary shim — removed once every writer endpoint passes org_id
-# explicitly. Reading or writing this value is a bug; if you find
-# yourself touching it, fix the call site instead.
-_current_stack_id: str = "default"
-
-# Sentinel org_id used when a writer/reader has not yet been migrated
-# to pass principal.organization_id explicitly. The compound cache key
-# becomes f"__legacy_default_org__:{stack_id}". Removed in a later
-# commit once every call site is migrated.
-_LEGACY_ORG: str = "__legacy_default_org__"
-
-
-def _get_engine_store(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or
-    (org_id, stack_id) [new — preferred]. Removed in a later commit
-    once every call site passes (org_id, stack_id)."""
-    if len(args) == 1:
-        return _lineage_cache.get_engine_store(_LEGACY_ORG, args[0])
-    if len(args) == 2:
-        return _lineage_cache.get_engine_store(args[0], args[1])
-    raise TypeError(
-        f"_get_engine_store expected 1 or 2 args, got {len(args)}"
-    )
-
-
-def _get_run_registry(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or
-    (org_id, stack_id) [new — preferred]. Removed in a later commit
-    once every call site passes (org_id, stack_id)."""
-    if len(args) == 1:
-        return _lineage_cache.get_run_registry(_LEGACY_ORG, args[0])
-    if len(args) == 2:
-        return _lineage_cache.get_run_registry(args[0], args[1])
-    raise TypeError(
-        f"_get_run_registry expected 1 or 2 args, got {len(args)}"
-    )
-
-
-def _get_collected_results(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or
-    (org_id, stack_id) [new — preferred]. Removed in a later commit
-    once every call site passes (org_id, stack_id)."""
-    if len(args) == 1:
-        return _lineage_cache.get_collected_results(_LEGACY_ORG, args[0])
-    if len(args) == 2:
-        return _lineage_cache.get_collected_results(args[0], args[1])
-    raise TypeError(
-        f"_get_collected_results expected 1 or 2 args, got {len(args)}"
-    )
-
-
-def _clear_engine_cache(*args):
-    """Transition wrapper. Accepts either (stack_id) [legacy] or
-    (org_id, stack_id) [new — preferred]. Removed in a later commit
-    once every call site passes (org_id, stack_id)."""
-    if len(args) == 1:
-        _lineage_cache.clear_engine_cache(_LEGACY_ORG, args[0])
-    elif len(args) == 2:
-        _lineage_cache.clear_engine_cache(args[0], args[1])
-    else:
-        raise TypeError(
-            f"_clear_engine_cache expected 1 or 2 args, got {len(args)}"
-        )
-
-
-class _CollectedResultsProxy:
-    """TRANSITION-ONLY proxy. Delegates to the (default-org, current-stack)
-    bucket via the legacy _current_stack_id global. Removed in a later
-    task once every writer passes (org_id, stack_id) directly."""
-
-    def __getitem__(self, key):
-        return _lineage_cache.get_collected_results(_LEGACY_ORG, _current_stack_id)[key]
-
-    def __setitem__(self, key, value):
-        _lineage_cache.get_collected_results(_LEGACY_ORG, _current_stack_id)[key] = value
-
-    def get(self, key, default=None):
-        return _lineage_cache.get_collected_results(_LEGACY_ORG, _current_stack_id).get(key, default)
-
-
-_engine_collected_results = _CollectedResultsProxy()
+# Cache helpers — direct aliases over the per-tenant cache module.
+# Every call site supplies (org_id, stack_id) explicitly, where org_id
+# is derived from request.state.principal.organization_id (set by
+# ActingPrincipalMiddleware). No legacy fallback path exists.
+_get_engine_store = _lineage_cache.get_engine_store
+_get_run_registry = _lineage_cache.get_run_registry
+_get_collected_results = _lineage_cache.get_collected_results
+_clear_engine_cache = _lineage_cache.clear_engine_cache
 
 
 def _rebuild_engine_from_cache(org_id: str, stack_id: Optional[str]) -> None:
