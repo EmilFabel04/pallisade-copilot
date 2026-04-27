@@ -407,40 +407,47 @@ def _parse_filters(
 
 
 @router.post("/lineage/engine/clear-cache")
-async def engine_clear_cache(stack_id: Optional[str] = Query(None)):
+async def engine_clear_cache(
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Reset engine cache before a fresh extraction batch.
 
-    The frontend calls this before looping over pipeline nodes so that
+    Clears only the buckets owned by the caller's organization. The
+    frontend calls this before looping over pipeline nodes so that
     stale data from a previous extraction run doesn't accumulate.
-    Also clears the in-memory graph and run registry so stale views
-    are never served after lineage is deleted.
     """
     import logging
-    global _current_stack_id
-    if stack_id:
-        _current_stack_id = stack_id
-    _clear_engine_cache(stack_id)
 
-    # Clear in-memory graph
-    store = _get_engine_store(stack_id)
+    org_id = principal.organization_id
+    _clear_engine_cache(org_id, stack_id)
+
+    # Clear in-memory graph for this principal's bucket
+    store = _get_engine_store(org_id, stack_id)
     store.graph = None
     store.tool_nodes = []
 
     # Clear run registry so stale pre-computed views are not served
-    registry = _get_run_registry(stack_id)
+    registry = _get_run_registry(org_id, stack_id)
     registry._runs.clear()
     registry._current_run_id = None
 
-    logging.getLogger(__name__).info(f"[Engine] clear-cache: Reset engine store for stack_id={stack_id or 'default'}")
+    logging.getLogger(__name__).info(
+        f"[Engine] clear-cache: org={org_id} stack_id={stack_id or 'default'}"
+    )
     return {"success": True, "message": "Engine cache cleared"}
 
 
 @router.post("/lineage/engine/build", response_model=EngineGraphResponse)
-async def engine_build(request: EngineBuildRequest, stack_id: Optional[str] = Query(None)):
+async def engine_build(
+    request: EngineBuildRequest,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Build a lineage graph from engine config."""
     import asyncio
 
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     try:
         graph = await asyncio.to_thread(store.build_graph, request.config)
         coverage = store.get_stats()
@@ -732,7 +739,11 @@ class EngineRestoreRequest(BaseModel):
 
 
 @router.post("/lineage/engine/restore")
-async def engine_restore(request: EngineRestoreRequest, stack_id: Optional[str] = Query(None)):
+async def engine_restore(
+    request: EngineRestoreRequest,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Restore the engine graph from a previously persisted snapshot.
 
     Called by the frontend when the in-memory engine graph is empty (after
@@ -748,7 +759,7 @@ async def engine_restore(request: EngineRestoreRequest, stack_id: Optional[str] 
             from scanner.lineage.graph import LineageGraph
 
         graph = LineageGraph.from_dict(request.graph_data)
-        store = _get_engine_store(stack_id)
+        store = _get_engine_store(principal.organization_id, stack_id)
         store.graph = graph
         store.tool_nodes = request.graph_data.get("tool_nodes", [])
         _logger.info(
@@ -1362,7 +1373,11 @@ async def engine_reconcile_diagnostics(stack_id: Optional[str] = Query(None)):
 
 
 @router.post("/lineage/engine/reconcile", response_model=ReconcileResponse)
-async def engine_reconcile(request: ReconcileRequest, stack_id: Optional[str] = Query(None)):
+async def engine_reconcile(
+    request: ReconcileRequest,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Run LLM reconciliation on the current engine graph.
 
     If dry_run=True (default), returns the patch for UI review without applying.
@@ -1374,7 +1389,7 @@ async def engine_reconcile(request: ReconcileRequest, stack_id: Optional[str] = 
     import logging
     _logger = logging.getLogger(__name__)
 
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         raise HTTPException(404, "No graph built. Extract lineage first.")
 
@@ -1430,7 +1445,11 @@ class ReconcileApplyRequest(BaseModel):
 
 
 @router.post("/lineage/engine/reconcile/apply")
-async def engine_reconcile_apply(request: ReconcileApplyRequest, stack_id: Optional[str] = Query(None)):
+async def engine_reconcile_apply(
+    request: ReconcileApplyRequest,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """Apply a reconciliation patch that was previously generated with dry_run=True.
 
     This enables the 'review & confirm' flow:
@@ -1442,7 +1461,7 @@ async def engine_reconcile_apply(request: ReconcileApplyRequest, stack_id: Optio
     import logging
     _logger = logging.getLogger(__name__)
 
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph or not store.graph.nodes:
         raise HTTPException(404, "No graph built.")
 
