@@ -34,6 +34,31 @@ def _get_encryption_key() -> bytes:
     return hashlib.scrypt(b"pallisade-dev-key", salt=b"salt", n=16384, r=8, p=1, dklen=32)
 
 
+def _run_coro_sync(coro):
+    """Run an async coroutine from sync code, regardless of whether the
+    calling thread already has a running event loop.
+
+    The dbt-core validation client is built synchronously but is itself
+    invoked from inside the scheduler's async pipeline, so a naïve
+    ``asyncio.get_event_loop().run_until_complete(...)`` either errors
+    ('no current event loop' on Python 3.12+) or deadlocks ('This event
+    loop is already running') depending on the caller. This helper picks
+    the right strategy: ``asyncio.run`` if no loop is running, otherwise
+    run in a worker thread with its own fresh loop.
+    """
+    import asyncio as _asyncio
+    import concurrent.futures as _cf
+    try:
+        _asyncio.get_running_loop()
+        running = True
+    except RuntimeError:
+        running = False
+    if not running:
+        return _asyncio.run(coro)
+    with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(_asyncio.run, coro).result()
+
+
 def _decrypt(encrypted_hex: str) -> str:
     """Decrypt AES-256-GCM data produced by lib/crypto.ts encrypt().
 
@@ -1292,12 +1317,21 @@ class TaskExecutor:
                         from scanner.lineage.github_reader import fetch_dbt_project_files_with_fallback
                     except ImportError:
                         from lineage.github_reader import fetch_dbt_project_files_with_fallback  # type: ignore
-                    token = (integration_config.get("github") or {}).get("token") \
+                    token = (
+                        (integration_config.get("github") or {}).get("token")
                         or integration_config.get("github_token")
+                        # Fall back to the workspace-level GITHUB OAuth integration's
+                        # access token. The dbt Core integration form doesn't ask the
+                        # user to paste a github_token — it relies on a separately-
+                        # connected GitHub OAuth integration. Without this fallback,
+                        # configured monitors fail with "missing token or repo" even
+                        # though the user has GitHub fully connected.
+                        or self._get_workspace_github_token((task or {}).get("organizationId"))
+                    )
                     repo = integration_config.get("github_repo")
                     if not token or not repo:
                         raise ValueError("dbt_core GitHub mode missing token or repo.")
-                    project_files, fallback = asyncio.get_event_loop().run_until_complete(
+                    project_files, fallback = _run_coro_sync(
                         fetch_dbt_project_files_with_fallback(
                             repo=repo,
                             token=token,
@@ -1864,6 +1898,48 @@ class TaskExecutor:
                 "status": "ERROR",
                 "message": f"Prompt execution failed: {str(e)}",
             }
+
+    def _get_workspace_github_token(self, organization_id: Optional[str]) -> Optional[str]:
+        """Look up the workspace-level GITHUB integration's OAuth access token.
+
+        Used as a fallback when a per-tool integration (e.g. dbt Core in
+        GitHub mode) doesn't carry its own github_token field — the user has
+        a separately-connected GitHub OAuth integration whose accessToken
+        column holds the credential. Returns None if the org has no active
+        GitHub integration or the lookup fails.
+        """
+        if not organization_id:
+            return None
+        try:
+            from scanner.scheduler.service import _get_connection
+
+            conn = _get_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT "accessToken"
+                        FROM "Integration"
+                        WHERE type = 'GITHUB'
+                          AND "organizationId" = %s
+                          AND status = 'ACTIVE'
+                          AND "accessToken" IS NOT NULL
+                        ORDER BY "updatedAt" DESC
+                        LIMIT 1
+                        """,
+                        (organization_id,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        return row[0]
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"[Executor] Failed to look up workspace GitHub token: {e}")
+        return None
 
     async def _get_integration_config(
         self, integration_id: Optional[str], organization_id: Optional[str] = None,
