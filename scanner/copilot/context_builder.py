@@ -260,7 +260,9 @@ class CopilotContext:
                 lines.append(f"### {layer.value.title()} Layer")
                 for integration in layer_integrations:
                     lines.append(f"- **{integration.name}** ({integration.type})")
-                    # Include relevant config details for the AI
+                    # Include relevant config details for the AI.
+                    # NEVER expose secret-bearing fields (token, password, key, etc.)
+                    # — restrict to a hand-curated allowlist.
                     if integration.config:
                         config = integration.config
                         if config.get('project_id') or config.get('project'):
@@ -276,6 +278,22 @@ class CopilotContext:
                             lines.append(f"  - Database: `{config.get('database')}`")
                         if config.get('schema'):
                             lines.append(f"  - Schema: `{config.get('schema')}`")
+                        # Surface where the integration reads its project artifacts
+                        # from. Without this, the LLM can't tell whether dbt is
+                        # configured to fetch from GitHub vs. an upload, and
+                        # ends up asking the user instead of investigating.
+                        if config.get('source_mode'):
+                            lines.append(f"  - Source mode: `{config['source_mode']}`")
+                        if config.get('github_repo'):
+                            lines.append(f"  - GitHub repo: `{config['github_repo']}`")
+                        if config.get('github_branch'):
+                            lines.append(f"  - GitHub branch: `{config['github_branch']}`")
+                        if config.get('dbt_project_path'):
+                            lines.append(f"  - dbt project path: `{config['dbt_project_path']}`")
+                        if config.get('dag_directory'):
+                            lines.append(f"  - DAG directory: `{config['dag_directory']}`")
+                        if config.get('warehouse_type'):
+                            lines.append(f"  - Target warehouse: `{config['warehouse_type']}`")
                 lines.append("")
 
         # Add lineage node catalog so LLM can use lineage tools

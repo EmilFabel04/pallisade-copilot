@@ -2182,14 +2182,17 @@ class ToolExecutor:
                 dbt_adapter.manifest = manifest
                 logger.info("[dbt] Loaded manifest from %s", dbt_config.get("source_mode", "config"))
             else:
-                # Fall back to loading from local filesystem
+                # Try the local filesystem as a last resort, but if that also
+                # fails, surface an error message that reflects the actual dbt
+                # *configuration* — not the meaningless ./target/manifest.json
+                # path that confuses both users and the LLM.
                 try:
                     dbt_adapter.load_manifest()
                     logger.info("[dbt] Auto-loaded manifest.json from filesystem")
-                except FileNotFoundError as e:
+                except FileNotFoundError:
                     return None, ToolResult(
                         success=False,
-                        error=f"dbt manifest.json not found. Ensure dbt compile has been run, upload your project, or connect a GitHub repo. Error: {e}"
+                        error=self._build_dbt_manifest_error(dbt_config),
                     )
                 except Exception as e:
                     return None, ToolResult(
@@ -2198,6 +2201,69 @@ class ToolExecutor:
                     )
 
         return dbt_adapter, None
+
+    def _build_dbt_manifest_error(self, dbt_config: Dict[str, Any]) -> str:
+        """
+        Produce an error message that reflects what was actually attempted
+        based on the dbt integration's source_mode. Avoids leaking the
+        ./target/manifest.json filesystem path or implying GitHub is
+        disconnected when it's just not wired into the dbt config.
+        """
+        source_mode = (dbt_config.get("source_mode") or "").lower()
+
+        if source_mode == "github":
+            repo = dbt_config.get("github_repo")
+            branch = dbt_config.get("github_branch") or "main"
+            path = dbt_config.get("dbt_project_path") or "(repo root)"
+            has_token = bool(
+                dbt_config.get("github_token")
+                or dbt_config.get("github", {}).get("token")
+                or self._get_github_token()
+            )
+            if not repo:
+                return (
+                    "dbt is configured in GitHub source mode but no github_repo "
+                    "is set. Open the dbt Core integration in Pipeline settings "
+                    "and pick a repository."
+                )
+            if not has_token:
+                return (
+                    f"dbt is configured to read from GitHub repo `{repo}` "
+                    f"(branch `{branch}`, path `{path}`) but no GitHub token "
+                    "is reachable. Connect the GitHub integration (or paste a "
+                    "github_token into the dbt connector) so the manifest can "
+                    "be fetched."
+                )
+            return (
+                f"dbt is configured to read from GitHub repo `{repo}` "
+                f"(branch `{branch}`, path `{path}`) but the fetch returned "
+                "no parseable dbt project files. Verify the branch and "
+                "project path are correct, and that dbt_project.yml lives at "
+                "that location."
+            )
+
+        if source_mode == "upload":
+            return (
+                "dbt is configured in 'upload manifest' mode but no manifest "
+                "blob is stored on the connector. Re-upload your "
+                "target/manifest.json in Pipeline settings."
+            )
+
+        if source_mode == "project":
+            return (
+                "dbt is configured in 'upload project folder' mode but the "
+                "stored project files couldn't be parsed into a manifest. "
+                "Re-upload the dbt project folder, ensuring it includes "
+                "dbt_project.yml and your models/ directory."
+            )
+
+        # source_mode unset or unrecognized
+        return (
+            "dbt is connected but no source mode is configured. Open the "
+            "dbt Core integration in Pipeline settings and choose how to "
+            "supply the project: upload manifest, upload project folder, "
+            "or connect a GitHub repo."
+        )
 
     def _get_dbt_integration_config(self) -> Dict[str, Any]:
         """Get the config dict for the active dbt integration."""
@@ -2234,7 +2300,14 @@ class ToolExecutor:
 
         # GitHub mode — fetch files from repo
         if source_mode == "github":
-            github_token = config.get("github_token") or config.get("github", {}).get("token")
+            github_token = (
+                config.get("github_token")
+                or config.get("github", {}).get("token")
+                # Fall back to the workspace-level GitHub integration token.
+                # The dbt Core form doesn't expose a github_token field — it relies
+                # on a separately-connected GitHub connector for auth.
+                or self._get_github_token()
+            )
             github_repo = config.get("github_repo")
             if github_token and github_repo:
                 try:
