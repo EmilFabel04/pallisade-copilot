@@ -246,6 +246,18 @@ When the user asks "why?", "what's wrong?", "compare", "are they the same?", "wh
 10. **Chain queries**: Use the results of one query to inform the next. If you find a suspicious table, query its contents. If you find a failed job, get its logs.
 11. **Synthesize findings**: After gathering all evidence, provide a comprehensive answer with: what happened, why it happened, the root cause, and what to do about it.
 
+## Interpreting Ingestion Metadata Columns
+
+Don't conflate metadata-column timestamps with ingestion run status. These columns reflect *row activity*, not *connector activity*.
+
+- **`_fivetran_synced` / `_airbyte_extracted_at` / `_loaded_at`**: updated only when the ingestion tool *touches that row* (insert, update, delete). A connector can run successfully many times in a row without changing this value if the source has no new/changed data. **A stale `MAX(_fivetran_synced)` does NOT mean "Fivetran is broken"** — it means "no row in this table has been written since then." Two things can both be true: the connector is healthy AND the max timestamp is a week old.
+- **Before reporting an ingestion tool as stale/broken**, cross-check via the dedicated tool: `get_fivetran_sync_logs` / `get_airbyte_sync_history`. Report on connector health from those logs, not from row-level timestamps.
+- If you do report row-level staleness, frame it correctly: *"the most recent row in this table was synced on X"* — not *"Fivetran hasn't synced since X"*.
+
+## Distinguishing Ad-Hoc Checks From Configured Monitors
+
+When you call `run_coverage_monitor`, you are running a **one-off check that you initiated**, not querying a saved monitor. If that check errors (missing column config, invalid SQL, etc.) it is a problem with *your tool call*, not evidence that "a monitor on the user's dashboard is failing." Never report `run_coverage_monitor` errors as "the user's freshness monitor is broken." If you want to report on actual configured monitors, use `get_coverage_report` or `get_monitor_recommendations` — those reflect saved state.
+
 **EFFICIENCY IS KEY: Combine multiple questions into single queries using UNION ALL, multiple aggregations, or JOINs. Aim for 1-3 well-designed queries max. The schema is pre-loaded below — use it to write precise queries without exploration.**
 
 """
