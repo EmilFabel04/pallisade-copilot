@@ -61,6 +61,11 @@ class TestCollectedResults:
 
 
 class TestRunRegistry:
+    def test_returns_same_instance_for_same_principal(self):
+        r1 = cache.get_run_registry("org_a", "s1")
+        r2 = cache.get_run_registry("org_a", "s1")
+        assert r1 is r2
+
     def test_isolates_orgs(self):
         r_a = cache.get_run_registry("org_a", "s1")
         r_b = cache.get_run_registry("org_b", "s1")

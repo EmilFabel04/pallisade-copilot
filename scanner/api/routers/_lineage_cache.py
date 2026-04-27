@@ -9,15 +9,19 @@ value cannot collide because the org prefix makes the key unique.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+if TYPE_CHECKING:
+    from scanner.lineage.engine.run_registry import RunRegistry
+    from scanner.lineage.engine.store import GraphStore
 
 
 # ---------------------------------------------------------------------------
 # Module-level cache dicts
 # ---------------------------------------------------------------------------
 
-_engine_stores: Dict[str, Any] = {}
-_run_registries: Dict[str, Any] = {}
+_engine_stores: Dict[str, "GraphStore"] = {}
+_run_registries: Dict[str, "RunRegistry"] = {}
 _engine_collected_results_map: Dict[str, Dict[str, Any]] = {}
 _engine_tool_configs_map: Dict[str, Dict[str, Any]] = {}
 
@@ -41,7 +45,7 @@ def cache_key(org_id: str, stack_id: Optional[str]) -> str:
     return f"{org_id}:{stack_id or 'default'}"
 
 
-def get_engine_store(org_id: str, stack_id: Optional[str]):
+def get_engine_store(org_id: str, stack_id: Optional[str]) -> "GraphStore":
     """Return the GraphStore for this principal, creating it if needed."""
     key = cache_key(org_id, stack_id)
     if key not in _engine_stores:
@@ -53,7 +57,7 @@ def get_engine_store(org_id: str, stack_id: Optional[str]):
     return _engine_stores[key]
 
 
-def get_run_registry(org_id: str, stack_id: Optional[str]):
+def get_run_registry(org_id: str, stack_id: Optional[str]) -> "RunRegistry":
     """Return the RunRegistry for this principal, creating it if needed."""
     key = cache_key(org_id, stack_id)
     if key not in _run_registries:
@@ -88,6 +92,12 @@ def set_tool_configs(
 
 
 def clear_engine_cache(org_id: str, stack_id: Optional[str]) -> None:
-    """Reset the collected-results bucket for this principal."""
+    """Reset the collected-results bucket for this principal.
+
+    Note: this only clears the adapter-output accumulator. Callers that
+    also need to wipe the resolved graph and run registry must reset
+    those on the returned ``GraphStore`` and ``RunRegistry`` themselves
+    (see ``engine_clear_cache`` in ``lineage.py``).
+    """
     key = cache_key(org_id, stack_id)
     _engine_collected_results_map[key] = _empty_collected()
