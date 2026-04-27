@@ -1954,7 +1954,11 @@ class InvestigateLLMRequest(BaseModel):
 
 
 @router.post("/lineage/investigate-llm", response_model=InvestigateResponse)
-async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Optional[str] = Query(None)):
+async def investigate_lineage_llm(
+    request: InvestigateLLMRequest,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Run LLM-enhanced lineage investigation.
 
@@ -1968,9 +1972,7 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
     """
     import logging
     _logger = logging.getLogger(__name__)
-    global _current_stack_id
-    if stack_id:
-        _current_stack_id = stack_id
+    org_id = principal.organization_id
 
     try:
         try:
@@ -1999,8 +2001,8 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
         except ImportError:
             from scanner.lineage.engine.pipeline import run_extraction_pipeline, ExtractionPipelineConfig
 
-        registry = _get_run_registry(_current_stack_id)
-        store = _get_engine_store(_current_stack_id)
+        registry = _get_run_registry(org_id, stack_id)
+        store = _get_engine_store(org_id, stack_id)
 
         # Build tool_nodes list so Pipeline Overview shows ALL integrated tools
         _VCS_TOOL_TYPES_LLM = {"github", "gitlab", "bitbucket"}
@@ -2052,8 +2054,8 @@ async def investigate_lineage_llm(request: InvestigateLLMRequest, stack_id: Opti
 
         # Cache tool configs for on-demand SLA discovery
         _lineage_cache.set_tool_configs(
-            _LEGACY_ORG,
-            _current_stack_id,
+            org_id,
+            stack_id,
             {tc.tool_type: tc.config for tc in request.tool_configs if tc.config},
         )
 
@@ -2113,7 +2115,11 @@ class LLMExtractRequest(BaseModel):
 
 
 @router.post("/lineage/extract-llm")
-async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optional[str] = Query(None)):
+async def extract_lineage_with_llm(
+    request: LLMExtractRequest,
+    stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     LLM-powered lineage extraction with SSE streaming progress.
 
@@ -2123,9 +2129,7 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
     """
     import logging
     _logger = logging.getLogger(__name__)
-    global _current_stack_id
-    if stack_id:
-        _current_stack_id = stack_id
+    org_id = principal.organization_id
 
     async def event_stream():
         try:
@@ -2177,8 +2181,8 @@ async def extract_lineage_with_llm(request: LLMExtractRequest, stack_id: Optiona
                 except ImportError:
                     from lineage.engine.run_registry import RunArtifacts
 
-                registry = _get_run_registry(_current_stack_id)
-                store = _get_engine_store(_current_stack_id)
+                registry = _get_run_registry(org_id, stack_id)
+                store = _get_engine_store(org_id, stack_id)
 
                 run_id = registry.start_run(
                     [tc.tool_type for tc in request.tool_configs]
