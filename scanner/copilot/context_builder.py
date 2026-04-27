@@ -1363,6 +1363,9 @@ class CopilotContextBuilder:
             "get_coverage_gaps",
             "get_node_coverage",
             "get_monitor_recommendations",
+            # Saved-monitor visibility — query Prisma via Next.js callback.
+            "list_configured_monitors",
+            "get_monitor_run_history",
         ])
 
         # run_coverage_monitor needs a warehouse to execute SQL

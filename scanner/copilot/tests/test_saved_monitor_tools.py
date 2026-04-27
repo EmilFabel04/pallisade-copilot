@@ -112,3 +112,13 @@ async def test_get_monitor_run_history_requires_monitor_id():
     assert result.success is False
     assert "monitor_id" in (result.error or "").lower()
     executor._call_nextjs.assert_not_awaited()
+
+
+def test_saved_monitor_tools_are_always_available():
+    from copilot.context_builder import CopilotContextBuilder
+
+    builder = CopilotContextBuilder.__new__(CopilotContextBuilder)
+    # Empty integration set — these tools must still be offered.
+    tools = builder._get_available_tools(set())
+    assert "list_configured_monitors" in tools
+    assert "get_monitor_run_history" in tools
