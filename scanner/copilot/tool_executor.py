@@ -3939,6 +3939,27 @@ class ToolExecutor:
             },
         )
 
+    async def _execute_list_configured_monitors(self, args: Dict[str, Any]) -> ToolResult:
+        """List the user's saved monitors via the Next.js Prisma-backed endpoint."""
+        body = {
+            k: v for k, v in {
+                "monitor_type": args.get("monitor_type"),
+                "status": args.get("status"),
+                "target_fqn": args.get("target_fqn"),
+                "enabled": args.get("enabled"),
+                "limit": args.get("limit"),
+            }.items()
+            if v is not None
+        }
+        try:
+            data = await self._call_nextjs(
+                "/api/copilot/internal/list-configured-monitors",
+                body,
+            )
+        except Exception as exc:
+            return ToolResult(success=False, error=str(exc))
+        return ToolResult(success=True, data=data)
+
     async def _execute_run_coverage_monitor(self, args: Dict[str, Any]) -> ToolResult:
         """Execute a specific monitor against a data asset."""
         import asyncio
