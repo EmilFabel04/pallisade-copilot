@@ -11,8 +11,11 @@ import logging
 from dataclasses import asdict
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from ..auth import require_principal, ActingPrincipal
+from . import _lineage_cache
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +111,7 @@ def _create_warehouse_adapter(platform: str, config: Dict[str, Any]):
 async def discover_node_sla(
     request: NodeDiscoveryRequest,
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """
     Run on-demand SLA discovery for a single lineage node.
@@ -116,10 +120,10 @@ async def discover_node_sla(
     nearest warehouse ancestor, queries historical metrics, and returns
     suggested SLA thresholds without persisting anything.
     """
-    from .lineage import _get_engine_store, _engine_tool_configs_map
+    org_id = principal.organization_id
 
     # 1. Get the engine graph for this stack
-    store = _get_engine_store(stack_id)
+    store = _lineage_cache.get_engine_store(org_id, stack_id)
     if not store.graph or not store.graph.nodes:
         raise HTTPException(
             status_code=404,
@@ -169,8 +173,7 @@ async def discover_node_sla(
             skipped_reason=f"Platform '{platform}' does not support historical metrics",
         )
 
-    cache_key = stack_id or "default"
-    tool_configs = _engine_tool_configs_map.get(cache_key, {})
+    tool_configs = _lineage_cache.get_tool_configs(org_id, stack_id)
     config = tool_configs.get(platform)
 
     if not config:
@@ -226,17 +229,20 @@ async def discover_node_sla(
 
 
 @router.post("/discovery/bulk", response_model=BulkDiscoveryResponse)
-async def discover_bulk_sla(request: BulkDiscoveryRequest):
+async def discover_bulk_sla(
+    request: BulkDiscoveryRequest,
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Run on-demand SLA discovery for multiple lineage nodes.
 
     Groups nodes by platform to reuse adapter connections. Each node is
     discovered independently — results are per-node, not merged.
     """
-    from .lineage import _get_engine_store, _engine_tool_configs_map
+    org_id = principal.organization_id
+    stack_id = request.stackId  # bulk endpoint takes stack_id from body, not query
 
-    stack_id = request.stackId
-    store = _get_engine_store(stack_id)
+    store = _lineage_cache.get_engine_store(org_id, stack_id)
     if not store.graph or not store.graph.nodes:
         raise HTTPException(
             status_code=404,
@@ -248,8 +254,7 @@ async def discover_bulk_sla(request: BulkDiscoveryRequest):
     except ImportError:
         from scanner.lineage.sla_discovery import _find_warehouse_ancestor, discover_sla_profile
 
-    cache_key = stack_id or "default"
-    tool_configs = _engine_tool_configs_map.get(cache_key, {})
+    tool_configs = _lineage_cache.get_tool_configs(org_id, stack_id)
 
     # Group nodes by platform to reuse adapter connections
     platform_nodes: Dict[str, list] = {}  # platform -> [(node, ancestor)]
