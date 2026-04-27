@@ -1317,20 +1317,34 @@ class TaskExecutor:
                         from scanner.lineage.github_reader import fetch_dbt_project_files_with_fallback
                     except ImportError:
                         from lineage.github_reader import fetch_dbt_project_files_with_fallback  # type: ignore
-                    token = (
+                    dbt_inline_token = (
                         (integration_config.get("github") or {}).get("token")
                         or integration_config.get("github_token")
-                        # Fall back to the workspace-level GITHUB OAuth integration's
-                        # access token. The dbt Core integration form doesn't ask the
-                        # user to paste a github_token — it relies on a separately-
-                        # connected GitHub OAuth integration. Without this fallback,
-                        # configured monitors fail with "missing token or repo" even
-                        # though the user has GitHub fully connected.
-                        or self._get_workspace_github_token((task or {}).get("organizationId"))
                     )
+                    org_id_for_token = (task or {}).get("organizationId")
+                    workspace_token = (
+                        None if dbt_inline_token else self._get_workspace_github_token(org_id_for_token)
+                    )
+                    token = dbt_inline_token or workspace_token
                     repo = integration_config.get("github_repo")
                     if not token or not repo:
-                        raise ValueError("dbt_core GitHub mode missing token or repo.")
+                        # Diagnostic so the run-history error string tells us *why*
+                        # the token chain failed instead of an opaque "missing".
+                        logger.error(
+                            "[dbt_core] token chain exhausted",
+                            has_dbt_inline_token=bool(dbt_inline_token),
+                            has_workspace_token=bool(workspace_token),
+                            org_id_present=bool(org_id_for_token),
+                            has_repo=bool(repo),
+                            integration_config_keys=list(integration_config.keys()),
+                        )
+                        raise ValueError(
+                            "dbt_core GitHub mode missing token or repo. "
+                            f"(dbt_inline_token={'set' if dbt_inline_token else 'absent'}, "
+                            f"workspace_token={'set' if workspace_token else 'absent'}, "
+                            f"org_id={'set' if org_id_for_token else 'absent'}, "
+                            f"repo={'set' if repo else 'absent'})"
+                        )
                     project_files, fallback = _run_coro_sync(
                         fetch_dbt_project_files_with_fallback(
                             repo=repo,
@@ -1909,6 +1923,7 @@ class TaskExecutor:
         GitHub integration or the lookup fails.
         """
         if not organization_id:
+            logger.info("[GitHub] workspace token lookup skipped — no organization_id on task")
             return None
         try:
             from scanner.scheduler.service import _get_connection
@@ -1916,6 +1931,27 @@ class TaskExecutor:
             conn = _get_connection()
             try:
                 with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, status, "accessToken" IS NOT NULL AS has_token
+                        FROM "Integration"
+                        WHERE type = 'GITHUB'
+                          AND "organizationId" = %s
+                        ORDER BY "updatedAt" DESC
+                        LIMIT 5
+                        """,
+                        (organization_id,),
+                    )
+                    diag_rows = cur.fetchall() or []
+                    logger.info(
+                        "[GitHub] candidate integrations for org",
+                        org_id=organization_id,
+                        rows=[
+                            {"id": r[0], "status": r[1], "has_token": bool(r[2])}
+                            for r in diag_rows
+                        ],
+                    )
+
                     cur.execute(
                         """
                         SELECT "accessToken"
@@ -1931,7 +1967,9 @@ class TaskExecutor:
                     )
                     row = cur.fetchone()
                     if row and row[0]:
+                        logger.info("[GitHub] resolved workspace token from active GITHUB integration")
                         return row[0]
+                    logger.info("[GitHub] no ACTIVE GITHUB integration with accessToken found for org")
             finally:
                 try:
                     conn.close()
