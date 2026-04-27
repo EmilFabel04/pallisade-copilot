@@ -18,15 +18,38 @@ FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 
 @pytest.fixture
 def client():
-    """Create a FastAPI test client with the lineage router."""
+    """Create a FastAPI test client with the lineage router.
+
+    Overrides require_principal to return a fixed test principal so
+    the tests can exercise endpoint logic without standing up
+    InternalAuthMiddleware + ActingPrincipalMiddleware.
+    """
     if not HAS_TESTCLIENT:
         pytest.skip("fastapi[testclient] not available")
 
     from fastapi import FastAPI
+    from scanner.api.auth import ActingPrincipal, require_principal
     from scanner.api.routers.lineage import router
+    from scanner.api.routers import _lineage_cache
+
+    # Reset cache between tests so a previous test's bucket doesn't
+    # contaminate the next one.
+    _lineage_cache._engine_stores.clear()
+    _lineage_cache._engine_collected_results_map.clear()
+    _lineage_cache._engine_tool_configs_map.clear()
+    _lineage_cache._run_registries.clear()
 
     app = FastAPI()
     app.include_router(router)
+
+    # Tests don't go through ActingPrincipalMiddleware, so stub the
+    # principal dependency directly.
+    app.dependency_overrides[require_principal] = lambda: ActingPrincipal(
+        user_id="test_user",
+        organization_id="test_org",
+        request_id="test_req",
+    )
+
     return TestClient(app)
 
 
@@ -90,7 +113,7 @@ class TestEngineQueryEndpoints:
         resp = client.get(f"/lineage/engine/blast-radius/{node_id}")
         assert resp.status_code == 200
         body = resp.json()
-        assert "total" in body
+        assert "total_downstream" in body
 
     def test_explain_edge(self, built_client):
         client, data = built_client
@@ -154,9 +177,8 @@ class TestFilterQueryParams:
 
     def test_no_graph_returns_empty_stats(self, client):
         """Querying before building should return empty stats (not 404)."""
-        # Reset the engine store
-        import scanner.api.routers.lineage as mod
-        mod._engine_store = None
+        # The client fixture already resets the per-tenant cache buckets,
+        # so no graph exists for test_org at this point.
         resp = client.get("/lineage/engine/stats")
         assert resp.status_code == 200
         data = resp.json()
