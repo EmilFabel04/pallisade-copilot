@@ -6,8 +6,10 @@ Extracts lineage from connected warehouses and returns a graph.
 
 from typing import Dict, Any, List, Optional, Set
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from ..auth import require_principal, ActingPrincipal
+from . import _lineage_cache
 
 router = APIRouter()
 
@@ -171,75 +173,75 @@ def _edge_to_engine_response(edge) -> EngineEdgeResponse:
     )
 
 
-# Per-pipeline stores for the engine graph (keyed by stack_id)
-_engine_stores: dict = {}
-_run_registries: dict = {}
+# All cache state lives in _lineage_cache. The wrappers below take the
+# explicit (org_id, stack_id) form. They exist as a transition layer
+# while individual writer/reader endpoints are migrated to pass
+# principal.organization_id directly. Removed in a subsequent task once
+# every endpoint passes through _lineage_cache directly.
 
-# Per-pipeline cached tool configs — used by on-demand SLA discovery
-_engine_tool_configs_map: dict = {}
-
-# Per-pipeline cached engine adapter results — nodes/edges from each extraction
-_engine_collected_results_map: dict = {}
-
-_EMPTY_COLLECTED = lambda: {"nodes": [], "edges": [], "dbt_manifest": None, "dbt_config": None, "schema_mapping": None}
-
-# Track the "current" stack_id for extraction endpoints that accumulate results
+# Temporary shim — removed once every writer endpoint passes org_id
+# explicitly. Reading or writing this value is a bug; if you find
+# yourself touching it, fix the call site instead.
 _current_stack_id: str = "default"
 
 
-def _get_collected_results(stack_id: str | None = None) -> dict:
-    key = stack_id or _current_stack_id
-    if key not in _engine_collected_results_map:
-        _engine_collected_results_map[key] = _EMPTY_COLLECTED()
-    return _engine_collected_results_map[key]
+def _get_engine_store(*args):
+    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    if len(args) == 1:
+        stack_id = args[0]
+        return _lineage_cache.get_engine_store("__legacy_default_org__", stack_id)
+    org_id, stack_id = args
+    return _lineage_cache.get_engine_store(org_id, stack_id)
 
 
-# Backwards-compatible global alias so existing extraction code can reference it
+def _get_run_registry(*args):
+    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    if len(args) == 1:
+        stack_id = args[0]
+        return _lineage_cache.get_run_registry("__legacy_default_org__", stack_id)
+    org_id, stack_id = args
+    return _lineage_cache.get_run_registry(org_id, stack_id)
+
+
+def _get_collected_results(*args):
+    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    if len(args) == 1:
+        stack_id = args[0]
+        return _lineage_cache.get_collected_results("__legacy_default_org__", stack_id)
+    org_id, stack_id = args
+    return _lineage_cache.get_collected_results(org_id, stack_id)
+
+
+def _clear_engine_cache(*args):
+    """Transition wrapper. Accepts either (stack_id) [legacy] or (org_id, stack_id) [new]."""
+    if len(args) == 1:
+        stack_id = args[0]
+        _lineage_cache.clear_engine_cache("__legacy_default_org__", stack_id)
+    else:
+        org_id, stack_id = args
+        _lineage_cache.clear_engine_cache(org_id, stack_id)
+
+
 class _CollectedResultsProxy:
-    """Proxy that delegates to per-stack collected results."""
+    """TRANSITION-ONLY proxy. Delegates to the (default-org, current-stack)
+    bucket via the legacy _current_stack_id global. Removed in a later
+    task once every writer passes (org_id, stack_id) directly."""
+    _LEGACY_ORG = "__legacy_default_org__"
+
     def __getitem__(self, key):
-        return _get_collected_results()[key]
+        return _lineage_cache.get_collected_results(self._LEGACY_ORG, _current_stack_id)[key]
+
     def __setitem__(self, key, value):
-        _get_collected_results()[key] = value
+        _lineage_cache.get_collected_results(self._LEGACY_ORG, _current_stack_id)[key] = value
+
     def get(self, key, default=None):
-        return _get_collected_results().get(key, default)
+        return _lineage_cache.get_collected_results(self._LEGACY_ORG, _current_stack_id).get(key, default)
+
 
 _engine_collected_results = _CollectedResultsProxy()
 
 
-def _clear_engine_cache(stack_id: str | None = None):
-    """Reset cached results for a fresh extraction run.
-
-    Called before a batch of extractions to prevent stale data from
-    previous runs accumulating and causing non-deterministic graphs.
-    """
-    key = stack_id or _current_stack_id
-    _engine_collected_results_map[key] = _EMPTY_COLLECTED()
-
-
-def _get_engine_store(stack_id: str | None = None):
-    key = stack_id or "default"
-    if key not in _engine_stores:
-        try:
-            from lineage.engine.store import GraphStore
-        except ImportError:
-            from scanner.lineage.engine.store import GraphStore
-        _engine_stores[key] = GraphStore()
-    return _engine_stores[key]
-
-
-def _get_run_registry(stack_id: str | None = None):
-    key = stack_id or "default"
-    if key not in _run_registries:
-        try:
-            from lineage.engine.run_registry import RunRegistry
-        except ImportError:
-            from scanner.lineage.engine.run_registry import RunRegistry
-        _run_registries[key] = RunRegistry()
-    return _run_registries[key]
-
-
-def _rebuild_engine_from_cache() -> None:
+def _rebuild_engine_from_cache(org_id: str, stack_id) -> None:
     """
     Run the resolver pipeline on cached adapter results (no re-parsing).
 
@@ -256,11 +258,12 @@ def _rebuild_engine_from_cache() -> None:
         except ImportError:
             from scanner.lineage.engine.resolver import ResolverPipeline, ResolverConfig
 
-        store = _get_engine_store(_current_stack_id)
+        store = _get_engine_store(org_id, stack_id)
+        collected = _get_collected_results(org_id, stack_id)
         pipeline = ResolverPipeline(ResolverConfig())
         store.graph = pipeline.resolve(
-            list(_get_collected_results()["nodes"]),
-            list(_get_collected_results()["edges"]),
+            list(collected["nodes"]),
+            list(collected["edges"]),
         )
         store.resolution_stats = pipeline.stats
         store.graph.built_at = datetime.utcnow()
@@ -291,8 +294,8 @@ def _rebuild_engine_from_cache() -> None:
                     from scanner.lineage.canonical import CanonicalResolver
                     from scanner.lineage.cross_tool import CrossToolEdgeSynthesizer
 
-                dbt_manifest = _get_collected_results().get("dbt_manifest")
-                dbt_cfg = _get_collected_results().get("dbt_config") or {}
+                dbt_manifest = collected.get("dbt_manifest")
+                dbt_cfg = collected.get("dbt_config") or {}
                 resolver = CanonicalResolver(
                     default_warehouse=dbt_cfg.get("warehouse_type", "bigquery"),
                     project_id=dbt_cfg.get("namespace", ""),
@@ -302,7 +305,7 @@ def _rebuild_engine_from_cache() -> None:
                     resolver.register_dbt_model_targets(dbt_manifest.get("nodes", {}))
 
                 # Patch dbt node schemas if GitHub-derived schema mapping is available
-                schema_mapping = _get_collected_results().get("schema_mapping")
+                schema_mapping = collected.get("schema_mapping")
                 if schema_mapping:
                     for node in store.graph.nodes.values():
                         if node.platform == "dbt" and node.name in schema_mapping:
@@ -1490,7 +1493,10 @@ class OpenLineageBatchRequest(BaseModel):
 
 
 @router.post("/lineage/openlineage/event")
-async def ingest_openlineage_event(request: OpenLineageEventRequest):
+async def ingest_openlineage_event(
+    request: OpenLineageEventRequest,
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Ingest a single OpenLineage RunEvent.
 
@@ -1510,9 +1516,10 @@ async def ingest_openlineage_event(request: OpenLineageEventRequest):
         event_dict = request.dict()
         nodes, edges = mapper.map_event(event_dict)
 
-        _engine_collected_results["nodes"].extend(nodes)
-        _engine_collected_results["edges"].extend(edges)
-        _rebuild_engine_from_cache()
+        collected = _lineage_cache.get_collected_results(principal.organization_id, None)
+        collected["nodes"].extend(nodes)
+        collected["edges"].extend(edges)
+        _rebuild_engine_from_cache(principal.organization_id, None)
 
         _logger.info(
             f"[OpenLineage] Ingested event: {request.job.get('name', '?')} "
@@ -1530,7 +1537,10 @@ async def ingest_openlineage_event(request: OpenLineageEventRequest):
 
 
 @router.post("/lineage/openlineage/events")
-async def ingest_openlineage_events_batch(request: OpenLineageBatchRequest):
+async def ingest_openlineage_events_batch(
+    request: OpenLineageBatchRequest,
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Ingest a batch of OpenLineage RunEvents.
 
@@ -1549,18 +1559,19 @@ async def ingest_openlineage_events_batch(request: OpenLineageBatchRequest):
         total_nodes = 0
         total_edges = 0
         errors = []
+        collected = _lineage_cache.get_collected_results(principal.organization_id, None)
 
         for i, event in enumerate(request.events):
             try:
                 nodes, edges = mapper.map_event(event)
-                _engine_collected_results["nodes"].extend(nodes)
-                _engine_collected_results["edges"].extend(edges)
+                collected["nodes"].extend(nodes)
+                collected["edges"].extend(edges)
                 total_nodes += len(nodes)
                 total_edges += len(edges)
             except Exception as e:
                 errors.append(f"Event {i}: {str(e)}")
 
-        _rebuild_engine_from_cache()
+        _rebuild_engine_from_cache(principal.organization_id, None)
 
         _logger.info(
             f"[OpenLineage] Batch ingested {len(request.events)} events "
