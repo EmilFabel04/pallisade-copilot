@@ -64,7 +64,7 @@ class TestAcceptedValuesBuildQuery:
             "allowed_values": ["active", "inactive"],
         })
         sql = m.build_query("mydb", "public", "users", dialect="postgres")
-        assert "mydb.public.users" in sql
+        assert '"mydb"."public"."users"' in sql
         assert "total_rows" in sql
         assert "violation_count" in sql
 
@@ -74,7 +74,7 @@ class TestAcceptedValuesBuildQuery:
             "allowed_values": ["active", "inactive"],
         })
         sql = m.build_query("project", "dataset", "users", dialect="bigquery")
-        assert "project.dataset.users" in sql
+        assert "`project`.`dataset`.`users`" in sql
         assert "total_rows" in sql
         assert "violation_count" in sql
 

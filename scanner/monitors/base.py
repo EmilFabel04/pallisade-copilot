@@ -141,7 +141,41 @@ class BaseMonitor(ABC):
             # Fall back to the original SQL if transpilation fails.
             return sql
 
-    def _fqn(self, database: str, schema: str, table: str) -> str:
-        """Build a fully qualified table reference."""
+    def _fqn(
+        self,
+        database: str,
+        schema: str,
+        table: str,
+        dialect: str = "postgres",
+    ) -> str:
+        """Build a quoted, fully qualified table reference for *dialect*.
+
+        Each part is validated against a strict identifier character set;
+        anything else raises ValueError. The dialect controls the quote
+        character (backticks for BigQuery / Databricks, brackets for
+        SQL Server, double-quotes elsewhere).
+        """
+        from scanner.adapters.sql_safety import join_quoted_identifiers
         parts = [p for p in (database, schema, table) if p]
-        return ".".join(parts)
+        return join_quoted_identifiers(parts, dialect)
+
+    def _qident(self, name: str, dialect: str = "postgres") -> str:
+        """Validate + quote a single column or alias identifier."""
+        from scanner.adapters.sql_safety import quote_identifier
+        return quote_identifier(name, dialect)
+
+    def _validate_column(self, name: str) -> str:
+        """Reject column names with SQL metacharacters; return unchanged.
+
+        Use at the top of `build_query` for any user-supplied column name
+        that will be interpolated unquoted into SQL (e.g. `COUNT(DISTINCT
+        {col})` or `AS null_rate_{col}`). Validation is strict — columns
+        with dashes or other special characters must instead flow through
+        `_qident()` and be used in identifier-quoted positions only.
+        """
+        import re
+        if not isinstance(name, str) or not name:
+            raise ValueError("column name is required")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_$]*$", name):
+            raise ValueError("column name contains disallowed characters")
+        return name

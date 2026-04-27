@@ -66,7 +66,7 @@ class RangeValidationMonitor(BaseMonitor):
                 "'min_value' or 'max_value' in config."
             )
 
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
         col = self.column
 
         # Build violation conditions

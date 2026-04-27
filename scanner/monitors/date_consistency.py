@@ -65,7 +65,7 @@ class DateConsistencyMonitor(BaseMonitor):
                 "DateConsistencyMonitor requires at least one rule in 'rules' config."
             )
 
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
 
         rule_exprs = []
         null_filters = []

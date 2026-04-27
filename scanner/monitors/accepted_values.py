@@ -66,7 +66,7 @@ class AcceptedValuesMonitor(BaseMonitor):
                 "AcceptedValuesMonitor requires 'allowed_values' in config."
             )
 
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
         col = self.column
 
         # Build the IN clause with properly escaped values

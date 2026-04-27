@@ -92,7 +92,11 @@ class VolumeMonitor(BaseMonitor):
         table: str,
         dialect: str = "postgres",
     ) -> str:
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
+        if self.time_bucket_column:
+            self._validate_column(self.time_bucket_column)
+        if self.partition_column:
+            self._validate_column(self.partition_column)
 
         if self.time_bucket_column:
             col = self.time_bucket_column

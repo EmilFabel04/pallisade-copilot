@@ -86,7 +86,11 @@ class UniquenessCheckMonitor(BaseMonitor):
                 "UniquenessCheckMonitor requires at least one column in 'columns' config."
             )
 
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
+        for c in self.columns:
+            self._validate_column(c)
+        if self.timestamp_column:
+            self._validate_column(self.timestamp_column)
         col_exprs = []
         for col in self.columns:
             col_exprs.append(f"COUNT(DISTINCT {col}) AS distinct_{col}")

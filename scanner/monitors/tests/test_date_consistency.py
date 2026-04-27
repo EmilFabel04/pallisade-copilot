@@ -89,7 +89,7 @@ class TestDateConsistencyBuildQuery:
             "rules": [_make_rule("start_date", "<=", "end_date")]
         })
         sql = m.build_query("mydb", "public", "projects", dialect="postgres")
-        assert "mydb.public.projects" in sql
+        assert '"mydb"."public"."projects"' in sql
         assert "total_rows" in sql
         assert "violations_rule_0" in sql
 
@@ -98,7 +98,7 @@ class TestDateConsistencyBuildQuery:
             "rules": [_make_rule("start_date", "<=", "end_date")]
         })
         sql = m.build_query("project", "dataset", "tasks", dialect="bigquery")
-        assert "project.dataset.tasks" in sql
+        assert "`project`.`dataset`.`tasks`" in sql
         assert "violations_rule_0" in sql
 
     def test_build_query_violation_is_negation_of_rule(self):

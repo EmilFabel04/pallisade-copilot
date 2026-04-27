@@ -54,7 +54,7 @@ class TestRangeValidationBuildQuery:
     def test_build_query_postgres_min_only(self):
         m = RangeValidationMonitor({"column": "age", "min_value": 0})
         sql = m.build_query("db", "public", "users", dialect="postgres")
-        assert "db.public.users" in sql
+        assert '"db"."public"."users"' in sql
         assert "total_rows" in sql
         assert "violation_count" in sql
         assert "0" in sql  # min_value appears in SQL
@@ -80,7 +80,7 @@ class TestRangeValidationBuildQuery:
     def test_build_query_bigquery_fqn(self):
         m = RangeValidationMonitor({"column": "amount", "min_value": 0})
         sql = m.build_query("myproject", "analytics", "events", dialect="bigquery")
-        assert "myproject.analytics.events" in sql
+        assert "`myproject`.`analytics`.`events`" in sql
 
     def test_build_query_includes_actual_min_max(self):
         m = RangeValidationMonitor({"column": "val", "min_value": 1})

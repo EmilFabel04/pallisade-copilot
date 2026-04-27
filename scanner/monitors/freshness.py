@@ -68,21 +68,39 @@ def build_discovery_query(
     table: str,
     dialect: str = "postgres",
 ) -> str:
-    """Query INFORMATION_SCHEMA to find all timestamp/datetime columns."""
+    """Query INFORMATION_SCHEMA to find all timestamp/datetime columns.
+
+    `database`, `schema`, and `table` originate from a monitor's `targetFqn`
+    (user-controlled). They are validated + quoted as identifiers and
+    escaped as string literals before composition. A malformed value raises
+    ValueError rather than producing a query.
+    """
+    from scanner.adapters.sql_safety import (
+        escape_string_literal,
+        join_quoted_identifiers,
+    )
+
+    table_lit = escape_string_literal(table, dialect)
+    schema_lit = escape_string_literal(schema, dialect)
+
     if dialect == "bigquery":
+        info_schema = join_quoted_identifiers(
+            [database, schema, "INFORMATION_SCHEMA", "COLUMNS"], "bigquery",
+        )
         return (
             f"SELECT column_name, data_type "
-            f"FROM `{database}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
-            f"WHERE table_name = '{table}' "
+            f"FROM {info_schema} "
+            f"WHERE table_name = '{table_lit}' "
             f"AND data_type IN ('TIMESTAMP', 'DATETIME', 'DATE')"
         )
 
-    # Postgres / Snowflake / Redshift
+    # Postgres / Snowflake / Redshift — INFORMATION_SCHEMA is a SQL standard
+    # name (no quoting needed); schema/table flow as string literals.
     return (
         f"SELECT column_name, data_type "
         f"FROM information_schema.columns "
-        f"WHERE table_schema = '{schema}' "
-        f"AND table_name = '{table}' "
+        f"WHERE table_schema = '{schema_lit}' "
+        f"AND table_name = '{table_lit}' "
         f"AND data_type IN "
         f"('timestamp with time zone', 'timestamp without time zone', "
         f"'timestamptz', 'timestamp', 'date', 'datetime', "
@@ -388,7 +406,7 @@ class FreshnessMonitor(BaseMonitor):
         table: str,
         dialect: str = "postgres",
     ) -> str:
-        fqn = self._fqn(database, schema, table)
+        fqn = self._fqn(database, schema, table, dialect)
         col = self.timestamp_column
 
         if not col:
