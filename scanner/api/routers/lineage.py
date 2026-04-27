@@ -1708,6 +1708,50 @@ async def _preprocess_dbt_configs(tool_configs, logger_instance=None) -> None:
                     _log.warning(f"[dbt-preprocess] GitHub fetch failed: {gh_err}")
 
 
+async def _fetch_dag_files_from_github(
+    repo: str, token: str, branch: str, dag_directory: str
+) -> Dict[str, str]:
+    """Fetch .py DAG files from a GitHub repo directory."""
+    import aiohttp
+    import base64
+
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    api_base = "https://api.github.com"
+
+    dag_files: Dict[str, str] = {}
+
+    async with aiohttp.ClientSession() as session:
+        # List files in the DAG directory
+        list_url = f"{api_base}/repos/{repo}/contents/{dag_directory}?ref={branch}"
+        async with session.get(list_url, headers=headers) as resp:
+            if resp.status == 404:
+                # Directory doesn't exist — no DAGs in this repo
+                return {}
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise RuntimeError(f"GitHub API error listing {dag_directory}: {resp.status} {error_text}")
+            items = await resp.json()
+
+        # Filter to .py files
+        py_files = [item for item in items if item.get("name", "").endswith(".py") and item.get("type") == "file"]
+
+        # Fetch each file's content
+        for item in py_files:
+            file_url = f"{api_base}/repos/{repo}/contents/{item['path']}?ref={branch}"
+            async with session.get(file_url, headers=headers) as resp:
+                if resp.status != 200:
+                    continue
+                file_data = await resp.json()
+                content_b64 = file_data.get("content", "")
+                content = base64.b64decode(content_b64).decode("utf-8")
+                dag_files[item["name"]] = content
+
+    return dag_files
+
+
 async def _preprocess_airflow_configs(tool_configs, logger_instance=None) -> None:
     """Fetch DAG files from GitHub for Airflow configs in-place.
 
