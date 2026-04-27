@@ -1,15 +1,21 @@
 import { POST } from '@/app/api/copilot/internal/list-configured-monitors/route';
+import { POST as runHistoryPOST } from '@/app/api/copilot/internal/get-monitor-run-history/route';
 import { NextRequest } from 'next/server';
 
 jest.mock('@/lib/db', () => ({
   __esModule: true,
   default: {
-    monitor: { findMany: jest.fn() },
+    monitor: { findMany: jest.fn(), findFirst: jest.fn() },
+    monitorRun: { findMany: jest.fn() },
   },
 }));
 
 import prisma from '@/lib/db';
 const mockedPrisma = prisma as unknown as { monitor: { findMany: jest.Mock } };
+const mockedPrisma2 = prisma as unknown as {
+  monitor: { findMany: jest.Mock; findFirst: jest.Mock };
+  monitorRun: { findMany: jest.Mock };
+};
 
 const SECRET = 'pallisade-internal';
 
@@ -120,5 +126,98 @@ describe('list-configured-monitors POST', () => {
 
     await POST(makeRequest({ limit: 999 }));
     expect((mockedPrisma.monitor.findMany.mock.calls[2][0] as any).take).toBe(200);
+  });
+});
+
+function makeRunHistoryRequest(body: any, headers: Record<string, string> = {}): NextRequest {
+  return new NextRequest('http://localhost/api/copilot/internal/get-monitor-run-history', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Internal-Secret': headers['X-Internal-Secret'] ?? SECRET,
+      'X-Organization-Id': headers['X-Organization-Id'] ?? 'org_1',
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('get-monitor-run-history POST', () => {
+  beforeEach(() => {
+    mockedPrisma2.monitor.findFirst.mockReset();
+    mockedPrisma2.monitorRun.findMany.mockReset();
+  });
+
+  test('rejects when monitor_id missing', async () => {
+    const res = await runHistoryPOST(makeRunHistoryRequest({}));
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 404 when monitor does not belong to org', async () => {
+    mockedPrisma2.monitor.findFirst.mockResolvedValue(null);
+    const res = await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_other' }));
+    expect(res.status).toBe(404);
+    expect(mockedPrisma2.monitor.findFirst).toHaveBeenCalledWith({
+      where: { id: 'mon_other', organizationId: 'org_1' },
+      select: { id: true, name: true, monitorType: true, targetFqn: true },
+    });
+  });
+
+  test('returns recent runs ordered newest first', async () => {
+    mockedPrisma2.monitor.findFirst.mockResolvedValue({
+      id: 'mon_1',
+      name: 'orders source validation',
+      monitorType: 'DBT_CORE_SOURCE_VALIDATION',
+      targetFqn: 'analytics.orders',
+    });
+    mockedPrisma2.monitorRun.findMany.mockResolvedValue([
+      {
+        id: 'run_2',
+        status: 'FAIL',
+        message: 'source freshness exceeded threshold',
+        details: null,
+        sqlExecuted: 'SELECT MAX(_loaded_at) ...',
+        startedAt: new Date('2026-04-27T06:00:00Z'),
+        completedAt: new Date('2026-04-27T06:00:02Z'),
+        durationMs: 2000,
+      },
+      {
+        id: 'run_1',
+        status: 'PASS',
+        message: null,
+        details: null,
+        sqlExecuted: 'SELECT MAX(_loaded_at) ...',
+        startedAt: new Date('2026-04-26T06:00:00Z'),
+        completedAt: new Date('2026-04-26T06:00:01Z'),
+        durationMs: 1000,
+      },
+    ]);
+
+    const res = await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_1', limit: 5 }));
+    const data = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(data.monitor.id).toBe('mon_1');
+    expect(data.runs).toHaveLength(2);
+    expect(data.runs[0].id).toBe('run_2');
+    expect(mockedPrisma2.monitorRun.findMany).toHaveBeenCalledWith({
+      where: { monitorId: 'mon_1' },
+      select: expect.any(Object),
+      orderBy: { startedAt: 'desc' },
+      take: 5,
+    });
+  });
+
+  test('clamps limit to [1, 50]', async () => {
+    mockedPrisma2.monitor.findFirst.mockResolvedValue({ id: 'mon_1', name: 'x', monitorType: 'FRESHNESS', targetFqn: 't' });
+    mockedPrisma2.monitorRun.findMany.mockResolvedValue([]);
+
+    await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_1' }));
+    expect((mockedPrisma2.monitorRun.findMany.mock.calls[0][0] as any).take).toBe(10);
+
+    await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_1', limit: 100 }));
+    expect((mockedPrisma2.monitorRun.findMany.mock.calls[1][0] as any).take).toBe(50);
+
+    await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_1', limit: 0 }));
+    expect((mockedPrisma2.monitorRun.findMany.mock.calls[2][0] as any).take).toBe(1);
   });
 });
