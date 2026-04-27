@@ -333,21 +333,30 @@ export async function resolveStackIntegrations(
 
     const oauthType = oauth.type.toUpperCase();
 
-    // If this type already exists (from pipeline nodes), merge the OAuth token
+    // If this type already exists (from pipeline nodes), merge the OAuth token.
+    // CRITICAL: never clobber a token already provided by the pipeline node.
+    // The pipeline node form lets users paste a PAT directly into
+    // config.access_token; that value MUST take precedence over the
+    // separate Integration.accessToken column (which is empty for non-OAuth
+    // flows). The previous unconditional overwrite destroyed real PATs.
     const existing = integrations.find((i) => i.type === oauthType);
     if (existing) {
-      console.log(
-        `[integration-credentials] Merging OAuth token for ${oauthType} into existing pipeline node`,
-      );
-      existing.config = {
-        ...existing.config,
-        access_token: accessToken,
-        token: accessToken,
-      };
+      // Always merge metadata — non-destructive.
       existing.metadata = {
         ...existing.metadata,
         ...((oauth.metadata as Record<string, any>) || {}),
       };
+      // Only inject token aliases when we have a real OAuth token AND the
+      // pipeline node didn't supply one of its own.
+      if (accessToken) {
+        const merged: Record<string, any> = { ...existing.config };
+        if (!merged.access_token) merged.access_token = accessToken;
+        if (!merged.token) merged.token = accessToken;
+        existing.config = merged;
+        console.log(
+          `[integration-credentials] Merged OAuth token for ${oauthType} into pipeline node config`,
+        );
+      }
       continue;
     }
 
