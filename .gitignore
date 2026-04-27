@@ -3,6 +3,9 @@
 # Superpowers brainstorming
 .superpowers/
 
+# Claude Code local state and worktrees
+.claude/
+
 # dependencies
 /node_modules
 /.pnp
