@@ -392,8 +392,18 @@ class FreshnessMonitor(BaseMonitor):
         col = self.timestamp_column
 
         if not col:
-            # Fallback if discovery wasn't run — use updated_at
-            col = "updated_at"
+            # Refusing to silently fall back to a hardcoded column name.
+            # The previous "updated_at" fallback caused false-positive
+            # "freshness monitor failing" findings whenever the target
+            # table didn't happen to have an updated_at column. Callers
+            # must either configure timestamp_column or run
+            # discover_timestamp_column() first.
+            raise ValueError(
+                f"FreshnessMonitor cannot run on {fqn}: no timestamp_column "
+                "is configured. Either set 'timestamp_column' in the monitor "
+                "config, or call discover_timestamp_column() to auto-detect "
+                "one before invoking build_query()."
+            )
 
         if dialect == "bigquery":
             return (
