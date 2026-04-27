@@ -102,7 +102,12 @@ class AirflowDAGRun:
         if self.start_date and self.end_date:
             return self.end_date - self.start_date
         return None
-    
+
+    @property
+    def duration_seconds(self) -> Optional[float]:
+        d = self.duration
+        return d.total_seconds() if d else None
+
     @property
     def duration_minutes(self) -> Optional[float]:
         d = self.duration
