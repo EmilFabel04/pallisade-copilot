@@ -114,58 +114,66 @@ export async function POST(request: Request) {
 
     // Fetch lineage data from database to pass to copilot
     let lineageData: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
-    try {
-      const [lineageNodes, lineageEdges] = await Promise.all([
-        prisma.lineageNode.findMany({
-          where: { organizationId: user.organizationId },
-          select: {
-            id: true,
-            name: true,
-            database: true,
-            schema: true,
-            tableName: true,
-            nodeType: true,
-            description: true,
-            upstreamCount: true,
-            downstreamCount: true,
-          },
-        }),
-        prisma.lineageEdge.findMany({
-          where: { organizationId: user.organizationId },
-          select: {
-            id: true,
-            sourceId: true,
-            targetId: true,
-            edgeType: true,
-            columns: true,
-          },
-        }),
-      ]);
+    if (effectivePipelineStackId) {
+      try {
+        const [lineageNodes, lineageEdges] = await Promise.all([
+          prisma.lineageNode.findMany({
+            where: {
+              organizationId: user.organizationId,
+              pipelineStackId: effectivePipelineStackId,
+            },
+            select: {
+              id: true,
+              name: true,
+              database: true,
+              schema: true,
+              tableName: true,
+              nodeType: true,
+              description: true,
+              upstreamCount: true,
+              downstreamCount: true,
+            },
+          }),
+          prisma.lineageEdge.findMany({
+            where: {
+              organizationId: user.organizationId,
+              pipelineStackId: effectivePipelineStackId,
+            },
+            select: {
+              id: true,
+              sourceId: true,
+              targetId: true,
+              edgeType: true,
+              columns: true,
+            },
+          }),
+        ]);
 
-      lineageData = {
-        nodes: lineageNodes.map(n => ({
-          id: n.id,
-          name: n.name,
-          fqn: n.name, // name is already FQN format
-          database: n.database,
-          schema: n.schema,
-          node_type: n.nodeType,
-          description: n.description,
-          upstream_count: n.upstreamCount,
-          downstream_count: n.downstreamCount,
-        })),
-        edges: lineageEdges.map(e => ({
-          id: e.id,
-          source_id: e.sourceId,
-          target_id: e.targetId,
-          edge_type: e.edgeType,
-          columns: e.columns,
-        })),
-      };
+        lineageData = {
+          nodes: lineageNodes.map(n => ({
+            id: n.id,
+            name: n.name,
+            fqn: n.name, // name is already FQN format
+            database: n.database,
+            schema: n.schema,
+            node_type: n.nodeType,
+            description: n.description,
+            upstream_count: n.upstreamCount,
+            downstream_count: n.downstreamCount,
+          })),
+          edges: lineageEdges.map(e => ({
+            id: e.id,
+            source_id: e.sourceId,
+            target_id: e.targetId,
+            edge_type: e.edgeType,
+            columns: e.columns,
+          })),
+        };
 
-      console.log(`[COPILOT] Fetched lineage: ${lineageData.nodes.length} nodes, ${lineageData.edges.length} edges`);
-    } catch (e) {
-      console.error('[COPILOT] Failed to fetch lineage:', e);
+        console.log(`[COPILOT] Fetched lineage: ${lineageData.nodes.length} nodes, ${lineageData.edges.length} edges`);
+      } catch (e) {
+        console.error('[COPILOT] Failed to fetch lineage:', e);
+      }
     }
 
     // Call the scanner copilot API with full conversation history
@@ -498,33 +506,41 @@ async function handleStreamingChat(
 
   // Fetch lineage data
   let lineageData: { nodes: any[]; edges: any[] } = { nodes: [], edges: [] };
-  try {
-    const [lineageNodes, lineageEdges] = await Promise.all([
-      prisma.lineageNode.findMany({
-        where: { organizationId: user.organizationId },
-        select: {
-          id: true, name: true, database: true, schema: true, tableName: true,
-          nodeType: true, description: true, upstreamCount: true, downstreamCount: true,
-        },
-      }),
-      prisma.lineageEdge.findMany({
-        where: { organizationId: user.organizationId },
-        select: { id: true, sourceId: true, targetId: true, edgeType: true, columns: true },
-      }),
-    ]);
-    lineageData = {
-      nodes: lineageNodes.map(n => ({
-        id: n.id, name: n.name, fqn: n.name, database: n.database, schema: n.schema,
-        node_type: n.nodeType, description: n.description,
-        upstream_count: n.upstreamCount, downstream_count: n.downstreamCount,
-      })),
-      edges: lineageEdges.map(e => ({
-        id: e.id, source_id: e.sourceId, target_id: e.targetId,
-        edge_type: e.edgeType, columns: e.columns,
-      })),
-    };
-  } catch (e) {
-    console.error('[COPILOT/Stream] Failed to fetch lineage:', e);
+  if (effectivePipelineStackId) {
+    try {
+      const [lineageNodes, lineageEdges] = await Promise.all([
+        prisma.lineageNode.findMany({
+          where: {
+            organizationId: user.organizationId,
+            pipelineStackId: effectivePipelineStackId,
+          },
+          select: {
+            id: true, name: true, database: true, schema: true, tableName: true,
+            nodeType: true, description: true, upstreamCount: true, downstreamCount: true,
+          },
+        }),
+        prisma.lineageEdge.findMany({
+          where: {
+            organizationId: user.organizationId,
+            pipelineStackId: effectivePipelineStackId,
+          },
+          select: { id: true, sourceId: true, targetId: true, edgeType: true, columns: true },
+        }),
+      ]);
+      lineageData = {
+        nodes: lineageNodes.map(n => ({
+          id: n.id, name: n.name, fqn: n.name, database: n.database, schema: n.schema,
+          node_type: n.nodeType, description: n.description,
+          upstream_count: n.upstreamCount, downstream_count: n.downstreamCount,
+        })),
+        edges: lineageEdges.map(e => ({
+          id: e.id, source_id: e.sourceId, target_id: e.targetId,
+          edge_type: e.edgeType, columns: e.columns,
+        })),
+      };
+    } catch (e) {
+      console.error('[COPILOT/Stream] Failed to fetch lineage:', e);
+    }
   }
 
   // Call FastAPI streaming endpoint
