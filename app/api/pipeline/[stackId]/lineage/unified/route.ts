@@ -402,6 +402,7 @@ export async function GET(
     const findings = await prisma.finding.findMany({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         table: { in: allFqns },
         status: { in: ['OPEN', 'IN_PROGRESS'] },
       },
@@ -423,7 +424,7 @@ export async function GET(
 
     // Fetch ALL enabled monitors (including infra monitors with null targetFqn)
     const monitors = await prisma.monitor.findMany({
-      where: { organizationId, enabled: true },
+      where: { organizationId, pipelineStackId: stackId, enabled: true },
       select: {
         id: true, name: true, monitorType: true, targetFqn: true,
         lastStatus: true, lastRunAt: true, integrationId: true, config: true,
