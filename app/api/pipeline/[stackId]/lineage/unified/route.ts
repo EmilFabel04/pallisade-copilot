@@ -52,11 +52,10 @@ async function tryRestoreEngineFromSnapshot(
   stackId: string,
 ): Promise<{ nodes: any[]; edges: any[] } | null> {
   try {
-    // Find the latest snapshot with graphData (org-scoped, no integrationId filter
-    // because save-snapshot stores with integrationId=null)
     const snapshot = await prisma.lineageSnapshot.findFirst({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         graphData: { not: null as any },
       },
       orderBy: { createdAt: 'desc' },
@@ -717,6 +716,7 @@ export async function GET(
       const lineageEdges = await prisma.lineageEdge.findMany({
         where: {
           organizationId,
+          pipelineStackId: stackId,
           sourceId: { in: lineageNodes.map((n) => n.id) },
           targetId: { in: lineageNodes.map((n) => n.id) },
         },
