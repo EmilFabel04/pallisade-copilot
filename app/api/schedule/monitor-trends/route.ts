@@ -74,10 +74,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No organization' }, { status: 400 });
     }
 
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
+
     // Fetch all monitor groups with their monitors and last 30 runs each
     const groups = await prisma.monitorGroup.findMany({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         watchType: { not: null },
       },
       include: {
