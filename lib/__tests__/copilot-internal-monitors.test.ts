@@ -20,6 +20,13 @@ const mockedPrisma2 = prisma as unknown as {
 const SECRET = 'pallisade-internal';
 
 function makeRequest(body: any, headers: Record<string, string> = {}): NextRequest {
+  // The route requires `pipelineStackId` in the body. Tests default to
+  // 'stack_1' so individual cases only need to override when they want to
+  // exercise the missing-stack 400 path.
+  const bodyWithStack =
+    body && Object.prototype.hasOwnProperty.call(body, 'pipelineStackId')
+      ? body
+      : { pipelineStackId: 'stack_1', ...(body ?? {}) };
   return new NextRequest('http://localhost/api/copilot/internal/list-configured-monitors', {
     method: 'POST',
     headers: {
@@ -27,7 +34,7 @@ function makeRequest(body: any, headers: Record<string, string> = {}): NextReque
       'X-Internal-Secret': headers['X-Internal-Secret'] ?? SECRET,
       'X-Organization-Id': headers['X-Organization-Id'] ?? 'org_1',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(bodyWithStack),
   });
 }
 
@@ -76,7 +83,7 @@ describe('list-configured-monitors POST', () => {
     expect(res.status).toBe(200);
     expect(mockedPrisma.monitor.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ organizationId: 'org_1' }),
+        where: expect.objectContaining({ organizationId: 'org_1', pipelineStackId: 'stack_1' }),
       }),
     );
     expect(data.monitors).toHaveLength(1);
@@ -161,9 +168,20 @@ describe('list-configured-monitors POST', () => {
     await POST(makeRequest({ limit: 999 }));
     expect((mockedPrisma.monitor.findMany.mock.calls[2][0] as any).take).toBe(200);
   });
+
+  test('rejects when pipelineStackId is missing', async () => {
+    const req = makeRequest({ pipelineStackId: undefined });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    expect(mockedPrisma.monitor.findMany).not.toHaveBeenCalled();
+  });
 });
 
 function makeRunHistoryRequest(body: any, headers: Record<string, string> = {}): NextRequest {
+  const bodyWithStack =
+    body && Object.prototype.hasOwnProperty.call(body, 'pipelineStackId')
+      ? body
+      : { pipelineStackId: 'stack_1', ...(body ?? {}) };
   return new NextRequest('http://localhost/api/copilot/internal/get-monitor-run-history', {
     method: 'POST',
     headers: {
@@ -171,7 +189,7 @@ function makeRunHistoryRequest(body: any, headers: Record<string, string> = {}):
       'X-Internal-Secret': headers['X-Internal-Secret'] ?? SECRET,
       'X-Organization-Id': headers['X-Organization-Id'] ?? 'org_1',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(bodyWithStack),
   });
 }
 
@@ -191,7 +209,7 @@ describe('get-monitor-run-history POST', () => {
     const res = await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_other' }));
     expect(res.status).toBe(404);
     expect(mockedPrisma2.monitor.findFirst).toHaveBeenCalledWith({
-      where: { id: 'mon_other', organizationId: 'org_1' },
+      where: { id: 'mon_other', organizationId: 'org_1', pipelineStackId: 'stack_1' },
       select: { id: true, name: true, monitorType: true, targetFqn: true },
     });
   });
@@ -253,5 +271,12 @@ describe('get-monitor-run-history POST', () => {
 
     await runHistoryPOST(makeRunHistoryRequest({ monitor_id: 'mon_1', limit: 0 }));
     expect((mockedPrisma2.monitorRun.findMany.mock.calls[2][0] as any).take).toBe(1);
+  });
+
+  test('rejects when pipelineStackId is missing', async () => {
+    const req = makeRunHistoryRequest({ monitor_id: 'mon_1', pipelineStackId: undefined });
+    const res = await runHistoryPOST(req);
+    expect(res.status).toBe(400);
+    expect(mockedPrisma2.monitor.findFirst).not.toHaveBeenCalled();
   });
 });
