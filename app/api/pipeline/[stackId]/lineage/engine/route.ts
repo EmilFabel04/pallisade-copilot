@@ -244,7 +244,7 @@ export async function POST(
 
       // Find or create a snapshot record and update with graphData
       let snapshot = await prisma.lineageSnapshot.findFirst({
-        where: { organizationId },
+        where: { organizationId, pipelineStackId: stackId },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -262,6 +262,7 @@ export async function POST(
         snapshot = await prisma.lineageSnapshot.create({
           data: {
             organizationId,
+            pipelineStackId: stackId,
             source: 'llm_extractor',
             dialect: toolTypes,
             status: 'ready',
