@@ -100,9 +100,17 @@ export async function POST(
     const organizationId = (session.user as any).organizationId;
     const baseUrl = request.nextUrl?.origin || process.env.NEXTAUTH_URL || 'http://localhost:3000';
     const cookie = request.headers.get('cookie') || '';
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
 
     const task = await prisma.monitor.findFirst({
-      where: { id: taskId, organizationId },
+      where: { id: taskId, organizationId, pipelineStackId: stackId },
     });
 
     if (!task) {
@@ -389,7 +397,7 @@ export async function POST(
           headers: { 'Content-Type': 'application/json', cookie },
           body: JSON.stringify({
             nodes: [{ fqn: task.targetFqn, domain: resolvedDomain, criticality: 'medium' }],
-            stackId: undefined,
+            stackId,
           }),
         });
         if (policyRes.ok) {
@@ -502,8 +510,12 @@ export async function POST(
     const isGroupedRun = request.nextUrl.searchParams.get('grouped') === 'true';
     if (!isGroupedRun && task.monitorGroupId) {
       try {
-        const group = await prisma.monitorGroup.findUnique({
-          where: { id: task.monitorGroupId },
+        const group = await prisma.monitorGroup.findFirst({
+          where: {
+            id: task.monitorGroupId,
+            organizationId,
+            pipelineStackId: stackId,
+          },
           select: {
             id: true,
             anchorFqn: true,
@@ -534,18 +546,14 @@ export async function POST(
     // Fire-and-forget notification (skip when running as part of a group —
     // the bundle endpoint sends one collective notification instead)
     if (!isGroupedRun) {
-      const pipelineStack = await prisma.pipelineStack.findFirst({
-        where: { organizationId },
-        select: { id: true },
-      });
       if (status === 'FAIL' || status === 'ERROR') {
         notifyEvents.monitorFailed(
-          organizationId, pipelineStack?.id, (session.user as any).id,
+          organizationId, stackId, (session.user as any).id,
           task.name, task.id, result.message || 'Monitor check failed',
         );
       } else if (status === 'PASS') {
         notifyEvents.monitorPassed(
-          organizationId, pipelineStack?.id, task.name, task.id,
+          organizationId, stackId, task.name, task.id,
         );
       }
     }

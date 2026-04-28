@@ -15,10 +15,17 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
+    const stackId = searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
     const status = searchParams.get('status'); // all, passing, failing, disabled
     const due = searchParams.get('due'); // "true" — for scheduler to get due tasks
 
-    const where: any = { organizationId };
+    const where: any = { organizationId, pipelineStackId: stackId };
 
     if (due === 'true') {
       // Scheduler needs ALL due monitors including watch-grouped ones

@@ -16,9 +16,16 @@ export async function GET(
 
     const { taskId } = await params;
     const organizationId = (session.user as any).organizationId;
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
 
     const task = await prisma.monitor.findFirst({
-      where: { id: taskId, organizationId },
+      where: { id: taskId, organizationId, pipelineStackId: stackId },
       include: {
         integration: {
           select: { id: true, name: true, type: true },
@@ -54,11 +61,18 @@ export async function PATCH(
 
     const { taskId } = await params;
     const organizationId = (session.user as any).organizationId;
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
 
-    // Verify task belongs to org
+    // Verify task belongs to org and stack
     const existing = await prisma.monitor.findFirst({
-      where: { id: taskId, organizationId },
+      where: { id: taskId, organizationId, pipelineStackId: stackId },
     });
 
     if (!existing) {
@@ -112,9 +126,17 @@ export async function DELETE(
 
     const { taskId } = await params;
     const organizationId = (session.user as any).organizationId;
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
 
     const existing = await prisma.monitor.findFirst({
-      where: { id: taskId, organizationId },
+      where: { id: taskId, organizationId, pipelineStackId: stackId },
     });
 
     if (!existing) {
