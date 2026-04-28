@@ -3941,7 +3941,13 @@ class ToolExecutor:
 
     async def _execute_list_configured_monitors(self, args: Dict[str, Any]) -> ToolResult:
         """List the user's saved monitors via the Next.js Prisma-backed endpoint."""
-        body = {
+        pipeline_stack_id = getattr(self.context, "pipeline_stack_id", None)
+        if not pipeline_stack_id:
+            return ToolResult(
+                success=False,
+                error="pipeline_stack_id is required to list configured monitors.",
+            )
+        body: Dict[str, Any] = {
             k: v for k, v in {
                 "monitor_type": args.get("monitor_type"),
                 "status": args.get("status"),
@@ -3951,6 +3957,7 @@ class ToolExecutor:
             }.items()
             if v is not None
         }
+        body["pipelineStackId"] = pipeline_stack_id
         try:
             data = await self._call_nextjs(
                 "/api/copilot/internal/list-configured-monitors",
@@ -3969,7 +3976,14 @@ class ToolExecutor:
                 error="monitor_id is required. Call list_configured_monitors first to find the right id.",
             )
 
-        body: Dict[str, Any] = {"monitor_id": monitor_id}
+        pipeline_stack_id = getattr(self.context, "pipeline_stack_id", None)
+        if not pipeline_stack_id:
+            return ToolResult(
+                success=False,
+                error="pipeline_stack_id is required to fetch monitor run history.",
+            )
+
+        body: Dict[str, Any] = {"monitor_id": monitor_id, "pipelineStackId": pipeline_stack_id}
         if "limit" in args and args["limit"] is not None:
             body["limit"] = args["limit"]
 

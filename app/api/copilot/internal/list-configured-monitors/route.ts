@@ -46,6 +46,12 @@ export async function POST(request: NextRequest) {
     /* empty body is fine */
   }
 
+  const pipelineStackId: string | undefined =
+    typeof body?.pipelineStackId === 'string' ? body.pipelineStackId : undefined;
+  if (!pipelineStackId) {
+    return NextResponse.json({ error: 'pipelineStackId required' }, { status: 400 });
+  }
+
   const monitorTypes = normalizeList(body?.monitor_type);
   const statuses = normalizeList(body?.status)?.filter((s) => VALID_STATUSES.has(s));
   const targetFqn: string | undefined = typeof body?.target_fqn === 'string' ? body.target_fqn : undefined;
@@ -54,7 +60,7 @@ export async function POST(request: NextRequest) {
   const limitRaw = Number.isFinite(body?.limit) ? Number(body.limit) : 50;
   const limit = Math.max(1, Math.min(200, Math.trunc(limitRaw)));
 
-  const where: Record<string, any> = { organizationId: auth.orgId };
+  const where: Record<string, any> = { organizationId: auth.orgId, pipelineStackId };
   if (monitorTypes && monitorTypes.length > 0) where.monitorType = { in: monitorTypes };
   if (statuses && statuses.length > 0) where.lastStatus = { in: statuses };
   if (targetFqn) where.targetFqn = targetFqn;
