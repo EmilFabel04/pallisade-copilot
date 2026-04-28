@@ -18,6 +18,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'anchorFqn is required' }, { status: 400 });
   }
 
+  const stackId = req.nextUrl.searchParams.get('stackId');
+  if (!stackId) {
+    return NextResponse.json(
+      { error: 'stackId query parameter is required' },
+      { status: 400 }
+    );
+  }
+
   // Return any existing monitor group for this anchor so new asset-level
   // monitors (e.g. DATA_TYPE_VALIDATION) merge into the same group rather than
   // spawning a separate custom_watch. Standalone groups are preferred when
@@ -25,6 +33,7 @@ export async function GET(req: NextRequest) {
   const groups = await prisma.monitorGroup.findMany({
     where: {
       organizationId: orgId,
+      pipelineStackId: stackId,
       anchorFqn,
     },
     include: {

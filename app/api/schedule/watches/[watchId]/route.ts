@@ -17,9 +17,16 @@ export async function GET(
 
     const { watchId } = await params;
     const organizationId = (session.user as any).organizationId;
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
 
     const group = await prisma.monitorGroup.findFirst({
-      where: { id: watchId, organizationId, watchType: { not: null } },
+      where: { id: watchId, organizationId, pipelineStackId: stackId, watchType: { not: null } },
       include: {
         monitors: {
           include: {
@@ -86,6 +93,7 @@ export async function GET(
               domain: 'warehouse',
               criticality: 'medium',
             })),
+            stackId,
           }),
         });
         if (policyRes.ok) {
@@ -155,14 +163,22 @@ export async function PATCH(
     const { watchId } = await params;
     const organizationId = (session.user as any).organizationId;
 
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     const group = await prisma.monitorGroup.findFirst({
-      where: { id: watchId, organizationId, watchType: { not: null } },
+      where: { id: watchId, organizationId, pipelineStackId: stackId, watchType: { not: null } },
     });
     if (!group) {
       return NextResponse.json({ error: 'Watch not found' }, { status: 404 });
     }
 
-    const body = await request.json();
     const {
       name,
       description,
@@ -212,7 +228,12 @@ export async function PATCH(
           where: { monitorId: { in: removeMonitorIds } },
         });
         await tx.monitor.deleteMany({
-          where: { id: { in: removeMonitorIds }, monitorGroupId: watchId },
+          where: {
+            id: { in: removeMonitorIds },
+            monitorGroupId: watchId,
+            organizationId,
+            pipelineStackId: stackId,
+          },
         });
       }
 
@@ -238,7 +259,7 @@ export async function PATCH(
 
         if (validTypes.length > 0) {
           const existingMonitors = await tx.monitor.findMany({
-            where: { monitorGroupId: watchId, organizationId },
+            where: { monitorGroupId: watchId, organizationId, pipelineStackId: stackId },
             select: { monitorType: true },
           });
           const existingTypes = new Set(existingMonitors.map((m) => m.monitorType));
@@ -266,6 +287,7 @@ export async function PATCH(
                 alertOnStatus: (body.alertOnStatus as string[]) || group.alertOnStatus as any || [],
                 nextRunAt,
                 organizationId,
+                pipelineStackId: stackId,
                 monitorGroupId: watchId,
                 taskMode: 'structured',
               },
@@ -281,7 +303,7 @@ export async function PATCH(
 
       if (Object.keys(monitorUpdate).length > 0) {
         await tx.monitor.updateMany({
-          where: { monitorGroupId: watchId },
+          where: { monitorGroupId: watchId, organizationId, pipelineStackId: stackId },
           data: monitorUpdate,
         });
       }
@@ -308,8 +330,17 @@ export async function DELETE(
     const { watchId } = await params;
     const organizationId = (session.user as any).organizationId;
 
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     const group = await prisma.monitorGroup.findFirst({
-      where: { id: watchId, organizationId, watchType: { not: null } },
+      where: { id: watchId, organizationId, pipelineStackId: stackId, watchType: { not: null } },
       include: { monitors: { select: { id: true } } },
     });
     if (!group) {
@@ -326,7 +357,7 @@ export async function DELETE(
           where: { monitorId: { in: monitorIds } },
         });
         await tx.monitor.deleteMany({
-          where: { id: { in: monitorIds } },
+          where: { id: { in: monitorIds }, organizationId, pipelineStackId: stackId },
         });
       }
       await tx.monitorGroup.delete({
@@ -337,7 +368,7 @@ export async function DELETE(
     // Fire-and-forget notification
     notifyEvents.monitorGroupDeleted(
       group.organizationId,
-      undefined,
+      stackId,
       (session.user as any).id ?? undefined, // actorUserId from session
       group.name,
       watchId,

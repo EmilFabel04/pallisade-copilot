@@ -16,12 +16,22 @@ export async function PUT(
     const organizationId = (session.user as any).organizationId;
     const { watchId, monitorId } = await params;
 
-    // Verify monitor belongs to this watch and org
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
+    // Verify monitor belongs to this watch, org, and stack
     const monitor = await prisma.monitor.findFirst({
       where: {
         id: monitorId,
         monitorGroupId: watchId,
         organizationId,
+        pipelineStackId: stackId,
       },
     });
 
@@ -32,7 +42,6 @@ export async function PUT(
       );
     }
 
-    const body = await request.json();
     const { config, policyOverrides } = body;
 
     const updateData: Record<string, any> = {};
