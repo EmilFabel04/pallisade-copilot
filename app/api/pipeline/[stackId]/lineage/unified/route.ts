@@ -397,9 +397,7 @@ export async function GET(
     const lineageNodes = await prisma.lineageNode.findMany({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}),
+        pipelineStackId: stackId,
       },
     });
 
