@@ -124,11 +124,12 @@ export default function MonitorsPage() {
   }, [selectedPipeline?.id]);
 
   const fetchTasks = useCallback(async () => {
+    if (!selectedPipeline?.id) { setTasks([]); return; }
     try {
-      const res = await cachedFetch('/api/schedule/tasks');
+      const res = await cachedFetch(`/api/schedule/tasks?stackId=${selectedPipeline.id}`);
       if (res.ok) { const data = await res.json(); setTasks(data.tasks || []); }
     } catch (err) { console.error('[Monitors] Failed to fetch tasks:', err); }
-  }, []);
+  }, [selectedPipeline?.id]);
 
   // Live-refresh: bypass cache to get fresh monitor statuses
   const refreshLive = useCallback(async () => {
@@ -144,7 +145,7 @@ export default function MonitorsPage() {
       // Also refresh detail panel if open — use ref to avoid stale closure
       const currentWatch = selectedWatchRef.current;
       if (currentWatch) {
-        const detailRes = await fetch(`/api/schedule/watches/${currentWatch.id}`);
+        const detailRes = await fetch(`/api/schedule/watches/${currentWatch.id}?stackId=${selectedPipeline.id}`);
         if (detailRes.ok) {
           const d = await detailRes.json();
           // Re-check ref: user may have navigated away while fetch was in-flight
@@ -248,8 +249,9 @@ export default function MonitorsPage() {
   // Fetch watch detail
   useEffect(() => {
     if (!selectedWatch) return;
+    if (!selectedPipeline?.id) return;
     setWatchDetailLoading(true);
-    fetch(`/api/schedule/watches/${selectedWatch.id}`)
+    fetch(`/api/schedule/watches/${selectedWatch.id}?stackId=${selectedPipeline.id}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data?.watch) {
@@ -259,7 +261,7 @@ export default function MonitorsPage() {
       })
       .catch(() => {})
       .finally(() => setWatchDetailLoading(false));
-  }, [selectedWatch?.id]);
+  }, [selectedWatch?.id, selectedPipeline?.id]);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -273,8 +275,9 @@ export default function MonitorsPage() {
   }, [fetchWatches, fetchPlans, fetchTasks]);
 
   const handleToggleWatchEnabled = async (watchId: string, enabled: boolean) => {
+    if (!selectedPipeline?.id) return;
     try {
-      await fetch(`/api/schedule/watches/${watchId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+      await fetch(`/api/schedule/watches/${watchId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, stackId: selectedPipeline.id }) });
       invalidateCache('/api/schedule');
       setWatches((prev) => prev.map((w) => (w.id === watchId ? { ...w, enabled } : w)));
       if (selectedWatch?.id === watchId) setSelectedWatch((prev) => prev ? { ...prev, enabled } : prev);
@@ -282,9 +285,14 @@ export default function MonitorsPage() {
   };
 
   const handleRunWatch = (watchId: string) => {
+    if (!selectedPipeline?.id) return;
     setRunningWatchIds((prev) => new Set(prev).add(watchId));
     // Fire and forget — polling handles real-time updates while running
-    fetch(`/api/schedule/watches/${watchId}/run`, { method: 'POST' })
+    fetch(`/api/schedule/watches/${watchId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stackId: selectedPipeline.id }),
+    })
       .then(async () => {
         invalidateCache('/api/schedule');
         await refreshLive();
@@ -296,9 +304,14 @@ export default function MonitorsPage() {
   };
 
   const handleDeleteWatch = async (watchId: string) => {
+    if (!selectedPipeline?.id) return;
     if (!confirm('Delete this monitor group and its monitors?')) return;
     try {
-      await fetch(`/api/schedule/watches/${watchId}`, { method: 'DELETE' });
+      await fetch(`/api/schedule/watches/${watchId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stackId: selectedPipeline.id }),
+      });
       invalidateCache('/api/schedule');
       setWatches((prev) => prev.filter((w) => w.id !== watchId));
       setSelectedWatch(null);
@@ -308,11 +321,12 @@ export default function MonitorsPage() {
 
   const handleRemoveMonitorFromWatch = async (monitorId: string) => {
     if (!selectedWatch) return;
+    if (!selectedPipeline?.id) return;
     try {
-      const res = await fetch(`/api/schedule/watches/${selectedWatch.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeMonitorIds: [monitorId] }) });
+      const res = await fetch(`/api/schedule/watches/${selectedWatch.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ removeMonitorIds: [monitorId], stackId: selectedPipeline.id }) });
       if (res.ok) {
         invalidateCache('/api/schedule');
-        const detailRes = await fetch(`/api/schedule/watches/${selectedWatch.id}`);
+        const detailRes = await fetch(`/api/schedule/watches/${selectedWatch.id}?stackId=${selectedPipeline.id}`);
         if (detailRes.ok) { const data = await detailRes.json(); setWatchDetailMonitors(data.watch?.monitors || []); if (data.watch) setSelectedWatch(data.watch); }
         fetchWatches();
       }
@@ -421,16 +435,22 @@ export default function MonitorsPage() {
   ];
 
   const handleToggleTaskEnabled = async (taskId: string, enabled: boolean) => {
+    if (!selectedPipeline?.id) return;
     try {
-      await fetch(`/api/schedule/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+      await fetch(`/api/schedule/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, stackId: selectedPipeline.id }) });
       invalidateCache('/api/schedule');
       setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, enabled } : t)));
     } catch (err) { console.error('[Monitors] Failed to toggle task:', err); }
   };
 
   const handleRunTask = async (taskId: string) => {
+    if (!selectedPipeline?.id) return;
     try {
-      await fetch(`/api/schedule/tasks/${taskId}/run`, { method: 'POST' });
+      await fetch(`/api/schedule/tasks/${taskId}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stackId: selectedPipeline.id }),
+      });
       invalidateCache('/api/schedule');
       fetchTasks();
     } catch (err) { console.error('[Monitors] Failed to run task:', err); }

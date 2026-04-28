@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { usePipeline } from '@/contexts/PipelineContext';
 import type { MonitoringPlanSummary, HealthStatus } from '@/types/health-watch';
 import {
   healthStatusFromScore,
@@ -63,6 +64,7 @@ export function MonitoringPlanCard({
   policyMonitorCount = 0,
   overrideMonitorCount = 0,
 }: MonitoringPlanCardProps) {
+  const { selectedPipelineId } = usePipeline();
   const [showEditModal, setShowEditModal] = useState(false);
   const hasRun = plan.passCount > 0 || plan.warnCount > 0 || plan.failCount > 0 || plan.errorCount > 0;
 
@@ -309,10 +311,11 @@ export function MonitoringPlanCard({
             enabled: plan.enabled,
           }}
           onSave={async (data: Record<string, any>) => {
+            if (!selectedPipelineId) return;
             await fetch(`/api/schedule/plans/${plan.id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data),
+              body: JSON.stringify({ ...data, stackId: selectedPipelineId }),
             });
           }}
           onClose={() => setShowEditModal(false)}

@@ -139,6 +139,10 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, onComplete,
         }],
       }];
 
+      if (!stackId) {
+        console.error('[CreateTaskModal] stackId required to create plan');
+        return;
+      }
       const res = await fetch('/api/schedule/plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -152,6 +156,7 @@ export function CreateTaskModal({ open, onClose, onSubmit, onUpdate, onComplete,
           alertChannels,
           alertOnStatus,
           groups,
+          stackId,
         }),
       });
 

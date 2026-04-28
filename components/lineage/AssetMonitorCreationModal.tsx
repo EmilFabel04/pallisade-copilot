@@ -6,6 +6,7 @@ import { X, Loader2, ChevronRight, ChevronLeft } from 'lucide-react';
 import { ScheduleInput } from '@/components/schedule/ScheduleInput';
 import { AlertChannelPicker } from '@/components/schedule/AlertChannelPicker';
 import { getMonitorDefinition, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
+import { usePipeline } from '@/contexts/PipelineContext';
 
 interface AssetMonitorCreationModalProps {
   open: boolean;
@@ -37,6 +38,7 @@ export function AssetMonitorCreationModal({
   assetName,
   integrations,
 }: AssetMonitorCreationModalProps) {
+  const { selectedPipelineId } = usePipeline();
   const [step, setStep] = useState<Step>(1);
   const [saving, setSaving] = useState(false);
   const [existingTypes, setExistingTypes] = useState<Set<string>>(new Set());
@@ -56,9 +58,10 @@ export function AssetMonitorCreationModal({
 
   // Fetch existing group for this asset on open
   const fetchExisting = useCallback(async () => {
+    if (!selectedPipelineId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/schedule/watches/by-anchor?anchorFqn=${encodeURIComponent(assetFqn)}`);
+      const res = await fetch(`/api/schedule/watches/by-anchor?anchorFqn=${encodeURIComponent(assetFqn)}&stackId=${selectedPipelineId}`);
       if (res.ok) {
         const data = await res.json();
         if (data.group) {
@@ -76,7 +79,7 @@ export function AssetMonitorCreationModal({
     } finally {
       setLoading(false);
     }
-  }, [assetFqn]);
+  }, [assetFqn, selectedPipelineId]);
 
   useEffect(() => {
     if (open) {
@@ -107,6 +110,7 @@ export function AssetMonitorCreationModal({
 
   const handleSave = async () => {
     if (selectedTypes.size === 0) return;
+    if (!selectedPipelineId) return;
     setSaving(true);
     try {
       if (existingGroupId) {
@@ -115,6 +119,7 @@ export function AssetMonitorCreationModal({
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            stackId: selectedPipelineId,
             schedule,
             timezone,
             alertChannels,
@@ -137,6 +142,7 @@ export function AssetMonitorCreationModal({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            stackId: selectedPipelineId,
             name: assetName,
             watchType: 'custom_watch',
             anchorFqn: assetFqn,
