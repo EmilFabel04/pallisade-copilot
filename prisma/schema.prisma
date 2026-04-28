@@ -361,6 +361,13 @@ model PipelineStack {
   lineageEdges     LineageEdge[]
   lineageSnapshots LineageSnapshot[]
 
+  // Monitors + findings (per-profile isolation)
+  monitors             Monitor[]
+  monitorGroups        MonitorGroup[]
+  monitoringPlans      MonitoringPlan[]
+  findings             Finding[]
+  driftRecommendations DriftRecommendation[]
+
   @@index([organizationId])
   @@index([status])
 }
@@ -1868,12 +1875,14 @@ model Finding {
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-  report         Report?      @relation(fields: [reportId], references: [id])
-  reportId       String?
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  integration     Integration?   @relation(fields: [integrationId], references: [id])
+  integrationId   String?
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
+  report          Report?        @relation(fields: [reportId], references: [id])
+  reportId        String?
 
   @@unique([organizationId, fingerprint])
   @@index([organizationId])
@@ -1882,6 +1891,7 @@ model Finding {
   @@index([severity])
   @@index([scanType])
   @@index([fingerprint])
+  @@index([pipelineStackId])
 }
 
 enum FindingSeverity {
@@ -2003,6 +2013,8 @@ model Monitor {
   integrationId        String?
   monitorGroup         MonitorGroup?         @relation(fields: [monitorGroupId], references: [id], onDelete: SetNull)
   monitorGroupId       String?
+  pipelineStack        PipelineStack?        @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId      String?
   runs                 MonitorRun[]
   baselines            MonitorBaseline[]
   driftRecommendations DriftRecommendation[]
@@ -2013,6 +2025,8 @@ model Monitor {
   @@index([monitorType])
   @@index([enabled])
   @@index([monitorGroupId])
+  @@index([pipelineStackId])
+  @@index([organizationId, pipelineStackId])
 }
 
 model MonitorRun {
@@ -2164,9 +2178,11 @@ model MonitorGroup {
   monitoringPlanId String?
 
   // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  monitors       Monitor[]
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
+  monitors        Monitor[]
 
   createdBy String?
   createdAt DateTime @default(now())
@@ -2178,6 +2194,7 @@ model MonitorGroup {
   @@index([watchType])
   @@index([presetGroupId])
   @@index([monitoringPlanId])
+  @@index([pipelineStackId])
 }
 
 model MonitoringPlan {
@@ -2222,12 +2239,15 @@ model MonitoringPlan {
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  monitorGroups  MonitorGroup[]
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
+  monitorGroups   MonitorGroup[]
 
   @@index([organizationId])
   @@index([enabled])
+  @@index([pipelineStackId])
 }
 
 // ============================================
@@ -2260,10 +2280,13 @@ model DriftRecommendation {
 
   createdAt DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  monitor      Monitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  organization    Organization   @relation(fields: [organizationId], references: [id])
+  monitor         Monitor        @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
 
   @@index([organizationId, status])
   @@index([monitorId])
   @@index([runId])
+  @@index([pipelineStackId])
 }
