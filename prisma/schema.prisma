@@ -356,6 +356,11 @@ model PipelineStack {
   // Notifications
   notificationEvents NotificationEvent[]
 
+  // Lineage owned by this stack (cascade-deletes when stack is deleted)
+  lineageNodes     LineageNode[]
+  lineageEdges     LineageEdge[]
+  lineageSnapshots LineageSnapshot[]
+
   @@index([organizationId])
   @@index([status])
 }
@@ -881,12 +886,17 @@ model LineageNode {
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
 
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
+
   // Edges
   upstreamEdges   LineageEdge[] @relation("downstream")
   downstreamEdges LineageEdge[] @relation("upstream")
 
-  @@unique([organizationId, name])
+  @@unique([organizationId, pipelineStackId, name])
   @@index([organizationId])
+  @@index([organizationId, pipelineStackId])
+  @@index([pipelineStackId])
   @@index([integrationId])
   @@index([name])
 }
@@ -912,10 +922,14 @@ model LineageEdge {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
 
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
+
   @@unique([sourceId, targetId])
   @@index([sourceId])
   @@index([targetId])
   @@index([organizationId])
+  @@index([pipelineStackId])
 }
 
 model LineageSnapshot {
@@ -948,12 +962,16 @@ model LineageSnapshot {
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
 
+  pipelineStack   PipelineStack? @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String?
+
   @@index([organizationId])
   @@index([integrationId])
+  @@index([pipelineStackId])
 }
 
 enum Plan {
-  STARTER      // Legacy — maps to GROWTH
+  STARTER // Legacy — maps to GROWTH
   PROFESSIONAL // Legacy — maps to BUSINESS
   GROWTH
   BUSINESS
@@ -1271,7 +1289,7 @@ model BillingSubscription {
   orgId                    String        @unique
   paystackCustomerCode     String
   paystackSubscriptionCode String?
-  paystackEmailToken       String?       // needed to manage subscriptions via PayStack API
+  paystackEmailToken       String? // needed to manage subscriptions via PayStack API
   plan                     BillingPlan
   status                   BillingStatus @default(ACTIVE)
   currentPeriodStart       DateTime
@@ -1290,19 +1308,19 @@ model BillingSubscription {
 }
 
 model UsageLedger {
-  id               String    @id @default(cuid())
-  orgId            String
-  periodStart      DateTime
-  periodEnd        DateTime
-  tokensUsed       Int       @default(0)
-  storageUsedGb    Float     @default(0)
+  id                String    @id @default(cuid())
+  orgId             String
+  periodStart       DateTime
+  periodEnd         DateTime
+  tokensUsed        Int       @default(0)
+  storageUsedGb     Float     @default(0)
   lastStorageScanAt DateTime?
-  notifiedAt80Pct  DateTime?
-  notifiedAt100Pct DateTime?
-  updatedAt        DateTime  @updatedAt
+  notifiedAt80Pct   DateTime?
+  notifiedAt100Pct  DateTime?
+  updatedAt         DateTime  @updatedAt
 
-  organization         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade, map: "UsageLedger_org_fkey")
-  billingSubscription  BillingSubscription? @relation(fields: [orgId], references: [orgId], map: "UsageLedger_billing_fkey")
+  organization        Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade, map: "UsageLedger_org_fkey")
+  billingSubscription BillingSubscription? @relation(fields: [orgId], references: [orgId], map: "UsageLedger_billing_fkey")
 
   @@unique([orgId, periodStart])
   @@index([orgId])
@@ -1318,12 +1336,12 @@ model CreditBalance {
 }
 
 model CreditPurchase {
-  id                    String   @id @default(cuid())
-  orgId                 String
-  tokensAmount          Int
-  pricePaid             Int      // kobo/cents
-  paystackReference     String
-  createdAt             DateTime @default(now())
+  id                String   @id @default(cuid())
+  orgId             String
+  tokensAmount      Int
+  pricePaid         Int // kobo/cents
+  paystackReference String
+  createdAt         DateTime @default(now())
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
