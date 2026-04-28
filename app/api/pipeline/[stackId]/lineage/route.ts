@@ -45,39 +45,24 @@ export async function GET(
 
     const { stackId } = await params;
 
-    // Get the pipeline stack
+    // Get the pipeline stack (ownership check)
     const stack = await prisma.pipelineStack.findFirst({
       where: {
         id: stackId,
         organizationId,
       },
-      include: {
-        nodes: {
-          select: {
-            id: true,
-            integrationId: true,
-          },
-        },
-      },
+      select: { id: true },
     });
 
     if (!stack) {
       return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
     }
 
-    // Get integration IDs from stack nodes
-    const integrationIds = stack.nodes
-      .map(n => n.integrationId)
-      .filter((id): id is string => id !== null);
-
-    // Get lineage nodes for these integrations
+    // Get lineage nodes scoped to this stack
     const allNodes = await prisma.lineageNode.findMany({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}
-        ),
+        pipelineStackId: stackId,
       },
       orderBy: { name: 'asc' },
     });
@@ -98,6 +83,7 @@ export async function GET(
     const edges = await prisma.lineageEdge.findMany({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         sourceId: { in: nodeIds },
         targetId: { in: nodeIds },
       },
@@ -107,10 +93,7 @@ export async function GET(
     const latestSnapshot = await prisma.lineageSnapshot.findFirst({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}
-        ),
+        pipelineStackId: stackId,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -170,25 +153,31 @@ export async function DELETE(
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
-    // Delete all edges first (due to foreign key constraints)
+    const { stackId } = await params;
+
+    // Ownership check: 404 if the stack doesn't belong to this org
+    const stack = await prisma.pipelineStack.findFirst({
+      where: { id: stackId, organizationId },
+      select: { id: true },
+    });
+    if (!stack) {
+      return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
+    }
+
+    // Delete edges first (FK constraint), then nodes, then snapshots — all scoped to this stack.
     const deletedEdges = await prisma.lineageEdge.deleteMany({
-      where: { organizationId },
+      where: { organizationId, pipelineStackId: stackId },
     });
-
-    // Then delete all nodes
     const deletedNodes = await prisma.lineageNode.deleteMany({
-      where: { organizationId },
+      where: { organizationId, pipelineStackId: stackId },
     });
-
-    // Delete snapshots
     const deletedSnapshots = await prisma.lineageSnapshot.deleteMany({
-      where: { organizationId },
+      where: { organizationId, pipelineStackId: stackId },
     });
 
-    // Clear in-memory engine graph and run registry so stale views aren't served
+    // Clear in-memory engine graph for this specific stack
     try {
-      const { stackId: delStackId } = await params;
-      await scannerClient.fetch(session, `/api/v1/lineage/engine/clear-cache?stack_id=${delStackId}`, {
+      await scannerClient.fetch(session, `/api/v1/lineage/engine/clear-cache?stack_id=${stackId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: AbortSignal.timeout(5000),
@@ -197,7 +186,7 @@ export async function DELETE(
       console.warn('[LINEAGE] Failed to clear engine cache (non-fatal)');
     }
 
-    console.log(`[LINEAGE] Cleared: ${deletedNodes.count} nodes, ${deletedEdges.count} edges, ${deletedSnapshots.count} snapshots`);
+    console.log(`[LINEAGE] Cleared stack=${stackId}: ${deletedNodes.count} nodes, ${deletedEdges.count} edges, ${deletedSnapshots.count} snapshots`);
 
     return NextResponse.json({
       success: true,
