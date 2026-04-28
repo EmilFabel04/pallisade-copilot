@@ -358,11 +358,6 @@ export async function GET(
       return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
     }
 
-    // Collect integration IDs from pipeline nodes
-    const integrationIds = stack.nodes
-      .map((n) => n.integrationId)
-      .filter((id): id is string => id !== null);
-
     // Map plane param to engine API filter
     // data → data,cross (show data assets + their orchestration cross-links)
     // control → control,cross (show orchestration + their data cross-links)
@@ -534,9 +529,7 @@ export async function GET(
     const latestSnapshot = await prisma.lineageSnapshot.findFirst({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}),
+        pipelineStackId: stackId,
       },
       orderBy: { createdAt: 'desc' },
     });
