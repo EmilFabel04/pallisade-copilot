@@ -19,8 +19,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
+
     const plans = await prisma.monitoringPlan.findMany({
-      where: { organizationId },
+      where: { organizationId, pipelineStackId: stackId },
       orderBy: { createdAt: 'desc' },
       include: {
         monitorGroups: {
@@ -210,6 +218,12 @@ export async function POST(request: NextRequest) {
     if (!mode) {
       return NextResponse.json({ error: 'mode is required' }, { status: 400 });
     }
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required' },
+        { status: 400 }
+      );
+    }
 
     // ---- Server-side policy merge ----
     // Resolve policies for all target FQNs and merge into config_hints
@@ -229,6 +243,7 @@ export async function POST(request: NextRequest) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             nodes: Array.from(targetFqns).map((fqn) => ({ fqn, domain: '', criticality: '' })),
+            stackId,
             _assignments: (await prisma.policyAssignment.findMany({
               where: { organizationId },
               include: { profile: true },
@@ -291,6 +306,7 @@ export async function POST(request: NextRequest) {
           alertOnStatus,
           createdBy: userId,
           organizationId,
+          pipelineStackId: stackId,
         },
       });
 
@@ -343,6 +359,7 @@ export async function POST(request: NextRequest) {
           monitoringPlanId: plan.id,
           monitors,
           organizationId,
+          pipelineStackId: stackId,
           userId,
         });
 

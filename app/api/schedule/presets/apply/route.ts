@@ -28,6 +28,14 @@ export async function POST(request: NextRequest) {
       alertOnStatus = ['FAIL', 'WARN', 'ERROR'],
     } = body;
 
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     if (!presetKey) {
       return NextResponse.json({ error: 'presetKey is required' }, { status: 400 });
     }
@@ -61,6 +69,7 @@ export async function POST(request: NextRequest) {
           presetKey,
           monitors: watch.monitors,
           organizationId,
+          pipelineStackId: stackId,
           userId,
         };
 

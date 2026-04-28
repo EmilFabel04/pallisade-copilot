@@ -16,8 +16,16 @@ export async function GET(
     const organizationId = (session.user as any).organizationId;
     const { planId } = await params;
 
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
+
     const plan = await prisma.monitoringPlan.findFirst({
-      where: { id: planId, organizationId },
+      where: { id: planId, organizationId, pipelineStackId: stackId },
       include: {
         monitorGroups: {
           include: {
@@ -104,10 +112,18 @@ export async function PATCH(
 
     const organizationId = (session.user as any).organizationId;
     const { planId } = await params;
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
+
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
 
     const existing = await prisma.monitoringPlan.findFirst({
-      where: { id: planId, organizationId },
+      where: { id: planId, organizationId, pipelineStackId: stackId },
     });
     if (!existing) {
       return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
@@ -147,7 +163,7 @@ export async function PATCH(
 
       if (Object.keys(propagateData).length > 0) {
         await tx.monitorGroup.updateMany({
-          where: { monitoringPlanId: planId },
+          where: { monitoringPlanId: planId, organizationId, pipelineStackId: stackId },
           data: propagateData,
         });
 
@@ -159,14 +175,14 @@ export async function PATCH(
           if (enabled !== undefined) monitorData.enabled = enabled;
 
           const childGroups = await tx.monitorGroup.findMany({
-            where: { monitoringPlanId: planId },
+            where: { monitoringPlanId: planId, organizationId, pipelineStackId: stackId },
             select: { id: true },
           });
           const groupIds = childGroups.map((g) => g.id);
 
           if (groupIds.length > 0) {
             await tx.monitor.updateMany({
-              where: { monitorGroupId: { in: groupIds } },
+              where: { monitorGroupId: { in: groupIds }, organizationId, pipelineStackId: stackId },
               data: monitorData,
             });
           }
@@ -197,8 +213,17 @@ export async function DELETE(
     const organizationId = (session.user as any).organizationId;
     const { planId } = await params;
 
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     const existing = await prisma.monitoringPlan.findFirst({
-      where: { id: planId, organizationId },
+      where: { id: planId, organizationId, pipelineStackId: stackId },
     });
     if (!existing) {
       return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
@@ -207,17 +232,17 @@ export async function DELETE(
     // Delete child monitors, then groups, then the plan
     await prisma.$transaction(async (tx) => {
       const childGroups = await tx.monitorGroup.findMany({
-        where: { monitoringPlanId: planId },
+        where: { monitoringPlanId: planId, organizationId, pipelineStackId: stackId },
         select: { id: true },
       });
       const groupIds = childGroups.map((g) => g.id);
 
       if (groupIds.length > 0) {
         await tx.monitor.deleteMany({
-          where: { monitorGroupId: { in: groupIds } },
+          where: { monitorGroupId: { in: groupIds }, organizationId, pipelineStackId: stackId },
         });
         await tx.monitorGroup.deleteMany({
-          where: { id: { in: groupIds } },
+          where: { id: { in: groupIds }, organizationId, pipelineStackId: stackId },
         });
       }
 
