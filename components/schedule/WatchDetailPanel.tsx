@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { usePipeline } from '@/contexts/PipelineContext';
@@ -556,7 +557,10 @@ export function WatchDetailPanel({
                                   }}
                                   resolvedPolicy={mon.resolvedPolicy || null}
                                   onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
-                                    if (!selectedPipelineId) return;
+                                    if (!selectedPipelineId) {
+                                      toast.error('No pipeline profile selected');
+                                      return;
+                                    }
                                     const res = await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
                                       method: 'PUT',
                                       headers: { 'Content-Type': 'application/json' },
@@ -673,7 +677,10 @@ export function WatchDetailPanel({
                           }}
                           resolvedPolicy={mon.resolvedPolicy || null}
                           onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
-                            if (!selectedPipelineId) return;
+                            if (!selectedPipelineId) {
+                              toast.error('No pipeline profile selected');
+                              return;
+                            }
                             await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
                               method: 'PUT',
                               headers: { 'Content-Type': 'application/json' },

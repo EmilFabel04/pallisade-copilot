@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Settings } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { usePipeline } from '@/contexts/PipelineContext';
 import type { MonitoringPlanSummary, HealthStatus } from '@/types/health-watch';
@@ -311,7 +312,10 @@ export function MonitoringPlanCard({
             enabled: plan.enabled,
           }}
           onSave={async (data: Record<string, any>) => {
-            if (!selectedPipelineId) return;
+            if (!selectedPipelineId) {
+              toast.error('No pipeline profile selected');
+              return;
+            }
             await fetch(`/api/schedule/plans/${plan.id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
