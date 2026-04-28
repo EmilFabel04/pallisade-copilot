@@ -15,9 +15,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
+
     const groups = await prisma.monitorGroup.findMany({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         watchType: { not: null },
         monitoringPlanId: null, // Exclude groups that belong to a plan
       },

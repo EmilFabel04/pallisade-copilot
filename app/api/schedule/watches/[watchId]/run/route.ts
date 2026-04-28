@@ -156,8 +156,17 @@ export async function POST(
     const { watchId } = await params;
     const organizationId = (session.user as any).organizationId;
 
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     const group = await prisma.monitorGroup.findFirst({
-      where: { id: watchId, organizationId, watchType: { not: null } },
+      where: { id: watchId, organizationId, pipelineStackId: stackId, watchType: { not: null } },
       include: {
         monitors: {
           where: { enabled: true },
@@ -185,6 +194,7 @@ export async function POST(
         const runRes = await fetch(`${baseUrl}/api/schedule/tasks/${monitor.id}/run?grouped=true`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Cookie: cookie },
+          body: JSON.stringify({ stackId }),
         });
 
         const runData = await runRes.json();
@@ -305,7 +315,7 @@ export async function POST(
     // 1. In-app notification (always)
     notifyEvents.monitorGroupCompleted(
       group.organizationId,
-      undefined,
+      stackId,
       undefined,
       group.name,
       watchId,
@@ -317,7 +327,7 @@ export async function POST(
     detectHighImpactEvents({
       watchId,
       organizationId: group.organizationId,
-      pipelineStackId: undefined,
+      pipelineStackId: stackId,
       currentHealthScore: healthScore,
       previousHealthScore,
       results: signals.map((s) => ({
@@ -329,13 +339,13 @@ export async function POST(
       for (const event of events) {
         if (event.eventType === 'monitor.health_score_dropped') {
           notifyEvents.healthScoreDropped(
-            group.organizationId, undefined, undefined,
+            group.organizationId, stackId, undefined,
             group.name, watchId,
             event.previousScore!, event.currentScore!, event.severity,
           ).catch(() => {});
         } else if (event.eventType === 'monitor.sustained_failure') {
           notifyEvents.sustainedFailure(
-            group.organizationId, undefined, undefined,
+            group.organizationId, stackId, undefined,
             group.name, watchId,
             event.monitorName!, event.monitorId!, event.consecutiveFailures!, event.severity,
           ).catch(() => {});

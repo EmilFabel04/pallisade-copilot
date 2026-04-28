@@ -14,11 +14,18 @@ export async function PATCH(
 
     const organizationId = (session.user as any).organizationId;
     const { id } = await params;
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
     const { action, value } = body as { action: string; value?: string };
 
     const rec = await prisma.driftRecommendation.findFirst({
-      where: { id, organizationId },
+      where: { id, organizationId, pipelineStackId: stackId },
       include: { monitor: true },
     });
 
@@ -43,6 +50,14 @@ export async function PATCH(
         config[rec.currentField.replace('.', '_')] = isNaN(Number(applyValue))
           ? applyValue
           : Number(applyValue);
+
+        const ownedMonitor = await prisma.monitor.findFirst({
+          where: { id: rec.monitorId, organizationId, pipelineStackId: stackId },
+          select: { id: true },
+        });
+        if (!ownedMonitor) {
+          return NextResponse.json({ error: 'Monitor not found' }, { status: 404 });
+        }
 
         await prisma.monitor.update({
           where: { id: rec.monitorId },

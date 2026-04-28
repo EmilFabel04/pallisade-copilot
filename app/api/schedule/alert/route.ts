@@ -48,6 +48,7 @@ export async function POST(request: NextRequest) {
       config: legacyAlertConfig, // legacy: { slack: {...}, email: {...} }
       organizationId,
       recovered, // optional: set by alert engine when monitor transitions back to PASS
+      stackId, // optional: pipeline stack ID for defensive isolation check
     } = body;
 
     // --- Resolve destinations ------------------------------------------------
@@ -60,6 +61,16 @@ export async function POST(request: NextRequest) {
         where: { id: taskId },
         include: { monitorGroup: true },
       });
+
+      // Defensive isolation: if the caller (scheduler) sent a stackId, verify
+      // it matches the monitor's pipelineStackId. Back-compat: if no stackId
+      // was sent, behavior is unchanged.
+      if (stackId && monitor && monitor.pipelineStackId !== stackId) {
+        return NextResponse.json(
+          { error: 'monitor stack mismatch' },
+          { status: 400 }
+        );
+      }
 
       if (monitor) {
         const monitorDest = (monitor.alertConfig as any)?.destinations;
@@ -74,6 +85,14 @@ export async function POST(request: NextRequest) {
         const group = await prisma.monitorGroup.findUnique({
           where: { id: taskId },
         });
+        // Defensive isolation: if the caller sent a stackId, verify it matches
+        // the group's pipelineStackId.
+        if (stackId && group && group.pipelineStackId !== stackId) {
+          return NextResponse.json(
+            { error: 'monitor stack mismatch' },
+            { status: 400 }
+          );
+        }
         const groupDest = (group?.alertConfig as any)?.destinations;
         if (Array.isArray(groupDest) && groupDest.length > 0) {
           destinations = groupDest;

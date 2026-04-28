@@ -356,6 +356,18 @@ model PipelineStack {
   // Notifications
   notificationEvents NotificationEvent[]
 
+  // Lineage owned by this stack (cascade-deletes when stack is deleted)
+  lineageNodes     LineageNode[]
+  lineageEdges     LineageEdge[]
+  lineageSnapshots LineageSnapshot[]
+
+  // Monitors + findings (per-profile isolation)
+  monitors             Monitor[]
+  monitorGroups        MonitorGroup[]
+  monitoringPlans      MonitoringPlan[]
+  findings             Finding[]
+  driftRecommendations DriftRecommendation[]
+
   @@index([organizationId])
   @@index([status])
 }
@@ -881,12 +893,17 @@ model LineageNode {
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
 
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+
   // Edges
   upstreamEdges   LineageEdge[] @relation("downstream")
   downstreamEdges LineageEdge[] @relation("upstream")
 
-  @@unique([organizationId, name])
+  @@unique([organizationId, pipelineStackId, name])
   @@index([organizationId])
+  @@index([organizationId, pipelineStackId])
+  @@index([pipelineStackId])
   @@index([integrationId])
   @@index([name])
 }
@@ -912,10 +929,14 @@ model LineageEdge {
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   organizationId String
 
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+
   @@unique([sourceId, targetId])
   @@index([sourceId])
   @@index([targetId])
   @@index([organizationId])
+  @@index([pipelineStackId])
 }
 
 model LineageSnapshot {
@@ -948,12 +969,16 @@ model LineageSnapshot {
   integration    Integration? @relation(fields: [integrationId], references: [id])
   integrationId  String?
 
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+
   @@index([organizationId])
   @@index([integrationId])
+  @@index([pipelineStackId])
 }
 
 enum Plan {
-  STARTER      // Legacy — maps to GROWTH
+  STARTER // Legacy — maps to GROWTH
   PROFESSIONAL // Legacy — maps to BUSINESS
   GROWTH
   BUSINESS
@@ -1271,7 +1296,7 @@ model BillingSubscription {
   orgId                    String        @unique
   paystackCustomerCode     String
   paystackSubscriptionCode String?
-  paystackEmailToken       String?       // needed to manage subscriptions via PayStack API
+  paystackEmailToken       String? // needed to manage subscriptions via PayStack API
   plan                     BillingPlan
   status                   BillingStatus @default(ACTIVE)
   currentPeriodStart       DateTime
@@ -1290,19 +1315,19 @@ model BillingSubscription {
 }
 
 model UsageLedger {
-  id               String    @id @default(cuid())
-  orgId            String
-  periodStart      DateTime
-  periodEnd        DateTime
-  tokensUsed       Int       @default(0)
-  storageUsedGb    Float     @default(0)
+  id                String    @id @default(cuid())
+  orgId             String
+  periodStart       DateTime
+  periodEnd         DateTime
+  tokensUsed        Int       @default(0)
+  storageUsedGb     Float     @default(0)
   lastStorageScanAt DateTime?
-  notifiedAt80Pct  DateTime?
-  notifiedAt100Pct DateTime?
-  updatedAt        DateTime  @updatedAt
+  notifiedAt80Pct   DateTime?
+  notifiedAt100Pct  DateTime?
+  updatedAt         DateTime  @updatedAt
 
-  organization         Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade, map: "UsageLedger_org_fkey")
-  billingSubscription  BillingSubscription? @relation(fields: [orgId], references: [orgId], map: "UsageLedger_billing_fkey")
+  organization        Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade, map: "UsageLedger_org_fkey")
+  billingSubscription BillingSubscription? @relation(fields: [orgId], references: [orgId], map: "UsageLedger_billing_fkey")
 
   @@unique([orgId, periodStart])
   @@index([orgId])
@@ -1318,12 +1343,12 @@ model CreditBalance {
 }
 
 model CreditPurchase {
-  id                    String   @id @default(cuid())
-  orgId                 String
-  tokensAmount          Int
-  pricePaid             Int      // kobo/cents
-  paystackReference     String
-  createdAt             DateTime @default(now())
+  id                String   @id @default(cuid())
+  orgId             String
+  tokensAmount      Int
+  pricePaid         Int // kobo/cents
+  paystackReference String
+  createdAt         DateTime @default(now())
 
   organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
@@ -1850,20 +1875,23 @@ model Finding {
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  integration    Integration? @relation(fields: [integrationId], references: [id])
-  integrationId  String?
-  report         Report?      @relation(fields: [reportId], references: [id])
-  reportId       String?
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  integration     Integration?  @relation(fields: [integrationId], references: [id])
+  integrationId   String?
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+  report          Report?       @relation(fields: [reportId], references: [id])
+  reportId        String?
 
-  @@unique([organizationId, fingerprint])
+  @@unique([organizationId, pipelineStackId, fingerprint])
   @@index([organizationId])
   @@index([integrationId])
   @@index([status])
   @@index([severity])
   @@index([scanType])
   @@index([fingerprint])
+  @@index([pipelineStackId])
 }
 
 enum FindingSeverity {
@@ -1985,16 +2013,20 @@ model Monitor {
   integrationId        String?
   monitorGroup         MonitorGroup?         @relation(fields: [monitorGroupId], references: [id], onDelete: SetNull)
   monitorGroupId       String?
+  pipelineStack        PipelineStack         @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId      String
   runs                 MonitorRun[]
   baselines            MonitorBaseline[]
   driftRecommendations DriftRecommendation[]
 
-  @@unique([organizationId, targetFqn, monitorType])
+  @@unique([organizationId, pipelineStackId, targetFqn, monitorType])
   @@index([organizationId])
   @@index([targetFqn])
   @@index([monitorType])
   @@index([enabled])
   @@index([monitorGroupId])
+  @@index([pipelineStackId])
+  @@index([organizationId, pipelineStackId])
 }
 
 model MonitorRun {
@@ -2146,9 +2178,11 @@ model MonitorGroup {
   monitoringPlanId String?
 
   // Relations
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  monitors       Monitor[]
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+  monitors        Monitor[]
 
   createdBy String?
   createdAt DateTime @default(now())
@@ -2160,6 +2194,7 @@ model MonitorGroup {
   @@index([watchType])
   @@index([presetGroupId])
   @@index([monitoringPlanId])
+  @@index([pipelineStackId])
 }
 
 model MonitoringPlan {
@@ -2204,12 +2239,15 @@ model MonitoringPlan {
   updatedAt DateTime @updatedAt
 
   // Relations
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  organizationId String
-  monitorGroups  MonitorGroup[]
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId  String
+  pipelineStack   PipelineStack  @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
+  monitorGroups   MonitorGroup[]
 
   @@index([organizationId])
   @@index([enabled])
+  @@index([pipelineStackId])
 }
 
 // ============================================
@@ -2242,10 +2280,13 @@ model DriftRecommendation {
 
   createdAt DateTime @default(now())
 
-  organization Organization @relation(fields: [organizationId], references: [id])
-  monitor      Monitor      @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  organization    Organization  @relation(fields: [organizationId], references: [id])
+  monitor         Monitor       @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+  pipelineStackId String
 
   @@index([organizationId, status])
   @@index([monitorId])
   @@index([runId])
+  @@index([pipelineStackId])
 }

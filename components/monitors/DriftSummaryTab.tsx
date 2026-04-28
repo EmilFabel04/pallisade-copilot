@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { DriftRecommendationCard, type DriftRecommendation } from './DriftRecommendationCard';
 import { CategorySparklinePanel } from './CategorySparklinePanel';
 import { AssetHealthRow } from './AssetHealthRow';
+import { usePipeline } from '@/contexts/PipelineContext';
 import type { WatchSummary } from '@/types/health-watch';
 import type { ScheduledTask } from '@/types/schedule';
 
@@ -88,6 +89,7 @@ interface Props {
 }
 
 export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Props) {
+  const { selectedPipelineId } = usePipeline();
   const [trendData, setTrendData] = useState<TrendData | null>(null);
   const [trendLoading, setTrendLoading] = useState(true);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
@@ -101,8 +103,9 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
   const [activeCategories, setActiveCategories] = useState<Set<string>>(new Set());
 
   const fetchTrends = useCallback(async () => {
+    if (!selectedPipelineId) return;
     try {
-      const res = await fetch('/api/schedule/monitor-trends');
+      const res = await fetch(`/api/schedule/monitor-trends?stackId=${selectedPipelineId}`);
       if (res.ok) {
         const data = await res.json();
         setTrendData(data);
@@ -112,19 +115,21 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
     } finally {
       setTrendLoading(false);
     }
-  }, []);
+  }, [selectedPipelineId]);
 
   useEffect(() => { fetchTrends(); }, [fetchTrends]);
 
   useEffect(() => {
+    if (!selectedPipelineId) return;
     const timer = setInterval(fetchTrends, 30000);
     return () => clearInterval(timer);
-  }, [fetchTrends]);
+  }, [fetchTrends, selectedPipelineId]);
 
   const fetchRecommendations = useCallback(async () => {
+    if (!selectedPipelineId) return;
     setDriftLoading(true);
     try {
-      const res = await fetch('/api/drift?status=pending');
+      const res = await fetch(`/api/drift?status=pending&stackId=${selectedPipelineId}`);
       if (res.ok) {
         const data = await res.json();
         setRecommendations(data.recommendations || []);
@@ -136,14 +141,19 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
     } finally {
       setDriftLoading(false);
     }
-  }, []);
+  }, [selectedPipelineId]);
 
   useEffect(() => { fetchRecommendations(); }, [fetchRecommendations]);
 
   const handleRunAnalysis = async () => {
+    if (!selectedPipelineId) return;
     setRunning(true);
     try {
-      const res = await fetch('/api/drift/run', { method: 'POST' });
+      const res = await fetch('/api/drift/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stackId: selectedPipelineId }),
+      });
       if (res.ok) {
         const data = await res.json();
         toast.success(`Analysis complete — ${data.recommendationCount} recommendation${data.recommendationCount !== 1 ? 's' : ''}`);
@@ -160,11 +170,12 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
   };
 
   const handleAccept = async (id: string, value?: string) => {
+    if (!selectedPipelineId) return;
     const action = value ? 'accept_with_value' : 'accept';
     const res = await fetch(`/api/drift/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, value }),
+      body: JSON.stringify({ action, value, stackId: selectedPipelineId }),
     });
     if (res.ok) {
       toast.success('Recommendation applied');
@@ -175,10 +186,11 @@ export function DriftSummaryTab({ watches, tasks, loading: monitorsLoading }: Pr
   };
 
   const handleDismiss = async (id: string) => {
+    if (!selectedPipelineId) return;
     const res = await fetch(`/api/drift/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'dismiss' }),
+      body: JSON.stringify({ action: 'dismiss', stackId: selectedPipelineId }),
     });
     if (res.ok) {
       fetchRecommendations();

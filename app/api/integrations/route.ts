@@ -124,13 +124,18 @@ export async function GET(request: NextRequest) {
     ];
 
     const [monitors, latestScans] = await Promise.all([
-      // Fetch ALL enabled monitors for this org (not just those with integrationId)
-      // so we can match by targetFqn pattern too
+      // Fetch enabled monitors for this org (not just those with integrationId)
+      // so we can match by targetFqn pattern too. When a stackId is supplied,
+      // scope to monitors that belong to that pipeline profile so the per-
+      // integration count overlay reflects only the active profile (per
+      // finding+monitor isolation spec). Integrations themselves stay
+      // org-shared, but their count overlay is profile-scoped.
       prisma.monitor.findMany({
         where: {
           organizationId: user.organizationId,
           enabled: true,
           lastRunAt: { not: null },
+          ...(stackId ? { pipelineStackId: stackId } : {}),
         },
         select: {
           integrationId: true,

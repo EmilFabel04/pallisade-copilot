@@ -12,6 +12,7 @@ def _ctx() -> CopilotContext:
         org_id="org_1",
         base_url="http://localhost:3000",
         auth_token="copilot-token",
+        pipeline_stack_id="stack_1",
     )
 
 
@@ -50,6 +51,7 @@ async def test_list_configured_monitors_posts_filters_to_nextjs():
         "monitor_type": "DBT_CORE_SOURCE_VALIDATION,DBT_CORE_REF_INTEGRITY",
         "status": "FAIL,ERROR",
         "limit": 25,
+        "pipelineStackId": "stack_1",
     }
 
 
@@ -97,7 +99,7 @@ async def test_get_monitor_run_history_posts_to_nextjs():
 
     path, body = executor._call_nextjs.await_args.args
     assert path == "/api/copilot/internal/get-monitor-run-history"
-    assert body == {"monitor_id": "mon_1", "limit": 5}
+    assert body == {"monitor_id": "mon_1", "pipelineStackId": "stack_1", "limit": 5}
 
 
 @pytest.mark.asyncio

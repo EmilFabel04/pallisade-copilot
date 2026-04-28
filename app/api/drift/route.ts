@@ -15,11 +15,18 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
+    const stackId = searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
     const status = searchParams.get('status');
     const category = searchParams.get('category');
     const runId = searchParams.get('runId');
 
-    const where: any = { organizationId };
+    const where: any = { organizationId, pipelineStackId: stackId };
     if (status) where.status = status;
     if (category) where.driftCategory = category;
     if (runId) where.runId = runId;
@@ -35,14 +42,14 @@ export async function GET(request: NextRequest) {
     });
 
     const latestRun = await prisma.driftRecommendation.findFirst({
-      where: { organizationId },
+      where: { organizationId, pipelineStackId: stackId },
       orderBy: { createdAt: 'desc' },
       select: { runId: true, createdAt: true },
     });
 
     const counts = await prisma.driftRecommendation.groupBy({
       by: ['status'],
-      where: { organizationId, runId: latestRun?.runId || '' },
+      where: { organizationId, pipelineStackId: stackId, runId: latestRun?.runId || '' },
       _count: true,
     });
 

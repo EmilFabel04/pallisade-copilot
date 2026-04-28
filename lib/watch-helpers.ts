@@ -49,6 +49,7 @@ export interface CreateWatchParams {
     alertConfig?: Record<string, any> | null;
   }>;
   organizationId: string;
+  pipelineStackId: string;
   userId: string;
 }
 
@@ -85,6 +86,7 @@ export async function createWatchInTransaction(
     presetKey,
     monitors,
     organizationId,
+    pipelineStackId,
     userId,
   } = params;
 
@@ -107,6 +109,7 @@ export async function createWatchInTransaction(
     ? await tx.monitorGroup.findFirst({
         where: {
           organizationId,
+          pipelineStackId,
           anchorFqn,
           ...(monitoringPlanId ? { monitoringPlanId } : {}),
         },
@@ -135,6 +138,7 @@ export async function createWatchInTransaction(
         alertOnStatus,
         alertConfig: alertConfig ?? undefined,
         organizationId,
+        pipelineStackId,
         createdBy: userId,
       },
     });
@@ -150,6 +154,7 @@ export async function createWatchInTransaction(
     ? await tx.monitor.findMany({
         where: {
           organizationId,
+          pipelineStackId,
           OR: dedupPairs.map((p) => ({
             targetFqn: p.targetFqn,
             monitorType: p.monitorType,
@@ -222,6 +227,7 @@ export async function createWatchInTransaction(
             createdBy: userId,
             source: 'pallisade',
             organizationId,
+            pipelineStackId,
             monitorGroupId: group.id,
             ...(validIntegrationId && !isToolMonitor && !isInfraMonitor && !isBIMonitor
               ? { integrationId: validIntegrationId }
@@ -232,7 +238,7 @@ export async function createWatchInTransaction(
       } catch (createErr: any) {
         if (createErr?.code === 'P2002' && mon.targetFqn && mon.monitorType) {
           const dup = await tx.monitor.findFirst({
-            where: { organizationId, targetFqn: mon.targetFqn, monitorType: mon.monitorType },
+            where: { organizationId, pipelineStackId, targetFqn: mon.targetFqn, monitorType: mon.monitorType },
           });
           if (dup) {
             const updated = await tx.monitor.update({

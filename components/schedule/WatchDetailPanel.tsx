@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { usePipeline } from '@/contexts/PipelineContext';
 import type { WatchSummary } from '@/types/health-watch';
 import {
   WATCH_TYPE_LABELS,
@@ -198,6 +200,7 @@ export function WatchDetailPanel({
   onSettings,
   onMonitorConfigSaved,
 }: WatchDetailPanelProps) {
+  const { selectedPipelineId } = usePipeline();
   const storedReport = watch.healthDetails as HealthReport | undefined;
   // Prefer a fresh computation whenever we have live monitor counts or
   // detail rows — the stored report is only refreshed on a full "Run All"
@@ -216,9 +219,10 @@ export function WatchDetailPanel({
 
   const fetchMonitorRuns = useCallback(async (monitorId: string) => {
     if (monitorRuns[monitorId]) return; // already fetched
+    if (!selectedPipelineId) return;
     setMonitorRunsLoading((prev) => ({ ...prev, [monitorId]: true }));
     try {
-      const res = await fetch(`/api/schedule/tasks/${monitorId}/runs?limit=10`);
+      const res = await fetch(`/api/schedule/tasks/${monitorId}/runs?limit=10&stackId=${selectedPipelineId}`);
       if (res.ok) {
         const data = await res.json();
         setMonitorRuns((prev) => ({ ...prev, [monitorId]: data.runs || [] }));
@@ -228,7 +232,7 @@ export function WatchDetailPanel({
     } finally {
       setMonitorRunsLoading((prev) => ({ ...prev, [monitorId]: false }));
     }
-  }, [monitorRuns]);
+  }, [monitorRuns, selectedPipelineId]);
 
   const handleToggleMonitor = useCallback((monitorId: string) => {
     if (expandedMonitorId === monitorId) {
@@ -553,10 +557,14 @@ export function WatchDetailPanel({
                                   }}
                                   resolvedPolicy={mon.resolvedPolicy || null}
                                   onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
+                                    if (!selectedPipelineId) {
+                                      toast.error('No pipeline profile selected');
+                                      return;
+                                    }
                                     const res = await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
                                       method: 'PUT',
                                       headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ config, policyOverrides }),
+                                      body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
                                     });
                                     if (!res.ok) throw new Error('Failed to save');
                                     onMonitorConfigSaved?.(monitorId, config, policyOverrides);
@@ -669,10 +677,14 @@ export function WatchDetailPanel({
                           }}
                           resolvedPolicy={mon.resolvedPolicy || null}
                           onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
+                            if (!selectedPipelineId) {
+                              toast.error('No pipeline profile selected');
+                              return;
+                            }
                             await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
                               method: 'PUT',
                               headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ config, policyOverrides }),
+                              body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
                             });
                             setEditingMonitorId(null);
                           }}

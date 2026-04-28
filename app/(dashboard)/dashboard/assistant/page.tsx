@@ -589,7 +589,8 @@ function AssistantPageInner() {
     }).then((result) => {
       if (result.sessionId) {
         setSessionId(result.sessionId);
-        fetch('/api/copilot/sessions?limit=50')
+        const stackQs = selectedPipelineId ? `&pipelineStackId=${encodeURIComponent(selectedPipelineId)}` : '';
+        fetch(`/api/copilot/sessions?limit=50${stackQs}`)
           .then(res => res.json())
           .then(d => setSessions(d.sessions || []))
           .catch(() => {});
@@ -620,7 +621,8 @@ function AssistantPageInner() {
   const fetchSessions = async () => {
     try {
       setLoadingSessions(true);
-      const response = await fetch('/api/copilot/sessions?limit=50');
+      const stackQs = selectedPipelineId ? `&pipelineStackId=${encodeURIComponent(selectedPipelineId)}` : '';
+      const response = await fetch(`/api/copilot/sessions?limit=50${stackQs}`);
       if (response.ok) {
         const data = await response.json();
         setSessions(data.sessions || []);
@@ -632,15 +634,7 @@ function AssistantPageInner() {
         }
 
         if (data.sessions && data.sessions.length > 0) {
-          const pipelineSession = selectedPipelineId
-            ? data.sessions.find((s: ChatSession) => s.pipelineStackId === selectedPipelineId)
-            : null;
-
-          if (pipelineSession) {
-            loadSession(pipelineSession.id);
-          } else {
-            loadSession(data.sessions[0].id);
-          }
+          loadSession(data.sessions[0].id);
         } else {
           startNewChat();
         }
@@ -828,7 +822,8 @@ function AssistantPageInner() {
 
       if (result.sessionId && result.sessionId !== outboundSessionId) {
         setSessionId(result.sessionId);
-        const sessionsRes = await fetch('/api/copilot/sessions?limit=50');
+        const stackQs = selectedPipelineId ? `&pipelineStackId=${encodeURIComponent(selectedPipelineId)}` : '';
+        const sessionsRes = await fetch(`/api/copilot/sessions?limit=50${stackQs}`);
         if (sessionsRes.ok) {
           const sessionsData = await sessionsRes.json();
           // Drop any optimistic stubs so they don't duplicate real sessions.

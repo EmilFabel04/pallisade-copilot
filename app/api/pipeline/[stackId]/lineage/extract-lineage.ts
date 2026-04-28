@@ -366,7 +366,11 @@ export async function extractLineageForStack(
       try {
         const dbNode = await prisma.lineageNode.upsert({
           where: {
-            organizationId_name: { organizationId, name: fqn },
+            organizationId_pipelineStackId_name: {
+              organizationId,
+              pipelineStackId: stackId,
+              name: fqn,
+            },
           },
           create: {
             name: fqn,
@@ -381,6 +385,7 @@ export async function extractLineageForStack(
             upstreamCount: lineageNode.upstream_count || 0,
             downstreamCount: lineageNode.downstream_count || 0,
             organizationId,
+            pipelineStackId: stackId,
             integrationId: lineageNode.integration_id,
           },
           update: {
@@ -419,6 +424,7 @@ export async function extractLineageForStack(
               ) || [],
               transformation: lineageEdge.transformation,
               organizationId,
+              pipelineStackId: stackId,
             },
             update: {
               edgeType: lineageEdge.edge_type || 'depends_on',
@@ -439,6 +445,7 @@ export async function extractLineageForStack(
     await prisma.lineageSnapshot.create({
       data: {
         organizationId,
+        pipelineStackId: stackId,
         source: 'investigator',
         dialect: toolConfigs.map(t => t.tool_type).join(','),
         status: 'ready',
@@ -458,7 +465,7 @@ export async function extractLineageForStack(
         const snapshotData = await snapshotRes.json();
         if (snapshotData.has_graph && snapshotData.graph_data) {
           const latestSnapshot = await prisma.lineageSnapshot.findFirst({
-            where: { organizationId },
+            where: { organizationId, pipelineStackId: stackId },
             orderBy: { createdAt: 'desc' },
           });
           if (latestSnapshot) {

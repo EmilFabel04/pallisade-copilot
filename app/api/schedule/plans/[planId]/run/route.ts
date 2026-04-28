@@ -18,8 +18,17 @@ export async function POST(
     const organizationId = (session.user as any).organizationId;
     const { planId } = await params;
 
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     const plan = await prisma.monitoringPlan.findFirst({
-      where: { id: planId, organizationId },
+      where: { id: planId, organizationId, pipelineStackId: stackId },
       include: {
         monitorGroups: {
           where: { enabled: true },
@@ -66,6 +75,7 @@ export async function POST(
                 'Content-Type': 'application/json',
                 cookie,
               },
+              body: JSON.stringify({ stackId }),
             },
           );
           const body = await res.json().catch(() => ({}));
@@ -120,14 +130,9 @@ export async function POST(
     const errorCount = allStatuses.filter((s: string) => s === 'ERROR' || s === 'FAILED').length;
     const totalMonitors = allStatuses.length;
 
-    const pipelineStack = await prisma.pipelineStack.findFirst({
-      where: { organizationId },
-      select: { id: true },
-    });
-
     notifyEvents.monitorGroupCompleted(
       organizationId,
-      pipelineStack?.id,
+      stackId,
       (session.user as any).id,
       plan.name,
       planId,

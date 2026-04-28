@@ -6,6 +6,7 @@ import { X, Loader2 } from 'lucide-react';
 import { ScheduleInput } from './ScheduleInput';
 import { AlertDestinationPicker, type AlertDestination } from './AlertDestinationPicker';
 import { getMonitorDefinition, ASSET_MONITOR_TYPES } from '@/types/monitor-catalog';
+import { usePipeline } from '@/contexts/PipelineContext';
 
 interface MonitorGroupSettingsModalProps {
   watchId: string;
@@ -41,6 +42,7 @@ export function MonitorGroupSettingsModal({
   onSaved,
   integrations,
 }: MonitorGroupSettingsModalProps) {
+  const { selectedPipelineId } = usePipeline();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [watch, setWatch] = useState<WatchDetail | null>(null);
@@ -58,9 +60,10 @@ export function MonitorGroupSettingsModal({
 
   const fetchWatch = useCallback(async () => {
     if (!watchId) return;
+    if (!selectedPipelineId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/schedule/watches/${watchId}`);
+      const res = await fetch(`/api/schedule/watches/${watchId}?stackId=${selectedPipelineId}`);
       if (!res.ok) throw new Error('Failed to fetch watch');
       const data = await res.json();
       const w = data.watch || data;
@@ -82,7 +85,7 @@ export function MonitorGroupSettingsModal({
     } finally {
       setLoading(false);
     }
-  }, [watchId]);
+  }, [watchId, selectedPipelineId]);
 
   useEffect(() => {
     if (open) fetchWatch();
@@ -102,6 +105,7 @@ export function MonitorGroupSettingsModal({
 
   const handleSave = async () => {
     if (!watch) return;
+    if (!selectedPipelineId) return;
     setSaving(true);
     try {
       // Compute diffs
@@ -115,6 +119,7 @@ export function MonitorGroupSettingsModal({
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          stackId: selectedPipelineId,
           schedule: schedule || undefined,
           timezone: timezone || undefined,
           alertChannels: alertDestinations.length > 0

@@ -52,11 +52,10 @@ async function tryRestoreEngineFromSnapshot(
   stackId: string,
 ): Promise<{ nodes: any[]; edges: any[] } | null> {
   try {
-    // Find the latest snapshot with graphData (org-scoped, no integrationId filter
-    // because save-snapshot stores with integrationId=null)
     const snapshot = await prisma.lineageSnapshot.findFirst({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         graphData: { not: null as any },
       },
       orderBy: { createdAt: 'desc' },
@@ -358,11 +357,6 @@ export async function GET(
       return NextResponse.json({ error: 'Pipeline stack not found' }, { status: 404 });
     }
 
-    // Collect integration IDs from pipeline nodes
-    const integrationIds = stack.nodes
-      .map((n) => n.integrationId)
-      .filter((id): id is string => id !== null);
-
     // Map plane param to engine API filter
     // data → data,cross (show data assets + their orchestration cross-links)
     // control → control,cross (show orchestration + their data cross-links)
@@ -397,9 +391,7 @@ export async function GET(
     const lineageNodes = await prisma.lineageNode.findMany({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}),
+        pipelineStackId: stackId,
       },
     });
 
@@ -410,6 +402,7 @@ export async function GET(
     const findings = await prisma.finding.findMany({
       where: {
         organizationId,
+        pipelineStackId: stackId,
         table: { in: allFqns },
         status: { in: ['OPEN', 'IN_PROGRESS'] },
       },
@@ -431,7 +424,7 @@ export async function GET(
 
     // Fetch ALL enabled monitors (including infra monitors with null targetFqn)
     const monitors = await prisma.monitor.findMany({
-      where: { organizationId, enabled: true },
+      where: { organizationId, pipelineStackId: stackId, enabled: true },
       select: {
         id: true, name: true, monitorType: true, targetFqn: true,
         lastStatus: true, lastRunAt: true, integrationId: true, config: true,
@@ -536,9 +529,7 @@ export async function GET(
     const latestSnapshot = await prisma.lineageSnapshot.findFirst({
       where: {
         organizationId,
-        ...(integrationIds.length > 0
-          ? { integrationId: { in: integrationIds } }
-          : {}),
+        pipelineStackId: stackId,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -726,6 +717,7 @@ export async function GET(
       const lineageEdges = await prisma.lineageEdge.findMany({
         where: {
           organizationId,
+          pipelineStackId: stackId,
           sourceId: { in: lineageNodes.map((n) => n.id) },
           targetId: { in: lineageNodes.map((n) => n.id) },
         },

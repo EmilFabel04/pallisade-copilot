@@ -30,9 +30,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'monitor_id is required' }, { status: 400 });
   }
 
+  const pipelineStackId: string | undefined =
+    typeof body?.pipelineStackId === 'string' ? body.pipelineStackId : undefined;
+  if (!pipelineStackId) {
+    return NextResponse.json({ error: 'pipelineStackId required' }, { status: 400 });
+  }
+
   try {
     const monitor = await prisma.monitor.findFirst({
-      where: { id: monitorId, organizationId: auth.orgId },
+      where: { id: monitorId, organizationId: auth.orgId, pipelineStackId },
       select: { id: true, name: true, monitorType: true, targetFqn: true },
     });
     if (!monitor) {

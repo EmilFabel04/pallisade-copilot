@@ -15,10 +15,17 @@ export async function GET(
 
     const { taskId } = await params;
     const organizationId = (session.user as any).organizationId;
+    const stackId = new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId query parameter is required' },
+        { status: 400 }
+      );
+    }
 
-    // Verify task belongs to org
+    // Verify task belongs to org and stack
     const task = await prisma.monitor.findFirst({
-      where: { id: taskId, organizationId },
+      where: { id: taskId, organizationId, pipelineStackId: stackId },
       select: { id: true },
     });
 

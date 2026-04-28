@@ -72,9 +72,10 @@ export default function PlanDetailPage() {
   // Fetch plan data (initialLoad controls whether full-page spinner shows)
   const fetchPlan = useCallback(async (initialLoad = false) => {
     if (!planId) return;
+    if (!selectedPipelineId) return;
     if (initialLoad) setLoading(true);
     try {
-      const res = await fetch(`/api/schedule/plans/${planId}`);
+      const res = await fetch(`/api/schedule/plans/${planId}?stackId=${selectedPipelineId}`);
       if (res.ok) {
         const data = await res.json();
         setPlan(data.plan);
@@ -113,7 +114,7 @@ export default function PlanDetailPage() {
     } finally {
       if (initialLoad) setLoading(false);
     }
-  }, [planId]);
+  }, [planId, selectedPipelineId]);
 
   useEffect(() => {
     fetchPlan(true);
@@ -122,9 +123,10 @@ export default function PlanDetailPage() {
   // Fetch runs for a specific monitor
   const fetchMonitorRuns = useCallback(async (monitorId: string) => {
     if (monitorRuns[monitorId]) return;
+    if (!selectedPipelineId) return;
     setMonitorRunsLoading((prev) => ({ ...prev, [monitorId]: true }));
     try {
-      const res = await fetch(`/api/schedule/tasks/${monitorId}/runs?limit=10`);
+      const res = await fetch(`/api/schedule/tasks/${monitorId}/runs?limit=10&stackId=${selectedPipelineId}`);
       if (res.ok) {
         const data = await res.json();
         setMonitorRuns((prev) => ({ ...prev, [monitorId]: data.runs || [] }));
@@ -134,7 +136,7 @@ export default function PlanDetailPage() {
     } finally {
       setMonitorRunsLoading((prev) => ({ ...prev, [monitorId]: false }));
     }
-  }, [monitorRuns]);
+  }, [monitorRuns, selectedPipelineId]);
 
   // Auto-refetch runs when the expanded monitor's cache is cleared (after a run completes)
   useEffect(() => {
@@ -155,21 +157,23 @@ export default function PlanDetailPage() {
   // Toggle plan enabled
   const handleToggleEnabled = useCallback(async (enabled: boolean) => {
     if (!planId) return;
+    if (!selectedPipelineId) return;
     try {
       await fetch(`/api/schedule/plans/${planId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, stackId: selectedPipelineId }),
       });
       fetchPlan();
     } catch (err) {
       console.error('[PlanDetail] Failed to toggle plan:', err);
     }
-  }, [planId, fetchPlan]);
+  }, [planId, fetchPlan, selectedPipelineId]);
 
   // Run all monitors (fire-and-forget, runs in background)
   const handleRunAll = useCallback(async () => {
     if (!plan) return;
+    if (!selectedPipelineId) return;
     const allMons = (plan.monitorGroups || []).flatMap((g: any) => g.monitors || []);
     const monIds = allMons.map((m: any) => m.id);
     const startTime = new Date().toISOString();
@@ -177,14 +181,18 @@ export default function PlanDetailPage() {
     setRunStartedAt(startTime);
 
     // Fire the plan-level run endpoint (non-blocking)
-    fetch(`/api/schedule/plans/${planId}/run`, { method: 'POST' }).catch((err) => {
+    fetch(`/api/schedule/plans/${planId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stackId: selectedPipelineId }),
+    }).catch((err) => {
       console.error('[PlanDetail] Run all failed:', err);
     });
 
     // Poll for updated results — check which monitors have completed since startTime
     const poll = setInterval(async () => {
       try {
-        const res = await fetch(`/api/schedule/plans/${planId}`);
+        const res = await fetch(`/api/schedule/plans/${planId}?stackId=${selectedPipelineId}`);
         if (!res.ok) return;
         const data = await res.json();
         setPlan(data.plan);
@@ -227,18 +235,23 @@ export default function PlanDetailPage() {
       setRunningMonitorIds(new Set());
       setRunStartedAt(null);
     }, 120000);
-  }, [plan, planId]);
+  }, [plan, planId, selectedPipelineId]);
 
   // Delete plan
   const handleDelete = useCallback(async () => {
-    if (!planId || !confirm('Delete this monitoring plan? Groups will become standalone.')) return;
+    if (!planId || !selectedPipelineId) return;
+    if (!confirm('Delete this monitoring plan? Groups will become standalone.')) return;
     try {
-      await fetch(`/api/schedule/plans/${planId}`, { method: 'DELETE' });
+      await fetch(`/api/schedule/plans/${planId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stackId: selectedPipelineId }),
+      });
       router.push('/dashboard/schedule');
     } catch (err) {
       console.error('[PlanDetail] Failed to delete plan:', err);
     }
-  }, [planId, router]);
+  }, [planId, router, selectedPipelineId]);
 
   if (loading) {
     return (
@@ -563,10 +576,11 @@ export default function PlanDetailPage() {
                               }}
                               resolvedPolicy={mon.targetFqn ? resolvedPolicies[mon.targetFqn] || null : null}
                               onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
+                                if (!selectedPipelineId) return;
                                 await fetch(`/api/schedule/watches/${mon.groupId}/monitors/${monitorId}`, {
                                   method: 'PUT',
                                   headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ config, policyOverrides }),
+                                  body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
                                 });
                                 setEditingMonitorId(null);
                                 await fetchPlan();
@@ -604,10 +618,11 @@ export default function PlanDetailPage() {
             enabled: plan.enabled,
           }}
           onSave={async (data: Record<string, any>) => {
+            if (!selectedPipelineId) return;
             await fetch(`/api/schedule/plans/${planId}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data),
+              body: JSON.stringify({ ...data, stackId: selectedPipelineId }),
             });
             fetchPlan();
           }}
