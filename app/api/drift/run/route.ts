@@ -15,9 +15,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No organization found' }, { status: 400 });
     }
 
+    const body = await request.json().catch(() => ({}));
+    const stackId = body.stackId || new URL(request.url).searchParams.get('stackId');
+    if (!stackId) {
+      return NextResponse.json(
+        { error: 'stackId is required (in body or query)' },
+        { status: 400 }
+      );
+    }
+
     // Fetch all monitors + runs for this org
     const monitors = await prisma.monitor.findMany({
-      where: { organizationId, enabled: true },
+      where: { organizationId, pipelineStackId: stackId, enabled: true },
     });
 
     const monitorIds = monitors.map(m => m.id);
@@ -97,6 +106,7 @@ export async function POST(request: NextRequest) {
         await prisma.driftRecommendation.updateMany({
           where: {
             organizationId,
+            pipelineStackId: stackId,
             monitorId: pair.monitorId,
             currentField: pair.currentField,
             status: 'pending',
@@ -106,7 +116,10 @@ export async function POST(request: NextRequest) {
       }
 
       await prisma.driftRecommendation.createMany({
-        data: result.recommendations,
+        data: result.recommendations.map((r: any) => ({
+          ...r,
+          pipelineStackId: stackId,
+        })),
       });
     }
 
