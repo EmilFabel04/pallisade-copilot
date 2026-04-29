@@ -1587,7 +1587,6 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         try:
                             if tool_name.startswith("mcp_") and mcp_manager:
                                 mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                from scanner.copilot.tools import ToolResult
                                 result = ToolResult(
                                     success=mcp_result.get("success", False),
                                     data=mcp_result.get("data"),
@@ -1597,7 +1596,6 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 result = await executor.execute(tool_name, tool_input)
                         except Exception as tool_err:
                             logger.exception(f"[Stream/Anthropic] Unhandled error executing tool '{tool_name}'")
-                            from scanner.copilot.tools import ToolResult
                             result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
 
                         # Check if the result is an artifact proposal (write tool returning ToolArtifactResult)
@@ -2177,7 +2175,6 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         try:
                             if tool_name.startswith("mcp_") and mcp_manager:
                                 mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                from scanner.copilot.tools import ToolResult
                                 result = ToolResult(
                                     success=mcp_result.get("success", False),
                                     data=mcp_result.get("data"),
@@ -2187,7 +2184,6 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 result = await executor.execute(tool_name, tool_input)
                         except Exception as tool_err:
                             logger.exception(f"[Stream/OpenAI] Unhandled error executing tool '{tool_name}'")
-                            from scanner.copilot.tools import ToolResult
                             result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
 
                         # Check if the result is an artifact proposal (write tool returning ToolArtifactResult)
@@ -2469,7 +2465,6 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 if tool_name.startswith("mcp_") and mcp_manager:
                                     mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
                                     # Convert MCP result to ToolResult-compatible format
-                                    from scanner.copilot.tools import ToolResult
                                     result = ToolResult(
                                         success=mcp_result.get("success", False),
                                         data=mcp_result.get("data"),
@@ -2777,7 +2772,6 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             # Route MCP-prefixed tools to MCP, others to legacy executor
                             if tool_name.startswith("mcp_") and mcp_manager:
                                 mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                from scanner.copilot.tools import ToolResult
                                 result = ToolResult(
                                     success=mcp_result.get("success", False),
                                     data=mcp_result.get("data"),
