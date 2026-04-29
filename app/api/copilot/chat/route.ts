@@ -38,7 +38,7 @@ export async function POST(request: Request) {
       pipelineStackId, // Support both formats
       node_ids,
       referenced_entities,
-      model = 'gpt-5.2',
+      model = 'gpt-5.4',
       mode = 'ask',
       stream = false,
       confirmed_tool_ids,
@@ -399,7 +399,7 @@ async function handleStreamingChat(
     pipelineStackId,
     node_ids,
     referenced_entities,
-    model = 'gpt-5.2',
+    model = 'gpt-5.4',
     mode = 'ask',
     confirmed_tool_ids,
     pending_tool_call,

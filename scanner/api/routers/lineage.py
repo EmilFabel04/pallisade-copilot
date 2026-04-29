@@ -1388,8 +1388,8 @@ async def engine_reconcile(
         config = ReconcilerConfig(
             provider=request.provider,
             model=request.model or (
-                "claude-sonnet-4-20250514" if request.provider == "anthropic"
-                else "gpt-5.2"
+                "claude-sonnet-4-6" if request.provider == "anthropic"
+                else "gpt-5.4"
             ),
             dry_run=request.dry_run,
         )

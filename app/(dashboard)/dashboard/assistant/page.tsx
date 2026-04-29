@@ -180,7 +180,7 @@ function AssistantPageInner() {
   const [showHistory, setShowHistory] = useState(true);
   const sidebarWidth = 256;
   const [selectedMode, setSelectedMode] = useState('ask');
-  const selectedModel = 'gpt-5.2';
+  const selectedModel = 'gpt-5.4';
   const [thinkingStep, setThinkingStep] = useState(0);
   const [brailleFrame, setBrailleFrame] = useState(0);
   const [showSources, setShowSources] = useState(false);

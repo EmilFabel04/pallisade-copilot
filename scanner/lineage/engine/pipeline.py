@@ -379,8 +379,8 @@ async def _run_reconciliation(
         from .reconciler import ReconcilerConfig, ReconciliationEngine
 
         _default_model = (
-            "gpt-4o" if config.llm_provider == "openai"
-            else "claude-sonnet-4-20250514"
+            "gpt-5.4" if config.llm_provider == "openai"
+            else "claude-sonnet-4-6"
         )
         recon_config = ReconcilerConfig(
             provider=config.llm_provider,

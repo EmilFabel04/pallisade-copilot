@@ -46,7 +46,7 @@ class MAASConfig:
             logs_model=os.environ.get("MAAS_LOGS_MODEL", "specialist-logs"),
 
             specialist_timeout=float(os.environ.get("MAAS_SPECIALIST_TIMEOUT", "90")),
-            orchestrator_model=os.environ.get("MAAS_ORCHESTRATOR_MODEL", "gpt-5.2"),
+            orchestrator_model=os.environ.get("MAAS_ORCHESTRATOR_MODEL", "gpt-5.4"),
         )
 
 

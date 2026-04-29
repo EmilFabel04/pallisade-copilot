@@ -248,7 +248,7 @@ async def _call_anthropic_planner(
 
     client = anthropic.AsyncAnthropic(api_key=key, max_retries=2)
     response = await client.messages.create(
-        model=model or "claude-sonnet-4-20250514",
+        model=model or "claude-sonnet-4-6",
         max_tokens=2048,
         temperature=0.0,
         system=PLANNER_SYSTEM_PROMPT,

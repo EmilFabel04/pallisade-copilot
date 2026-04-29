@@ -1146,7 +1146,7 @@ class LineageInvestigator:
             try:
                 recon_config = ReconcilerConfig(
                     provider=llm_provider,
-                    model=llm_model or "claude-sonnet-4-20250514",
+                    model=llm_model or "claude-sonnet-4-6",
                     api_key=llm_api_key,
                 )
                 recon_engine = ReconciliationEngine(recon_config)

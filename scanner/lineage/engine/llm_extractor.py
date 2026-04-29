@@ -662,7 +662,7 @@ class LLMLineageExtractor:
 
         client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=3)
         tools = _build_tool_definitions()
-        model = self.config.model or "claude-sonnet-4-20250514"
+        model = self.config.model or "claude-sonnet-4-6"
 
         messages = [{"role": "user", "content": user_message}]
 

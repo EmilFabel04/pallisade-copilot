@@ -28,14 +28,14 @@ def _mock_config():
     config.logs_api_key = "key"
     config.logs_model = "logs-model"
     config.specialist_timeout = 30
-    config.orchestrator_model = "gpt-5.2"
+    config.orchestrator_model = "gpt-5.4"
     return config
 
 
 async def _fake_chat_stream(*args, **kwargs):
     """Async generator that mimics CopilotLLM.chat_stream()."""
     yield StreamEvent("text_delta", {"text": "Fallback response"})
-    yield StreamEvent("done", {"model": "gpt-5.2", "input_tokens": 0, "output_tokens": 0})
+    yield StreamEvent("done", {"model": "gpt-5.4", "input_tokens": 0, "output_tokens": 0})
 
 
 @pytest.mark.asyncio
