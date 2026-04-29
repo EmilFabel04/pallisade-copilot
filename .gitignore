@@ -58,6 +58,9 @@ scanner/env/
 dist/
 build/
 
+# Lineage engine runtime debug artifacts
+scanner/lineage/engine/_cross_debug.log
+
 # IDE
 .vscode/
 .idea/
