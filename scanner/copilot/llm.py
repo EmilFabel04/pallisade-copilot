@@ -1973,15 +1973,20 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     else:
                         api_params["max_tokens"] = 16384
 
-                    effort = _reasoning_effort_for(self.model, context)
-                    if effort:
-                        api_params["reasoning_effort"] = effort
-
-                    if tools and not is_reasoning_model:
+                    will_have_tools = bool(tools and not is_reasoning_model)
+                    if will_have_tools:
                         api_params["tools"] = tools
                         if iteration == 0 and _should_force_initial_tool(user_query):
                             api_params["tool_choice"] = "required"
                             logger.info("[Stream/OpenAI] Forcing tool call on iter 0 for investigative query")
+
+                    # GPT-5.x on Chat Completions rejects `reasoning_effort`
+                    # when `tools` are present (OpenAI returns 400 directing
+                    # callers to /v1/responses). Until we migrate to the
+                    # Responses API, only send the param on tool-free calls.
+                    effort = _reasoning_effort_for(self.model, context)
+                    if effort and not will_have_tools:
+                        api_params["reasoning_effort"] = effort
 
                     response_stream = self.openai_client.chat.completions.create(**api_params)
 
@@ -2694,16 +2699,21 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     else:
                         api_params["max_tokens"] = 16384
 
-                    effort = _reasoning_effort_for(self.model, context)
-                    if effort:
-                        api_params["reasoning_effort"] = effort
-
                     # Add tools (reasoning models don't support tools yet)
-                    if tools and not is_reasoning_model:
+                    will_have_tools = bool(tools and not is_reasoning_model)
+                    if will_have_tools:
                         api_params["tools"] = tools
                         if iteration == 0 and _should_force_initial_tool(user_query):
                             api_params["tool_choice"] = "required"
                             logger.info("[OpenAI] Forcing tool call on iter 0 for investigative query")
+
+                    # GPT-5.x on Chat Completions rejects `reasoning_effort`
+                    # when `tools` are present (OpenAI returns 400 directing
+                    # callers to /v1/responses). Until we migrate to the
+                    # Responses API, only send the param on tool-free calls.
+                    effort = _reasoning_effort_for(self.model, context)
+                    if effort and not will_have_tools:
+                        api_params["reasoning_effort"] = effort
 
                     # Call OpenAI
                     response = self.openai_client.chat.completions.create(**api_params)
