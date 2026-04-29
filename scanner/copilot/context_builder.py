@@ -35,6 +35,45 @@ _STOP_WORDS = frozenset({
 })
 
 
+# Keys whose values are credentials. RedactingDict and _redact_for_logs use
+# this set to scrub before logging or string-formatting integration config.
+_SECRET_KEYS = frozenset({
+    "password", "passwd", "secret", "token", "api_token", "api_key",
+    "access_token", "refresh_token", "credentials_json", "credentials",
+    "private_key", "private_key_id", "client_secret", "service_account_key",
+})
+
+
+def _redact_for_logs(value: Any) -> Any:
+    """Return a copy of `value` with secret-looking keys replaced by '***'.
+
+    Recurses into dicts and lists. Used at logger boundaries so a stray
+    f-string of an adapter config never dumps a real key into the log file.
+    """
+    if isinstance(value, dict):
+        return {
+            k: ("***" if k.lower() in _SECRET_KEYS else _redact_for_logs(v))
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_for_logs(v) for v in value]
+    return value
+
+
+class RedactingDict(dict):
+    """
+    A dict whose repr/str redacts secret values. Adapters consuming this
+    via `cfg["password"]` etc. still see the real values; only repr/str
+    (which is what logging interpolation uses) is scrubbed.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return repr(_redact_for_logs(dict(self)))
+
+    def __str__(self) -> str:  # pragma: no cover - cosmetic
+        return str(_redact_for_logs(dict(self)))
+
+
 def tokenize_query(text: str) -> List[str]:
     """Split query into meaningful tokens, removing stop words."""
     tokens = re.findall(r'[a-z][a-z0-9_]*', text.lower())
@@ -140,16 +179,23 @@ class TableSchema:
     warehouse_type: Optional[str] = None  # BIGQUERY, SNOWFLAKE, etc.
 
     def to_prompt_string(self) -> str:
-        """Format table schema for LLM prompt."""
+        """Format table schema for LLM prompt with warehouse-appropriate quoting."""
         cols = ", ".join([f"{c['name']} ({c['type']})" for c in self.columns[:20]])
         if len(self.columns) > 20:
             cols += f", ... (+{len(self.columns) - 20} more)"
 
-        # Include full path for BigQuery (project.dataset.table)
-        if self.project and self.warehouse_type == "BIGQUERY":
-            full_path = f"`{self.project}.{self.dataset}.{self.name}`"
+        wh = (self.warehouse_type or "").upper()
+        # Snowflake / Postgres / Redshift / SQL Server use double-quoted identifiers.
+        # BigQuery uses backticks. Default to backticks for unknown warehouses.
+        if wh in ("SNOWFLAKE", "POSTGRES", "REDSHIFT", "SQLSERVER", "AZURE_SQL"):
+            q = '"'
         else:
-            full_path = f"`{self.dataset}.{self.name}`"
+            q = "`"
+
+        if self.project and wh == "BIGQUERY":
+            full_path = f"{q}{self.project}.{self.dataset}.{self.name}{q}"
+        else:
+            full_path = f"{q}{self.dataset}.{self.name}{q}"
 
         return f"  - {full_path}: {cols}"
 
@@ -196,6 +242,12 @@ class CopilotContext:
     # Pre-fetched warehouse schema (tables and columns)
     warehouse_schema: Dict[str, List[TableSchema]] = field(default_factory=dict)  # dataset -> tables
 
+    # If schema pre-fetch fails or returns empty, the reason is recorded here
+    # so build_system_prompt can surface "Schema unavailable: <reason>" to the
+    # LLM instead of silently dropping the schema section. Without this, the
+    # LLM hallucinates table/column names.
+    warehouse_schema_error: Optional[str] = None
+
     # Pre-fetched aggregate snapshot of user's stack (monitor counts, recent
     # runs, etc.) populated by copilot.prefetch.prefetch_for_query before iter 0
     # for investigative queries. Rendered into the system prompt so the LLM
@@ -214,6 +266,12 @@ class CopilotContext:
 
     # MCP (Model Context Protocol) — set to True when MCP servers are active
     mcp_enabled: bool = False
+
+    # Optional override for the OpenAI `reasoning_effort` parameter on GPT-5
+    # and o-series models. When None, the level is derived from intent_result
+    # (DEBUG/FIX/PR → "high", INFO → "low", default → "medium"). Set this to
+    # one of "minimal" / "low" / "medium" / "high" to override that mapping.
+    reasoning_effort: Optional[str] = None
 
     def has_integration(self, integration_type: str) -> bool:
         """Check if a specific integration type is connected."""
@@ -305,6 +363,22 @@ class CopilotContext:
         # Add lineage node catalog so LLM can use lineage tools
         if self.graph and self.graph.nodes:
             lines.append(self._build_lineage_prompt_section(query))
+            lines.append("")
+
+        # Surface schema-fetch failures explicitly so the LLM doesn't silently
+        # operate without column info and hallucinate table/column names.
+        if self.warehouse_schema_error and not self.warehouse_schema:
+            lines.append("### Database Schema — UNAVAILABLE")
+            lines.append(
+                f"Schema pre-fetch failed: {self.warehouse_schema_error}"
+            )
+            lines.append(
+                "**You do NOT have column info for this warehouse.** Before writing any "
+                "query, call `query_warehouse` with `INFORMATION_SCHEMA.COLUMNS` (or the "
+                "warehouse equivalent) to discover columns. Do NOT guess column names — "
+                "if you cannot determine them, tell the user the schema fetch failed and "
+                "ask them to verify the warehouse connection."
+            )
             lines.append("")
 
         # Add warehouse schema with relevance filtering
@@ -410,10 +484,15 @@ class CopilotContext:
         relevant = [(ds, t) for score, ds, t in scored if score > 0][:15]
         other = [(ds, t) for score, ds, t in scored if score == 0]
 
-        # If nothing matched, show all tables (fallback)
+        # If nothing matched, the previous fallback dumped EVERY table into
+        # `relevant`, blowing the prompt on vague queries. Cap fallback at
+        # the first 20 tables (sorted by score, then preserving insertion
+        # order) and put the rest in `other` so the LLM still knows they
+        # exist without re-paying tokens for every column.
         if not relevant:
-            relevant = [(ds, t) for _, ds, t in scored]
-            other = []
+            unscored = [(ds, t) for _, ds, t in scored]
+            relevant = unscored[:20]
+            other = unscored[20:]
 
         return relevant, other
 
@@ -604,7 +683,10 @@ class CopilotContext:
                 lines.append(f"_{remaining} more nodes not shown. Use `search_lineage` to find specific nodes._")
                 lines.append("")
 
-        # Engine coverage stats
+        # Engine coverage stats. Failures here previously dropped silently —
+        # log at info so operators notice if the engine store is broken, and
+        # render an explicit "stats unavailable" line so the LLM doesn't
+        # invent coverage numbers.
         if self.engine_store:
             try:
                 stats = self.engine_store.get_stats()
@@ -618,8 +700,9 @@ class CopilotContext:
                     stat_parts.append(f"Edges: {', '.join(level_parts)}")
                 if stat_parts:
                     lines.append(" | ".join(stat_parts))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.info(f"[Lineage Prompt] Engine stats unavailable: {e}")
+                lines.append("_Coverage stats unavailable — do not assume any coverage figure._")
 
         return "\n".join(lines)
 
@@ -1058,14 +1141,16 @@ class CopilotContextBuilder:
 
         namespace = config.get("namespace") or config.get("instance_name") or "airflow"
         adapter = LiveAirflowAdapter(adapter_id=f"airflow_{namespace}", mode="api")
-        adapter_config = {
+        # RedactingDict scrubs `password` if any caller logs / repr's the dict.
+        # Adapter still gets real values via __getitem__.
+        adapter_config = RedactingDict({
             "mode": "api",
             "namespace": namespace,
             "integration_id": integration.id,
             "base_url": base_url,
             "username": config.get("username") or config.get("user"),
             "password": config.get("password"),
-        }
+        })
 
         try:
             nodes = adapter.discover_assets(adapter_config)

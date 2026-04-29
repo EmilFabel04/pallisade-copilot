@@ -59,6 +59,86 @@ from .modes import tools_excluded_for_mode
 logger = logging.getLogger(__name__)
 
 
+class _BoundedList(list):
+    """
+    A list that drops the oldest item when its size exceeds `maxlen`.
+    Used for `all_tool_calls` so a runaway 30-iteration loop doesn't
+    accumulate hundreds of entries in memory and produce a fallback
+    summary that loses 90% of context anyway.
+    """
+
+    __slots__ = ("_maxlen",)
+
+    def __init__(self, maxlen: int = 50) -> None:
+        super().__init__()
+        self._maxlen = maxlen
+
+    def append(self, item: Any) -> None:  # type: ignore[override]
+        super().append(item)
+        if len(self) > self._maxlen:
+            del self[: len(self) - self._maxlen]
+
+
+def _supports_reasoning_effort(model: str) -> bool:
+    """
+    True if the OpenAI model accepts the `reasoning_effort` parameter.
+    Applies to GPT-5 family and the o-series (o1, o3, o4-mini, etc.).
+    """
+    m = (model or "").lower()
+    return m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4")
+
+
+def _reasoning_effort_for(model: str, context: Any) -> Optional[str]:
+    """
+    Pick a `reasoning_effort` level for the request based on intent:
+
+    - DEBUG / FIX / PR: "high" — multi-step investigation, root-causing.
+    - PLAN / EXPLAIN: "medium" — design / explanation needs deliberation.
+    - INFO / ASK: "low" — one-shot data lookups; minimal thinking is fine.
+    - Default: "medium".
+
+    Returns None if the model doesn't support the param so the caller can
+    omit it from the request entirely.
+    """
+    if not _supports_reasoning_effort(model):
+        return None
+    # Explicit override on the context wins.
+    override = getattr(context, "reasoning_effort", None) if context is not None else None
+    if override in ("minimal", "low", "medium", "high"):
+        return override
+    intent_result = getattr(context, "intent_result", None) if context is not None else None
+    if intent_result is None:
+        return "medium"
+    try:
+        from .intent import Intent
+        primary = intent_result.primary.intent
+        if primary in (Intent.DEBUG, Intent.FIX, Intent.PR):
+            return "high"
+        if primary in (Intent.INFO,):
+            return "low"
+        return "medium"
+    except Exception:
+        return "medium"
+
+
+def _cached_system(system: str) -> List[Dict[str, Any]]:
+    """
+    Wrap the system prompt in Anthropic's cacheable block format.
+
+    With cache_control: ephemeral on the (single) system text block, Anthropic
+    caches the prefix for ~5 min. Subsequent turns in the same conversation
+    (and follow-up requests within the TTL) reuse the cached prefix instead
+    of paying input tokens for the full system prompt + schema every turn.
+    """
+    return [
+        {
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
 def _safe_json_default(obj: Any) -> Any:
     """Fallback serializer for json.dumps — prevents stream crashes."""
     if isinstance(obj, Enum):
@@ -330,9 +410,9 @@ class CopilotLLM:
 
 4. **USE THE SCHEMA PROVIDED** - The exact column names for all tables are listed below. Use ONLY these column names - never guess or assume column names.
 
-5. **NEVER HALLUCINATE COLUMNS** - If you're unsure whether a column exists, check the schema section. If it's not listed, do NOT use it.
+5. **NEVER HALLUCINATE COLUMNS** - If you're unsure whether a column exists, check the schema section. If it's not listed, do NOT use it. **EXCEPTION**: when a table line ends with `... (+N more)`, only the first 20 columns are shown; if the user asks about a column you don't see, query `INFORMATION_SCHEMA.COLUMNS` for that specific table to find it before answering.
 
-6. **DO NOT QUERY INFORMATION_SCHEMA** - When the "Database Schema" section below lists tables and columns, that IS your schema. Go straight to writing your data query. Do NOT waste a tool call querying INFORMATION_SCHEMA.
+6. **DO NOT QUERY INFORMATION_SCHEMA** - When the "Database Schema" section below lists tables and columns, that IS your schema. Go straight to writing your data query. Do NOT waste a tool call querying INFORMATION_SCHEMA. (Only exception: a table marked `... (+N more)` may have additional columns past the displayed 20 — see rule 5.)
 
 7. **MATCH DEPTH TO QUESTION COMPLEXITY**:
    - **Simple data questions** ("how many orders?", "top product?"): ONE tool call with `query_warehouse`, return the answer.
@@ -1006,6 +1086,39 @@ Response: "**You have 12,847 active users** (from `analytics.users`)"
 """
         return examples
 
+    async def _prefetch_schema(
+        self,
+        context: CopilotContext,
+        executor,
+        log_prefix: str,
+    ) -> None:
+        """
+        Pre-fetch warehouse schema and capture failure reasons on the context
+        so build_system_prompt can render them. Without an explicit reason,
+        the LLM silently operates without column info and hallucinates names.
+        """
+        if context.warehouse_schema or not context.has_warehouse():
+            return
+        try:
+            logger.info(f"{log_prefix} Pre-fetching warehouse schema...")
+            context.warehouse_schema = await executor.fetch_warehouse_schema()
+            if context.warehouse_schema:
+                total_tables = sum(len(t) for t in context.warehouse_schema.values())
+                logger.info(
+                    f"{log_prefix} Schema loaded: {len(context.warehouse_schema)} datasets, "
+                    f"{total_tables} tables"
+                )
+            else:
+                msg = (
+                    "no tables/datasets returned by warehouse adapter (check that "
+                    "the integration's dataset/schema is configured and reachable)"
+                )
+                logger.warning(f"{log_prefix} Schema pre-fetch returned empty: {msg}")
+                context.warehouse_schema_error = msg
+        except Exception as e:
+            logger.error(f"{log_prefix} Schema pre-fetch failed: {e}", exc_info=True)
+            context.warehouse_schema_error = f"{type(e).__name__}: {e}"
+
     def _build_schema_discovery_fallback(self, context: CopilotContext) -> str:
         """
         When schema pre-fetch fails, instruct the LLM to discover
@@ -1153,16 +1266,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Create tool executor (same setup as _chat_anthropic)
         executor = ToolExecutor(context)
 
-        # Pre-fetch warehouse schema
-        if not context.warehouse_schema and context.has_warehouse():
-            try:
-                logger.info("[Stream/Anthropic] Pre-fetching warehouse schema...")
-                context.warehouse_schema = await executor.fetch_warehouse_schema()
-                if context.warehouse_schema:
-                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
-                    logger.info(f"[Stream/Anthropic] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
-            except Exception as e:
-                logger.error(f"[Stream/Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
+        # Pre-fetch warehouse schema (failures recorded on context for prompt)
+        await self._prefetch_schema(context, executor, "[Stream/Anthropic]")
 
         registry = get_tool_registry()
         mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
@@ -1213,7 +1318,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             anthropic_messages = self._convert_messages(messages)
             total_input_tokens = 0
             total_output_tokens = 0
-            all_tool_calls: List[Dict[str, Any]] = []
+            all_tool_calls: List[Dict[str, Any]] = _BoundedList(maxlen=50)
             fired_adjacent_rules: Set[str] = set()
 
             # If we have a pending tool call from confirmation flow,
@@ -1346,7 +1451,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 try:
                     stream_kwargs: Dict[str, Any] = {
                         "model": self.model,
-                        "system": system,
+                        "system": _cached_system(system),
                         "messages": anthropic_messages,
                         "tools": tools if tools else anthropic.NOT_GIVEN,
                         "max_tokens": 16384,
@@ -1423,8 +1528,13 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                     if not get_change_plan_store().get(plan_id):
                                         logger.warning(f"[Stream/Anthropic] apply_change_plan: plan '{plan_id}' not found, skipping confirmation")
                                         needs_confirmation = False
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    # Don't silently disable confirmation if
+                                    # the store/import is broken — log it so
+                                    # operators can spot the infra failure.
+                                    logger.warning(
+                                        f"[Stream/Anthropic] change_plan store lookup failed: {e}"
+                                    )
 
                         if needs_confirmation:
                             logger.info(f"[Stream/Anthropic] Tool '{tool_name}' requires confirmation")
@@ -1667,16 +1777,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Create tool executor (same setup as _chat_openai)
         executor = ToolExecutor(context)
 
-        # Pre-fetch warehouse schema
-        if not context.warehouse_schema and context.has_warehouse():
-            try:
-                logger.info("[Stream/OpenAI] Pre-fetching warehouse schema...")
-                context.warehouse_schema = await executor.fetch_warehouse_schema()
-                if context.warehouse_schema:
-                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
-                    logger.info(f"[Stream/OpenAI] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
-            except Exception as e:
-                logger.error(f"[Stream/OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
+        # Pre-fetch warehouse schema (failures recorded on context for prompt)
+        await self._prefetch_schema(context, executor, "[Stream/OpenAI]")
 
         registry = get_tool_registry()
         mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
@@ -1727,7 +1829,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             openai_messages = self._convert_messages_openai(messages, system)
             total_input_tokens = 0
             total_output_tokens = 0
-            all_tool_calls: List[Dict[str, Any]] = []
+            all_tool_calls: List[Dict[str, Any]] = _BoundedList(maxlen=50)
             fired_adjacent_rules: Set[str] = set()
             is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
 
@@ -1871,6 +1973,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     else:
                         api_params["max_tokens"] = 16384
 
+                    effort = _reasoning_effort_for(self.model, context)
+                    if effort:
+                        api_params["reasoning_effort"] = effort
+
                     if tools and not is_reasoning_model:
                         api_params["tools"] = tools
                         if iteration == 0 and _should_force_initial_tool(user_query):
@@ -2008,8 +2114,13 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                     if not get_change_plan_store().get(plan_id):
                                         logger.warning(f"[Stream/OpenAI] apply_change_plan: plan '{plan_id}' not found, skipping confirmation")
                                         needs_confirmation = False
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    # Don't silently disable confirmation if
+                                    # the store/import is broken — log it so
+                                    # operators can spot the infra failure.
+                                    logger.warning(
+                                        f"[Stream/OpenAI] change_plan store lookup failed: {e}"
+                                    )
 
                         if needs_confirmation:
                             logger.info(f"[Stream/OpenAI] Tool '{tool_name}' requires confirmation")
@@ -2177,9 +2288,13 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                     f"[Stream/OpenAI] Root cause: {owner_decision.owner_system.value} "
                                     f"(confidence={owner_decision.confidence:.0%})"
                                 )
+                                # Inject as user-role note rather than a mid-loop
+                                # system message: Chat Completions tolerates
+                                # role:"system" after the first turn, but it is
+                                # non-standard and the Responses API rejects it.
                                 openai_messages.append({
-                                    "role": "system",
-                                    "content": f"[Root cause analysis]: {hint}",
+                                    "role": "user",
+                                    "content": f"[system note — root cause analysis]: {hint}",
                                 })
                         except Exception as e:
                             logger.debug(f"[Stream/OpenAI] Root cause injection skipped: {e}")
@@ -2240,18 +2355,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         # Create tool executor first (needs adapters for schema fetch)
         executor = ToolExecutor(context)
 
-        # Pre-fetch warehouse schema if not already populated
-        if not context.warehouse_schema and context.has_warehouse():
-            try:
-                logger.info("[Anthropic] Pre-fetching warehouse schema...")
-                context.warehouse_schema = await executor.fetch_warehouse_schema()
-                if context.warehouse_schema:
-                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
-                    logger.info(f"[Anthropic] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
-                else:
-                    logger.warning("[Anthropic] Schema pre-fetch returned empty — LLM will have no column info")
-            except Exception as e:
-                logger.error(f"[Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
+        # Pre-fetch warehouse schema (failures recorded on context for prompt)
+        await self._prefetch_schema(context, executor, "[Anthropic]")
 
         # Build system prompt (now includes schema info)
         registry = get_tool_registry()
@@ -2294,7 +2399,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             # Track total tokens
             total_input_tokens = 0
             total_output_tokens = 0
-            all_tool_calls = []
+            all_tool_calls = _BoundedList(maxlen=50)
             accumulated_text = []  # Accumulate text from ALL iterations, not just final
             fired_adjacent_rules: Set[str] = set()
 
@@ -2305,7 +2410,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     # queries so the LLM cannot open with a clarifying question.
                     api_kwargs: Dict[str, Any] = {
                         "model": self.model,
-                        "system": system,
+                        "system": _cached_system(system),
                         "messages": anthropic_messages,
                         "tools": tools if tools else None,
                         "max_tokens": 16384,
@@ -2522,17 +2627,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         executor = ToolExecutor(context)
 
         # Pre-fetch warehouse schema if not already populated
-        if not context.warehouse_schema and context.has_warehouse():
-            try:
-                logger.info("[OpenAI] Pre-fetching warehouse schema...")
-                context.warehouse_schema = await executor.fetch_warehouse_schema()
-                if context.warehouse_schema:
-                    total_tables = sum(len(t) for t in context.warehouse_schema.values())
-                    logger.info(f"[OpenAI] Schema loaded: {len(context.warehouse_schema)} datasets, {total_tables} tables")
-                else:
-                    logger.warning("[OpenAI] Schema pre-fetch returned empty — LLM will have no column info")
-            except Exception as e:
-                logger.error(f"[OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
+        # Pre-fetch warehouse schema (failures recorded on context for prompt)
+        await self._prefetch_schema(context, executor, "[OpenAI]")
 
         # Build system prompt (now includes schema info)
         registry = get_tool_registry()
@@ -2575,7 +2671,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             # Track total tokens
             total_input_tokens = 0
             total_output_tokens = 0
-            all_tool_calls = []
+            all_tool_calls = _BoundedList(maxlen=50)
             accumulated_text = []  # Accumulate text from ALL iterations, not just final
             fired_adjacent_rules: Set[str] = set()
 
@@ -2597,6 +2693,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         api_params["max_completion_tokens"] = 16384
                     else:
                         api_params["max_tokens"] = 16384
+
+                    effort = _reasoning_effort_for(self.model, context)
+                    if effort:
+                        api_params["reasoning_effort"] = effort
 
                     # Add tools (reasoning models don't support tools yet)
                     if tools and not is_reasoning_model:
@@ -2766,9 +2866,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                         f"[OpenAI] Root cause: {owner_decision.owner_system.value} "
                                         f"(confidence={owner_decision.confidence:.0%})"
                                     )
+                                    # Inject as user-role note rather than a
+                                    # mid-loop system message: Chat Completions
+                                    # tolerates role:"system" after the first
+                                    # turn, but it is non-standard and the
+                                    # Responses API rejects it.
                                     openai_messages.append({
-                                        "role": "system",
-                                        "content": f"[Root cause analysis]: {hint}",
+                                        "role": "user",
+                                        "content": f"[system note — root cause analysis]: {hint}",
                                     })
                             except Exception as e:
                                 logger.debug(f"[OpenAI] Root cause injection skipped: {e}")

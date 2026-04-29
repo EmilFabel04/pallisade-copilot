@@ -113,3 +113,8 @@ class MAASTrace(BaseModel):
     total_latency_ms: int = 0
     selected_warehouse: Optional[str] = None
     repair_attempted: bool = False
+    budget_exhausted: bool = False
+    # Per-specialist health summary, populated at end of run.
+    # Keys: specialist name → {calls, retries, mean_latency_ms,
+    # verification_pass_rate, mean_confidence, cache_hits}.
+    health: Dict[str, Dict[str, Any]] = Field(default_factory=dict)

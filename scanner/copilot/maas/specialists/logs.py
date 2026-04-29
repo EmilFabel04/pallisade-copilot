@@ -1,6 +1,6 @@
 """Logs specialist — extracts error signatures and triages root cause from logs/tool results."""
 
-from typing import Type
+from typing import Iterable, Optional, Type
 from pydantic import BaseModel
 
 from .base import BaseSpecialist
@@ -20,6 +20,21 @@ class LogsSpecialist(BaseSpecialist):
     def build_messages(self, evidence: str, query: str, **kwargs) -> list:
         schema_json = LogsResponse.model_json_schema()
 
+        # Inject the user's connected tools so the specialist requests
+        # tools that actually exist instead of hallucinating ones the
+        # orchestrator will silently filter out.
+        available_tools: Optional[Iterable[str]] = kwargs.get("available_tools")
+        if available_tools:
+            tools_block = (
+                "AVAILABLE TOOLS (next_evidence.tool_name MUST be one of these):\n- "
+                + "\n- ".join(sorted(set(available_tools)))
+            )
+        else:
+            tools_block = (
+                "AVAILABLE TOOLS: not provided. Prefer generic names like "
+                "search_lineage; the orchestrator will filter unavailable ones."
+            )
+
         system_prompt = f"""You are a data pipeline logs analyst. \
 Return a single JSON object. No markdown, no code fences, no extra keys, no preamble text.
 
@@ -38,9 +53,11 @@ FAILURE LAYERS (use one of these exact strings):
 OWNER SYSTEMS (use one of these exact strings):
 airflow, dbt, ingestion, warehouse, infra, reporting, unknown
 
+{tools_block}
+
 RULES:
 1. If the error contains SQL or a warehouse error code, it is NOT Connection/Auth.
-2. next_evidence must have at most 3 entries. Each must have a valid tool_name.
+2. next_evidence must have at most 3 entries. Each tool_name MUST be from the AVAILABLE TOOLS list above (or omit next_evidence if no listed tool fits).
 3. summary must be non-empty.
 4. owner_confidence must be between 0.0 and 1.0.
 

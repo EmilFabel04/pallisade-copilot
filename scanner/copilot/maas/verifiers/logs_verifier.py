@@ -8,6 +8,7 @@ from typing import List, Optional, Set
 from dataclasses import dataclass
 
 from ..schemas import LogsResponse
+from .sql_verifier import _score_confidence
 
 VALID_FAILURE_LAYERS = {
     "Connection/Auth",
@@ -28,6 +29,7 @@ class LogsVerificationResult:
     passed: bool
     errors: List[str]
     warnings: List[str]
+    confidence: float = 1.0
 
 
 class LogsVerifier:
@@ -96,4 +98,5 @@ class LogsVerifier:
             passed=len(errors) == 0,
             errors=errors,
             warnings=warnings,
+            confidence=_score_confidence(errors, warnings),
         )

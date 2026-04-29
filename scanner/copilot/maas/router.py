@@ -114,25 +114,47 @@ def route_intent(
                 optional_specialists=[],
             )
 
-    # --- DEBUG: Logs specialist ---
+    # --- DEBUG: Logs specialist (only if relevant infrastructure connected) ---
     if primary == Intent.DEBUG:
         evidence_tools = _debug_evidence_tools(intent_result)
+        if _logs_specialist_useful(context):
+            return SpecialistRoute(
+                specialists=["logs"],
+                evidence_tools=evidence_tools,
+                budget=budget,
+                required_specialists=["logs"],
+                optional_specialists=[],
+            )
+        # No orchestrator / transformation / ingestion / warehouse connected
+        # → logs specialist has nothing to triage. Skip the LLM call entirely
+        # and let GPT-5 narrate from whatever evidence we already have.
+        logger.info(
+            "[MAAS/Router] DEBUG with no relevant infra — skipping logs specialist"
+        )
         return SpecialistRoute(
-            specialists=["logs"],
+            specialists=[],
             evidence_tools=evidence_tools,
             budget=budget,
-            required_specialists=["logs"],
+            required_specialists=[],
             optional_specialists=[],
         )
 
     # --- FIX/PR: Logs triage; GPT-5 orchestrator produces the fix ---
     if primary in (Intent.FIX, Intent.PR):
         evidence_tools = _fix_evidence_tools(intent_result)
+        if _logs_specialist_useful(context):
+            return SpecialistRoute(
+                specialists=["logs"],
+                evidence_tools=evidence_tools,
+                budget=budget,
+                required_specialists=["logs"],
+                optional_specialists=[],
+            )
         return SpecialistRoute(
-            specialists=["logs"],
+            specialists=[],
             evidence_tools=evidence_tools,
             budget=budget,
-            required_specialists=["logs"],
+            required_specialists=[],
             optional_specialists=[],
         )
 
@@ -163,6 +185,21 @@ def route_intent(
         budget=get_budget(Intent.INFO),
         required_specialists=[],
         optional_specialists=[],
+    )
+
+
+def _logs_specialist_useful(context: CopilotContext) -> bool:
+    """
+    True if the Logs specialist has any chance of being useful given what
+    the user has connected. Without orchestration, transformation,
+    ingestion, or warehouse integrations, logs triage has nothing to
+    triage — and we can skip a whole LLM round-trip.
+    """
+    return (
+        context.has_orchestrator()
+        or context.has_transformation()
+        or context.has_ingestion()
+        or context.has_warehouse()
     )
 
 

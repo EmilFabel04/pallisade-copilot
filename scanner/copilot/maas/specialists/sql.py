@@ -1,6 +1,6 @@
 """SQL specialist — generates SQL queries from natural language + schema context."""
 
-from typing import Dict, Type
+from typing import Dict, Iterable, Optional, Type
 from pydantic import BaseModel
 
 from .base import BaseSpecialist
@@ -65,6 +65,22 @@ class SQLSpecialist(BaseSpecialist):
             warehouse_type, "Use correct syntax for this warehouse."
         )
 
+        # Inject the user's actually-connected warehouses so the specialist
+        # doesn't generate SQL for one that isn't available. Mirrors the
+        # available_tools pattern in LogsSpecialist.
+        available_warehouses: Optional[Iterable[str]] = kwargs.get("available_warehouses")
+        if available_warehouses:
+            wh_list = sorted({w.lower() for w in available_warehouses})
+            warehouses_block = (
+                "CONNECTED WAREHOUSES (the `warehouse` field MUST be one of these):\n- "
+                + "\n- ".join(wh_list)
+            )
+        else:
+            warehouses_block = (
+                "CONNECTED WAREHOUSES: not provided — assume target warehouse is "
+                f"`{warehouse_type}`."
+            )
+
         system_prompt = f"""You are a SQL specialist for data pipelines. \
 Return a single JSON object. No markdown, no code fences, no extra keys, no preamble text.
 
@@ -80,6 +96,8 @@ DIALECT RULES:
 {dialect_rules}
 6. If the schema does not contain the needed columns, set "sql" to empty string and explain in "explanation".
 7. The "warehouse" field is REQUIRED — always set it to "{warehouse_type}".
+
+{warehouses_block}
 
 OUTPUT FORMAT (strict JSON):
 {schema_json}"""

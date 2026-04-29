@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any, Set, Union
 import logging
 import json
 import asyncio
+import re
 
 from .tools import Tool, ToolResult, get_tool_registry
 from .context_builder import CopilotContext, IntegrationInfo, TableSchema
@@ -24,6 +25,156 @@ except ImportError:
     _DriverBase = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+# Allow alphanumerics, underscore, hyphen (BigQuery project IDs), and dot
+# (for fully-qualified names). Anything else in an identifier we interpolate
+# into SQL is rejected — the LLM should re-call with a clean name.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
+
+
+def _safe_identifier(value: Optional[str]) -> Optional[str]:
+    """
+    Validate an identifier (table / dataset / schema / project) before SQL
+    interpolation. Returns the value if safe, None otherwise. Tools that pass
+    LLM-provided values into INFORMATION_SCHEMA / metadata queries should
+    refuse to run when this returns None instead of building the query.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s or len(s) > 256:
+        return None
+    if not _SAFE_IDENTIFIER_RE.match(s):
+        return None
+    return s
+
+
+# Byte budget for tool results returned to the LLM. Beyond this, we truncate
+# rows from the tail and replace overlong string cells with a marker so a
+# single 100MB result row can't blow up the context window.
+_RESULT_BYTE_BUDGET = 50_000
+_PER_CELL_CHAR_LIMIT = 2_000
+
+
+def _truncate_long_strings(row: Dict[str, Any]) -> tuple:
+    """Return (row_with_capped_strings, count_of_capped_cells)."""
+    out: Dict[str, Any] = {}
+    capped = 0
+    for k, v in row.items():
+        if isinstance(v, str) and len(v) > _PER_CELL_CHAR_LIMIT:
+            out[k] = (
+                v[:_PER_CELL_CHAR_LIMIT]
+                + f"... [truncated, original {len(v)} chars]"
+            )
+            capped += 1
+        else:
+            out[k] = v
+    return out, capped
+
+
+def _cap_results_by_bytes(rows: List[Dict[str, Any]]) -> tuple:
+    """
+    Cap a serialized result list to _RESULT_BYTE_BUDGET. First, oversized
+    string cells in each row are truncated; second, rows past the byte
+    budget are dropped from the tail. Returns (kept, dropped_count, capped_cells).
+    """
+    kept: List[Dict[str, Any]] = []
+    capped_cells = 0
+    running = 2  # `[` and `]`
+    for row in rows:
+        row, c = _truncate_long_strings(row)
+        capped_cells += c
+        # Approximate size = serialized row + comma separator.
+        size = len(json.dumps(row, default=str)) + 1
+        if kept and running + size > _RESULT_BYTE_BUDGET:
+            return kept, len(rows) - len(kept), capped_cells
+        kept.append(row)
+        running += size
+    return kept, 0, capped_cells
+
+
+def _safe_like_pattern(value: str) -> str:
+    """
+    Escape SQL LIKE special characters in a search pattern. The caller is
+    responsible for adding the surrounding %s; this only neutralizes %, _,
+    and \\ inside the supplied substring.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# Patterns we redact from any error message returned to the LLM. The LLM
+# logs these into conversation history and can repeat them back; surfacing
+# raw secrets or absolute file paths into chat is the wrong default.
+_REDACTORS = [
+    # Bearer / Authorization tokens
+    (re.compile(r"(Bearer\s+)[A-Za-z0-9._\-]+", re.IGNORECASE), r"\1***"),
+    # OpenAI / Anthropic / generic API keys (`sk-...`, `xoxb-...`, etc.)
+    (re.compile(r"\b(sk|xox[abps]|ghp|github_pat|akia)[-_][A-Za-z0-9_\-]{12,}", re.IGNORECASE), "***"),
+    # Connection strings with embedded credentials: scheme://user:pass@host
+    (re.compile(r"([a-zA-Z][a-zA-Z0-9+\-.]*://)[^/@\s:]+:[^/@\s]+@"), r"\1***:***@"),
+    # Absolute home paths — `/Users/<name>/...` or `/home/<name>/...`
+    (re.compile(r"(/(?:Users|home))/[^/\s'\"]+/"), r"\1/***/"),
+    # Google service-account private-key blocks
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), "***private-key***"),
+]
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    """
+    Coerce an arg value to int. LLMs sometimes pass numbers as strings
+    ("100") or include trailing characters ("100x"); silently fall back to
+    the default rather than crashing inside slicing/range arithmetic.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        # bool is a subclass of int; treat as default to avoid surprises.
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _sanitize_error(message: str) -> str:
+    """Redact credentials, tokens, and home paths from an error string before
+    returning it to the LLM. Best-effort: not a substitute for not logging
+    secrets in the first place, but closes the most common leak paths."""
+    if not message:
+        return message
+    out = str(message)
+    for pat, repl in _REDACTORS:
+        out = pat.sub(repl, out)
+    return out
+
+
+def _missing_required_args(tool: Tool, args: Dict[str, Any]) -> List[str]:
+    """
+    Return names of required tool parameters that are missing or null in args.
+    Empty strings count as missing for string parameters — an LLM that passes
+    "" for a required identifier is hallucinating, not legitimately omitting.
+    """
+    if not args or not isinstance(args, dict):
+        args = {}
+    missing: List[str] = []
+    for param in tool.parameters:
+        if not param.required:
+            continue
+        if param.name not in args:
+            missing.append(param.name)
+            continue
+        value = args[param.name]
+        if value is None:
+            missing.append(param.name)
+            continue
+        if param.type == "string" and isinstance(value, str) and not value.strip():
+            missing.append(param.name)
+    return missing
 
 
 class ToolExecutor:
@@ -259,8 +410,14 @@ class ToolExecutor:
             # Connect if needed
             if not adapter.is_connected:
                 logger.info(f"[Schema Fetch] Connecting to {wh_type}...")
-                connected = adapter.connect()
+                try:
+                    connected = adapter.connect()
+                except Exception as conn_e:
+                    self._mark_adapter_disconnected(adapter)
+                    logger.error(f"[Schema Fetch] Connect raised for {wh_type}: {conn_e}")
+                    return schema_info
                 if not connected:
+                    self._mark_adapter_disconnected(adapter)
                     logger.error(f"[Schema Fetch] Failed to connect to {wh_type}")
                     return schema_info
                 logger.info(f"[Schema Fetch] Connected to {wh_type}")
@@ -318,6 +475,7 @@ class ToolExecutor:
                     logger.error(f"[Schema Fetch] Failed to fetch schema for {wh_type}.{dataset}: {e}")
 
         except Exception as e:
+            self._mark_adapter_disconnected(adapter)
             logger.error(f"[Schema Fetch] Unexpected error for {wh_type}: {e}", exc_info=True)
 
         return schema_info
@@ -819,7 +977,21 @@ class ToolExecutor:
                 success=False,
                 error=f"Tool '{tool_name}' requires integrations that are not connected. Use search_knowledge_base to find expert guidance on this topic instead."
             )
-        
+
+        # Validate required arguments are present and non-null before dispatch.
+        # Without this, missing args raise KeyError inside the handler and
+        # propagate as opaque errors that the LLM can't act on.
+        missing = _missing_required_args(tool, arguments)
+        if missing:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"Missing required parameter(s) for {tool_name}: "
+                    f"{', '.join(missing)}. Re-call the tool with all required "
+                    f"parameters set to non-null values."
+                ),
+            )
+
         try:
             result = await self._execute_tool(tool, arguments)
             return result
@@ -827,7 +999,7 @@ class ToolExecutor:
             logger.exception(f"Error executing tool {tool_name}")
             return ToolResult(
                 success=False,
-                error=str(e)
+                error=_sanitize_error(str(e)),
             )
     
     async def execute_confirmed(self, tool_name: str, confirmed_data: Dict[str, Any]) -> ToolResult:
@@ -1108,7 +1280,7 @@ class ToolExecutor:
     async def _execute_get_upstream(self, args: Dict[str, Any]) -> ToolResult:
         """Get upstream dependencies with optional engine filtering."""
         node_id = args["node_id"]
-        depth = args.get("depth", -1)
+        depth = _coerce_int(args.get("depth"), -1)
 
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
@@ -1149,7 +1321,7 @@ class ToolExecutor:
     async def _execute_get_downstream(self, args: Dict[str, Any]) -> ToolResult:
         """Get downstream dependents with optional engine filtering."""
         node_id = args["node_id"]
-        depth = args.get("depth", -1)
+        depth = _coerce_int(args.get("depth"), -1)
 
         if not self.context.graph:
             return ToolResult(success=False, error="No lineage graph available")
@@ -1318,11 +1490,24 @@ class ToolExecutor:
     def _build_lineage_search_query(self, query: str, adapter, limit: int) -> Optional[str]:
         """Build a warehouse-specific query to search for table dependencies."""
         adapter_type = type(adapter).__name__.upper()
-        
-        # Clean up the query pattern
-        search_pattern = query.replace("*", "%")
-        if "%" not in search_pattern:
-            search_pattern = f"%{search_pattern}%"
+
+        # Reject anything that isn't a plausible lineage search term. We only
+        # allow word chars and the user-facing wildcard `*` here — quotes,
+        # semicolons, comments, etc. cannot appear in a table-name search.
+        if not re.match(r"^[A-Za-z0-9_.\-*%]+$", query or ""):
+            return None
+        # Coerce to LIKE pattern. If the user passed `*`, treat as wildcard;
+        # otherwise wrap in %...% for a substring match. Underscore and other
+        # LIKE metacharacters in the literal portion are escaped.
+        if "*" in query:
+            search_pattern = _safe_like_pattern(query.replace("*", "\x00")).replace("\x00", "%")
+        else:
+            search_pattern = f"%{_safe_like_pattern(query)}%"
+        # Clamp limit to a sane integer to prevent injection via numeric arg.
+        try:
+            limit = max(1, min(int(limit), 1000))
+        except (TypeError, ValueError):
+            limit = 100
         
         if "BIGQUERY" in adapter_type:
             # For BigQuery, search views and their referenced tables
@@ -1419,7 +1604,9 @@ class ToolExecutor:
         import asyncio
 
         sql = args["sql"].strip()
-        limit = args.get("limit", 100)
+        # Coerce defensively — LLMs sometimes send "100" as a string. Clamp
+        # to a sane range so a bogus 10_000_000 doesn't blow the byte cap.
+        limit = max(1, min(_coerce_int(args.get("limit", 100), 100), 10_000))
         target_warehouse = args.get("warehouse", "").upper().strip()
 
         # Validate query is read-only (SELECT or WITH...SELECT for CTEs)
@@ -1438,6 +1625,8 @@ class ToolExecutor:
         adapter = None
         adapter_type = None
 
+        connected_warehouses = [w for w in warehouse_types if w in self._adapters]
+
         if target_warehouse and target_warehouse in self._adapters:
             # User specified which warehouse to query
             adapter = self._adapters[target_warehouse]
@@ -1450,13 +1639,23 @@ class ToolExecutor:
                 adapter = self._adapters[inferred]
                 adapter_type = inferred
                 logger.info(f"Inferred warehouse from SQL: {adapter_type}")
-            else:
-                # Fallback: use first available
-                for wh_type in warehouse_types:
-                    if wh_type in self._adapters:
-                        adapter = self._adapters[wh_type]
-                        adapter_type = wh_type
-                        break
+            elif len(connected_warehouses) == 1:
+                # Single warehouse — unambiguous, use it.
+                adapter_type = connected_warehouses[0]
+                adapter = self._adapters[adapter_type]
+            elif len(connected_warehouses) > 1:
+                # Multiple warehouses connected and we have no signal:
+                # refuse to guess. Picking the first in a fixed list silently
+                # routed Snowflake queries to BigQuery.
+                return ToolResult(
+                    success=False,
+                    error=(
+                        f"Multiple warehouses connected ({', '.join(connected_warehouses)}) "
+                        f"and the query has no clear dialect hint. "
+                        f"Re-call query_warehouse with explicit `warehouse` set to one of: "
+                        f"{', '.join(connected_warehouses)}."
+                    ),
+                )
 
         if not adapter:
             logger.warning(f"No warehouse adapter found. Available adapters: {list(self._adapters.keys())}")
@@ -1469,8 +1668,13 @@ class ToolExecutor:
             # Connect if not already connected
             if not adapter.is_connected:
                 logger.info(f"Connecting to {adapter_type}...")
-                connected = adapter.connect()
+                try:
+                    connected = adapter.connect()
+                except Exception as conn_e:
+                    self._mark_adapter_disconnected(adapter)
+                    return ToolResult(success=False, error=f"Failed to connect to {adapter_type}: {conn_e}")
                 if not connected:
+                    self._mark_adapter_disconnected(adapter)
                     return ToolResult(success=False, error=f"Failed to connect to {adapter_type}")
 
             # Add LIMIT if not present at the outer query level
@@ -1478,25 +1682,40 @@ class ToolExecutor:
 
             logger.info(f"Executing query on {adapter_type}: {sql[:100]}...")
 
-            # Execute synchronous adapter method in thread pool
-            results = await asyncio.to_thread(adapter.execute_query, sql)
+            # Execute via _run_query so a failed query also flips is_connected
+            # back to False — otherwise the next request reuses a stale flag
+            # and skips reconnect.
+            results = await self._run_query(adapter, sql)
 
             # Serialize results to handle datetime and other non-JSON types
             serialized_results = self._serialize_query_results(results[:limit])
 
-            logger.info(f"Query returned {len(results)} rows")
+            # Cap by bytes so a single oversize row can't blow context window.
+            kept, dropped, capped_cells = _cap_results_by_bytes(serialized_results)
 
-            return ToolResult(
-                success=True,
-                data={
-                    "sql": sql,
-                    "row_count": len(results),
-                    "rows": serialized_results
-                }
+            logger.info(
+                f"Query returned {len(results)} rows "
+                f"(returning {len(kept)}, dropped {dropped} for size, capped {capped_cells} cells)"
             )
+
+            data: Dict[str, Any] = {
+                "sql": sql,
+                "row_count": len(results),
+                "rows": kept,
+            }
+            if dropped or capped_cells:
+                data["truncation"] = {
+                    "rows_dropped_for_size": dropped,
+                    "cells_capped": capped_cells,
+                    "byte_budget": _RESULT_BYTE_BUDGET,
+                    "per_cell_char_limit": _PER_CELL_CHAR_LIMIT,
+                    "note": "Refine your query (filters, fewer columns, smaller LIMIT) for full data.",
+                }
+            return ToolResult(success=True, data=data)
         except Exception as e:
             logger.error(f"Query execution failed: {e}")
-            error_msg = str(e)
+            self._mark_adapter_disconnected(adapter)
+            error_msg = _sanitize_error(str(e))
 
             # Enrich error with schema hints to help the LLM self-correct
             hint = self._build_column_error_hint(sql, error_msg)
@@ -1506,6 +1725,29 @@ class ToolExecutor:
                 error_msg = f"{error_msg}\n\n{validation_warning}"
 
             return ToolResult(success=False, error=error_msg)
+
+    @staticmethod
+    def _mark_adapter_disconnected(adapter) -> None:
+        """
+        Mark an adapter as disconnected after a query/connect failure so the
+        next call goes through the reconnect path. Without this, a stale
+        is_connected=True flag silently masks dropped connections.
+        """
+        try:
+            adapter.is_connected = False
+        except Exception:
+            pass
+
+    async def _run_query(self, adapter, sql: str):
+        """
+        Run adapter.execute_query in a thread; on failure, reset the
+        connection flag so future calls reconnect, then re-raise.
+        """
+        try:
+            return await asyncio.to_thread(adapter.execute_query, sql)
+        except Exception:
+            self._mark_adapter_disconnected(adapter)
+            raise
 
     def _add_limit_if_needed(self, sql: str, limit: int) -> str:
         """
@@ -1846,20 +2088,41 @@ class ToolExecutor:
             if batch_fn is not None:
                 results = await asyncio.to_thread(batch_fn, table_names)
             else:
-                # Fall back to running single-table lookups concurrently
-                results = await asyncio.gather(*[
-                    asyncio.to_thread(adapter.get_table_stats, t) for t in table_names
-                ])
+                # Fall back to running single-table lookups concurrently with
+                # a bounded semaphore so a 10k-table input can't spawn 10k
+                # threads and exhaust the warehouse adapter's connection pool.
+                sem = asyncio.Semaphore(10)
+
+                async def _one(t):
+                    async with sem:
+                        return await asyncio.to_thread(adapter.get_table_stats, t)
+
+                results = await asyncio.gather(*[_one(t) for t in table_names])
             return ToolResult(success=True, data={"tables": list(results)})
         except Exception as e:
-            return ToolResult(success=False, error=str(e))
+            self._mark_adapter_disconnected(adapter)
+            return ToolResult(success=False, error=_sanitize_error(str(e)))
 
     async def _execute_get_table_dependencies(self, args: Dict[str, Any]) -> ToolResult:
         """Get upstream and downstream dependencies for a table."""
         import asyncio
-        
+
         table_name = args["table_name"]
         direction = args.get("direction", "both")
+
+        # Reject identifiers that aren't safe to interpolate into SQL. The
+        # downstream BigQuery/Snowflake/Postgres builders f-string this value
+        # into INFORMATION_SCHEMA queries.
+        if not _safe_identifier(table_name):
+            return ToolResult(
+                success=False,
+                error=(
+                    "table_name contains characters that cannot be safely used in a "
+                    "metadata query. Provide a name like `schema.table` or "
+                    "`project.dataset.table` using letters, digits, underscore, "
+                    "hyphen, and dots only."
+                ),
+            )
         
         # Find warehouse adapter
         warehouse_types = ["BIGQUERY", "SNOWFLAKE", "POSTGRES", "REDSHIFT"]
@@ -2094,8 +2357,8 @@ class ToolExecutor:
     async def _execute_get_query_history(self, args: Dict[str, Any]) -> ToolResult:
         """Get query history for a specific table."""
         table_name = args["table_name"]
-        hours = args.get("hours", 24)
-        limit = args.get("limit", 20)
+        hours = max(1, min(_coerce_int(args.get("hours"), 24), 720))
+        limit = max(1, min(_coerce_int(args.get("limit"), 20), 1000))
 
         # Find a warehouse adapter that supports query history
         warehouse_types = ["SNOWFLAKE", "BIGQUERY"]
@@ -4263,21 +4526,34 @@ class ToolExecutor:
         """
         import asyncio
 
+        # All identifiers are interpolated into INFORMATION_SCHEMA queries.
+        # Refuse the call if any contain unsafe characters.
+        safe_schema = _safe_identifier(schema)
+        safe_table = _safe_identifier(table)
+        if not safe_schema or not safe_table:
+            logger.warning(
+                f"[Monitor] Refusing schema lookup with unsafe identifiers: "
+                f"schema={schema!r} table={table!r}"
+            )
+            return None
+
         try:
             if adapter_type == "BIGQUERY":
-                project = getattr(adapter, "project", database)
+                project = _safe_identifier(getattr(adapter, "project", database))
+                if not project:
+                    return None
                 sql = (
                     f"SELECT column_name, data_type "
-                    f"FROM `{project}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
-                    f"WHERE table_name = '{table}' "
+                    f"FROM `{project}.{safe_schema}.INFORMATION_SCHEMA.COLUMNS` "
+                    f"WHERE table_name = '{safe_table}' "
                     f"ORDER BY ordinal_position"
                 )
             else:
                 sql = (
                     f"SELECT column_name, data_type "
                     f"FROM information_schema.columns "
-                    f"WHERE table_schema = '{schema}' "
-                    f"AND table_name = '{table}' "
+                    f"WHERE table_schema = '{safe_schema}' "
+                    f"AND table_name = '{safe_table}' "
                     f"ORDER BY ordinal_position"
                 )
 
@@ -4334,14 +4610,22 @@ class ToolExecutor:
         """
         from datetime import datetime, date, timezone
 
+        # All identifiers are interpolated into INFORMATION_SCHEMA queries.
+        safe_schema = _safe_identifier(schema)
+        safe_table = _safe_identifier(table)
+        if not safe_schema or not safe_table:
+            return None
+
         # Step 1 — discover all timestamp / date columns.
         try:
             if adapter_type == "BIGQUERY":
-                project = getattr(adapter, "project", database)
+                project = _safe_identifier(getattr(adapter, "project", database))
+                if not project:
+                    return None
                 col_sql = (
                     f"SELECT column_name, data_type "
-                    f"FROM `{project}.{schema}.INFORMATION_SCHEMA.COLUMNS` "
-                    f"WHERE table_name = '{table}' "
+                    f"FROM `{project}.{safe_schema}.INFORMATION_SCHEMA.COLUMNS` "
+                    f"WHERE table_name = '{safe_table}' "
                     f"AND (data_type LIKE '%TIMESTAMP%' OR data_type LIKE '%DATE%' "
                     f"OR data_type LIKE '%DATETIME%') "
                     f"ORDER BY ordinal_position"
@@ -4350,8 +4634,8 @@ class ToolExecutor:
                 col_sql = (
                     f"SELECT column_name, data_type "
                     f"FROM information_schema.columns "
-                    f"WHERE table_schema = '{schema}' "
-                    f"AND table_name = '{table}' "
+                    f"WHERE table_schema = '{safe_schema}' "
+                    f"AND table_name = '{safe_table}' "
                     f"AND (data_type ILIKE '%timestamp%' OR data_type ILIKE '%date%') "
                     f"ORDER BY ordinal_position"
                 )

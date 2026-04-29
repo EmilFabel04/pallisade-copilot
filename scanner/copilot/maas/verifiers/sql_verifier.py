@@ -14,11 +14,30 @@ from ..schemas import SQLResponse
 logger = logging.getLogger(__name__)
 
 
+def _score_confidence(errors: List[str], warnings: List[str]) -> float:
+    """
+    Map (errors, warnings) → 0..1.
+    - Any error: 0.0 (failed; orchestrator drops or retries).
+    - No errors, no warnings: 1.0 (perfect).
+    - No errors, warnings: 1.0 - 0.15 * min(len(warnings), 5), floor 0.25.
+    Floor of 0.25 keeps "warned but no errors" results usable while
+    signalling reduced trust.
+    """
+    if errors:
+        return 0.0
+    n = min(len(warnings or []), 5)
+    return max(0.25, 1.0 - 0.15 * n)
+
+
 @dataclass
 class VerificationResult:
     passed: bool
     errors: List[str]
     warnings: List[str]
+    # Calibrated 0..1 score: 1.0 = clean pass, 0.0 = errors. Warnings
+    # discount linearly so the orchestrator can weight evidence and (in
+    # future) auto-escalate to a stronger model below a threshold.
+    confidence: float = 1.0
 
 
 # Forbidden keywords — any DML/DDL besides SELECT
@@ -62,6 +81,7 @@ class SQLVerifier:
                 passed=True,
                 errors=[],
                 warnings=["Empty SQL — specialist declined to generate a query"],
+                confidence=0.5,
             )
 
         # 1. SELECT-only check
@@ -104,6 +124,7 @@ class SQLVerifier:
             passed=len(errors) == 0,
             errors=errors,
             warnings=warnings,
+            confidence=_score_confidence(errors, warnings),
         )
 
     def _check_columns(

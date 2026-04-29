@@ -113,13 +113,25 @@ def _extract_json(text: str) -> str:
     return stripped[start:]
 
 
+def _is_gpt5_or_reasoning(model: str) -> bool:
+    """True for OpenAI models that use max_completion_tokens / reasoning_effort."""
+    m = (model or "").lower()
+    return (
+        m.startswith("gpt-5")
+        or m.startswith("o1")
+        or m.startswith("o3")
+        or m.startswith("o4")
+    )
+
+
 class RunPodClient:
     """
-    Async HTTP client for RunPod vLLM endpoints.
+    Async HTTP client for an OpenAI-compatible /v1/chat/completions endpoint.
 
-    Uses OpenAI-compatible /v1/chat/completions API.
-    Each specialist gets its own RunPodClient instance with separate
-    base_url, api_key, and circuit breaker state.
+    Originally written for self-hosted vLLM on RunPod, but works against
+    api.openai.com, api.together.xyz, etc. unchanged. When `model_name` is
+    a GPT-5 / o-series model, the payload is adjusted to use
+    `max_completion_tokens` and optionally `reasoning_effort`.
     """
 
     def __init__(
@@ -129,12 +141,17 @@ class RunPodClient:
         model_name: str = "default",
         timeout: float = 90.0,
         max_retries: int = 1,
+        reasoning_effort: Optional[str] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model_name = model_name
         self.timeout = timeout
         self.max_retries = max_retries
+        # When set, applied to GPT-5 / o-series specialists. "minimal" or
+        # "low" is right for narrow JSON-emitting tasks (SQL gen, log triage)
+        # — they don't need much internal reasoning and the tokens add cost.
+        self.reasoning_effort = reasoning_effort
         self._circuit = CircuitBreakerState()
         self._client: Optional[httpx.AsyncClient] = None
 
@@ -153,7 +170,7 @@ class RunPodClient:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.0,
-        max_tokens: int = 512,
+        max_tokens: int = 2048,
         response_format: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
@@ -170,9 +187,19 @@ class RunPodClient:
         payload: Dict[str, Any] = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
         }
+        if _is_gpt5_or_reasoning(self.model_name):
+            # GPT-5 / o-series: max_completion_tokens, optional reasoning
+            # effort. Reasoning tokens count against the budget, so floor
+            # the budget at 4096 to leave room for visible JSON output even
+            # under "medium" effort. Some reasoning models reject custom
+            # temperature; safer to omit it and let the model use its default.
+            payload["max_completion_tokens"] = max(max_tokens, 4096)
+            if self.reasoning_effort:
+                payload["reasoning_effort"] = self.reasoning_effort
+        else:
+            payload["temperature"] = temperature
+            payload["max_tokens"] = max_tokens
         if response_format:
             payload["response_format"] = response_format
 

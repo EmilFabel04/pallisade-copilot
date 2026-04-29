@@ -9,6 +9,7 @@ GPT-5 is the only tool-caller and final narrator.
 Specialists are called via RunPod for SQL and Logs.
 """
 
+import asyncio
 import hashlib
 import json
 import time
@@ -65,13 +66,20 @@ class MAASOrchestrator:
         self.logs_verifier = LogsVerifier()
 
     def _init_specialists(self):
-        """Initialize RunPod clients and specialist wrappers (eagerly configured, lazily invoked)."""
+        """Initialize specialist HTTP clients (eagerly configured, lazily invoked).
+
+        The same client is used whether the endpoint is RunPod-hosted vLLM,
+        OpenAI's API, or any other OpenAI-compatible provider. For GPT-5 /
+        o-series specialists, reasoning_effort is set per the config so we
+        don't pay for unnecessary internal reasoning on narrow JSON tasks.
+        """
         if self.config.sql_endpoint:
             client = RunPodClient(
                 base_url=self.config.sql_endpoint,
                 api_key=self.config.sql_api_key or "",
                 model_name=self.config.sql_model,
                 timeout=self.config.specialist_timeout,
+                reasoning_effort=self.config.sql_reasoning_effort,
             )
             self._clients["sql"] = client
             self._specialists["sql"] = SQLSpecialist(client)
@@ -82,6 +90,7 @@ class MAASOrchestrator:
                 api_key=self.config.logs_api_key or "",
                 model_name=self.config.logs_model,
                 timeout=self.config.specialist_timeout,
+                reasoning_effort=self.config.logs_reasoning_effort,
             )
             self._clients["logs"] = client
             self._specialists["logs"] = LogsSpecialist(client)
@@ -197,51 +206,64 @@ class MAASOrchestrator:
             evidence_store = EvidenceStore(context=context)
             tool_call_count = 0
 
+            # --- Phase 1: parallel evidence-tool gathering ---
+            # Tools in route.evidence_tools are independent reads (warehouse
+            # schema, lineage, etc). Sequential previously cost N×latency;
+            # gather() collapses to ~max(latencies). Dedup, budget, and
+            # streaming-event order are still honored.
+            phase1_plan: List[tuple] = []
             for tool_name in route.evidence_tools:
-                if tool_call_count >= route.budget.max_tool_calls:
+                if len(phase1_plan) + tool_call_count >= route.budget.max_tool_calls:
                     break
-
                 tool_args = self._build_evidence_tool_args(tool_name, intent_result)
                 ah = _args_hash(tool_name, tool_args)
-
-                # Deduplication check
                 cached = evidence_store.get_cached_result(ah)
                 if cached is not None:
                     logger.debug(f"[MAAS] Dedup: reusing cached result for {tool_name}")
                     continue
+                phase1_plan.append((tool_name, tool_args, ah))
 
-                tool_start = time.monotonic()
+            async def _exec_one(idx: int, name: str, args: Dict[str, Any]):
+                start = time.monotonic()
+                try:
+                    res = await executor.execute(name, args)
+                    ok = res.success if hasattr(res, "success") else True
+                except Exception as e:
+                    res = ToolResult(success=False, error=str(e))
+                    ok = False
+                lat = int((time.monotonic() - start) * 1000)
+                return idx, res, ok, lat
+
+            # Emit start events in order so the UI sees them in plan order.
+            for i, (name, args, _ah) in enumerate(phase1_plan):
                 yield StreamEvent("tool_call_start", {
-                    "tool_use_id": f"maas_ev_{tool_call_count}",
-                    "tool_name": tool_name,
-                    "arguments": tool_args,
+                    "tool_use_id": f"maas_ev_{tool_call_count + i}",
+                    "tool_name": name,
+                    "arguments": args,
                 })
 
-                try:
-                    result = await executor.execute(tool_name, tool_args)
-                    success = result.success if hasattr(result, "success") else True
-                except Exception as e:
-                    result = ToolResult(success=False, error=str(e))
-                    success = False
+            phase1_outcomes = await asyncio.gather(*[
+                _exec_one(i, name, args) for i, (name, args, _ah) in enumerate(phase1_plan)
+            ]) if phase1_plan else []
 
-                tool_latency = int((time.monotonic() - tool_start) * 1000)
+            # Emit results in plan order.
+            for idx, result, success, tool_latency in phase1_outcomes:
+                name, _args, ah = phase1_plan[idx]
                 result_dict = result.to_dict() if hasattr(result, "to_dict") else {"error": str(result)}
-                evidence_store.add_tool_result(tool_name, result_dict)
+                evidence_store.add_tool_result(name, result_dict)
                 evidence_store.cache_result(ah, result_dict)
-
                 trace.tool_calls.append(ToolCallRecord(
-                    tool_name=tool_name,
+                    tool_name=name,
                     args_hash=ah,
                     latency_ms=tool_latency,
                     success=success,
                 ))
-
                 yield StreamEvent("tool_call_result", {
-                    "tool_use_id": f"maas_ev_{tool_call_count}",
-                    "tool_name": tool_name,
+                    "tool_use_id": f"maas_ev_{tool_call_count + idx}",
+                    "tool_name": name,
                     "result": result_dict,
                 })
-                tool_call_count += 1
+            tool_call_count += len(phase1_plan)
 
             # === Phase 2: Specialist Calls ===
             yield StreamEvent("iteration_start", {
@@ -257,15 +279,30 @@ class MAASOrchestrator:
             trace.selected_warehouse = warehouse_filter
             logger.info(f"[MAAS] Target warehouse: {warehouse_filter}")
 
-            for spec_name in active_specialists:
-                if specialist_call_count >= route.budget.max_specialist_calls:
+            # --- Phase 2 LLM phase: run all specialists in parallel ---
+            # Each specialist's call+verify+retry is independent. With one
+            # specialist routed (today's common case) gather() collapses to
+            # a single await; with two, it halves wall-clock latency.
+            spec_plan: List[str] = []
+            for n in active_specialists:
+                if len(spec_plan) >= route.budget.max_specialist_calls:
                     break
+                spec_plan.append(n)
 
+            # Pre-compute the list of warehouses the user actually has
+            # connected so the SQL specialist doesn't target a missing one.
+            # Compound schema keys are "WAREHOUSE_TYPE:dataset".
+            available_warehouses = sorted({
+                k.split(":")[0].lower()
+                for k in (context.warehouse_schema or {}).keys()
+                if ":" in k
+            })
+
+            async def _call_and_verify(spec_name: str):
                 specialist = self._specialists[spec_name]
                 evidence_blob = evidence_store.for_specialist(
                     spec_name, query, warehouse_filter=warehouse_filter
                 )
-
                 start_time = time.monotonic()
                 try:
                     if spec_name in self._clients:
@@ -274,12 +311,13 @@ class MAASOrchestrator:
                             f"[MAAS] Calling {spec_name} "
                             f"endpoint={c.base_url} model={c.model_name}"
                         )
-
                     result = await specialist.call(
                         evidence=evidence_blob,
                         query=query,
                         max_retries=route.budget.max_revisions,
                         warehouse_type=warehouse_filter or "bigquery",
+                        available_tools=context.available_tools,
+                        available_warehouses=available_warehouses,
                     )
                     latency = int((time.monotonic() - start_time) * 1000)
                     sql_preview = (
@@ -289,77 +327,124 @@ class MAASOrchestrator:
                         f"[MAAS] {spec_name} returned "
                         f"latency={latency}ms sql={sql_preview}"
                     )
-
-                    # Verify specialist output
-                    vr = await self._verify_specialist(
-                        spec_name, result, context
-                    )
-                    trace.verifier_results[spec_name] = {
-                        "passed": vr["passed"],
-                        "errors": vr.get("errors", []),
-                        "warnings": vr.get("warnings", []),
-                    }
-
+                    vr = await self._verify_specialist(spec_name, result, context)
                     if not vr["passed"]:
                         logger.warning(
                             f"[MAAS] {spec_name} failed verification: "
                             f"{vr['errors']}, retrying"
                         )
-                        # Single retry with explicit warehouse
                         result = await specialist.call(
                             evidence=evidence_blob,
                             query=query,
                             max_retries=0,
                             warehouse_type=warehouse_filter or "bigquery",
+                            available_tools=context.available_tools,
+                            available_warehouses=available_warehouses,
                         )
-                        vr = await self._verify_specialist(
-                            spec_name, result, context
-                        )
-                        trace.verifier_results[spec_name] = {
-                            "passed": vr["passed"],
-                            "errors": vr.get("errors", []),
-                            "warnings": vr.get("warnings", []),
-                        }
-
-                    specialist_results[spec_name] = {
+                        vr = await self._verify_specialist(spec_name, result, context)
+                    return {
+                        "spec_name": spec_name,
+                        "specialist": specialist,
+                        "evidence_blob": evidence_blob,
                         "result": result,
-                        "verified": vr["passed"],
+                        "vr": vr,
+                        "latency": latency,
+                        "error": None,
+                    }
+                except SpecialistError as e:
+                    latency = int((time.monotonic() - start_time) * 1000)
+                    logger.error(f"[MAAS] Specialist '{spec_name}' failed: {e}")
+                    return {
+                        "spec_name": spec_name,
+                        "specialist": None,
+                        "evidence_blob": None,
+                        "result": None,
+                        "vr": None,
+                        "latency": latency,
+                        "error": e,
                     }
 
+            outcomes = await asyncio.gather(*[
+                _call_and_verify(n) for n in spec_plan
+            ]) if spec_plan else []
+
+            # --- Sequential post-processing in plan order ---
+            for outcome in outcomes:
+                spec_name = outcome["spec_name"]
+                error = outcome["error"]
+                latency = outcome["latency"]
+
+                if error is not None:
+                    trace.specialists.append(SpecialistInvocation(
+                        specialist=spec_name,
+                        latency_ms=latency,
+                        success=False,
+                        error=str(error),
+                    ))
+                    if spec_name in route.required_specialists:
+                        trace.fallback_reason = f"specialist_{spec_name}_error"
+                        async for event in self._fallback_stream(
+                            messages, context, confirmed_tool_ids,
+                            pending_tool_call, trace,
+                            evidence_store=evidence_store, query=query,
+                        ):
+                            yield event
+                        return
+                    else:
+                        trace.skipped_specialists.append(spec_name)
+                        continue
+
+                specialist = outcome["specialist"]
+                evidence_blob = outcome["evidence_blob"]
+                result = outcome["result"]
+                vr = outcome["vr"]
+
+                trace.verifier_results[spec_name] = {
+                    "passed": vr["passed"],
+                    "errors": vr.get("errors", []),
+                    "warnings": vr.get("warnings", []),
+                    "confidence": vr.get("confidence", 1.0 if vr["passed"] else 0.0),
+                }
+                # Surface a warning when confidence is low but we're still
+                # accepting the result — useful signal in the trace and the
+                # log file for tuning thresholds later.
+                conf = vr.get("confidence", 1.0)
+                if vr["passed"] and conf < 0.7:
+                    logger.info(
+                        f"[MAAS] {spec_name} verified with low confidence "
+                        f"({conf:.2f}); warnings={vr.get('warnings', [])}"
+                    )
+
+                if vr["passed"]:
+                    specialist_results[spec_name] = {
+                        "result": result,
+                        "verified": True,
+                    }
                     trace.specialists.append(SpecialistInvocation(
                         specialist=spec_name,
                         latency_ms=latency,
                         success=True,
                     ))
-
-                except SpecialistError as e:
-                    latency = int((time.monotonic() - start_time) * 1000)
-                    logger.error(f"[MAAS] Specialist '{spec_name}' failed: {e}")
-
+                else:
+                    # Both attempts failed verification. Drop the result and
+                    # SKIP downstream side-effects (next_evidence tool calls,
+                    # SQL execution) — running unverified specialist output
+                    # against the warehouse is unsafe.
+                    logger.warning(
+                        f"[MAAS] {spec_name} dropped after second verification failure: "
+                        f"{vr.get('errors', [])}"
+                    )
                     trace.specialists.append(SpecialistInvocation(
                         specialist=spec_name,
                         latency_ms=latency,
                         success=False,
-                        error=str(e),
+                        error=f"verification failed: {vr.get('errors', [])}",
                     ))
-
-                    # Required specialist failure → full fallback
-                    if spec_name in route.required_specialists:
-                        trace.fallback_reason = f"specialist_{spec_name}_error"
-                        async for event in self._fallback_stream(
-                            messages, context, confirmed_tool_ids,
-                            pending_tool_call, trace
-                        ):
-                            yield event
-                        return
-                    else:
-                        # Optional specialist failure → skip it
-                        trace.skipped_specialists.append(spec_name)
-                        continue
+                    continue
 
                 specialist_call_count += 1
 
-                # --- Execute Logs specialist next_evidence ---
+                # --- Execute Logs specialist next_evidence (parallel) ---
                 if spec_name == "logs" and hasattr(result, "next_evidence"):
                     available = set(context.available_tools)
                     # Build (filtered_name, args) pairs with proper arg transformation
@@ -376,50 +461,72 @@ class MAASOrchestrator:
                                 evidence_calls.append(("search_lineage", {"query": search_query}))
                         else:
                             logger.warning(f"[MAAS/Router] Filtered out unavailable tool '{orig_name}'")
+
+                    # Plan + dedup + budget pass before launching anything.
+                    next_plan: List[tuple] = []
                     for ev_tool, ev_args in evidence_calls:
-                        if tool_call_count >= route.budget.max_tool_calls:
+                        if len(next_plan) + tool_call_count >= route.budget.max_tool_calls:
                             break
                         ah = _args_hash(ev_tool, ev_args)
-
                         if evidence_store.get_cached_result(ah) is not None:
                             continue
+                        next_plan.append((ev_tool, ev_args, ah))
 
-                        tool_start = time.monotonic()
-                        yield StreamEvent("tool_call_start", {
-                            "tool_use_id": f"maas_logs_ev_{tool_call_count}",
-                            "tool_name": ev_tool,
-                            "arguments": ev_args,
-                        })
+                    async def _exec_next(idx: int, name: str, args: Dict[str, Any]):
+                        start = time.monotonic()
                         try:
-                            tr = await executor.execute(ev_tool, ev_args)
-                            success = tr.success if hasattr(tr, "success") else True
+                            r2 = await executor.execute(name, args)
+                            ok = r2.success if hasattr(r2, "success") else True
                         except Exception as e:
-                            tr = ToolResult(success=False, error=str(e))
-                            success = False
+                            r2 = ToolResult(success=False, error=str(e))
+                            ok = False
+                        return idx, r2, ok, int((time.monotonic() - start) * 1000)
 
-                        tool_latency = int((time.monotonic() - tool_start) * 1000)
+                    # Emit start events in plan order so the UI renders predictably.
+                    for i, (name, args, _ah) in enumerate(next_plan):
+                        yield StreamEvent("tool_call_start", {
+                            "tool_use_id": f"maas_logs_ev_{tool_call_count + i}",
+                            "tool_name": name,
+                            "arguments": args,
+                        })
+
+                    next_outcomes = await asyncio.gather(*[
+                        _exec_next(i, name, args) for i, (name, args, _ah) in enumerate(next_plan)
+                    ]) if next_plan else []
+
+                    for idx, tr, success, tool_latency in next_outcomes:
+                        ev_tool, _ev_args, ah = next_plan[idx]
                         tr_dict = tr.to_dict() if hasattr(tr, "to_dict") else {"error": str(tr)}
                         evidence_store.add_tool_result(ev_tool, tr_dict)
                         evidence_store.cache_result(ah, tr_dict)
-
                         trace.tool_calls.append(ToolCallRecord(
                             tool_name=ev_tool,
                             args_hash=ah,
                             latency_ms=tool_latency,
                             success=success,
                         ))
-
                         yield StreamEvent("tool_call_result", {
-                            "tool_use_id": f"maas_logs_ev_{tool_call_count}",
+                            "tool_use_id": f"maas_logs_ev_{tool_call_count + idx}",
                             "tool_name": ev_tool,
                             "result": tr_dict,
                         })
-                        tool_call_count += 1
+                    tool_call_count += len(next_plan)
 
                 # --- Execute SQL from SQL specialist ---
                 if spec_name == "sql" and hasattr(result, "sql") and result.sql:
                     sql = result.sql
                     wh = result.warehouse.value
+
+                    # Hard budget gate: previously the SQL exec + repair
+                    # could over-spend the tool budget silently.
+                    if tool_call_count >= route.budget.max_tool_calls:
+                        trace.budget_exhausted = True
+                        logger.warning(
+                            f"[MAAS] Budget exhausted before SQL exec "
+                            f"({tool_call_count}/{route.budget.max_tool_calls}); "
+                            f"skipping execution"
+                        )
+                        continue
 
                     logger.info(
                         f"[MAAS] Executing query_warehouse warehouse={wh}"
@@ -466,6 +573,21 @@ class MAASOrchestrator:
                     # --- Repair loop: one retry on execution failure ---
                     if not success:
                         error_text = sql_dict.get("error", "Unknown execution error")
+                        # Repair = 1 specialist call + 1 tool call. Budget-gate it.
+                        if tool_call_count >= route.budget.max_tool_calls:
+                            trace.budget_exhausted = True
+                            logger.warning(
+                                f"[MAAS] Budget exhausted, skipping SQL repair "
+                                f"({tool_call_count}/{route.budget.max_tool_calls})"
+                            )
+                            trace.fallback_reason = "budget_exhausted"
+                            async for event in self._fallback_stream(
+                                messages, context, confirmed_tool_ids,
+                                pending_tool_call, trace,
+                                evidence_store=evidence_store, query=query,
+                            ):
+                                yield event
+                            return
                         logger.warning(
                             f"[MAAS] SQL execution failed, attempting repair: "
                             f"{str(error_text)[:200]}"
@@ -571,6 +693,7 @@ class MAASOrchestrator:
                             async for event in self._fallback_stream(
                                 messages, context, confirmed_tool_ids,
                                 pending_tool_call, trace,
+                                evidence_store=evidence_store, query=query,
                             ):
                                 yield event
                             return
@@ -622,6 +745,7 @@ class MAASOrchestrator:
                     trace.total_latency_ms = int(
                         (time.monotonic() - request_start) * 1000
                     )
+                    trace.health = self._compute_health(trace)
                     event.data["maas_trace"] = trace.model_dump()
                 yield event
 
@@ -631,8 +755,13 @@ class MAASOrchestrator:
             yield StreamEvent("error", {
                 "message": f"MAAS orchestration error: {e}",
             })
+            # Forward whatever evidence we managed to gather before crashing
+            # — variables may not be bound if the error fired early.
+            ev_store_local = locals().get("evidence_store")
+            ev_query_local = locals().get("query") or ""
             async for event in self._fallback_stream(
-                messages, context, confirmed_tool_ids, pending_tool_call, trace
+                messages, context, confirmed_tool_ids, pending_tool_call, trace,
+                evidence_store=ev_store_local, query=ev_query_local,
             ):
                 yield event
 
@@ -642,6 +771,54 @@ class MAASOrchestrator:
                     await client.close()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _compute_health(trace: MAASTrace) -> Dict[str, Dict[str, Any]]:
+        """
+        Aggregate per-specialist health stats from the trace. Surfaces the
+        information that's expensive to compute from raw events ad-hoc:
+        call count, retry count, mean latency, verification pass rate,
+        mean confidence. Lives on the trace so any consumer (UI, logs,
+        metrics pipeline) can ingest one structured payload.
+        """
+        by_name: Dict[str, Dict[str, Any]] = {}
+        for inv in trace.specialists:
+            entry = by_name.setdefault(inv.specialist, {
+                "calls": 0,
+                "retries": 0,
+                "successes": 0,
+                "latencies": [],
+            })
+            entry["calls"] += 1
+            entry["retries"] += inv.retry_count
+            if inv.success:
+                entry["successes"] += 1
+            entry["latencies"].append(inv.latency_ms)
+
+        # Merge in verifier confidence
+        for spec_name, vr in trace.verifier_results.items():
+            entry = by_name.setdefault(spec_name, {
+                "calls": 0, "retries": 0, "successes": 0, "latencies": [],
+            })
+            entry["last_confidence"] = vr.get("confidence", 1.0)
+            entry["last_passed"] = vr.get("passed", False)
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for name, e in by_name.items():
+            latencies = e["latencies"]
+            mean_lat = int(sum(latencies) / len(latencies)) if latencies else 0
+            out[name] = {
+                "calls": e["calls"],
+                "retries": e["retries"],
+                "verification_pass_rate": (
+                    round(e["successes"] / e["calls"], 2)
+                    if e["calls"] else 0.0
+                ),
+                "mean_latency_ms": mean_lat,
+                "last_confidence": e.get("last_confidence", 1.0),
+                "last_passed": e.get("last_passed", False),
+            }
+        return out
 
     async def _verify_specialist(
         self,
@@ -670,6 +847,7 @@ class MAASOrchestrator:
                     "passed": vr.passed,
                     "errors": vr.errors,
                     "warnings": vr.warnings,
+                    "confidence": vr.confidence,
                 }
 
             elif spec_name == "logs":
@@ -679,13 +857,14 @@ class MAASOrchestrator:
                     "passed": vr.passed,
                     "errors": vr.errors,
                     "warnings": vr.warnings,
+                    "confidence": vr.confidence,
                 }
 
         except Exception as e:
             logger.warning(f"[MAAS] Verification error for {spec_name}: {e}")
-            return {"passed": False, "errors": [str(e)], "warnings": []}
+            return {"passed": False, "errors": [str(e)], "warnings": [], "confidence": 0.0}
 
-        return {"passed": True, "errors": [], "warnings": []}
+        return {"passed": True, "errors": [], "warnings": [], "confidence": 1.0}
 
     def _build_evidence_tool_args(
         self,
@@ -735,15 +914,36 @@ class MAASOrchestrator:
         confirmed_tool_ids: Optional[Set[str]] = None,
         pending_tool_call: Optional[Dict[str, Any]] = None,
         trace: Optional[MAASTrace] = None,
+        evidence_store: Optional["EvidenceStore"] = None,
+        query: str = "",
     ) -> AsyncGenerator[StreamEvent, None]:
         """Fall back to standard CopilotLLM when MAAS cannot proceed."""
         logger.info(
             f"[MAAS] Falling back to standard CopilotLLM "
             f"(reason: {trace.fallback_reason if trace else 'unknown'})"
         )
+        # If Phase-1 evidence was already gathered, forward it as a synthetic
+        # user-role note so the fallback LLM doesn't redo the work. Without
+        # this, every tool call executed before the failure was wasted.
+        forwarded_messages = list(messages)
+        if evidence_store is not None:
+            try:
+                evidence_blob = evidence_store.for_specialist("orchestrator", query)
+            except Exception as e:
+                logger.debug(f"[MAAS] Evidence forwarding skipped: {e}")
+                evidence_blob = ""
+            if evidence_blob.strip():
+                forwarded_messages.append(Message(
+                    role="user",
+                    content=(
+                        "[system note — pre-gathered evidence from prior MAAS phase]\n"
+                        f"{evidence_blob}"
+                    ),
+                ))
+
         fallback_llm = CopilotLLM(model=self.config.orchestrator_model)
         async for event in fallback_llm.chat_stream(
-            messages,
+            forwarded_messages,
             context,
             confirmed_tool_ids=confirmed_tool_ids,
             pending_tool_call=pending_tool_call,

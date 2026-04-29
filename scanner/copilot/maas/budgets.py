@@ -21,6 +21,44 @@ class IntentBudget:
     description: str
 
 
+class BudgetTracker:
+    """
+    Live tracker that enforces an IntentBudget across a single MAAS request.
+
+    Centralizes the "are we still allowed to spend?" decision so SQL
+    execution, repair, and post-narration tool calls all check the same
+    counters. Without this the soft `if count >= max: break` checks were
+    scattered and easy to skip.
+    """
+
+    def __init__(self, budget: IntentBudget):
+        self._budget = budget
+        self.tool_calls = 0
+        self.specialist_calls = 0
+        self.exhausted = False
+
+    @property
+    def budget(self) -> IntentBudget:
+        return self._budget
+
+    def can_spend_tool(self, n: int = 1) -> bool:
+        return self.tool_calls + n <= self._budget.max_tool_calls
+
+    def can_spend_specialist(self, n: int = 1) -> bool:
+        return self.specialist_calls + n <= self._budget.max_specialist_calls
+
+    def consume_tool(self, n: int = 1) -> None:
+        self.tool_calls += n
+        if self.tool_calls >= self._budget.max_tool_calls:
+            self.exhausted = True
+
+    def consume_specialist(self, n: int = 1) -> None:
+        self.specialist_calls += n
+
+    def remaining_tool_budget(self) -> int:
+        return max(0, self._budget.max_tool_calls - self.tool_calls)
+
+
 INTENT_BUDGETS: Dict[Intent, IntentBudget] = {
     Intent.INFO: IntentBudget(
         max_tool_calls=3,
