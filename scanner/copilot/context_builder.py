@@ -196,6 +196,12 @@ class CopilotContext:
     # Pre-fetched warehouse schema (tables and columns)
     warehouse_schema: Dict[str, List[TableSchema]] = field(default_factory=dict)  # dataset -> tables
 
+    # Pre-fetched aggregate snapshot of user's stack (monitor counts, recent
+    # runs, etc.) populated by copilot.prefetch.prefetch_for_query before iter 0
+    # for investigative queries. Rendered into the system prompt so the LLM
+    # has the answer to common "how many X" questions without a tool call.
+    prefetched_snapshot: Optional[Dict[str, Any]] = None
+
     # Interaction mode
     mode: str = "ask"
     mode_config: Optional[Any] = None  # ModeConfig from modes.py

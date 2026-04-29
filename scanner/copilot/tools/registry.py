@@ -86,11 +86,20 @@ class ToolRegistry:
         """Get all registered tools."""
         return list(self._tools.values())
 
-    def get_available_tools(self, user_integrations: Set[str]) -> List[Tool]:
-        """Get tools available for the user's integrations."""
+    def get_available_tools(
+        self,
+        user_integrations: Set[str],
+        exclude: Optional[Set[str]] = None,
+    ) -> List[Tool]:
+        """Get tools available for the user's integrations.
+
+        If `exclude` is provided, tool names in that set are filtered out — used
+        by the chat loop to enforce per-mode tool gating (modes.tools_excluded_for_mode).
+        """
+        excluded = exclude or set()
         return [
             tool for tool in self._tools.values()
-            if tool.is_available(user_integrations)
+            if tool.is_available(user_integrations) and tool.name not in excluded
         ]
 
     def get_tools_by_category(self, category: ToolCategory) -> List[Tool]:
@@ -100,14 +109,22 @@ class ToolRegistry:
             if tool.category == category
         ]
 
-    def to_anthropic_tools(self, user_integrations: Set[str]) -> List[Dict[str, Any]]:
-        """Convert available tools to Anthropic format."""
-        available = self.get_available_tools(user_integrations)
+    def to_anthropic_tools(
+        self,
+        user_integrations: Set[str],
+        exclude: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Convert available tools to Anthropic format. `exclude` filters by name."""
+        available = self.get_available_tools(user_integrations, exclude=exclude)
         return [tool.to_anthropic_tool() for tool in available]
 
-    def to_openai_tools(self, user_integrations: Set[str]) -> List[Dict[str, Any]]:
-        """Convert available tools to OpenAI format."""
-        available = self.get_available_tools(user_integrations)
+    def to_openai_tools(
+        self,
+        user_integrations: Set[str],
+        exclude: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Convert available tools to OpenAI format. `exclude` filters by name."""
+        available = self.get_available_tools(user_integrations, exclude=exclude)
         return [tool.to_openai_tool() for tool in available]
 
     @staticmethod

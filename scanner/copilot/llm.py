@@ -12,6 +12,31 @@ from enum import Enum
 import logging
 import json
 import os
+import re
+
+
+_INVESTIGATIVE_QUERY_RE = re.compile(
+    "|".join([
+        r"\bmonitor(s)?\b",
+        r"\b(failing|failed|fail|error(ed|s)?|broken|stuck|wrong|issue|problem)\b",
+        r"\bis\s+(my\s+|the\s+)?(dbt|bigquery|snowflake|postgres|redshift|github|fivetran|airbyte|airflow|warehouse|pipeline|integration)\b",
+        r"\bconnect(ed|ing|ion)?\b",
+        r"\b(lineage|upstream|downstream)\b",
+        r"\b(why|investigate|diagnose|debug|check|look\s+into|figure\s+out|status|health)\b",
+        r"\bwhat'?s\s+wrong\b",
+        r"\b(list|show|which|what)\s+.*\b(monitor|integration|node|source|model|table|pipeline|dataset)",
+    ]),
+    re.IGNORECASE,
+)
+
+
+def _should_force_initial_tool(query: Optional[str]) -> bool:
+    """Return True when the query is investigative and the LLM should not be
+    allowed to open with a clarifying question. Forces a tool call on iter 0
+    so the LLM gathers context from the user's stack before responding."""
+    if not query:
+        return False
+    return bool(_INVESTIGATIVE_QUERY_RE.search(query))
 
 try:
     import anthropic
@@ -29,6 +54,7 @@ from .context_builder import CopilotContext
 from .tools import get_tool_registry, ToolResult
 from .tool_executor import ToolExecutor
 from .artifacts import ToolArtifactResult, WRITE_TOOLS
+from .modes import tools_excluded_for_mode
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +81,22 @@ class Message:
     tool_results: Optional[List[Dict[str, Any]]] = None
 
 
+class StopReason:
+    """Canonical reasons a chat turn ended. Frontend / observability consumers
+    can switch on these instead of guessing from raw provider strings.
+
+    Existing native provider values (`"end_turn"`, `"length"`, …) are still
+    emitted by streaming events for backward compat — these constants cover
+    the additional cases (errors, max_iterations, mock) and serve as the
+    target vocabulary for new code."""
+    COMPLETED = "completed"                        # natural end_turn / stop
+    MAX_ITERATIONS = "max_iterations"              # hit the iteration cap
+    MAX_TOKENS = "max_tokens"                      # provider length cap
+    CONFIRMATION_REQUIRED = "confirmation_required"  # write tool needs user OK
+    ERROR = "error"                                # provider/network/internal error
+    UNKNOWN = "unknown"                            # provider returned an unrecognised value
+
+
 @dataclass
 class CopilotResponse:
     """Response from the co-pilot."""
@@ -64,6 +106,120 @@ class CopilotResponse:
     output_tokens: int = 0
     model: str = ""
     stop_reason: str = ""
+    iterations_used: int = 0
+
+
+# --- Adjacent-path steering ---
+# When a primary tool returns empty / unavailable, the LLM tends to surrender
+# instead of trying the obvious next-best tool. These rules surgically detect
+# specific empty/unavailable signals and inject a one-shot steering message
+# pointing the LLM to the adjacent integration that has the answer.
+
+@dataclass
+class AdjacentPathRule:
+    name: str  # unique id; each rule fires at most once per chat turn
+    triggers_on_tool: str
+    matches: Any  # Callable[[ToolResult, Dict[str, Any]], bool]
+    message: str
+    requires_integration: Optional[str] = None  # uppercase, e.g. "AIRFLOW"
+    skip_if_tool_called: Optional[str] = None  # don't fire if this tool has been called this turn
+
+
+def _is_empty_listish(data: Any) -> bool:
+    """Defensive empty-result check across heterogeneous tool result shapes."""
+    if data is None:
+        return True
+    if isinstance(data, list):
+        return len(data) == 0
+    if isinstance(data, dict):
+        for k in ("monitors", "items", "results", "rows", "data"):
+            if k in data:
+                v = data[k]
+                if isinstance(v, list):
+                    return len(v) == 0
+        if "count" in data:
+            try:
+                return int(data["count"]) == 0
+            except (TypeError, ValueError):
+                pass
+    return False
+
+
+ADJACENT_PATH_RULES: List[AdjacentPathRule] = [
+    AdjacentPathRule(
+        name="dbt_run_history_unavailable_use_airflow",
+        triggers_on_tool="get_dbt_run_history",
+        matches=lambda result, args: bool(
+            getattr(result, "success", False)
+            and isinstance(getattr(result, "data", None), dict)
+            and result.data.get("available") is False
+        ),
+        requires_integration="AIRFLOW",
+        skip_if_tool_called="get_dag_run_history",
+        message=(
+            "[System steering] The previous tool reported dbt run history is unavailable, "
+            "but Airflow is connected and orchestrates dbt in this stack. Before responding, "
+            "call get_dag_run_history filtered to the dbt DAG (and pull dbt_build task logs "
+            "via the Airflow MCP tools) to retrieve the actual dbt run outcomes. Do NOT tell "
+            "the user dbt run history is unavailable without first checking Airflow."
+        ),
+    ),
+    AdjacentPathRule(
+        name="empty_monitors_with_filter_broaden",
+        triggers_on_tool="list_configured_monitors",
+        matches=lambda result, args: bool(
+            getattr(result, "success", False)
+            and _is_empty_listish(getattr(result, "data", None))
+            and ((args or {}).get("status") or (args or {}).get("monitor_type"))
+        ),
+        requires_integration=None,
+        skip_if_tool_called=None,
+        message=(
+            "[System steering] list_configured_monitors returned 0 results with a filter "
+            "applied (status / monitor_type). Re-run it WITHOUT those filters before "
+            "responding so you can tell the user whether 0 means 'none of that type are "
+            "failing' or 'none of that type exist at all' — those are different answers."
+        ),
+    ),
+]
+
+
+# Hard cap on total adjacent-path injections per chat turn — defense in depth
+# against any rule (or combination of rules) firing repeatedly.
+MAX_ADJACENT_INJECTIONS = 2
+
+
+def _evaluate_adjacent_path_rule(
+    tool_name: str,
+    tool_args: Optional[Dict[str, Any]],
+    tool_result: Any,
+    integration_types: Set[str],
+    all_tool_calls: List[Dict[str, Any]],
+    fired_rule_names: Set[str],
+) -> Optional[tuple]:
+    """Check rules against a tool result. Returns (rule_name, message) on the
+    first matching rule, None otherwise. Caller is responsible for adding
+    rule_name to fired_rule_names so each rule fires at most once per turn."""
+    if len(fired_rule_names) >= MAX_ADJACENT_INJECTIONS:
+        return None
+    for rule in ADJACENT_PATH_RULES:
+        if rule.name in fired_rule_names:
+            continue
+        if rule.triggers_on_tool != tool_name:
+            continue
+        if rule.requires_integration and rule.requires_integration not in (integration_types or set()):
+            continue
+        if rule.skip_if_tool_called and any(
+            tc.get("tool") == rule.skip_if_tool_called for tc in (all_tool_calls or [])
+        ):
+            continue
+        try:
+            if not rule.matches(tool_result, tool_args or {}):
+                continue
+        except Exception:
+            continue
+        return (rule.name, rule.message)
+    return None
 
 
 @dataclass
@@ -105,16 +261,16 @@ class CopilotLLM:
     # Available models by provider
     MODELS = {
         # OpenAI (higher rate limits)
-        "gpt-5.2": {"provider": "openai", "model": "gpt-5.2"},
-        "gpt-5.2-mini": {"provider": "openai", "model": "gpt-5.2-mini"},
+        "gpt-5.4": {"provider": "openai", "model": "gpt-5.4"},
+        "gpt-5.4-mini": {"provider": "openai", "model": "gpt-5.4-mini"},
         "o3-mini": {"provider": "openai", "model": "o3-mini"},
-        # Anthropic
-        "claude-sonnet": {"provider": "anthropic", "model": "claude-sonnet-4-20250514"},
-        "claude-opus": {"provider": "anthropic", "model": "claude-opus-4-20250514"},
-        "claude-haiku": {"provider": "anthropic", "model": "claude-haiku-4-20250514"},
+        # Anthropic — fallback path; see modes.py for prompt-tuning notes if swapping default
+        "claude-sonnet": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+        "claude-opus": {"provider": "anthropic", "model": "claude-opus-4-7"},
+        "claude-haiku": {"provider": "anthropic", "model": "claude-haiku-4-5"},
     }
 
-    DEFAULT_MODEL = "gpt-5.2"  # OpenAI as default for higher rate limits
+    DEFAULT_MODEL = "gpt-5.4"  # GPT-5.4 default — lower factual error rate than 5.2 and one-line migration since OpenAI path is well-exercised
     
     def __init__(
         self,
@@ -264,12 +420,27 @@ Before EVERY clarifying question, check:
 3. Only after both 1 and 2 fail is it acceptable to ask — and only for things the system fundamentally cannot know (a secret value, a user preference, an off-platform fact).
 
 Patterns to KILL:
-- ❌ "Do you see the repo set to `EmilFabel04/...` in Integrations?" — the repo is in your prompt; state it.
-- ❌ "What's the failing monitor's name?" — call `list_configured_monitors`.
+- ❌ "Can you confirm the GitHub repo and branch on your dbt integration?" — both are listed in the User's Data Stack section; state them.
+- ❌ "What's the failing monitor's name?" / "What's the exact monitor name?" — call `list_configured_monitors` with no filter; the returned list IS the answer.
 - ❌ "Is this table downstream of X?" — call `get_downstream`.
 - ❌ "Which warehouse does this run on?" — listed in the integration block.
+- ❌ "Can you screenshot the failing row?" — if a tool returned empty, the answer is either "0 of those exist" (say so) or "I queried with too narrow a filter" (broaden the filter and re-run).
 
 When you would otherwise ask a clarifying question, instead state what you know from context, do the next tool call, and present the user with findings + a concrete next action.
+
+## When a Tool Returns Empty or "Not Available" — Find an Adjacent Path
+
+A tool returning 0 results, `available=false`, or an "unavailable" message does NOT mean the answer is unknowable. It means *that specific tool* can't help. Before responding, ask: "what *other* connected integration in the User's Data Stack would have the same information?" The integration list is a checklist of fallbacks — work it before asking the user anything.
+
+Concrete cross-references (apply the same principle to cases not listed here):
+
+- **`get_dbt_run_history` returns `available=false`** (typical when dbt is GitHub-mode, not dbt Cloud): if Airflow is connected and orchestrates dbt, Airflow's DAG/task history IS the dbt run history. Call `get_dag_run_history` filtered to the dbt DAG, then pull `dbt_build` task logs via the Airflow MCP tools for the actual model/test outcomes. Independently, BigQuery's `INFORMATION_SCHEMA.JOBS_BY_PROJECT` records every query dbt executed — query it for server-side execution history. Do NOT tell the user "you don't have dbt run history" without first checking these paths.
+- **`list_configured_monitors` returns 0 with a status filter** (e.g. `status="FAIL,ERROR"`): "0 failing" and "0 exist for this type" are different answers. Re-run the call WITHOUT the status filter to disambiguate, then report which it is. If 0 monitors of that type exist, that IS the answer — say so; don't ask for a screenshot.
+- **Monitor not configured for table X**: query the warehouse directly for freshness/volume (`SELECT MAX(_loaded_at)`, `COUNT(*)`) instead of giving up.
+- **GitHub manifest unreachable**: fall back to the cached lineage engine (`get_lineage_stats`, `search_lineage`) — it was populated from a prior successful parse.
+- **Lineage edge missing for table X → Y**: query `INFORMATION_SCHEMA.JOBS_BY_PROJECT` for the most recent INSERT / CREATE TABLE / MERGE statement targeting Y; the SQL names the upstream tables directly.
+
+Rule: when a tool returns empty or unavailable, your next action is another tool call against an adjacent integration — NOT a clarifying question to the user. Only ask the user after you've exhausted adjacent paths, and when you do, name which paths you tried and what each returned so the user can correct the route rather than re-explain the question.
 
 ## Investigating Saved Monitors (REQUIRED FIRST STEP)
 
@@ -450,12 +621,13 @@ Keep responses SHORT and SCANNABLE. The user should get the answer in the first 
 
 - **Data answers**: Lead with the number. Only mention the source table when the answer would otherwise be ambiguous (e.g. one number without context). For list/enumeration answers like "rows in each of my tables", just give `table: count` lines — the table name is already the source, don't repeat it as "(from …)" or tack on a "Source:" line.
 - **Lineage answers**: List nodes with types, no extra prose
-- **Debugging answers**: State the problem, cause, and fix. No preamble, no "let me investigate"
+- **Debugging answers**: Get to what's wrong and what to do about it. Write it as natural prose — do NOT template responses with literal `Problem:` / `Cause:` / `Fix:` / `Root cause:` section labels. The user can tell what's a problem and what's a fix from the sentence; they don't need it labelled.
 - **Code/config answers**: Copy-paste ready code with REAL names. Call tools first to get current state
 
 Formatting rules:
 - Use plain text. Minimal bold — only for the key answer or section label
-- NO markdown headings (`#`, `##`, `###`, `####`) in responses. Write in flowing prose or short bullets. Headings belong in documentation, not conversational answers. If you need to separate ideas, use a short bolded lead-in like `**What happened:**` on its own line instead of `### What happened`.
+- NO markdown headings (`#`, `##`, `###`, `####`) in responses. Write in flowing prose or short bullets. Headings belong in documentation, not conversational answers.
+- AVOID labelled section blocks (`**Problem:**`, `**Cause:**`, `**Fix:**`, `**Root cause:**`, `**What happened:**`, etc.) in normal answers. They make every response look like a templated incident report. Just write the sentences. Reserve a labelled lead-in only for genuinely multi-part answers where the user explicitly needs to navigate sections (e.g. comparing 3+ options side by side).
 - No walls of text. Prefer 3-5 short bullet points over paragraphs
 - No nested bullets, no italic emphasis blocks, no confidence labels
 - Don't repeat information the user already provided back to them
@@ -468,6 +640,16 @@ NEVER use placeholders like `your_project`, `<your_dataset>`, `your_table`. Use 
 
         # Add context about user's stack
         prompt += context.to_system_prompt_context(query=context.query)
+
+        # Pre-loaded snapshot (monitor counts etc. fetched before iter 0 for
+        # investigative queries — see copilot.prefetch).
+        try:
+            from .prefetch import render_snapshot_section
+            snapshot_section = render_snapshot_section(getattr(context, "prefetched_snapshot", None))
+            if snapshot_section:
+                prompt += "\n" + snapshot_section
+        except Exception as e:
+            logger.debug(f"Snapshot rendering skipped: {e}")
 
         # Add learned context from onboarding (if available)
         prompt += self._build_onboarded_context(context)
@@ -903,6 +1085,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             return CopilotResponse(
                 content=f"Unknown provider: {self.provider}",
                 model=self.model,
+                stop_reason=StopReason.ERROR,
             )
 
     async def chat_stream(
@@ -982,15 +1165,30 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 logger.error(f"[Stream/Anthropic] Schema pre-fetch failed: {e}", exc_info=True)
 
         registry = get_tool_registry()
-        available_tool_objects = registry.get_available_tools(context.integration_types)
+        mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
+        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
         user_query = ""
         if messages:
             last_msg = messages[-1]
             user_query = last_msg.content if isinstance(last_msg.content, str) else ""
+
+        # Eager prefetch for investigative queries (no-op for benign queries).
+        # Populates context.prefetched_snapshot, which build_system_prompt
+        # renders as a "Pre-loaded Snapshot" section so the LLM has aggregate
+        # state (monitor counts etc.) without burning an iteration on it.
+        if user_query and context.prefetched_snapshot is None:
+            try:
+                from .prefetch import prefetch_for_query
+                context.prefetched_snapshot = await prefetch_for_query(
+                    context, user_query, executor, timeout=2.0,
+                )
+            except Exception as e:
+                logger.debug(f"Prefetch skipped: {e}")
+
         system = system_prompt_override if system_prompt_override else self.build_system_prompt(
             context, query=user_query, available_tools=available_tool_objects
         )
-        tools = registry.to_anthropic_tools(context.integration_types)
+        tools = registry.to_anthropic_tools(context.integration_types, exclude=mode_excluded)
 
         # Start MCP servers
         mcp_manager = None
@@ -1016,6 +1214,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             total_input_tokens = 0
             total_output_tokens = 0
             all_tool_calls: List[Dict[str, Any]] = []
+            fired_adjacent_rules: Set[str] = set()
 
             # If we have a pending tool call from confirmation flow,
             # execute it directly and inject result into messages
@@ -1145,14 +1344,19 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 })
 
                 try:
+                    stream_kwargs: Dict[str, Any] = {
+                        "model": self.model,
+                        "system": system,
+                        "messages": anthropic_messages,
+                        "tools": tools if tools else anthropic.NOT_GIVEN,
+                        "max_tokens": 16384,
+                    }
+                    if iteration == 0 and tools and _should_force_initial_tool(user_query):
+                        stream_kwargs["tool_choice"] = {"type": "any"}
+                        logger.info("[Stream/Anthropic] Forcing tool call on iter 0 for investigative query")
+
                     # Use the streaming API
-                    with self.anthropic_client.messages.stream(
-                        model=self.model,
-                        system=system,
-                        messages=anthropic_messages,
-                        tools=tools if tools else anthropic.NOT_GIVEN,
-                        max_tokens=16384,
-                    ) as stream:
+                    with self.anthropic_client.messages.stream(**stream_kwargs) as stream:
                         for event in stream:
                             if event.type == "content_block_delta":
                                 if hasattr(event.delta, "text"):
@@ -1177,6 +1381,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "model": self.model,
                         "stop_reason": "end_turn",
                         "tool_calls": all_tool_calls,
+                        "iterations_used": iteration + 1,
                     })
                     return
 
@@ -1235,6 +1440,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "model": self.model,
                                 "stop_reason": "confirmation_required",
                                 "tool_calls": all_tool_calls,
+                                "iterations_used": iteration + 1,
                             })
                             return
 
@@ -1335,6 +1541,41 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "content": tool_results,
                     })
 
+                    # --- Adjacent-path steering (surgical, per-rule, capped) ---
+                    if iteration < max_tool_iterations - 1:
+                        for block in final_message.content:
+                            if getattr(block, "type", None) != "tool_use":
+                                continue
+                            matching = [
+                                c for c in all_tool_calls
+                                if c.get("tool") == block.name and c.get("input") == block.input
+                            ]
+                            if not matching:
+                                continue
+                            last_call = matching[-1]
+                            rd = last_call.get("result") or {}
+                            last_result = ToolResult(
+                                success=rd.get("success", False),
+                                data=rd.get("data"),
+                                error=rd.get("error"),
+                            )
+                            fired = _evaluate_adjacent_path_rule(
+                                tool_name=block.name,
+                                tool_args=block.input,
+                                tool_result=last_result,
+                                integration_types=context.integration_types,
+                                all_tool_calls=all_tool_calls,
+                                fired_rule_names=fired_adjacent_rules,
+                            )
+                            if fired is not None:
+                                rule_name, steer_msg = fired
+                                fired_adjacent_rules.add(rule_name)
+                                logger.info(f"[Stream/Anthropic] Adjacent-path steering: {rule_name}")
+                                anthropic_messages.append({
+                                    "role": "user",
+                                    "content": steer_msg,
+                                })
+
                     # --- Root cause injection (once, after first evidence round) ---
                     if (
                         context.intent_result
@@ -1377,6 +1618,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     "model": self.model,
                     "stop_reason": final_message.stop_reason or "unknown",
                     "tool_calls": all_tool_calls,
+                    "iterations_used": iteration + 1,
                 })
                 return
 
@@ -1396,6 +1638,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 "model": self.model,
                 "stop_reason": "max_iterations",
                 "tool_calls": all_tool_calls,
+                "iterations_used": max_tool_iterations,
             })
         finally:
             if mcp_manager:
@@ -1436,15 +1679,30 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 logger.error(f"[Stream/OpenAI] Schema pre-fetch failed: {e}", exc_info=True)
 
         registry = get_tool_registry()
-        available_tool_objects = registry.get_available_tools(context.integration_types)
+        mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
+        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
         user_query = ""
         if messages:
             last_msg = messages[-1]
             user_query = last_msg.content if isinstance(last_msg.content, str) else ""
+
+        # Eager prefetch for investigative queries (no-op for benign queries).
+        # Populates context.prefetched_snapshot, which build_system_prompt
+        # renders as a "Pre-loaded Snapshot" section so the LLM has aggregate
+        # state (monitor counts etc.) without burning an iteration on it.
+        if user_query and context.prefetched_snapshot is None:
+            try:
+                from .prefetch import prefetch_for_query
+                context.prefetched_snapshot = await prefetch_for_query(
+                    context, user_query, executor, timeout=2.0,
+                )
+            except Exception as e:
+                logger.debug(f"Prefetch skipped: {e}")
+
         system = system_prompt_override if system_prompt_override else self.build_system_prompt(
             context, query=user_query, available_tools=available_tool_objects
         )
-        tools = registry.to_openai_tools(context.integration_types)
+        tools = registry.to_openai_tools(context.integration_types, exclude=mode_excluded)
 
         # Start MCP servers
         mcp_manager = None
@@ -1470,6 +1728,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             total_input_tokens = 0
             total_output_tokens = 0
             all_tool_calls: List[Dict[str, Any]] = []
+            fired_adjacent_rules: Set[str] = set()
             is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
 
             # If we have a pending tool call from confirmation flow,
@@ -1614,6 +1873,9 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
                     if tools and not is_reasoning_model:
                         api_params["tools"] = tools
+                        if iteration == 0 and _should_force_initial_tool(user_query):
+                            api_params["tool_choice"] = "required"
+                            logger.info("[Stream/OpenAI] Forcing tool call on iter 0 for investigative query")
 
                     response_stream = self.openai_client.chat.completions.create(**api_params)
 
@@ -1671,6 +1933,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "model": self.model,
                         "stop_reason": "end_turn",
                         "tool_calls": all_tool_calls,
+                        "iterations_used": iteration + 1,
                     })
                     return
 
@@ -1686,6 +1949,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                         "model": self.model,
                         "stop_reason": "length",
                         "tool_calls": all_tool_calls,
+                        "iterations_used": iteration + 1,
                     })
                     return
 
@@ -1761,6 +2025,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 "model": self.model,
                                 "stop_reason": "confirmation_required",
                                 "tool_calls": all_tool_calls,
+                                "iterations_used": iteration + 1,
                             })
                             return
 
@@ -1850,6 +2115,44 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     if has_artifact:
                         break
 
+                    # --- Adjacent-path steering (surgical, per-rule, capped) ---
+                    if iteration < max_tool_iterations - 1:
+                        for tc_data in tool_calls_acc.values():
+                            tn = tc_data["name"]
+                            try:
+                                ta = json.loads(tc_data["arguments"])
+                            except json.JSONDecodeError:
+                                ta = {}
+                            matching = [
+                                c for c in all_tool_calls
+                                if c.get("tool") == tn and c.get("input") == ta
+                            ]
+                            if not matching:
+                                continue
+                            last_call = matching[-1]
+                            rd = last_call.get("result") or {}
+                            last_result = ToolResult(
+                                success=rd.get("success", False),
+                                data=rd.get("data"),
+                                error=rd.get("error"),
+                            )
+                            fired = _evaluate_adjacent_path_rule(
+                                tool_name=tn,
+                                tool_args=ta,
+                                tool_result=last_result,
+                                integration_types=context.integration_types,
+                                all_tool_calls=all_tool_calls,
+                                fired_rule_names=fired_adjacent_rules,
+                            )
+                            if fired is not None:
+                                rule_name, steer_msg = fired
+                                fired_adjacent_rules.add(rule_name)
+                                logger.info(f"[Stream/OpenAI] Adjacent-path steering: {rule_name}")
+                                openai_messages.append({
+                                    "role": "user",
+                                    "content": steer_msg,
+                                })
+
                     # --- Root cause injection (once, after first evidence round) ---
                     if (
                         context.intent_result
@@ -1891,6 +2194,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     "model": self.model,
                     "stop_reason": finish_reason or "unknown",
                     "tool_calls": all_tool_calls,
+                    "iterations_used": iteration + 1,
                 })
                 return
 
@@ -1910,6 +2214,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 "model": self.model,
                 "stop_reason": "max_iterations",
                 "tool_calls": all_tool_calls,
+                "iterations_used": max_tool_iterations,
             })
         finally:
             if mcp_manager:
@@ -1929,6 +2234,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             return CopilotResponse(
                 content="Anthropic not available. Please configure ANTHROPIC_API_KEY or switch to OpenAI.",
                 model=self.model,
+                stop_reason=StopReason.ERROR,
             )
 
         # Create tool executor first (needs adapters for schema fetch)
@@ -1949,7 +2255,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
         # Build system prompt (now includes schema info)
         registry = get_tool_registry()
-        available_tool_objects = registry.get_available_tools(context.integration_types)
+        mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
+        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
         user_query = ""
         if messages:
             last_msg = messages[-1]
@@ -1959,7 +2266,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         )
 
         # Get available tools (legacy)
-        tools = registry.to_anthropic_tools(context.integration_types)
+        tools = registry.to_anthropic_tools(context.integration_types, exclude=mode_excluded)
 
         # Start MCP servers and merge their tools
         mcp_manager = None
@@ -1989,18 +2296,26 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             total_output_tokens = 0
             all_tool_calls = []
             accumulated_text = []  # Accumulate text from ALL iterations, not just final
+            fired_adjacent_rules: Set[str] = set()
 
             # Iterate until we get a final response
             for iteration in range(max_tool_iterations):
                 try:
+                    # Force a tool call on the first iteration for investigative
+                    # queries so the LLM cannot open with a clarifying question.
+                    api_kwargs: Dict[str, Any] = {
+                        "model": self.model,
+                        "system": system,
+                        "messages": anthropic_messages,
+                        "tools": tools if tools else None,
+                        "max_tokens": 16384,
+                    }
+                    if iteration == 0 and tools and _should_force_initial_tool(user_query):
+                        api_kwargs["tool_choice"] = {"type": "any"}
+                        logger.info("[Anthropic] Forcing tool call on iter 0 for investigative query")
+
                     # Call Claude
-                    response = self.anthropic_client.messages.create(
-                        model=self.model,
-                        system=system,
-                        messages=anthropic_messages,
-                        tools=tools if tools else None,
-                        max_tokens=16384,
-                    )
+                    response = self.anthropic_client.messages.create(**api_kwargs)
 
                     # Track tokens
                     total_input_tokens += response.usage.input_tokens
@@ -2023,7 +2338,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             input_tokens=total_input_tokens,
                             output_tokens=total_output_tokens,
                             model=self.model,
-                            stop_reason=response.stop_reason,
+                            stop_reason=response.stop_reason or StopReason.COMPLETED,
+                            iterations_used=iteration + 1,
                         )
 
                     # Handle tool use
@@ -2092,6 +2408,43 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             "content": tool_results,
                         })
 
+                        # --- Adjacent-path steering (surgical, per-rule, capped) ---
+                        # If a primary tool returned empty/unavailable AND we have an
+                        # adjacent integration that can answer, inject a one-shot
+                        # steering message so the LLM tries that path before responding.
+                        if iteration < max_tool_iterations - 1:
+                            for block in response.content:
+                                if getattr(block, "type", None) != "tool_use":
+                                    continue
+                                tc_calls = [
+                                    tc for tc in all_tool_calls
+                                    if tc.get("tool") == block.name and tc.get("input") == block.input
+                                ]
+                                if not tc_calls:
+                                    continue
+                                last_call = tc_calls[-1]
+                                last_result = ToolResult(
+                                    success=last_call["result"].get("success", False),
+                                    data=last_call["result"].get("data"),
+                                    error=last_call["result"].get("error"),
+                                )
+                                fired = _evaluate_adjacent_path_rule(
+                                    tool_name=block.name,
+                                    tool_args=block.input,
+                                    tool_result=last_result,
+                                    integration_types=context.integration_types,
+                                    all_tool_calls=all_tool_calls,
+                                    fired_rule_names=fired_adjacent_rules,
+                                )
+                                if fired is not None:
+                                    rule_name, steer_msg = fired
+                                    fired_adjacent_rules.add(rule_name)
+                                    logger.info(f"[Anthropic] Adjacent-path steering: {rule_name}")
+                                    anthropic_messages.append({
+                                        "role": "user",
+                                        "content": steer_msg,
+                                    })
+
                         # --- Root cause injection (once, after first evidence round) ---
                         if (
                             context.intent_result
@@ -2132,7 +2485,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     return CopilotResponse(
                         content=final_content,
                         model=self.model,
-                        stop_reason=response.stop_reason,
+                        stop_reason=response.stop_reason or StopReason.UNKNOWN,
+                        iterations_used=iteration + 1,
                     )
 
                 except Exception as e:
@@ -2140,9 +2494,11 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     return CopilotResponse(
                         content=f"Error communicating with AI: {str(e)}",
                         model=self.model,
+                        stop_reason=StopReason.ERROR,
+                        iterations_used=iteration + 1,
                     )
 
-            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text, iterations_used=max_tool_iterations)
         finally:
             # Always shut down MCP servers
             if mcp_manager:
@@ -2159,6 +2515,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             return CopilotResponse(
                 content="OpenAI not available. Please configure OPENAI_API_KEY or switch to Anthropic.",
                 model=self.model,
+                stop_reason=StopReason.ERROR,
             )
         
         # Create tool executor first (needs adapters for schema fetch)
@@ -2179,7 +2536,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
         # Build system prompt (now includes schema info)
         registry = get_tool_registry()
-        available_tool_objects = registry.get_available_tools(context.integration_types)
+        mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
+        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
         user_query = ""
         if messages:
             last_msg = messages[-1]
@@ -2189,7 +2547,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         )
 
         # Get available tools in OpenAI format (legacy)
-        tools = registry.to_openai_tools(context.integration_types)
+        tools = registry.to_openai_tools(context.integration_types, exclude=mode_excluded)
 
         # Start MCP servers and merge their tools
         mcp_manager = None
@@ -2219,6 +2577,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             total_output_tokens = 0
             all_tool_calls = []
             accumulated_text = []  # Accumulate text from ALL iterations, not just final
+            fired_adjacent_rules: Set[str] = set()
 
             # Check if this is a reasoning model (o1, o3) that uses different params
             is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
@@ -2242,6 +2601,9 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     # Add tools (reasoning models don't support tools yet)
                     if tools and not is_reasoning_model:
                         api_params["tools"] = tools
+                        if iteration == 0 and _should_force_initial_tool(user_query):
+                            api_params["tool_choice"] = "required"
+                            logger.info("[OpenAI] Forcing tool call on iter 0 for investigative query")
 
                     # Call OpenAI
                     response = self.openai_client.chat.completions.create(**api_params)
@@ -2269,7 +2631,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             input_tokens=total_input_tokens,
                             output_tokens=total_output_tokens,
                             model=self.model,
-                            stop_reason=finish_reason,
+                            stop_reason=finish_reason or StopReason.COMPLETED,
+                            iterations_used=iteration + 1,
                         )
 
                     # Handle tool calls
@@ -2341,6 +2704,44 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                     "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
                                 })
 
+                        # --- Adjacent-path steering (surgical, per-rule, capped) ---
+                        if iteration < max_tool_iterations - 1:
+                            for tc in message.tool_calls:
+                                tn = tc.function.name
+                                try:
+                                    ta = json.loads(tc.function.arguments)
+                                except json.JSONDecodeError:
+                                    ta = {}
+                                matching = [
+                                    c for c in all_tool_calls
+                                    if c.get("tool") == tn and c.get("input") == ta
+                                ]
+                                if not matching:
+                                    continue
+                                last_call = matching[-1]
+                                rd = last_call.get("result") or {}
+                                last_result = ToolResult(
+                                    success=rd.get("success", False),
+                                    data=rd.get("data"),
+                                    error=rd.get("error"),
+                                )
+                                fired = _evaluate_adjacent_path_rule(
+                                    tool_name=tn,
+                                    tool_args=ta,
+                                    tool_result=last_result,
+                                    integration_types=context.integration_types,
+                                    all_tool_calls=all_tool_calls,
+                                    fired_rule_names=fired_adjacent_rules,
+                                )
+                                if fired is not None:
+                                    rule_name, steer_msg = fired
+                                    fired_adjacent_rules.add(rule_name)
+                                    logger.info(f"[OpenAI] Adjacent-path steering: {rule_name}")
+                                    openai_messages.append({
+                                        "role": "user",
+                                        "content": steer_msg,
+                                    })
+
                         # --- Root cause injection (once, after first evidence round) ---
                         if (
                             context.intent_result
@@ -2381,7 +2782,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     return CopilotResponse(
                         content=final_content,
                         model=self.model,
-                        stop_reason=finish_reason or "unknown",
+                        stop_reason=finish_reason or StopReason.UNKNOWN,
+                        iterations_used=iteration + 1,
                     )
 
                 except Exception as e:
@@ -2389,9 +2791,11 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     return CopilotResponse(
                         content=f"Error communicating with AI: {str(e)}",
                         model=self.model,
+                        stop_reason=StopReason.ERROR,
+                        iterations_used=iteration + 1,
                     )
 
-            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text)
+            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text, iterations_used=max_tool_iterations)
         finally:
             # Always shut down MCP servers
             if mcp_manager:
@@ -2403,9 +2807,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         total_input_tokens: int,
         total_output_tokens: int,
         accumulated_text: List[str] = None,
+        iterations_used: int = 0,
     ) -> CopilotResponse:
         """Build response when max iterations reached."""
-        logger.warning(f"Max tool iterations reached")
+        logger.warning(f"Max tool iterations reached (iterations_used={iterations_used})")
 
         # If we have accumulated text from the LLM, use that first
         if accumulated_text:
@@ -2417,7 +2822,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                     model=self.model,
-                    stop_reason="max_iterations",
+                    stop_reason=StopReason.MAX_ITERATIONS,
+                    iterations_used=iterations_used,
                 )
 
         # Fall back to summarizing tool results
@@ -2462,9 +2868,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             input_tokens=total_input_tokens,
             output_tokens=total_output_tokens,
             model=self.model,
-            stop_reason="max_iterations",
+            stop_reason=StopReason.MAX_ITERATIONS,
+            iterations_used=iterations_used,
         )
-    
+
     def _convert_messages(self, messages: List[Message]) -> List[Dict[str, Any]]:
         """Convert our Message format to Anthropic format."""
         anthropic_messages = []
@@ -2536,14 +2943,17 @@ class MockCopilotLLM(CopilotLLM):
             return CopilotResponse(
                 content="Based on your lineage graph, I can see the upstream dependencies. Would you like me to trace them?",
                 model="mock",
+                stop_reason=StopReason.COMPLETED,
             )
         elif "downstream" in last_message.lower():
             return CopilotResponse(
                 content="I can check the downstream impact for you. Which table or model would you like to analyze?",
                 model="mock",
+                stop_reason=StopReason.COMPLETED,
             )
         else:
             return CopilotResponse(
                 content=f"I understand you're asking about: {last_message[:100]}... I can help you explore your data pipeline. What would you like to know?",
                 model="mock",
+                stop_reason=StopReason.COMPLETED,
             )

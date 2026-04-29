@@ -82,20 +82,17 @@ CRITICAL: If the task reached SQL execution (error contains a SQL statement, war
 - Use `get_downstream` to identify all tables impacted by the failure.
 - Check freshness: use `run_coverage_monitor(monitor_type="freshness")` or `get_node_coverage` on affected tables.
 
-**Response format — keep it short and scannable:**
+**Write the answer as natural prose, not a templated incident report:**
+- Lead with what failed and the failure layer (Connection/Auth | SQL Compilation | Runtime/Data | Orchestration) in the first sentence.
+- Then explain the cause in a sentence or two, citing the exact error message or key numbers as evidence.
+- Then give the fix as 2-4 concrete steps with real table/column names — include type casts if source and target types differ.
+- Close with one line on downstream impact: which tables are now stale, by how much.
 
-**Problem:** One sentence stating what went wrong, which task/job failed, and the failure layer (Connection/Auth | SQL Compilation | Runtime/Data | Orchestration).
+DO NOT use `**Problem:**`, `**Cause:**`, `**Fix:**`, `**Impact:**`, or `**Root cause:**` as literal section labels — write the sentences directly. The user can tell what's a problem and what's a fix from the words; they don't need it labelled. Each labelled "section" the LLM emits is one more thing the user has to skim past to find the actual answer.
 
-**Cause:** One sentence explaining why, backed by data (include the exact error message or key numbers).
-
-**Fix:** 2-4 bullet points with concrete actions. Use real table/column names. Include column type casts if types differ between source and target.
-
-**Impact:** One line listing downstream tables affected and their current freshness status.
-
-**Rules:**
-- No bold section headers other than Problem / Cause / Fix / Impact
-- No hypothesis lists, confidence labels, or "to verify" sub-items — just state what you found
+**Other rules:**
 - Keep the entire response under 200 words when possible
+- No hypothesis lists, confidence labels, or "to verify" sub-items — just state what you found
 - Don't propose Docker/infra changes unless the failure layer is Orchestration and the user asks
 - Run multiple queries to gather evidence. Don't guess — investigate thoroughly
 """
@@ -732,6 +729,30 @@ def mode_from_intent(intent_result) -> ModeConfig:
         return MODES[mode_enum]
     except (ValueError, KeyError):
         return MODES[InteractionMode.ASK]
+
+
+def tools_excluded_for_mode(mode: str) -> set:
+    """Return tool names that must be HIDDEN from the LLM in `mode`.
+
+    A tool listed in another mode's `exclusive_tools` cannot be called from
+    this mode — the registry filters it out before the LLM ever sees it.
+    Examples:
+      - In ASK mode, write tools belonging to FIX/CREATE/BUNDLE/ONBOARD
+        (apply_change_plan, generate_dbt_model, create_bundle, …) are hidden.
+      - In FIX mode, FIX's own exclusive tools stay visible; the others vanish.
+
+    Unknown modes default to ASK behaviour (broadest exclusion — safer).
+    """
+    try:
+        current = InteractionMode(mode.lower())
+    except (ValueError, KeyError, AttributeError):
+        current = InteractionMode.ASK
+    excluded: set = set()
+    for m, cfg in MODES.items():
+        if m == current:
+            continue
+        excluded.update(cfg.exclusive_tools)
+    return excluded
 
 
 def get_available_modes() -> List[Dict]:
