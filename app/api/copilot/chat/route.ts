@@ -180,6 +180,14 @@ export async function POST(request: Request) {
       }
     }
 
+    // Hydrate the ContextRequest payload inline so the FastAPI clarify-mode
+    // prompt can render with full context (table_fqn, candidates, etc.) instead
+    // of just the id stub.
+    const clarificationRequestInline = await loadClarificationRequest(
+      clarification_request_id,
+      user.organizationId,
+    );
+
     // Call the scanner copilot API with full conversation history
     const response = await scannerClient.fetch(session, '/api/v1/copilot/chat', {
       method: 'POST',
@@ -198,6 +206,7 @@ export async function POST(request: Request) {
         integrations, // Pass integrations from pipeline nodes
         lineage: lineageData, // Pass pre-fetched lineage data
         clarification_request_id: clarification_request_id || null,
+        clarification_request: clarificationRequestInline,
       }),
     });
 
@@ -549,6 +558,13 @@ async function handleStreamingChat(
     }
   }
 
+  // Hydrate the ContextRequest payload inline so the clarify-mode prompt
+  // renders with full context.
+  const clarificationRequestInline = await loadClarificationRequest(
+    clarification_request_id,
+    user.organizationId,
+  );
+
   // Call FastAPI streaming endpoint
   const scannerResponse = await scannerClient.fetch(session, '/api/v1/copilot/chat/stream', {
     method: 'POST',
@@ -570,6 +586,7 @@ async function handleStreamingChat(
       pending_tool_call: pending_tool_call || null,
       confirmed_artifacts: confirmedArtifacts,
       clarification_request_id: clarification_request_id || null,
+      clarification_request: clarificationRequestInline,
     }),
   });
 
@@ -704,4 +721,54 @@ async function handleStreamingChat(
       'Connection': 'keep-alive',
     },
   });
+}
+
+/**
+ * Load a ContextRequest by id, scoped to the caller's organization. Returns
+ * the inline payload the FastAPI clarify-mode prompt expects, or null if no
+ * id was provided / the row doesn't exist / it's not in the caller's org.
+ *
+ * Best-effort: any error returns null so chat continues to work even if
+ * the lookup fails. The clarify prompt fragment will fall back to the stub
+ * payload built from `clarification_request_id` alone.
+ */
+async function loadClarificationRequest(
+  requestId: string | null | undefined,
+  organizationId: string,
+): Promise<{
+  id: string;
+  kind: string;
+  scope_type: string;
+  scope_ref: string;
+  payload: Record<string, unknown>;
+  priority: string;
+} | null> {
+  if (!requestId) return null;
+  try {
+    const req = await prisma.contextRequest.findUnique({
+      where: { id: requestId },
+      select: {
+        id: true,
+        kind: true,
+        scopeType: true,
+        scopeRef: true,
+        payload: true,
+        priority: true,
+        pipelineStack: { select: { organizationId: true } },
+      },
+    });
+    if (!req || req.pipelineStack?.organizationId !== organizationId) {
+      return null;
+    }
+    return {
+      id: req.id,
+      kind: req.kind,
+      scope_type: req.scopeType,
+      scope_ref: req.scopeRef,
+      payload: (req.payload as Record<string, unknown>) ?? {},
+      priority: req.priority,
+    };
+  } catch {
+    return null;
+  }
 }
