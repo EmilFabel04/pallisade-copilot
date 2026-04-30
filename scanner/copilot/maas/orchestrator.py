@@ -12,6 +12,7 @@ Specialists are called via RunPod for SQL and Logs.
 import asyncio
 import hashlib
 import json
+import re
 import time
 import logging
 from typing import AsyncGenerator, Dict, List, Any, Optional, Set
@@ -67,6 +68,39 @@ def _next_effort(current: Optional[str]) -> Optional[str]:
         return "medium"
     idx = EFFORT_LADDER.index(current)
     return EFFORT_LADDER[idx + 1] if idx < len(EFFORT_LADDER) - 1 else None
+
+
+# Words in the user's query that suggest multi-table reasoning, joins,
+# comparison, or investigation — the cases where running SQL gen at two
+# temperatures and picking the higher-confidence result is worth the
+# doubled cost. Heuristic on NL phrasing rather than the generated SQL
+# so we can decide before the first call.
+_HIGH_STAKES_PATTERNS = re.compile(
+    r"(?:"
+    # Comparison
+    r"\bcompar\w*|\bacross\b|\bbetween\b|\bvs\b|\bversus\b|"
+    # Explicit join
+    r"\bjoin(?:ed|s|ing)?\b|"
+    # Investigation / debug
+    r"\binvestigat\w*|\bwhy\s+(?:did|does|is|are|was|were)\b|"
+    r"\bwhat\s+went\s+wrong\b|\broot\s+cause\b|\bdebug\w*|"
+    # Delta / correlation
+    r"\bdifference\b|\bdiffer\w*|\bcorrelat\w*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_high_stakes(query: str) -> bool:
+    """Whether the query warrants self-consistency fan-out.
+
+    Conservative: false negatives are fine (we just spend less), but a
+    false positive doubles SQL specialist cost. Trigger only on signals
+    that genuinely indicate multi-table or investigative work.
+    """
+    if not query:
+        return False
+    return bool(_HIGH_STAKES_PATTERNS.search(query))
 
 
 class MAASOrchestrator:
@@ -333,7 +367,7 @@ class MAASOrchestrator:
                             f"[MAAS] Calling {spec_name} "
                             f"endpoint={c.base_url} model={c.model_name}"
                         )
-                    result = await specialist.call(
+                    common_kwargs = dict(
                         evidence=evidence_blob,
                         query=query,
                         max_retries=route.budget.max_revisions,
@@ -342,6 +376,45 @@ class MAASOrchestrator:
                         available_warehouses=available_warehouses,
                         pipeline_id=context.pipeline_stack_id,
                     )
+
+                    self_consistency_used = False
+                    self_consistency_picked: Optional[str] = None
+
+                    if spec_name == "sql" and _is_high_stakes(query):
+                        # Self-consistency: same prompt, two temperatures.
+                        # Doubles SQL specialist cost so it's gated by the
+                        # high-stakes heuristic. Pick the result that
+                        # passes the verifier with higher confidence; on
+                        # ties, prefer A (the deterministic temp=0.0
+                        # result) to keep behavior reproducible.
+                        logger.info(
+                            f"[MAAS] {spec_name} high-stakes — running "
+                            f"self-consistency fan-out (temp=0.0 || 0.7)"
+                        )
+                        result_a, result_b = await asyncio.gather(
+                            specialist.call(temperature=0.0, **common_kwargs),
+                            specialist.call(temperature=0.7, **common_kwargs),
+                        )
+                        vr_a, vr_b = await asyncio.gather(
+                            self._verify_specialist(spec_name, result_a, context),
+                            self._verify_specialist(spec_name, result_b, context),
+                        )
+                        conf_a = vr_a.get("confidence", 1.0 if vr_a["passed"] else 0.0)
+                        conf_b = vr_b.get("confidence", 1.0 if vr_b["passed"] else 0.0)
+                        # Strictly higher → B; otherwise A (stable default).
+                        if conf_b > conf_a:
+                            result, vr, self_consistency_picked = result_b, vr_b, "B"
+                        else:
+                            result, vr, self_consistency_picked = result_a, vr_a, "A"
+                        self_consistency_used = True
+                        logger.info(
+                            f"[MAAS] {spec_name} self-consistency picked "
+                            f"{self_consistency_picked} "
+                            f"(conf_a={conf_a:.2f}, conf_b={conf_b:.2f})"
+                        )
+                    else:
+                        result = await specialist.call(**common_kwargs)
+                        vr = await self._verify_specialist(spec_name, result, context)
                     latency = int((time.monotonic() - start_time) * 1000)
                     sql_preview = (
                         result.sql[:200] if hasattr(result, "sql") else "n/a"
@@ -350,7 +423,6 @@ class MAASOrchestrator:
                         f"[MAAS] {spec_name} returned "
                         f"latency={latency}ms sql={sql_preview}"
                     )
-                    vr = await self._verify_specialist(spec_name, result, context)
                     escalated_to: Optional[str] = None
                     if not vr["passed"]:
                         # Escalate reasoning_effort one tier for the retry.
@@ -392,6 +464,8 @@ class MAASOrchestrator:
                         "latency": latency,
                         "error": None,
                         "escalated_to": escalated_to,
+                        "self_consistency_used": self_consistency_used,
+                        "self_consistency_picked": self_consistency_picked,
                     }
                 except SpecialistError as e:
                     latency = int((time.monotonic() - start_time) * 1000)
@@ -458,6 +532,8 @@ class MAASOrchestrator:
                     )
 
                 escalated_to = outcome.get("escalated_to")
+                sc_used = outcome.get("self_consistency_used", False)
+                sc_picked = outcome.get("self_consistency_picked")
                 if vr["passed"]:
                     specialist_results[spec_name] = {
                         "result": result,
@@ -468,6 +544,8 @@ class MAASOrchestrator:
                         latency_ms=latency,
                         success=True,
                         escalated_to=escalated_to,
+                        self_consistency_used=sc_used,
+                        self_consistency_picked=sc_picked,
                     ))
                 else:
                     # Both attempts failed verification. Drop the result and
@@ -484,6 +562,8 @@ class MAASOrchestrator:
                         success=False,
                         error=f"verification failed: {vr.get('errors', [])}",
                         escalated_to=escalated_to,
+                        self_consistency_used=sc_used,
+                        self_consistency_picked=sc_picked,
                     ))
                     continue
 
