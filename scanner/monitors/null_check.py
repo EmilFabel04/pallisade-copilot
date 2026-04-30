@@ -343,16 +343,24 @@ class NullCheckMonitor(BaseMonitor):
             elif self.max_null_rate is not None and current > self.max_null_rate:
                 col_status = MonitorStatus.FAIL
             elif severity == "borderline":
-                col_status = MonitorStatus.BORDERLINE
-                self._emit_borderline_failure_review(
+                if self._is_dampened(
                     target_fqn=target_fqn,
                     column=col,
-                    observed=float(current),
-                    z_score=float(score.z_score),
-                    baseline_mean=float(score.baseline_mean),
-                    baseline_stddev=float(score.baseline_stddev),
-                    threshold_used=float(score.threshold_used),
-                )
+                    abs_z=abs(float(score.z_score)),
+                ):
+                    # User already marked this column's noise as expected; pass.
+                    col_status = MonitorStatus.PASS
+                else:
+                    col_status = MonitorStatus.BORDERLINE
+                    self._emit_borderline_failure_review(
+                        target_fqn=target_fqn,
+                        column=col,
+                        observed=float(current),
+                        z_score=float(score.z_score),
+                        baseline_mean=float(score.baseline_mean),
+                        baseline_stddev=float(score.baseline_stddev),
+                        threshold_used=float(score.threshold_used),
+                    )
 
             if col_status == MonitorStatus.FAIL:
                 worst_status = MonitorStatus.FAIL
@@ -433,6 +441,37 @@ class NullCheckMonitor(BaseMonitor):
                 ),
             },
         )
+
+    def _is_dampened(self, *, target_fqn: str, column: str, abs_z: float) -> bool:
+        """Suppress repeat clarifications when the user already marked this
+        column's null-rate noise as expected. Best-effort; any failure → False."""
+        pipeline_stack_id = self.config.get("pipeline_stack_id")
+        organization_id = self.config.get("organization_id")
+        if not pipeline_stack_id or not organization_id:
+            return False
+        try:
+            try:
+                from copilot.clarifications.emit import (
+                    fetch_conventions_via_nextjs,
+                    is_dampened,
+                )
+            except ImportError:
+                from scanner.copilot.clarifications.emit import (  # type: ignore
+                    fetch_conventions_via_nextjs,
+                    is_dampened,
+                )
+            conventions = fetch_conventions_via_nextjs(
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+            )
+            return is_dampened(
+                conventions=conventions,
+                scope_ref=f"{target_fqn}::{column}",
+                metric="null_rate",
+                abs_z=abs_z,
+            )
+        except Exception:
+            return False
 
     def _emit_borderline_failure_review(
         self,

@@ -80,3 +80,75 @@ def emit_via_nextjs(
     except Exception as exc:
         logger.debug("[Clarifications] create POST raised: %s", exc)
         return None
+
+
+def fetch_conventions_via_nextjs(
+    *,
+    pipeline_stack_id: str,
+    organization_id: Optional[str],
+) -> Dict[str, Any]:
+    """Fetch the pipeline's ``conventionsContext`` via Next.js. Returns ``{}``
+    on any failure so callers can default to "no conventions"."""
+    if not pipeline_stack_id or not organization_id:
+        return {}
+
+    try:
+        import httpx
+    except ImportError:
+        return {}
+
+    base = (
+        os.environ.get("NEXTJS_BASE_URL")
+        or os.environ.get("INTERNAL_NEXTJS_URL")
+        or "http://localhost:3000"
+    )
+    secret = os.environ.get("INTERNAL_API_SECRET", "pallisade-internal")
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(
+                f"{base}/api/pipeline-context/{pipeline_stack_id}/conventions",
+                headers={
+                    "X-Internal-Secret": secret,
+                    "X-Organization-Id": organization_id,
+                },
+            )
+        if resp.status_code >= 400:
+            return {}
+        data = resp.json()
+        return data.get("conventions") or {}
+    except Exception as exc:
+        logger.debug("[Clarifications] conventions GET raised: %s", exc)
+        return {}
+
+
+def is_dampened(
+    *,
+    conventions: Dict[str, Any],
+    scope_ref: str,
+    metric: str,
+    abs_z: float,
+) -> bool:
+    """Return True if a matching dampening rule says we should NOT emit a
+    borderline clarification for this (node, metric, |z|).
+
+    Rule shape (written by failure_review.conventions.on_resolve):
+        {
+          "node": "raw.orders",
+          "metric": "row_count",
+          "min_z_to_alert": 2.6,
+          ...
+        }
+    """
+    rules = (conventions.get("dampening") or {}).get("rules") or []
+    for rule in rules:
+        if rule.get("node") != scope_ref:
+            continue
+        if rule.get("metric") != metric:
+            continue
+        threshold = rule.get("min_z_to_alert")
+        if threshold is None:
+            continue
+        if abs_z < float(threshold):
+            return True
+    return False

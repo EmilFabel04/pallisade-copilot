@@ -483,6 +483,21 @@ class VolumeMonitor(BaseMonitor):
             range_max = raw_mean
 
         if severity == "borderline" and not score.is_anomaly:
+            if self._is_dampened(target_fqn=target_fqn, metric="row_count", abs_z=abs(float(score.z_score))):
+                # User previously marked this exact case "Expected"; suppress the
+                # repeat clarification and pass the eval.
+                details["dampened"] = True
+                return MonitorResult(
+                    monitor_type=self.monitor_type,
+                    target_fqn=target_fqn,
+                    status=MonitorStatus.PASS,
+                    value=float(latest),
+                    message=(
+                        f"Daily volume {latest:,} dipped (z={score.z_score:.2f}); "
+                        f"within user-confirmed noise band."
+                    ),
+                    details=details,
+                )
             self._emit_borderline_failure_review(
                 target_fqn=target_fqn,
                 metric="row_count",
@@ -540,6 +555,41 @@ class VolumeMonitor(BaseMonitor):
             ),
             details=details,
         )
+
+    def _is_dampened(self, *, target_fqn: str, metric: str, abs_z: float) -> bool:
+        """Check whether a previously-written dampening rule should suppress
+        a borderline emit + alert for this (node, metric, |z|).
+
+        Best-effort: any failure (no pipeline scope, network error, missing
+        rules) returns False so the normal borderline path runs.
+        """
+        pipeline_stack_id = self.config.get("pipeline_stack_id")
+        organization_id = self.config.get("organization_id")
+        if not pipeline_stack_id or not organization_id:
+            return False
+        try:
+            try:
+                from copilot.clarifications.emit import (
+                    fetch_conventions_via_nextjs,
+                    is_dampened,
+                )
+            except ImportError:
+                from scanner.copilot.clarifications.emit import (  # type: ignore
+                    fetch_conventions_via_nextjs,
+                    is_dampened,
+                )
+            conventions = fetch_conventions_via_nextjs(
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+            )
+            return is_dampened(
+                conventions=conventions,
+                scope_ref=target_fqn,
+                metric=metric,
+                abs_z=abs_z,
+            )
+        except Exception:
+            return False
 
     def _emit_borderline_failure_review(
         self,
