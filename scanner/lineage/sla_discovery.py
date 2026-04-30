@@ -733,28 +733,41 @@ def _compute_volume(
     ``tentative=True`` and carries a ``context_request_id`` the UI can
     surface.
     """
+    logger.info(
+        "[Clarifications] _compute_volume entered for %s (pipeline_stack_id=%s, has_metadata=%s)",
+        table_fqn, pipeline_stack_id, metadata is not None,
+    )
+
     count = metadata.get("row_count") if metadata else None
-    if not count or count <= 0:
-        return None
 
-    result: Dict[str, Any] = {
-        "enabled": True,
-        "currentRows": int(count),
-    }
-
-    # Pick timestamp column up-front so we can both reuse it for daily counts
-    # and inspect confidence to decide whether to emit a clarification.
+    # Run the picker + clarification emit regardless of row data — the column
+    # choice is independent of row counts, and an empty table still needs a
+    # timestamp column for future volume monitoring.
     pick = _pick_volume_timestamp_column(adapter, table_fqn)
-
-    # Best-effort: ask Next.js to create a ContextRequest if confidence is low
-    # AND we know which pipeline stack to attach it to. Failures are silent —
-    # discovery must keep working even if the clarification engine is down.
     clarification = _try_emit_timestamp_clarification(
         table_fqn=table_fqn,
         pick=pick,
         pipeline_stack_id=pipeline_stack_id,
         organization_id=organization_id,
     )
+
+    if not count or count <= 0:
+        # No row data. Preserve the historical None return so dimension
+        # aggregation skips this monitor cleanly — UNLESS we just created a
+        # clarification, in which case we surface a minimal tentative result
+        # so the UI can show the popup linkage.
+        if clarification and clarification.get("context_request_id") and not clarification.get("suppressed"):
+            return {
+                "enabled": False,
+                "tentative": True,
+                "context_request_id": clarification["context_request_id"],
+            }
+        return None
+
+    result: Dict[str, Any] = {
+        "enabled": True,
+        "currentRows": int(count),
+    }
     if clarification and clarification.get("context_request_id") and not clarification.get("suppressed"):
         result["tentative"] = True
         result["context_request_id"] = clarification["context_request_id"]
