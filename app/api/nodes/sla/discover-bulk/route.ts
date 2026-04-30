@@ -31,7 +31,15 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Resolve credentials and call direct-bulk for each platform
+      // Resolve credentials and call direct-bulk for each platform.
+      // Look up the caller's organizationId so FastAPI can attach
+      // clarifications to the right scope.
+      const userRow = await prisma.user.findUnique({
+        where: { email: session.user.email! },
+        select: { organizationId: true },
+      });
+      const organizationId = userRow?.organizationId ?? undefined;
+
       const allResults: any[] = [];
       for (const [platform, tableFqns] of Object.entries(byPlatform)) {
         const credentials = await resolveWarehouseCredentials(session.user.email!, stackId, platform);
@@ -49,7 +57,7 @@ export async function POST(request: NextRequest) {
         const res = await scannerClient.fetch(session, '/api/v1/discovery/direct-bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ platform, tableFqns, credentials }),
+          body: JSON.stringify({ platform, tableFqns, credentials, stackId, organizationId }),
           signal: AbortSignal.timeout(300000),
         });
 

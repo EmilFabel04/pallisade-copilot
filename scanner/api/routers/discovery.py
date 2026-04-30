@@ -49,6 +49,8 @@ class DirectDiscoveryRequest(BaseModel):
     platform: str = Field(..., description="Warehouse platform: bigquery, snowflake, postgres, redshift")
     tableFqn: str = Field(..., description="Fully qualified table name (e.g. project.dataset.table)")
     credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    stackId: Optional[str] = Field(None, description="Pipeline stack id; required for clarification emits")
+    organizationId: Optional[str] = Field(None, description="Caller's organization id; paired with stackId for clarifications")
 
 
 class BulkDirectDiscoveryRequest(BaseModel):
@@ -56,6 +58,8 @@ class BulkDirectDiscoveryRequest(BaseModel):
     platform: str = Field(..., description="Warehouse platform")
     tableFqns: list[str] = Field(..., description="Table FQNs to discover", max_length=50)
     credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    stackId: Optional[str] = Field(None, description="Pipeline stack id; required for clarification emits")
+    organizationId: Optional[str] = Field(None, description="Caller's organization id; paired with stackId for clarifications")
 
 
 class BulkDiscoveryRequest(BaseModel):
@@ -414,7 +418,12 @@ async def discover_direct_sla(request: DirectDiscoveryRequest):
         raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
 
     try:
-        result = await discover_sla_direct(request.tableFqn, adapter)
+        result = await discover_sla_direct(
+            request.tableFqn,
+            adapter,
+            pipeline_stack_id=request.stackId,
+            organization_id=request.organizationId,
+        )
     except Exception as e:
         logger.error("[SLA Discovery] Direct discovery failed for %s: %s", request.tableFqn, e)
         raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
@@ -478,7 +487,12 @@ async def discover_direct_bulk_sla(request: BulkDirectDiscoveryRequest):
                     skipped_reason=f"Failed to connect to {platform}",
                 )
             try:
-                result = await discover_sla_direct(table_fqn, adapter)
+                result = await discover_sla_direct(
+                    table_fqn,
+                    adapter,
+                    pipeline_stack_id=request.stackId,
+                    organization_id=request.organizationId,
+                )
                 return NodeDiscoveryResponse(
                     node_fqn=result.node_fqn,
                     warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
