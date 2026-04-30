@@ -42,11 +42,15 @@ export async function POST(request: Request) {
       mode = 'ask',
       stream = false,
       confirmed_tool_ids,
+      clarification_request_id, // Optional: pinned ContextRequest id (clarify mode)
     } = body;
 
     const effectivePipelineStackId = pipelineStackId || pipeline_stack_id;
 
-    if (!message) {
+    // Clarify mode with a pinned context request can send an empty initial
+    // message — the backend looks up the request and asks the user the
+    // first question. All other modes still require a message.
+    if (!message && !(mode === 'clarify' && clarification_request_id)) {
       return NextResponse.json({ error: 'Message required' }, { status: 400 });
     }
 
@@ -193,6 +197,7 @@ export async function POST(request: Request) {
         mode, // Interaction mode (ask, debug, plan, create, etc.)
         integrations, // Pass integrations from pipeline nodes
         lineage: lineageData, // Pass pre-fetched lineage data
+        clarification_request_id: clarification_request_id || null,
       }),
     });
 
@@ -403,6 +408,7 @@ async function handleStreamingChat(
     mode = 'ask',
     confirmed_tool_ids,
     pending_tool_call,
+    clarification_request_id, // Optional: pinned ContextRequest id (clarify mode)
   } = body;
 
   // Parse __action:* messages
@@ -563,6 +569,7 @@ async function handleStreamingChat(
       confirmed_tool_ids: confirmed_tool_ids || [],
       pending_tool_call: pending_tool_call || null,
       confirmed_artifacts: confirmedArtifacts,
+      clarification_request_id: clarification_request_id || null,
     }),
   });
 
