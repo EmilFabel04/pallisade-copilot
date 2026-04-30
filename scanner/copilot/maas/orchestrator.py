@@ -47,6 +47,28 @@ def _args_hash(tool_name: str, args: Dict[str, Any]) -> str:
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
+# Reasoning-effort ladder. Higher tiers spend more reasoning tokens for
+# better quality; the orchestrator escalates one tier on verifier failure.
+# This only meaningfully affects specialists (SQL, Logs) — the GPT-5.4
+# narration path runs Chat Completions with tools, where reasoning_effort
+# is silently dropped (see commit 3700f2b) until the /v1/responses
+# migration lands.
+EFFORT_LADDER = ["minimal", "low", "medium", "high"]
+
+
+def _next_effort(current: Optional[str]) -> Optional[str]:
+    """Return the next-higher effort tier, or None if already at the top.
+
+    ``None``/unknown values jump to ``medium`` rather than the bottom of
+    the ladder — when no effort was configured we have no signal that the
+    floor is the right starting point for the retry.
+    """
+    if current is None or current not in EFFORT_LADDER:
+        return "medium"
+    idx = EFFORT_LADDER.index(current)
+    return EFFORT_LADDER[idx + 1] if idx < len(EFFORT_LADDER) - 1 else None
+
+
 class MAASOrchestrator:
     """
     Multi-Agent Architecture System orchestrator.
@@ -318,6 +340,7 @@ class MAASOrchestrator:
                         warehouse_type=warehouse_filter or "bigquery",
                         available_tools=context.available_tools,
                         available_warehouses=available_warehouses,
+                        pipeline_id=context.pipeline_stack_id,
                     )
                     latency = int((time.monotonic() - start_time) * 1000)
                     sql_preview = (
@@ -328,10 +351,26 @@ class MAASOrchestrator:
                         f"latency={latency}ms sql={sql_preview}"
                     )
                     vr = await self._verify_specialist(spec_name, result, context)
+                    escalated_to: Optional[str] = None
                     if not vr["passed"]:
+                        # Escalate reasoning_effort one tier for the retry.
+                        # Specialists run JSON-only, no tools, so the
+                        # effort param actually flows through (unlike the
+                        # narration path on Chat Completions). At-most-one
+                        # escalation per call keeps cost bounded.
+                        current_effort = (
+                            self._clients[spec_name].reasoning_effort
+                            if spec_name in self._clients
+                            else None
+                        )
+                        escalated_to = _next_effort(current_effort)
                         logger.warning(
                             f"[MAAS] {spec_name} failed verification: "
                             f"{vr['errors']}, retrying"
+                            + (
+                                f" with reasoning_effort={escalated_to}"
+                                if escalated_to else ""
+                            )
                         )
                         result = await specialist.call(
                             evidence=evidence_blob,
@@ -340,6 +379,8 @@ class MAASOrchestrator:
                             warehouse_type=warehouse_filter or "bigquery",
                             available_tools=context.available_tools,
                             available_warehouses=available_warehouses,
+                            pipeline_id=context.pipeline_stack_id,
+                            reasoning_effort=escalated_to,
                         )
                         vr = await self._verify_specialist(spec_name, result, context)
                     return {
@@ -350,6 +391,7 @@ class MAASOrchestrator:
                         "vr": vr,
                         "latency": latency,
                         "error": None,
+                        "escalated_to": escalated_to,
                     }
                 except SpecialistError as e:
                     latency = int((time.monotonic() - start_time) * 1000)
@@ -415,6 +457,7 @@ class MAASOrchestrator:
                         f"({conf:.2f}); warnings={vr.get('warnings', [])}"
                     )
 
+                escalated_to = outcome.get("escalated_to")
                 if vr["passed"]:
                     specialist_results[spec_name] = {
                         "result": result,
@@ -424,6 +467,7 @@ class MAASOrchestrator:
                         specialist=spec_name,
                         latency_ms=latency,
                         success=True,
+                        escalated_to=escalated_to,
                     ))
                 else:
                     # Both attempts failed verification. Drop the result and
@@ -439,6 +483,7 @@ class MAASOrchestrator:
                         latency_ms=latency,
                         success=False,
                         error=f"verification failed: {vr.get('errors', [])}",
+                        escalated_to=escalated_to,
                     ))
                     continue
 
@@ -605,6 +650,8 @@ class MAASOrchestrator:
                                 query=query,
                                 max_retries=0,
                                 warehouse_type=warehouse_filter or "bigquery",
+                                pipeline_id=context.pipeline_stack_id,
+                                repair_mode=True,
                             )
                             vr = await self._verify_specialist(
                                 "sql", repaired, context

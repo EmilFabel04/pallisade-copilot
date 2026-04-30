@@ -5,7 +5,7 @@ Executes tools against the appropriate integration adapters.
 Routes tool calls to the correct backend based on user's integrations.
 """
 
-from typing import Dict, List, Optional, Any, Set, Union
+from typing import Dict, List, Optional, Any, Set, Tuple, Union
 import logging
 import json
 import asyncio
@@ -196,8 +196,11 @@ class ToolExecutor:
         self._adapters: Dict[str, Any] = {}
         self._drivers: Dict[str, Any] = {}  # integration_type -> IntegrationDriver instance
         # In-session cache of anomaly metric values.
-        # Key: "table_fqn.column.metric" → list of floats collected across runs.
-        self._anomaly_baselines: Dict[str, List[float]] = {}
+        # Key: (pipeline_stack_id, "table_fqn.column.metric") → list of floats
+        # collected across runs. Pipeline_stack_id is in the key so a future
+        # refactor that pools ToolExecutor instances across pipelines cannot
+        # leak baselines from one pipeline profile to another.
+        self._anomaly_baselines: Dict[Tuple[str, str], List[float]] = {}
         self._initialize_adapters()
         self._initialize_drivers()
     
@@ -4380,7 +4383,8 @@ class ToolExecutor:
         # -----------------------------------------------------------------
         if monitor_type == "anomaly" and not config.get("timestamp_column"):
             baseline_key = f"{table_fqn}.{config.get('column', '')}.{config.get('metric', 'avg')}"
-            cached = self._anomaly_baselines.get(baseline_key, [])
+            pipeline_bucket = self.context.pipeline_stack_id or "_default"
+            cached = self._anomaly_baselines.get((pipeline_bucket, baseline_key), [])
             if cached and not config.get("historical_values"):
                 config["historical_values"] = cached
 
@@ -4406,9 +4410,11 @@ class ToolExecutor:
         # -----------------------------------------------------------------
         if monitor_type == "anomaly" and result.value is not None:
             baseline_key = f"{table_fqn}.{config.get('column', '')}.{config.get('metric', 'avg')}"
-            if baseline_key not in self._anomaly_baselines:
-                self._anomaly_baselines[baseline_key] = []
-            self._anomaly_baselines[baseline_key].append(float(result.value))
+            pipeline_bucket = self.context.pipeline_stack_id or "_default"
+            cache_key = (pipeline_bucket, baseline_key)
+            if cache_key not in self._anomaly_baselines:
+                self._anomaly_baselines[cache_key] = []
+            self._anomaly_baselines[cache_key].append(float(result.value))
 
         logger.info(
             f"[Monitor] {monitor_type} result for {table_fqn}: "

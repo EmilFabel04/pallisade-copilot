@@ -92,6 +92,10 @@ class SpecialistInvocation(BaseModel):
     success: bool
     retry_count: int = 0
     error: Optional[str] = None
+    # Set when the verifier-failure retry escalated reasoning_effort one
+    # tier above the original. Useful for trace inspection and for
+    # measuring how often escalation happens in production.
+    escalated_to: Optional[str] = None
 
 
 class ToolCallRecord(BaseModel):

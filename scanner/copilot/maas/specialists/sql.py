@@ -6,6 +6,26 @@ from pydantic import BaseModel
 from .base import BaseSpecialist
 from ..schemas import SQLResponse
 
+
+# Prepended to the system prompt only when the orchestrator is repairing
+# a query that already failed at execution. The cue tells the model to
+# attach its fix to the specific error rather than regenerate from
+# scratch — without this, the second attempt often reproduces the same
+# broken SQL because the prompt is identical to the first.
+REPAIR_MODE_PREFIX = """REPAIR MODE — you are repairing a SQL query that failed at execution.
+
+The PREVIOUS SQL and the warehouse's exact error are appended to the evidence below. Your job:
+1. Identify the root cause from the error message.
+2. Make the MINIMAL change that fixes that specific error. Do not rewrite the query structure unless the error proves the structure is wrong.
+3. Common failure modes to check first:
+   - Column not found → use a column that exists in the schema.
+   - Type mismatch → add SAFE_CAST / TRY_CAST per dialect.
+   - Function not found → use the dialect-correct equivalent.
+   - Wrong warehouse syntax → confirm the `warehouse` field matches the dialect.
+4. Your repair must differ from the previous attempt in at least one substantive way. Do not return the same SQL.
+
+"""
+
 # Dialect-specific rules injected into the specialist prompt.
 # Only the target warehouse's rules are included — keeps prompt small.
 DIALECT_RULES: Dict[str, str] = {
@@ -101,6 +121,9 @@ DIALECT RULES:
 
 OUTPUT FORMAT (strict JSON):
 {schema_json}"""
+
+        if kwargs.get("repair_mode"):
+            system_prompt = REPAIR_MODE_PREFIX + system_prompt
 
         return [
             {"role": "system", "content": system_prompt},

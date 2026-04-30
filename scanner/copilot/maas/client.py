@@ -172,17 +172,25 @@ class RunPodClient:
         temperature: float = 0.0,
         max_tokens: int = 2048,
         response_format: Optional[Dict[str, str]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Call the OpenAI-compatible chat completions endpoint.
 
         Returns dict with 'content' (JSON-extracted), 'usage', 'latency_ms'.
         Raises RunPodUnavailableError if circuit is open or retries exhausted.
+
+        ``reasoning_effort`` (kwarg, optional): per-call override of the
+        instance default. Used by the orchestrator to escalate effort on a
+        retry without mutating the shared client. ``None`` falls back to
+        ``self.reasoning_effort``.
         """
         if not self._circuit.can_attempt():
             raise RunPodUnavailableError(
                 f"Circuit breaker open for {self.base_url}"
             )
+
+        effective_effort = reasoning_effort or self.reasoning_effort
 
         payload: Dict[str, Any] = {
             "model": self.model_name,
@@ -195,8 +203,8 @@ class RunPodClient:
             # under "medium" effort. Some reasoning models reject custom
             # temperature; safer to omit it and let the model use its default.
             payload["max_completion_tokens"] = max(max_tokens, 4096)
-            if self.reasoning_effort:
-                payload["reasoning_effort"] = self.reasoning_effort
+            if effective_effort:
+                payload["reasoning_effort"] = effective_effort
         else:
             payload["temperature"] = temperature
             payload["max_tokens"] = max_tokens
