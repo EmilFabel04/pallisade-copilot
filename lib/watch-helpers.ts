@@ -104,15 +104,19 @@ export async function createWatchInTransaction(
 
   const nextRunAt = schedule ? computeNextRun(schedule, timezone) : undefined;
 
-  // Dedup: reuse existing group with same anchor if it exists in this plan
+  // Dedup: groups are per-asset (per anchorFqn) regardless of plan
+  // affiliation. If a group already exists for this asset, attach the new
+  // monitors to it instead of creating a duplicate. The previous logic
+  // scoped dedup by monitoringPlanId, which meant every new plan creation
+  // produced a fresh group for assets that already had one.
   let group = anchorFqn
     ? await tx.monitorGroup.findFirst({
         where: {
           organizationId,
           pipelineStackId,
           anchorFqn,
-          ...(monitoringPlanId ? { monitoringPlanId } : {}),
         },
+        orderBy: { createdAt: 'asc' },  // prefer the oldest existing group
       })
     : null;
 
