@@ -812,14 +812,36 @@ def _try_emit_timestamp_clarification(
     except ImportError:
         from scanner.copilot.clarifications.config import CONFIG
 
+    logger.info(
+        "[Clarifications] picker for %s: column=%r confidence=%.2f candidates=%s "
+        "(threshold=%.2f, pipeline_stack_id=%s)",
+        table_fqn,
+        pick.column,
+        pick.confidence,
+        pick.candidates,
+        CONFIG.confidence_threshold,
+        pipeline_stack_id,
+    )
+
     if not pipeline_stack_id:
+        logger.info("[Clarifications] skip emit for %s: no pipeline_stack_id", table_fqn)
         return None
     if pick.confidence >= CONFIG.confidence_threshold:
+        logger.info(
+            "[Clarifications] skip emit for %s: confidence %.2f ≥ threshold %.2f",
+            table_fqn, pick.confidence, CONFIG.confidence_threshold,
+        )
         return None
     if not pick.candidates:
         # Nothing to disambiguate between — the user can't pick a column
         # that doesn't exist. Fall back silently.
+        logger.info("[Clarifications] skip emit for %s: no candidates", table_fqn)
         return None
+
+    logger.info(
+        "[Clarifications] emitting timestamp_choice for %s (confidence=%.2f, %d candidates)",
+        table_fqn, pick.confidence, len(pick.candidates),
+    )
 
     return _call_nextjs_create_context_request(
         pipeline_stack_id=pipeline_stack_id,
