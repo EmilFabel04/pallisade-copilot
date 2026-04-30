@@ -39,3 +39,46 @@ def test_parse_reply_detects_investigate():
 
 def test_parse_reply_returns_none_on_ambiguous():
     assert parse_reply("hmm") is None
+
+
+from copilot.clarifications.kinds.failure_review.conventions import on_resolve
+
+
+class _FakeReq:
+    def __init__(self):
+        self.id = "r1"
+        self.pipelineStackId = "ps1"
+        self.kind = "failure_review"
+        self.scopeType = "node"
+        self.scopeRef = "raw.orders"
+        self.payload = {
+            "node_fqn": "raw.orders",
+            "metric": "row_count",
+            "observed": 8200,
+            "expected_range": [10000, 12000],
+            "z_score": -2.1,
+            "sample_window": "7d",
+        }
+
+
+class _FakeDB:
+    def __init__(self):
+        self.conventions = {}
+        self.overrides = {}
+        self.handed_off_to_debug = []
+
+
+def test_on_resolve_expected_writes_dampening_convention():
+    db = _FakeDB()
+    on_resolve(_FakeReq(), {"disposition": "expected"}, db)
+    conv = db.conventions["ps1"]
+    assert "dampening" in conv
+    rules = conv["dampening"]["rules"]
+    assert any(r["node"] == "raw.orders" and r["metric"] == "row_count" for r in rules)
+
+
+def test_on_resolve_investigate_emits_debug_handoff():
+    db = _FakeDB()
+    on_resolve(_FakeReq(), {"disposition": "investigate"}, db)
+    assert len(db.handed_off_to_debug) == 1
+    assert db.handed_off_to_debug[0]["node_fqn"] == "raw.orders"
