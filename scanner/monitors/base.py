@@ -20,6 +20,7 @@ class MonitorStatus(str, Enum):
     PASS = "pass"
     WARN = "warn"
     FAIL = "fail"
+    BORDERLINE = "borderline"
     ERROR = "error"
     SKIPPED = "skipped"
 
@@ -44,6 +45,10 @@ class MonitorResult:
     @property
     def is_passing(self) -> bool:
         return self.status in (MonitorStatus.PASS, MonitorStatus.SKIPPED)
+
+    @property
+    def is_borderline(self) -> bool:
+        return self.status == MonitorStatus.BORDERLINE
 
     def to_dict(self) -> Dict[str, Any]:
         return {

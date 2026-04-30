@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
+from .borderline import classify_severity
 from .stats import score_anomaly, detrend_linear, build_confidence_info
 
 
@@ -461,6 +462,50 @@ class VolumeMonitor(BaseMonitor):
             ),
         }
 
+        # Borderline classification: between the noise floor (1.5σ default)
+        # and the configured anomaly threshold. Emits a failure_review
+        # ContextRequest so the user can mark it expected (dampen) or
+        # investigate.
+        severity = classify_severity(
+            z_score=score.z_score,
+            sensitivity_threshold=score.threshold_used,
+        )
+
+        if score.baseline_stddev > 0:
+            range_min = round(
+                raw_mean - score.threshold_used * score.baseline_stddev, 0
+            )
+            range_max = round(
+                raw_mean + score.threshold_used * score.baseline_stddev, 0
+            )
+        else:
+            range_min = raw_mean
+            range_max = raw_mean
+
+        if severity == "borderline" and not score.is_anomaly:
+            self._emit_borderline_failure_review(
+                target_fqn=target_fqn,
+                metric="row_count",
+                observed=float(latest),
+                expected_range=[float(range_min), float(range_max)],
+                z_score=float(score.z_score),
+            )
+            details["severity"] = "borderline"
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target_fqn,
+                status=MonitorStatus.BORDERLINE,
+                value=float(latest),
+                threshold=score.threshold_used,
+                expected_range={"min": range_min, "max": range_max},
+                message=(
+                    f"Volume anomaly within noise band "
+                    f"(z={score.z_score:.2f}, threshold={score.threshold_used:.2f}); "
+                    f"awaiting user review."
+                ),
+                details=details,
+            )
+
         if score.is_anomaly:
             # Confidence-based downgrade
             status = MonitorStatus.FAIL
@@ -473,16 +518,7 @@ class VolumeMonitor(BaseMonitor):
                 status=status,
                 value=float(latest),
                 threshold=score.threshold_used,
-                expected_range={
-                    "min": round(
-                        raw_mean - score.threshold_used * score.baseline_stddev, 0
-                    ),
-                    "max": round(
-                        raw_mean + score.threshold_used * score.baseline_stddev, 0
-                    ),
-                }
-                if score.baseline_stddev > 0
-                else {"min": raw_mean, "max": raw_mean},
+                expected_range={"min": range_min, "max": range_max},
                 message=(
                     f"Latest daily volume {latest:,} is anomalous "
                     f"({score.method_used}: {score.z_score:.2f}, "
@@ -504,6 +540,55 @@ class VolumeMonitor(BaseMonitor):
             ),
             details=details,
         )
+
+    def _emit_borderline_failure_review(
+        self,
+        *,
+        target_fqn: str,
+        metric: str,
+        observed: float,
+        expected_range: List[float],
+        z_score: float,
+    ) -> None:
+        """Best-effort: POST a failure_review ContextRequest via Next.js.
+
+        Reads ``pipeline_stack_id`` / ``organization_id`` from the monitor
+        config (passed in by the executor / API layer). If they're missing,
+        the helper short-circuits to None and the borderline status still
+        propagates — the user simply doesn't get a clarification chip.
+        """
+        pipeline_stack_id = self.config.get("pipeline_stack_id")
+        organization_id = self.config.get("organization_id")
+        if not pipeline_stack_id:
+            return
+        try:
+            try:
+                from copilot.clarifications.emit import emit_via_nextjs
+            except ImportError:
+                from scanner.copilot.clarifications.emit import emit_via_nextjs  # type: ignore
+
+            emit_via_nextjs(
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+                kind="failure_review",
+                scope_type="node",
+                scope_ref=target_fqn,
+                payload={
+                    "node_fqn": target_fqn,
+                    "metric": metric,
+                    "observed": observed,
+                    "expected_range": expected_range,
+                    "z_score": z_score,
+                    "sample_window": self.config.get(
+                        "history_window",
+                        f"{self.lookback_days}d",
+                    ),
+                },
+                priority="high",
+            )
+        except Exception:
+            # Clarification emit is best-effort; never break monitor evaluation.
+            return
 
     def _evaluate_partitioned(
         self,

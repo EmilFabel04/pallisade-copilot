@@ -850,66 +850,25 @@ def _call_nextjs_create_context_request(
     payload: Dict[str, Any],
     priority: str = "normal",
 ) -> Optional[Dict[str, Any]]:
-    """POST to Next.js /api/context-requests/create using internal-secret auth.
+    """Thin wrapper over the shared emit helper for backwards-compat.
 
-    Synchronous httpx — discovery itself is sync inside an async wrapper.
-    Failures are swallowed: clarification emission is best-effort and
-    must never break SLA discovery.
+    The body lives in ``copilot.clarifications.emit.emit_via_nextjs`` so other
+    FastAPI modules (e.g. monitor evaluators) can reuse it.
     """
     try:
-        import httpx
+        from copilot.clarifications.emit import emit_via_nextjs
     except ImportError:
-        logger.debug("[Clarifications] httpx unavailable; skipping emit")
-        return None
+        from scanner.copilot.clarifications.emit import emit_via_nextjs  # type: ignore
 
-    base = (
-        os.environ.get("NEXTJS_BASE_URL")
-        or os.environ.get("INTERNAL_NEXTJS_URL")
-        or "http://localhost:3000"
+    return emit_via_nextjs(
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+        kind=kind,
+        scope_type=scope_type,
+        scope_ref=scope_ref,
+        payload=payload,
+        priority=priority,
     )
-    secret = os.environ.get("INTERNAL_API_SECRET", "pallisade-internal")
-    if not organization_id:
-        logger.debug(
-            "[Clarifications] no organization_id available for table_fqn=%s; skipping emit",
-            scope_ref,
-        )
-        return None
-
-    body = {
-        "pipelineStackId": pipeline_stack_id,
-        "kind": kind,
-        "scopeType": scope_type,
-        "scopeRef": scope_ref,
-        "payload": payload,
-        "priority": priority,
-    }
-
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(
-                f"{base}/api/context-requests/create",
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Internal-Secret": secret,
-                    "X-Organization-Id": organization_id,
-                },
-                json=body,
-            )
-        if resp.status_code >= 400:
-            logger.warning(
-                "[Clarifications] create failed (%s): %s",
-                resp.status_code,
-                resp.text[:200],
-            )
-            return None
-        data = resp.json()
-        return {
-            "context_request_id": data.get("id"),
-            "suppressed": bool(data.get("suppressed")),
-        }
-    except Exception as exc:
-        logger.debug("[Clarifications] create POST raised: %s", exc)
-        return None
 
 
 def _compute_quality(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
