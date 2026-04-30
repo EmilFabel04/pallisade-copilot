@@ -27,9 +27,9 @@ This is **not** an ingestion platform. Pallisade does not move, load, transform,
                            │  POST /api/integrations
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  CustomSourceDriver  (scanner/drivers/other/custom_source_      │
+│  CustomSourceDriver  (scanner/drivers/source/custom_source_     │
 │   driver.py)                                                    │
-│   id() = "custom_source"   layer = OTHER                        │
+│   id() = "custom_source"   layer = SOURCE                       │
 │   integration_type = "CUSTOM_SOURCE"   graph_domain = DATA_PLANE│
 │   validate_config / test_connection / extract_metadata          │
 │   _extract_lineage_impl  (uses "lands_in" hint)                 │
@@ -53,17 +53,23 @@ This is **not** an ingestion platform. Pallisade does not move, load, transform,
 
 ## New components
 
-### 1. `IntegrationType.CUSTOM_SOURCE` (Prisma enum)
+### 1. New `IntegrationLayer.SOURCE` value
 
-Add `CUSTOM_SOURCE` under a new `OTHER (Layer: OTHER)` group in `prisma/schema.prisma:1754`. No schema migration needed beyond the enum addition — Custom Source uses the existing `Integration.config` JSON column for everything, with the structure defined below.
+Add a new value `SOURCE = "SOURCE"` to the `IntegrationLayer` enum in `scanner/drivers/base.py:38`. Position it first in the enum (it's the leftmost layer in any data flow). No existing layer fits an "operational source" — `WAREHOUSE` implies a queryable SQL store, `INGESTION` implies a connector tool that *moves* data — so `SOURCE` is genuinely new taxonomy, not a renaming.
 
-### 2. `CustomSourceDriver` (`scanner/drivers/other/custom_source_driver.py`)
+This unblocks future first-class source integrations (Salesforce, HubSpot, custom CRMs, other vertical-SaaS / IoT portals) without further taxonomy work.
 
-Implements `IntegrationDriver` from `scanner/drivers/base.py`. Replaces nothing; composes over the new `HttpProbeAdapter`.
+### 2. `IntegrationType.CUSTOM_SOURCE` (Prisma enum)
+
+Add `CUSTOM_SOURCE` under a new `SOURCE (Layer: SOURCE)` group in `prisma/schema.prisma:1754`. No schema migration needed beyond the enum addition — Custom Source uses the existing `Integration.config` JSON column for everything, with the structure defined below.
+
+### 3. `CustomSourceDriver` (`scanner/drivers/source/custom_source_driver.py`)
+
+Implements `IntegrationDriver` from `scanner/drivers/base.py`. Replaces nothing; composes over the new `HttpProbeAdapter`. Lives in a new `scanner/drivers/source/` package (created alongside the existing `warehouse/`, `ingestion/`, etc.).
 
 - `id() = "custom_source"`
 - `integration_type() = "CUSTOM_SOURCE"`
-- `layer() = IntegrationLayer.OTHER`
+- `layer() = IntegrationLayer.SOURCE`
 - `graph_domain() = GraphDomain.DATA_PLANE`
 - `capabilities()`: `can_extract_metadata=True`, `can_extract_lineage=True`, `can_health_check=True`, `supported_monitors=["freshness", "volume", "null_check", "schema_change"]`
 - `validate_config()`: required fields are `name`, `base_url`, `auth.kind`, `datasets[].endpoint`, `datasets[].timestamp_column`. URL must be `https://` (V1 only allows TLS).
@@ -72,7 +78,7 @@ Implements `IntegrationDriver` from `scanner/drivers/base.py`. Replaces nothing;
 - `_extract_lineage_impl()`: emits one `LineageNode` per dataset. If `dataset.lands_in` is set, emits a `LineageEdge` from the dataset → the named warehouse FQN (the warehouse-side node already exists from the existing lineage extraction).
 - `recommended_monitors()`: `["freshness", "volume", "null_check", "schema_change"]`.
 
-### 3. `HttpProbeAdapter` (`scanner/adapters/http_probe.py`)
+### 4. `HttpProbeAdapter` (`scanner/adapters/http_probe.py`)
 
 A new lightweight adapter family — *deliberately not* a `DatabaseAdapter` subclass, because the SQL surface (quote_identifier, get_random_sample_sql, etc.) doesn't apply. Sits alongside `DatabaseAdapter` in `scanner/adapters/`.
 
@@ -109,7 +115,7 @@ Implementation:
 
 Failure modes (HTTP 4xx/5xx, auth failure, timeout, malformed JSON, schema mismatch) raise `ProbeError` with a structured `code` field consumed by the alert layer.
 
-### 4. Probe scheduler hook (`scanner/scheduler/`)
+### 5. Probe scheduler hook (`scanner/scheduler/`)
 
 Reuses the existing scheduler. Adds a new task type `custom_source_probe` whose payload is `{integration_id, dataset_id}`. The scheduler service picks up due tasks and dispatches them to a worker that:
 
@@ -121,7 +127,7 @@ Reuses the existing scheduler. Adds a new task type `custom_source_probe` whose 
 
 Schedule is configurable per integration with fixed presets only for V1: **{hourly, every 6 hours, daily, weekly}**. Cron expressions deferred.
 
-### 5. Wizard UI (`app/(dashboard)/integrations/connect/custom-source/`)
+### 6. Wizard UI (`app/(dashboard)/integrations/connect/custom-source/`)
 
 Five-step Next.js wizard mirroring the existing Snowflake / BigQuery wizards:
 
@@ -131,7 +137,7 @@ Five-step Next.js wizard mirroring the existing Snowflake / BigQuery wizards:
 4. **Schedule & lands-in** — schedule preset, plus optional `lands_in` field per dataset (warehouse FQN where the customer's own pipeline writes this data, e.g. `snowflake.raw.water_meters`). Used for auto-edge creation in lineage.
 5. **Review** — config summary; "Save & test connection" button calls `validate_config` + `test_connection` and shows results inline.
 
-### 6. Configuration JSON shape
+### 7. Configuration JSON shape
 
 Stored in the existing `Integration.config` JSON column.
 
@@ -223,7 +229,7 @@ The monitor UI does not need to know the source is a custom source. The existing
 
 The writing-plans phase should structure work in this order, each step shippable independently:
 
-1. **Prisma enum + secret-store wiring** — the smallest possible change that lets the integration exist in the DB.
+1. **IntegrationLayer.SOURCE enum value + Prisma `CUSTOM_SOURCE` enum + secret-store wiring** — the smallest possible change that lets the integration exist in the taxonomy and DB.
 2. **`HttpProbeAdapter` + unit tests** — the core data-handling logic in isolation, no driver, no UI.
 3. **`CustomSourceDriver` + driver tests** — composes over the adapter, registered in the driver loader.
 4. **Scheduler probe-task type + worker** — wires the driver into the existing scheduler.
