@@ -146,6 +146,15 @@ export async function createWatchInTransaction(
         createdBy: userId,
       },
     });
+  } else if (!group.enabled) {
+    // Reusing an existing group that was disabled in the past. The user is
+    // actively adding new monitors → re-enable so the group's toggle reflects
+    // intent. Without this the new monitors land in a group that still
+    // shows as off.
+    group = await tx.monitorGroup.update({
+      where: { id: group.id },
+      data: { enabled: true },
+    });
   }
 
   const createdMonitors = [];

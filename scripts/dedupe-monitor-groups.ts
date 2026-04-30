@@ -32,6 +32,7 @@ interface DupeSet {
   pipelineStackId: string;
   anchorFqn: string;
   groupIds: string[]; // ordered: [winner, ...losers]
+  anyEnabled: boolean; // true if any group in the set is currently enabled
 }
 
 async function findDuplicateSets(): Promise<DupeSet[]> {
@@ -45,6 +46,7 @@ async function findDuplicateSets(): Promise<DupeSet[]> {
       organizationId: true,
       pipelineStackId: true,
       anchorFqn: true,
+      enabled: true,
     },
   });
 
@@ -54,12 +56,14 @@ async function findDuplicateSets(): Promise<DupeSet[]> {
     const existing = buckets.get(key);
     if (existing) {
       existing.groupIds.push(g.id);
+      existing.anyEnabled = existing.anyEnabled || g.enabled;
     } else {
       buckets.set(key, {
         organizationId: g.organizationId,
         pipelineStackId: g.pipelineStackId,
         anchorFqn: g.anchorFqn!,
         groupIds: [g.id],
+        anyEnabled: g.enabled,
       });
     }
   }
@@ -108,6 +112,25 @@ async function main() {
         console.log(`  → would reassign ${orphanMonitors} monitors to winner`);
       }
       totalMonitorsReassigned += orphanMonitors;
+    }
+
+    // If any group in the set was enabled, ensure the winner is too.
+    // Without this, merging a fresh enabled duplicate into an old disabled
+    // group leaves the toggle visually off even though monitors are running.
+    const winnerCurrent = await prisma.monitorGroup.findUnique({
+      where: { id: winnerId },
+      select: { enabled: true },
+    });
+    if (dupe.anyEnabled && winnerCurrent && !winnerCurrent.enabled) {
+      if (apply) {
+        await prisma.monitorGroup.update({
+          where: { id: winnerId },
+          data: { enabled: true },
+        });
+        console.log(`  → re-enabled winner (any duplicate was enabled)`);
+      } else {
+        console.log(`  → would re-enable winner (any duplicate was enabled)`);
+      }
     }
 
     // Delete losers (they're empty now, or we just emptied them).
