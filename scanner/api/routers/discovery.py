@@ -205,7 +205,13 @@ async def discover_node_sla(
         )
 
     try:
-        result = await discover_sla_profile(node, store.graph, adapter)
+        result = await discover_sla_profile(
+            node,
+            store.graph,
+            adapter,
+            pipeline_stack_id=stack_id,
+            organization_id=org_id,
+        )
     except Exception as e:
         logger.error("[SLA Discovery] On-demand discovery failed for %s: %s", node.fqn, e)
         raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
@@ -325,7 +331,13 @@ async def discover_bulk_sla(
                 # run in thread pool to avoid blocking the event loop
                 result = await asyncio.to_thread(
                     asyncio.run,
-                    discover_sla_profile(node, store.graph, adapter),
+                    discover_sla_profile(
+                        node,
+                        store.graph,
+                        adapter,
+                        pipeline_stack_id=stack_id,
+                        organization_id=org_id,
+                    ),
                 )
                 return NodeDiscoveryResponse(
                     node_fqn=result.node_fqn,
