@@ -13,16 +13,23 @@ from pathlib import Path
 
 import structlog
 
-# Load environment variables from .env file (parent directory)
+# Load environment variables from .env files.
+# scanner/.env is authoritative for backend API keys (MAAS_*, OPENAI_API_KEY,
+# ANTHROPIC_API_KEY) — those belong to the Pallisade project and must win over
+# personal/dev keys that may live in the repo-root .env or in the launcher
+# shell. We load scanner/.env with override=True so it replaces any pre-set
+# values; the repo-root .env is loaded after with override=False to fill in
+# any vars scanner/.env doesn't define.
 try:
     from dotenv import load_dotenv
-    # Try multiple locations for .env
-    env_paths = [
-        Path(__file__).parent.parent.parent / ".env",  # /scanner/../.env
-        Path(__file__).parent.parent / ".env",  # /scanner/.env
+    scanner_env = Path(__file__).parent.parent / ".env"
+    if scanner_env.exists():
+        load_dotenv(scanner_env, override=True)
+    fallback_paths = [
+        Path(__file__).parent.parent.parent / ".env",   # repo-root .env (fallback)
         Path.cwd() / ".env",
     ]
-    for env_path in env_paths:
+    for env_path in fallback_paths:
         if env_path.exists():
             load_dotenv(env_path, override=False)
 except ImportError:
