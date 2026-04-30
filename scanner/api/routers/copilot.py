@@ -62,6 +62,14 @@ class ChatRequest(BaseModel):
     mode: str = Field("ask", description="Interaction mode: ask, debug, plan, create, bundle, explain, suggest")
     integrations: Optional[List[IntegrationData]] = Field(None, description="User's pipeline integrations")
     lineage: Optional[LineageData] = Field(None, description="Pre-fetched lineage data from database")
+    clarification_request_id: Optional[str] = Field(
+        None,
+        description="Pinned ContextRequest id when running in clarify mode (clarification layer V1.0)",
+    )
+    clarification_request: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Inline ContextRequest row (id, kind, payload, scopeType, scopeRef, ...) when running in clarify mode. Next.js loads the row from Prisma and forwards it so the FastAPI process — which has no Prisma client — can render the kind-specific prompt fragment.",
+    )
 
 
 class PendingToolCall(BaseModel):
@@ -193,6 +201,14 @@ async def chat(
         except Exception as e:
             logger.debug(f"[Copilot] Engine store not available: {e}")
 
+        # Hydrate the ContextRequest payload for clarify mode. Next.js owns the
+        # Prisma client and forwards the full row inline; if only the id was
+        # passed (e.g. an older client), we still attach a stub so the LLM
+        # tool layer can correlate the answer back to the request id.
+        clarification_payload = request.clarification_request
+        if clarification_payload is None and request.clarification_request_id:
+            clarification_payload = {"id": request.clarification_request_id}
+
         # Build context with mode and intent
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
@@ -207,6 +223,7 @@ async def chat(
             lineage_data=request.lineage.model_dump() if request.lineage else None,
             engine_graph=engine_graph,
             intent_result=intent_result,
+            clarification_request=clarification_payload,
         )
         context.base_url = os.environ.get("NEXTJS_BASE_URL", "http://localhost:3000")
         context.auth_token = raw_request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -315,6 +332,11 @@ async def chat_stream(
         except Exception:
             pass
 
+        # Hydrate the ContextRequest payload for clarify mode (see /chat above).
+        clarification_payload = request.clarification_request
+        if clarification_payload is None and request.clarification_request_id:
+            clarification_payload = {"id": request.clarification_request_id}
+
         context_builder = CopilotContextBuilder()
         context = await context_builder.build_context(
             org_id=principal.organization_id,
@@ -328,6 +350,7 @@ async def chat_stream(
             lineage_data=request.lineage.model_dump() if request.lineage else None,
             engine_graph=engine_graph,
             intent_result=intent_result,
+            clarification_request=clarification_payload,
         )
         context.base_url = os.environ.get("NEXTJS_BASE_URL", "http://localhost:3000")
         context.auth_token = raw_request.headers.get("Authorization", "").replace("Bearer ", "")
