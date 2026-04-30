@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Send, X } from 'lucide-react';
 import { useClarifications } from './ClarificationProvider';
+import { BorderlineFailureCard } from './BorderlineFailureCard';
 
 interface ChatMsg {
   role: 'user' | 'assistant';
@@ -159,6 +160,17 @@ export function ClarificationPopup() {
           </button>
         </div>
       </header>
+
+      {focused?.kind === 'failure_review' && (
+        <div className="px-4 pt-3">
+          <BorderlineFailureCard
+            request={focused}
+            onAnswered={() => {
+              void refresh();
+            }}
+          />
+        </div>
+      )}
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {messages.map((m, i) => (
