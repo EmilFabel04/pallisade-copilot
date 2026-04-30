@@ -103,6 +103,42 @@ def _is_high_stakes(query: str) -> bool:
     return bool(_HIGH_STAKES_PATTERNS.search(query))
 
 
+async def gather_specialists_with_deadline(
+    coros: List[Any],
+    deadline_sec: Optional[float],
+) -> "tuple[Optional[List[Any]], bool]":
+    """Run specialist coroutines under an optional soft deadline.
+
+    Returns ``(outcomes, deadline_exceeded)``:
+
+    * ``deadline_sec`` is None or 0 → behaves like ``asyncio.gather``.
+      Returns ``(outcomes, False)``.
+    * Specialists complete in time → returns ``(outcomes, False)``.
+    * Specialists exceed the deadline → cancels all of them, returns
+      ``(None, True)``. Caller is expected to fall back to a path that
+      doesn't depend on specialist output (today's ``_fallback_stream``).
+
+    Conservative form of Tier-4 item 5 (speculative narration). The
+    full speculative version that runs narration in parallel with
+    specialists has streaming-UX and quality tradeoffs the eval harness
+    is needed to settle; this slice is opt-in via env var and uses the
+    existing fallback so it can ship without those measurements.
+    """
+    if not coros:
+        return [], False
+    gathered = asyncio.gather(*coros)
+    if not deadline_sec:
+        return await gathered, False
+    try:
+        outcomes = await asyncio.wait_for(gathered, timeout=deadline_sec)
+        return outcomes, False
+    except asyncio.TimeoutError:
+        # asyncio.wait_for already cancelled the inner gather; awaiting
+        # the gathered future would raise CancelledError. Caller handles
+        # the fallback path.
+        return None, True
+
+
 class MAASOrchestrator:
     """
     Multi-Agent Architecture System orchestrator.
@@ -480,9 +516,28 @@ class MAASOrchestrator:
                         "error": e,
                     }
 
-            outcomes = await asyncio.gather(*[
-                _call_and_verify(n) for n in spec_plan
-            ]) if spec_plan else []
+            outcomes, deadline_exceeded = await gather_specialists_with_deadline(
+                [_call_and_verify(n) for n in spec_plan],
+                deadline_sec=self.config.specialist_soft_deadline_sec,
+            )
+            if deadline_exceeded:
+                # Soft deadline tripped. Specialists are cancelled; route
+                # through the existing fallback path which narrates from
+                # Phase-1 evidence alone. Trace the reason so latency
+                # tuning has a signal.
+                logger.warning(
+                    f"[MAAS] Specialist soft deadline "
+                    f"({self.config.specialist_soft_deadline_sec}s) exceeded; "
+                    f"falling back to phase-1 narration"
+                )
+                trace.fallback_reason = "specialist_soft_deadline"
+                async for event in self._fallback_stream(
+                    messages, context, confirmed_tool_ids,
+                    pending_tool_call, trace,
+                    evidence_store=evidence_store, query=query,
+                ):
+                    yield event
+                return
 
             # --- Sequential post-processing in plan order ---
             for outcome in outcomes:
