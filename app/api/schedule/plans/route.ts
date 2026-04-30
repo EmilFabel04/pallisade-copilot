@@ -370,6 +370,19 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // After per-asset dedup (lib/watch-helpers.ts), watchResult.group
+      // may be an existing group owned by a different plan (or none) —
+      // those groups keep their original monitoringPlanId. If NONE of the
+      // watches in this request produced a group attached to this plan,
+      // the new plan would appear empty in the plans list. Drop it.
+      const ownedGroupCount = createdGroups.filter(
+        (g) => g.monitoringPlanId === plan.id,
+      ).length;
+      if (ownedGroupCount === 0) {
+        await tx.monitoringPlan.delete({ where: { id: plan.id } });
+        return { plan: null, groups: createdGroups, totalMonitors };
+      }
+
       // Update plan aggregate counts
       await tx.monitoringPlan.update({
         where: { id: plan.id },
@@ -383,10 +396,11 @@ export async function POST(request: NextRequest) {
     }, { maxWait: 15000, timeout: 60000 });
 
     return NextResponse.json({
-      id: result.plan.id,
-      name: result.plan.name,
+      id: result.plan?.id ?? null,
+      name: result.plan?.name ?? null,
       groupCount: result.groups.length,
       totalMonitors: result.totalMonitors,
+      planSkipped: result.plan === null,
     }, { status: 201 });
   } catch (error: any) {
     console.error('[Plans] Create error:', error?.message || error, error?.stack);
