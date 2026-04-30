@@ -131,6 +131,7 @@ def create_app() -> FastAPI:
     from .routers.policies import router as policies_router
     from .routers.discovery import router as discovery_router
     from .routers.drift import router as drift_router
+    from .routers.context_requests import router as context_requests_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -176,6 +177,11 @@ def create_app() -> FastAPI:
 
     # Drift Analysis API
     app.include_router(drift_router, prefix="/api/v1", tags=["Drift Analysis"])
+
+    # Clarification (ContextRequest) API — stateless validation + on_resolve
+    # invocation. Persistence stays in Next.js; see
+    # scanner/api/routers/context_requests.py for the full contract.
+    app.include_router(context_requests_router, prefix="/api/v1", tags=["Clarifications"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 
