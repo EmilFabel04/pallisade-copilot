@@ -124,16 +124,16 @@ class TestBlastRadius:
     def test_blast_radius_structure(self, built_store):
         node_id = list(built_store.graph.nodes.keys())[0]
         result = built_store.blast_radius(node_id)
-        assert "total" in result
+        assert "total_downstream" in result
         assert "by_kind" in result
         assert "by_domain" in result
-        assert isinstance(result["total"], int)
+        assert isinstance(result["total_downstream"], int)
 
     def test_blast_radius_with_filters(self, built_store):
         node_id = list(built_store.graph.nodes.keys())[0]
         filters = Filters(min_confidence=0.5)
         result = built_store.blast_radius(node_id, filters=filters)
-        assert isinstance(result["total"], int)
+        assert isinstance(result["total_downstream"], int)
 
 
 class TestSubgraph:

@@ -204,8 +204,36 @@ class VolumeMonitor(BaseMonitor):
             return self._evaluate_time_series(query_results, target_fqn)
         elif self.partition_column and any("partition_value" in r for r in query_results):
             return self._evaluate_partitioned(query_results, target_fqn)
-        else:
-            return self._evaluate_simple(query_results, target_fqn)
+
+        # Total row count path. min_rows / max_rows are daily-window
+        # thresholds (the SLA discovery, plan templates, and UI all label
+        # them that way) — comparing them against a static total is what
+        # made volume monitoring look broken. Refuse the comparison
+        # explicitly so the misconfiguration is visible instead of
+        # passing every check.
+        if self.min_rows is not None or self.max_rows is not None:
+            return MonitorResult(
+                monitor_type=self.monitor_type,
+                target_fqn=target_fqn,
+                status=MonitorStatus.ERROR,
+                message=(
+                    "Volume monitor has min_rows/max_rows but no "
+                    "time_bucket_column. These thresholds are daily — "
+                    "configure a timestamp column so the check buckets "
+                    "by day, or remove the min/max thresholds."
+                ),
+                details={
+                    "min_rows": self.min_rows,
+                    "max_rows": self.max_rows,
+                    "explanation": (
+                        "Daily thresholds compared to a lifetime total "
+                        "produce meaningless results — gating the check "
+                        "until the timestamp column is set."
+                    ),
+                },
+            )
+
+        return self._evaluate_simple(query_results, target_fqn)
 
     def _evaluate_simple(
         self,

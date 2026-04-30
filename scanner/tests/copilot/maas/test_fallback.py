@@ -33,7 +33,7 @@ class TestMAASConfig:
             config = MAASConfig.from_env()
             assert config.enabled is False
             assert config.sql_model == "specialist-sql"
-            assert config.specialist_timeout == 30.0
+            assert config.specialist_timeout == 90.0
             assert config.orchestrator_model == "gpt-5.4"
 
     def test_from_env_custom(self):

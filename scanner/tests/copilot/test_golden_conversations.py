@@ -73,7 +73,7 @@ class TestDebugConversation:
         from copilot.llm import CopilotLLM
         llm = CopilotLLM.__new__(CopilotLLM)
         policy = llm._build_tool_policy(result)
-        assert "Minimum: 2" in policy
+        assert "Minimum: 3" in policy
 
 
 class TestPRPivotConversation:

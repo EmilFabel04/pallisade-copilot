@@ -132,9 +132,13 @@ class TestDiscoverAssets:
         check_task = next(n for n in task_nodes if n.name == "check_data")
         assert check_task.raw_metadata.get("is_opaque") is True
 
-    def test_empty_dag_files_returns_empty(self, adapter):
+    def test_empty_dag_files_returns_only_pipeline_node(self, adapter):
+        # The adapter always emits a single Airflow pipeline node so the
+        # platform shows up in lineage even before any DAGs are discovered.
+        # Asset-level nodes (DAGs/tasks/tables) should remain empty.
         nodes = adapter.discover_assets({"namespace": "test", "dag_files": {}})
-        assert nodes == []
+        non_pipeline = [n for n in nodes if n.node_type != NodeType.PIPELINE]
+        assert non_pipeline == []
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ export const SLA_FIELD_MAP: SLAFieldMap = {
     min_rows: ['volume', 'minRows'],
     max_rows: ['volume', 'maxRows'],
     growth_rate_threshold: ['volume', 'growthRateThreshold'],
+    time_bucket_column: ['volume', 'timeColumn'],
   },
   OUTLIER_DETECTION: {
     anomaly_threshold: ['anomaly', 'sensitivity'],

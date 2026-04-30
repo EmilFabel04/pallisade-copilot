@@ -211,9 +211,23 @@ class GraphStore:
         ]
 
     def build_graph_from_yaml(self, config_path: str) -> LineageGraph:
-        """Build graph from a YAML config file."""
+        """Build graph from a YAML config file.
+
+        Relative `path:` values inside adapter `params` are resolved against
+        the config file's directory so configs travel with their fixtures
+        regardless of the caller's working directory.
+        """
+        import os
         with open(config_path) as f:
             config = yaml.safe_load(f)
+
+        config_dir = os.path.dirname(os.path.abspath(config_path))
+        for adapter_cfg in config.get("adapters", []) or []:
+            params = adapter_cfg.get("params") or {}
+            path_val = params.get("path")
+            if isinstance(path_val, str) and not os.path.isabs(path_val):
+                params["path"] = os.path.normpath(os.path.join(config_dir, path_val))
+
         return self.build_graph(config)
 
     def canonicalize(self) -> None:

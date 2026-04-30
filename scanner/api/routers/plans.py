@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..auth import ActingPrincipal, require_principal
 from .lineage import _get_engine_store
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ async def list_families(
     anchor_node_id: Optional[str] = Query(None),
     scope_type: Optional[str] = Query(None),
     node_ids: Optional[str] = Query(None, description="Comma-separated node IDs for custom scope"),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Return all monitor family definitions with eligibility for scope."""
     try:
@@ -64,7 +66,7 @@ async def list_families(
 
     scope_nodes = None
     if stack_id:
-        store = _get_engine_store(stack_id)
+        store = _get_engine_store(principal.organization_id, stack_id)
         if store.graph:
             if node_ids:
                 # Custom scope — use explicitly provided node IDs
@@ -93,6 +95,7 @@ async def list_families(
 async def preview_plan(
     request: PlanPreviewRequest,
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Preview what a monitoring plan would create without persisting anything."""
     try:
@@ -100,7 +103,7 @@ async def preview_plan(
     except ImportError:
         from monitors.plan_builder import preview_monitoring_plan
 
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(
             status_code=404,

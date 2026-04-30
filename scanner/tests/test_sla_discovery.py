@@ -141,8 +141,10 @@ class TestComputeFreshness:
         metadata = {"hours_since_update": 0.5, "row_count": 1000}
         result = _compute_freshness(None, "db.schema.table", metadata=metadata)
         assert result is not None
-        assert result["warningHours"] == 1
-        assert result["maxHours"] == 2
+        # Single-snapshot fallback: warning=1.5x, max=2x of observed age,
+        # rounded to 1 decimal — sub-hour values allowed for very fresh tables.
+        assert result["warningHours"] == 0.8
+        assert result["maxHours"] == 1.0
 
     def test_stale_table(self):
         from scanner.lineage.sla_discovery import _compute_freshness
@@ -168,26 +170,175 @@ class TestComputeFreshness:
 # ---------------------------------------------------------------------------
 
 class TestComputeVolume:
+    """Volume discovery is daily-by-definition.
 
-    def test_basic_volume(self):
+    The result is ``enabled: True`` with ``expectedDailyRows``, ``minRows``,
+    ``maxRows``, and ``timeColumn`` only when ≥3 days of history can be
+    bucketed by a timestamp column. Anything else returns ``enabled: False``
+    with a ``disabledReason`` so the UI surfaces *why* — falling back to a
+    static total would produce monitor checks that always pass.
+    """
+
+    def test_no_adapter_disables_with_reason(self):
         from scanner.lineage.sla_discovery import _compute_volume
-        metadata = {"row_count": 50000, "hours_since_update": 4.0}
+        metadata = {"row_count": 50000}
         result = _compute_volume(None, "db.schema.table", metadata=metadata)
         assert result is not None
-        assert result["enabled"] is True
+        assert result["enabled"] is False
+        assert "No timestamp" in result["disabledReason"]
         assert result["currentRows"] == 50000
-        assert "minRows" not in result  # user sets these manually
+        assert "minRows" not in result
+        assert "expectedDailyRows" not in result
 
-    def test_zero_rows_returns_none(self):
+    def test_zero_rows_disables_with_reason(self):
         from scanner.lineage.sla_discovery import _compute_volume
         metadata = {"row_count": 0}
         result = _compute_volume(None, "db.schema.table", metadata=metadata)
-        assert result is None
+        assert result is not None
+        assert result["enabled"] is False
+        assert result["currentRows"] == 0
 
-    def test_no_metadata_returns_none(self):
+    def test_no_metadata_disables_without_currentRows(self):
         from scanner.lineage.sla_discovery import _compute_volume
         result = _compute_volume(None, "db.schema.table", metadata=None)
-        assert result is None
+        assert result is not None
+        assert result["enabled"] is False
+        assert "currentRows" not in result
+
+    def test_daily_window_with_history(self):
+        """≥3 days of bucketed data → daily headline values + timeColumn."""
+        from scanner.lineage.sla_discovery import _compute_volume
+
+        class FakeColumn:
+            def __init__(self, name, data_type):
+                self.name = name
+                self.data_type = data_type
+
+        class FakeAdapter:
+            dialect = "postgres"
+            dataset = "public"
+
+            def get_columns(self, fqn):
+                return [
+                    FakeColumn("id", "BIGINT"),
+                    FakeColumn("loaded_at", "TIMESTAMP"),
+                ]
+
+            def execute_query(self, sql):
+                # Stable ~1000 rows/day for 5 days.
+                return [{"day": f"2026-04-{20 + i}", "row_count": 1000 + i * 10}
+                        for i in range(5)]
+
+        metadata = {"row_count": 50000}
+        result = _compute_volume(FakeAdapter(), "db.public.orders", metadata=metadata)
+        assert result is not None
+        assert result["enabled"] is True
+        assert result["timeColumn"] == "loaded_at"
+        assert result["dataPoints"] == 5
+        assert result["expectedDailyRows"] > 0
+        assert result["minRows"] >= 0
+        assert result["maxRows"] > result["minRows"]
+        assert result["currentRows"] == 50000  # supplementary context
+        assert "partialToday" not in result   # strict pass succeeded
+
+    def test_strict_empty_falls_back_to_including_today(self):
+        """Newly-loaded table where every row carries today's date should
+        still produce a daily window via the today-included fallback."""
+        from scanner.lineage.sla_discovery import _compute_volume
+
+        class FakeColumn:
+            def __init__(self, name, data_type):
+                self.name = name
+                self.data_type = data_type
+
+        class FakeAdapter:
+            dialect = "postgres"
+            dataset = "public"
+            calls = []
+
+            def get_columns(self, fqn):
+                return [
+                    FakeColumn("id", "BIGINT"),
+                    FakeColumn("_loaded_at", "TIMESTAMP"),
+                ]
+
+            def execute_query(self, sql):
+                self.calls.append(sql)
+                # First call is strict (excludes today) → empty.
+                # Second call drops today_excl → returns 4 days incl. today.
+                if "< CURRENT_DATE" in sql:
+                    return []
+                if "MIN(" in sql:  # probe (shouldn't be reached here)
+                    return [{"total_rows": 4000, "non_null_rows": 4000,
+                             "min_ts": "2026-04-26", "max_ts": "2026-04-29"}]
+                return [{"day": f"2026-04-{26 + i}", "row_count": 1000}
+                        for i in range(4)]
+
+        result = _compute_volume(FakeAdapter(), "db.public.events",
+                                 metadata={"row_count": 4000})
+        assert result["enabled"] is True
+        assert result["timeColumn"] == "_loaded_at"
+        # Today's partial bucket is dropped from stats but counted in dataPoints
+        assert result["partialToday"] is True
+        assert result["dataPoints"] == 3  # 4 buckets, today excluded from stats
+
+    def test_probe_explains_all_null_column(self):
+        """Both passes empty + probe shows non_null=0 → 'all NULL' reason."""
+        from scanner.lineage.sla_discovery import _compute_volume
+
+        class FakeColumn:
+            def __init__(self, name, data_type):
+                self.name = name
+                self.data_type = data_type
+
+        class FakeAdapter:
+            dialect = "postgres"
+            dataset = "public"
+
+            def get_columns(self, fqn):
+                return [FakeColumn("ts", "TIMESTAMP")]
+
+            def execute_query(self, sql):
+                if "MIN(" in sql:
+                    return [{"total_rows": 100, "non_null_rows": 0,
+                             "min_ts": None, "max_ts": None}]
+                return []
+
+        result = _compute_volume(FakeAdapter(), "db.public.events",
+                                 metadata={"row_count": 100})
+        assert result["enabled"] is False
+        assert "NULL" in result["disabledReason"]
+        assert result["timeColumn"] == "ts"
+
+    def test_probe_explains_data_too_old(self):
+        """Both passes empty + probe shows non-null data older than window."""
+        from scanner.lineage.sla_discovery import _compute_volume
+
+        class FakeColumn:
+            def __init__(self, name, data_type):
+                self.name = name
+                self.data_type = data_type
+
+        class FakeAdapter:
+            dialect = "postgres"
+            dataset = "public"
+
+            def get_columns(self, fqn):
+                return [FakeColumn("created_at", "TIMESTAMP")]
+
+            def execute_query(self, sql):
+                if "MIN(" in sql:
+                    return [{"total_rows": 5000, "non_null_rows": 5000,
+                             "min_ts": "2024-01-01", "max_ts": "2024-12-31"}]
+                return []
+
+        result = _compute_volume(FakeAdapter(), "db.public.archive",
+                                 metadata={"row_count": 5000})
+        assert result["enabled"] is False
+        # Reason should reference the column name and the latest value
+        reason = result["disabledReason"]
+        assert "created_at" in reason
+        assert "2024-12-31" in reason
 
 
 # ---------------------------------------------------------------------------

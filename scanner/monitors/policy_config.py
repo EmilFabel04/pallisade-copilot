@@ -158,6 +158,7 @@ POLICY_TO_MONITOR_CONFIG: Dict[str, Dict[str, Any]] = {
         "volume_min_rows": "min_rows",
         "volume_max_rows": "max_rows",
         "volume_growth_threshold": "growth_rate_threshold",
+        "volume_time_column": "time_bucket_column",
     },
     "OUTLIER_DETECTION": {
         "anomaly_sensitivity": ("anomaly_threshold", sensitivity_to_zscore),

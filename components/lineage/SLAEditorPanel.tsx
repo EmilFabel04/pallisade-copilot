@@ -558,17 +558,30 @@ export function SLAEditorPanel({
                 {r.volume && (
                   <div className="space-y-0.5">
                     <p className="text-[10px] font-medium text-cyan-400 uppercase tracking-wide">Volume</p>
+                    {r.volume.enabled === false ? (
+                      <p className="text-[10px] text-amber-400">
+                        Disabled: <span className="text-[var(--muted)]">{r.volume.disabledReason || 'daily volume could not be computed'}</span>
+                      </p>
+                    ) : (
+                      <>
+                        {r.volume.expectedDailyRows != null && (
+                          <p className="text-[10px] text-[var(--muted)]">Expected daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.expectedDailyRows).toLocaleString()}</span>
+                            {r.volume.dataPoints != null && <span className="text-[var(--text-faint)]"> ({r.volume.dataPoints}d)</span>}
+                          </p>
+                        )}
+                        {r.volume.minRows != null && (
+                          <p className="text-[10px] text-[var(--muted)]">Min daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.minRows).toLocaleString()}</span></p>
+                        )}
+                        {r.volume.maxRows != null && (
+                          <p className="text-[10px] text-[var(--muted)]">Max daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.maxRows).toLocaleString()}</span></p>
+                        )}
+                        {r.volume.timeColumn && (
+                          <p className="text-[10px] text-[var(--text-faint)]">Bucketed by <code className="text-[var(--text-faint)]">{r.volume.timeColumn}</code></p>
+                        )}
+                      </>
+                    )}
                     {r.volume.currentRows != null && (
-                      <p className="text-[10px] text-[var(--muted)]">Current: <span className="text-[var(--text)] font-medium">{Number(r.volume.currentRows).toLocaleString()} rows</span></p>
-                    )}
-                    {r.volume.expectedDailyRows != null && (
-                      <p className="text-[10px] text-[var(--muted)]">Expected daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.expectedDailyRows).toLocaleString()}</span></p>
-                    )}
-                    {r.volume.minRows != null && (
-                      <p className="text-[10px] text-[var(--muted)]">Min daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.minRows).toLocaleString()}</span></p>
-                    )}
-                    {r.volume.maxRows != null && (
-                      <p className="text-[10px] text-[var(--muted)]">Max daily: <span className="text-[var(--text)] font-medium">{Number(r.volume.maxRows).toLocaleString()}</span></p>
+                      <p className="text-[10px] text-[var(--text-faint)]">Table size: {Number(r.volume.currentRows).toLocaleString()} rows</p>
                     )}
                   </div>
                 )}
@@ -753,19 +766,38 @@ export function SLAEditorPanel({
           {applicableSections.includes('volume') && (
             <div className="space-y-2 p-3 rounded-lg bg-[var(--overlay-bg)] border border-[var(--subtle-border)]">
               <h4 className="text-[11px] font-medium text-[var(--text)] uppercase tracking-wide">Volume</h4>
-              {getVal('volumeConfig', 'currentRows') != null && (
-                <p className="text-[11px] text-[var(--muted)]">
-                  Total rows now: <span className="text-[var(--text)] font-medium">{Number(getVal('volumeConfig', 'currentRows')).toLocaleString()}</span>
-                </p>
-              )}
-              {getVal('volumeConfig', 'expectedDailyRows') != null && (
-                <p className="text-[11px] text-[var(--muted)]">
-                  Expected daily rows: <span className="text-[var(--text)] font-medium">{Number(getVal('volumeConfig', 'expectedDailyRows')).toLocaleString()}</span>
-                  {getVal('volumeConfig', 'dataPoints') != null && (
-                    <span className="text-[var(--text-faint)]"> · {getVal('volumeConfig', 'dataPoints')}d history</span>
+
+              {getVal('volumeConfig', 'enabled') === false ? (
+                <div className="text-[11px] text-amber-400 p-2 rounded bg-amber-500/10 border border-amber-500/20">
+                  <p className="font-medium">Daily volume could not be computed</p>
+                  <p className="text-[var(--muted)] mt-1">
+                    {getVal('volumeConfig', 'disabledReason') ||
+                      'Volume monitoring is daily-by-definition. Without a daily window the monitor cannot evaluate min/max thresholds.'}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {getVal('volumeConfig', 'expectedDailyRows') != null && (
+                    <p className="text-[11px] text-[var(--muted)]">
+                      Expected daily rows: <span className="text-[var(--text)] font-medium">{Number(getVal('volumeConfig', 'expectedDailyRows')).toLocaleString()}</span>
+                      {getVal('volumeConfig', 'dataPoints') != null && (
+                        <span className="text-[var(--text-faint)]"> · {getVal('volumeConfig', 'dataPoints')}d history</span>
+                      )}
+                    </p>
                   )}
-                </p>
+                  {getVal('volumeConfig', 'timeColumn') && (
+                    <p className="text-[11px] text-[var(--muted)]">
+                      Bucketed by <code className="text-[var(--text)]">{getVal('volumeConfig', 'timeColumn')}</code>
+                    </p>
+                  )}
+                  {getVal('volumeConfig', 'partialToday') && (
+                    <p className="text-[10px] text-[var(--text-faint)]">
+                      Today's bucket excluded from stats (partial day) — re-run discovery tomorrow for a full window.
+                    </p>
+                  )}
+                </>
               )}
+
               <NumberInput
                 label="Min daily rows"
                 value={getVal('volumeConfig', 'minRows')}
@@ -780,6 +812,12 @@ export function SLAEditorPanel({
                 min={0}
                 placeholder="Expected high end of daily ingest"
               />
+
+              {getVal('volumeConfig', 'currentRows') != null && (
+                <p className="text-[10px] text-[var(--text-faint)]">
+                  Table size: {Number(getVal('volumeConfig', 'currentRows')).toLocaleString()} rows total (context only — thresholds above are daily)
+                </p>
+              )}
             </div>
           )}
 

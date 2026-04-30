@@ -186,7 +186,7 @@ async def chat(
         engine_graph = None
         try:
             from api.routers.lineage import _get_engine_store
-            _store = _get_engine_store()
+            _store = _get_engine_store(principal.organization_id, request.pipeline_stack_id)
             if _store and _store.graph and _store.graph.nodes:
                 engine_graph = _store.graph
                 logger.info(f"[Copilot] Using in-process engine graph: {len(engine_graph.nodes)} nodes, {len(engine_graph.edges)} edges")
@@ -309,7 +309,7 @@ async def chat_stream(
         engine_graph = None
         try:
             from api.routers.lineage import _get_engine_store
-            _store = _get_engine_store()
+            _store = _get_engine_store(principal.organization_id, request.pipeline_stack_id)
             if _store and _store.graph and _store.graph.nodes:
                 engine_graph = _store.graph
         except Exception:

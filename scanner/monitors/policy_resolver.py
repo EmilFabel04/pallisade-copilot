@@ -48,10 +48,15 @@ class EffectivePolicy:
     schema_allow_evolution: Optional[bool] = None
 
     # --- Volume ---
+    # Volume monitoring is daily-by-definition. ``volume_time_column``
+    # carries the ts column discovery picked so the running monitor can
+    # bucket by day; without it the monitor has no way to evaluate the
+    # daily min/max thresholds and falls back to a meaningless total.
     volume_enabled: Optional[bool] = None
     volume_min_rows: Optional[int] = None
     volume_max_rows: Optional[int] = None
     volume_growth_threshold: Optional[float] = None
+    volume_time_column: Optional[str] = None
 
     # --- Anomaly ---
     anomaly_enabled: Optional[bool] = None
@@ -259,6 +264,7 @@ def _extract_fields_from_config(config_json: Optional[Dict], config_key: str) ->
             "minRows": "volume_min_rows",
             "maxRows": "volume_max_rows",
             "growthRateThreshold": "volume_growth_threshold",
+            "timeColumn": "volume_time_column",
         },
         "anomalyConfig": {
             "enabled": "anomaly_enabled",

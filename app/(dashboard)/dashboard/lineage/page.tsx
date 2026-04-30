@@ -387,8 +387,9 @@ function LineagePageInner() {
             usedRenderedView = true;
           }
         }
-      } catch {
+      } catch (err) {
         // Non-fatal — fall through to unified endpoint
+        console.error('[Lineage] view-data-plane fetch failed, falling back to unified:', err);
       }
 
       // Always fetch unified data (for detail panels, filters, and fallback)
@@ -412,12 +413,16 @@ function LineagePageInner() {
         // If we got rendered view, this isn't fatal
         if (!usedRenderedView) {
           const errorData = await res.json().catch(() => ({}));
+          console.error('[Lineage] unified plane=data returned non-OK:', res.status, errorData);
           setError(errorData.error || 'Failed to fetch lineage');
+          toast.error('Failed to load lineage. Try refreshing.');
         }
       }
     } catch (err) {
       if (fetchVersionRef.current !== thisVersion) return;
+      console.error('[Lineage] fetchLineage threw:', err);
       setError('Failed to connect to server');
+      toast.error('Lost connection to backend while loading lineage.');
     } finally {
       if (fetchVersionRef.current === thisVersion) {
         setLoading(false);
@@ -443,8 +448,9 @@ function LineagePageInner() {
             return;
           }
         }
-      } catch {
+      } catch (err) {
         // Non-fatal — fall through
+        console.error('[Lineage] view-lane-pipeline-overview fetch failed, falling back:', err);
       }
 
       // Try rendered pipeline overview (tool clusters)
@@ -483,14 +489,21 @@ function LineagePageInner() {
             return;
           }
         }
-      } catch {
+      } catch (err) {
         // Non-fatal — fall through to legacy path
+        console.error('[Lineage] view-pipeline-overview fetch failed, falling back to legacy:', err);
       }
 
       // Fetch engine control plane data and pipeline stack in parallel
       const [engineRes, stackRes] = await Promise.all([
-        cachedFetch(`/api/pipeline/${stackId}/lineage/engine?action=control-plane-overview`).catch(() => null),
-        cachedFetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`).catch(() => null),
+        cachedFetch(`/api/pipeline/${stackId}/lineage/engine?action=control-plane-overview`).catch((err) => {
+          console.error('[Lineage] control-plane-overview fetch failed:', err);
+          return null;
+        }),
+        cachedFetch(`/api/pipeline/${stackId}/lineage/unified?plane=data`).catch((err) => {
+          console.error('[Lineage] unified plane=data fetch failed:', err);
+          return null;
+        }),
       ]);
 
       const engineData: ControlPlaneOverviewResponse | null = engineRes?.ok

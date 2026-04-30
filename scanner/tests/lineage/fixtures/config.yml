@@ -2,17 +2,17 @@ adapters:
   - id: warehouse_main
     type: warehouse_catalog
     params:
-      path: scanner/tests/lineage/fixtures/warehouse_catalog.json
+      path: warehouse_catalog.json
 
   - id: transform_dbt
     type: transform_artifact
     params:
-      path: scanner/tests/lineage/fixtures/transform_manifest.json
+      path: transform_manifest.json
 
   - id: bi_looker
     type: bi_query
     params:
-      path: scanner/tests/lineage/fixtures/bi_export.json
+      path: bi_export.json
 
 resolver:
   evidence_weights:
