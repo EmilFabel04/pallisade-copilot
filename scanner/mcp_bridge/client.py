@@ -95,7 +95,10 @@ class MCPClientManager:
             credentials = integration_configs.get(first_type, {})
 
             try:
-                await self._start_external_server(server_name, server_cfg, credentials)
+                await self._start_external_server(
+                    server_name, server_cfg, credentials,
+                    all_integration_configs=integration_configs,
+                )
             except Exception as e:
                 logger.warning(f"Failed to start MCP server '{server_name}': {e}")
 
@@ -111,6 +114,7 @@ class MCPClientManager:
         server_name: str,
         server_cfg: MCPServerConfig,
         credentials: Dict[str, Any],
+        all_integration_configs: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> None:
         """Start an external MCP server subprocess."""
         # Build environment variables from credentials
@@ -135,6 +139,30 @@ class MCPClientManager:
                     f"(needed for env var {server_env_var}). "
                     f"Available keys: {list(credentials.keys())}"
                 )
+
+        # Cross-integration credential lookups. Some servers need creds that
+        # live on a *different* integration (e.g. dbt MCP needs the GitHub
+        # token from the GITHUB integration). Only fills env vars that
+        # weren't already set by the primary env_mapping.
+        if server_cfg.cross_integration_env_mapping and all_integration_configs:
+            for other_type, lookups in server_cfg.cross_integration_env_mapping.items():
+                other_cfg = all_integration_configs.get(other_type.upper())
+                if not other_cfg:
+                    continue
+                for candidate_keys, env_var in lookups:
+                    if env_var in env and env[env_var]:
+                        continue  # already set by primary mapping
+                    for k in candidate_keys:
+                        v = other_cfg.get(k)
+                        if v:
+                            env[env_var] = str(v)
+                            mapped_vars.append(env_var)
+                            logger.info(
+                                f"MCP '{server_name}': using {other_type}.{k} "
+                                f"for env var {env_var}"
+                            )
+                            break
+
         if mapped_vars:
             logger.info(f"MCP '{server_name}': set env vars {mapped_vars}")
         else:

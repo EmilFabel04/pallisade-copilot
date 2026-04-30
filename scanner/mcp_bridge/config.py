@@ -23,6 +23,14 @@ class MCPServerConfig:
     # Fallback keys: if a primary key isn't found, try these alternatives
     # e.g. pipeline nodes store Airflow URL as "host" but adapters expect "base_url"
     key_aliases: Dict[str, str] = field(default_factory=dict)
+    # Cross-integration credential lookups. Some servers need credentials
+    # that live on a *different* integration than the one that activated them.
+    # Example: dbt MCP in github source mode needs the GitHub token, which
+    # is stored on the GITHUB integration, not the DBT_CORE one.
+    # Schema: {OTHER_INTEGRATION_TYPE: [(candidate_key1, candidate_key2, ...), env_var]}
+    # The first non-empty candidate key wins. Only fills the env var if the
+    # primary env_mapping didn't already set it.
+    cross_integration_env_mapping: Dict[str, List[tuple]] = field(default_factory=dict)
     is_custom: bool = False
 
     def matches_integration(self, integration_type: str) -> bool:
@@ -86,6 +94,14 @@ MCP_SERVERS: Dict[str, MCPServerConfig] = {
             "github_token": "DBT_GITHUB_TOKEN",
             "github_repo": "DBT_GITHUB_REPO",
             "github_branch": "DBT_GITHUB_BRANCH",
+        },
+        # When source_mode=github, the dbt integration itself doesn't store
+        # a GitHub token — it lives on the user's GITHUB integration. Pull
+        # it from there if the dbt config didn't carry its own.
+        cross_integration_env_mapping={
+            "GITHUB": [
+                (("github_token", "access_token", "token"), "DBT_GITHUB_TOKEN"),
+            ],
         },
     ),
     # --- Orchestration servers ---
