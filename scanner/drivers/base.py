@@ -37,6 +37,7 @@ class GraphDomain(Enum):
 
 class IntegrationLayer(Enum):
     """Logical layer for UI grouping."""
+    SOURCE = "SOURCE"
     WAREHOUSE = "WAREHOUSE"
     INGESTION = "INGESTION"
     TRANSFORMATION = "TRANSFORMATION"
