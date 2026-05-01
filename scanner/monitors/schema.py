@@ -555,3 +555,50 @@ def _classify_type_change_severity(old_type: str, new_type: str) -> str:
 
     # Unknown type mapping — default to medium
     return SEVERITY_MEDIUM
+
+
+def _run_schema_for_custom_source(task: Dict[str, Any]) -> Dict[str, Any]:
+    from scanner.monitors.custom_source_results import (
+        latest_probe_run_for, previous_probe_run_for,
+    )
+
+    integration_id = task["integrationId"]
+    config = task.get("config") or {}
+    dataset_id = config.get("dataset_id")
+    if not dataset_id:
+        return {"status": "ERROR", "message": "config.dataset_id missing for CUSTOM_SOURCE schema"}
+
+    latest = latest_probe_run_for(integration_id, dataset_id)
+    if not latest:
+        return {"status": "ERROR", "message": "no probe run yet"}
+
+    previous = previous_probe_run_for(integration_id, dataset_id)
+    if not previous:
+        # First successful probe — no comparison possible, no drift.
+        return {"status": "OK", "value": 0.0, "threshold": None, "message": "baseline established"}
+
+    def _index(schema):
+        return {col["name"]: col.get("data_type") for col in (schema or [])}
+
+    cur_idx = _index(latest.get("column_schema"))
+    prev_idx = _index(previous.get("column_schema"))
+
+    added = sorted(set(cur_idx) - set(prev_idx))
+    removed = sorted(set(prev_idx) - set(cur_idx))
+    type_changed = sorted(
+        c for c in set(cur_idx) & set(prev_idx) if cur_idx[c] != prev_idx[c]
+    )
+
+    drift_count = len(added) + len(removed) + len(type_changed)
+    status = "ALERT" if drift_count > 0 else "OK"
+    msg_parts = []
+    if added: msg_parts.append(f"added: {added}")
+    if removed: msg_parts.append(f"removed: {removed}")
+    if type_changed: msg_parts.append(f"type-changed: {type_changed}")
+    return {
+        "status": status,
+        "value": float(drift_count),
+        "threshold": 0.0,
+        "message": "; ".join(msg_parts) if msg_parts else "no schema drift",
+        "details": {"added": added, "removed": removed, "type_changed": type_changed},
+    }
