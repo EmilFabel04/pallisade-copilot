@@ -85,7 +85,7 @@ class MonitorExecutor:
 
     def __init__(
         self,
-        query_func: QueryFunc,
+        query_func: Optional[QueryFunc] = None,
         dialect: str = "postgres",
     ):
         self.query_func = query_func
@@ -93,12 +93,44 @@ class MonitorExecutor:
 
     def run_monitor(
         self,
-        monitor: BaseMonitor,
-        database: str,
-        schema: str,
-        table: str,
+        monitor: Any,
+        database: Optional[str] = None,
+        schema: Optional[str] = None,
+        table: Optional[str] = None,
     ) -> MonitorResult:
-        """Execute a single monitor and return its result."""
+        """Execute a single monitor and return its result.
+
+        Two calling shapes are supported:
+
+        1. Legacy / SQL warehouse path:
+              ``run_monitor(monitor: BaseMonitor, database, schema, table)``
+           — builds SQL via the monitor, executes via ``self.query_func``,
+           and dispatches to ``monitor.evaluate``.
+
+        2. Task-envelope path (used by the scheduler for non-SQL
+           integrations such as CUSTOM_SOURCE):
+              ``run_monitor(task: Dict[str, Any])``
+           — when the first positional argument is a ``dict``, the
+           ``integrationType`` key is inspected. ``CUSTOM_SOURCE`` tasks
+           are routed to dedicated helpers that read from
+           ``CustomSourceProbeRun`` rather than running SQL.
+        """
+        # CUSTOM_SOURCE integrations (and any future task-envelope-only
+        # integration types) don't run SQL queries; they read from
+        # dedicated helpers. Detect the task-envelope shape and dispatch
+        # before any SQL machinery touches the monitor.
+        if isinstance(monitor, dict):
+            task = monitor
+            integration_type = (task.get("integrationType") or "").upper()
+            if integration_type == "CUSTOM_SOURCE":
+                return self._run_custom_source_monitor(task)
+            return self._build_error_result(
+                task,
+                f"run_monitor task envelope received for unsupported "
+                f"integrationType {integration_type!r}",
+            )
+
+        # Legacy SQL warehouse path: monitor is a BaseMonitor instance.
         target_fqn = f"{database}.{schema}.{table}"
         start = time.monotonic()
 
@@ -140,6 +172,113 @@ class MonitorExecutor:
             pass  # Explanation enrichment is best-effort
 
         return result
+
+    # ------------------------------------------------------------------
+    # CUSTOM_SOURCE dispatch
+    # ------------------------------------------------------------------
+
+    # Map the helper-dict status strings ("OK"/"ALERT"/"ERROR") onto
+    # MonitorStatus enum values.
+    _CUSTOM_SOURCE_STATUS_MAP: Dict[str, MonitorStatus] = {
+        "OK": MonitorStatus.PASS,
+        "PASS": MonitorStatus.PASS,
+        "ALERT": MonitorStatus.FAIL,
+        "FAIL": MonitorStatus.FAIL,
+        "WARN": MonitorStatus.WARN,
+        "ERROR": MonitorStatus.ERROR,
+        "SKIPPED": MonitorStatus.SKIPPED,
+    }
+
+    def _run_custom_source_monitor(
+        self, task: Dict[str, Any]
+    ) -> MonitorResult:
+        """Route to the CUSTOM_SOURCE-specific helper for the requested
+        monitor type and package its dict result as a ``MonitorResult``."""
+        from scanner.monitors.freshness import _run_freshness_for_custom_source
+        from scanner.monitors.volume import _run_volume_for_custom_source
+        from scanner.monitors.null_check import _run_null_check_for_custom_source
+        from scanner.monitors.schema import _run_schema_for_custom_source
+
+        monitor_type = (task.get("monitorType") or "").lower()
+        helpers = {
+            "freshness": _run_freshness_for_custom_source,
+            "volume": _run_volume_for_custom_source,
+            "null_check": _run_null_check_for_custom_source,
+            "schema_change": _run_schema_for_custom_source,
+            "schema": _run_schema_for_custom_source,
+        }
+        helper = helpers.get(monitor_type)
+        if helper is None:
+            return self._build_error_result(
+                task,
+                f"CUSTOM_SOURCE does not support monitor type {monitor_type!r}",
+            )
+
+        start = time.monotonic()
+        try:
+            result_dict = helper(task)
+        except Exception as exc:
+            result = self._build_error_result(
+                task, f"CUSTOM_SOURCE monitor execution failed: {exc}"
+            )
+            result.duration_ms = int((time.monotonic() - start) * 1000)
+            return result
+
+        result = self._build_result_from_dict(task, result_dict)
+        result.duration_ms = int((time.monotonic() - start) * 1000)
+        return result
+
+    def _build_result_from_dict(
+        self, task: Dict[str, Any], result_dict: Dict[str, Any]
+    ) -> MonitorResult:
+        """Convert a helper's status dict into a populated MonitorResult."""
+        raw_status = str(result_dict.get("status") or "ERROR").upper()
+        status = self._CUSTOM_SOURCE_STATUS_MAP.get(
+            raw_status, MonitorStatus.ERROR
+        )
+
+        target_fqn = (
+            task.get("targetFqn")
+            or task.get("target_fqn")
+            or f"custom_source:{task.get('integrationId', 'unknown')}"
+            f":{(task.get('config') or {}).get('dataset_id', 'unknown')}"
+        )
+
+        value = result_dict.get("value")
+        threshold = result_dict.get("threshold")
+
+        return MonitorResult(
+            monitor_type=(task.get("monitorType") or "custom_source").lower(),
+            target_fqn=target_fqn,
+            status=status,
+            value=float(value) if isinstance(value, (int, float)) else None,
+            threshold=(
+                float(threshold)
+                if isinstance(threshold, (int, float))
+                else None
+            ),
+            message=str(result_dict.get("message") or ""),
+            details=dict(result_dict.get("details") or {}),
+            executed_at=datetime.now(timezone.utc),
+        )
+
+    def _build_error_result(
+        self, task: Dict[str, Any], message: str
+    ) -> MonitorResult:
+        """Construct an ERROR-status MonitorResult for a task envelope."""
+        target_fqn = (
+            task.get("targetFqn")
+            or task.get("target_fqn")
+            or f"custom_source:{task.get('integrationId', 'unknown')}"
+            f":{(task.get('config') or {}).get('dataset_id', 'unknown')}"
+        )
+        return MonitorResult(
+            monitor_type=(task.get("monitorType") or "custom_source").lower(),
+            target_fqn=target_fqn,
+            status=MonitorStatus.ERROR,
+            message=message,
+            executed_at=datetime.now(timezone.utc),
+        )
 
     def _retry_anomaly_adaptive(
         self,
