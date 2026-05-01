@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react';
-import { Check } from 'lucide-react';
+import { Check, Trash2, Plus, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -94,7 +94,15 @@ export default function CustomSourceWizard() {
             onNext={() => setStep(3)}
           />
         )}
-        {step > 2 && (
+        {step === 3 && (
+          <DatasetsStep
+            state={state}
+            onChange={updateState}
+            onBack={() => setStep(2)}
+            onNext={() => setStep(4)}
+          />
+        )}
+        {step > 3 && (
           <div className="text-sm text-[var(--text-faint)]">
             Step {step} not yet implemented.
           </div>
@@ -368,6 +376,289 @@ function ConnectionStep({
         >
           Next
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 3: Datasets ──────────────────────────────────────────────
+
+function DatasetsStep({
+  state,
+  onChange,
+  onBack,
+  onNext,
+}: {
+  state: WizardState;
+  onChange: (patch: Partial<WizardState>) => void;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const updateDataset = (index: number, next: DatasetSpec) => {
+    const updated = [...state.datasets];
+    updated[index] = next;
+    onChange({ datasets: updated });
+  };
+
+  const removeDataset = (index: number) => {
+    onChange({ datasets: state.datasets.filter((_, j) => j !== index) });
+  };
+
+  const addDataset = () => {
+    onChange({
+      datasets: [
+        ...state.datasets,
+        { id: '', endpoint: '', timestampColumn: '' },
+      ],
+    });
+  };
+
+  const incomplete = state.datasets.some(
+    (d) => !d.id.trim() || !d.endpoint.trim() || !d.timestampColumn.trim(),
+  );
+  const canProceed = state.datasets.length > 0 && !incomplete;
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-[var(--text)]">Datasets</h2>
+        <p className="mt-1 text-sm text-[var(--text-tertiary)]">
+          Add one or more datasets. Each dataset is a JSON endpoint Pallisade will
+          probe — it becomes a monitored asset with freshness, volume, and quality
+          checks.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        {state.datasets.map((ds, i) => (
+          <DatasetCard
+            key={i}
+            index={i}
+            dataset={ds}
+            baseUrl={state.baseUrl}
+            auth={state.auth}
+            onChange={(next) => updateDataset(i, next)}
+            onRemove={() => removeDataset(i)}
+          />
+        ))}
+        {state.datasets.length === 0 && (
+          <div className="rounded-lg border border-dashed border-[var(--subtle-border)] px-4 py-8 text-center text-sm text-[var(--text-faint)]">
+            No datasets yet. Add at least one to continue.
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={addDataset}
+        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed
+                   border-[var(--border-medium)] bg-[var(--overlay-bg)]
+                   text-sm font-medium text-[var(--text-tertiary)]
+                   hover:border-[var(--accent)] hover:text-[var(--accent-2)]
+                   transition-colors"
+      >
+        <Plus className="w-4 h-4" />
+        Add dataset
+      </button>
+
+      <div className="flex justify-between pt-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="px-4 py-2 rounded-lg border border-[var(--border-medium)] bg-[var(--overlay-bg)]
+                     text-[var(--text)] text-sm font-medium
+                     hover:bg-[var(--surface-raised)] transition-colors"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          disabled={!canProceed}
+          onClick={onNext}
+          className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium
+                     hover:bg-[var(--accent-2)] disabled:opacity-50 disabled:cursor-not-allowed
+                     transition-colors"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface PreviewResult {
+  ok: boolean;
+  message: string;
+  latency_ms?: number | null;
+}
+
+function DatasetCard({
+  index,
+  dataset,
+  baseUrl,
+  auth,
+  onChange,
+  onRemove,
+}: {
+  index: number;
+  dataset: DatasetSpec;
+  baseUrl: string;
+  auth: WizardState['auth'];
+  onChange: (next: DatasetSpec) => void;
+  onRemove: () => void;
+}) {
+  const [testing, setTesting] = useState(false);
+  const [lastResult, setLastResult] = useState<PreviewResult | null>(null);
+
+  const inputClass =
+    'w-full px-3 py-2.5 bg-[var(--overlay-bg)] border border-[var(--border-medium)] rounded-lg ' +
+    'text-[var(--text)] placeholder-[var(--text-faint)] ' +
+    'focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] ' +
+    'transition-colors text-sm';
+
+  const canTest =
+    baseUrl.startsWith('https://') &&
+    dataset.endpoint.trim().length > 0 &&
+    dataset.timestampColumn.trim().length > 0;
+
+  async function handleTestFetch() {
+    setTesting(true);
+    setLastResult(null);
+    try {
+      const resp = await fetch('/api/integrations/custom-source/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config: {
+            base_url: baseUrl,
+            auth,
+            // Send only the SINGLE dataset under test — the wizard probes
+            // one at a time so a failing dataset doesn't mask others.
+            datasets: [
+              {
+                id: dataset.id.trim() || 'preview',
+                endpoint: dataset.endpoint.trim(),
+                timestamp_column: dataset.timestampColumn.trim(),
+                ...(dataset.cursorParam
+                  ? { cursor_param: dataset.cursorParam }
+                  : {}),
+                ...(dataset.jsonRoot ? { json_root: dataset.jsonRoot } : {}),
+                ...(dataset.landsIn ? { lands_in: dataset.landsIn } : {}),
+              },
+            ],
+          },
+        }),
+      });
+      const data = (await resp.json().catch(() => ({}))) as Partial<PreviewResult>;
+      setLastResult({
+        ok: Boolean(data.ok),
+        message:
+          data.message ??
+          (resp.ok ? 'No message returned' : `Request failed (${resp.status})`),
+        latency_ms: data.latency_ms ?? null,
+      });
+    } catch (err) {
+      setLastResult({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Network error',
+      });
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--overlay-bg)] p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-[var(--text)]">
+          Dataset {index + 1}
+        </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove dataset"
+          className="p-1.5 rounded-md text-[var(--text-faint)]
+                     hover:text-red-400 hover:bg-[var(--surface-raised)]
+                     transition-colors"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Field label="ID" required hint="Slug used in lineage.">
+          <input
+            type="text"
+            value={dataset.id}
+            onChange={(e) => onChange({ ...dataset, id: e.target.value })}
+            placeholder="water_meters"
+            className={inputClass}
+          />
+        </Field>
+
+        <Field label="Endpoint" required hint="Appended to base URL.">
+          <input
+            type="text"
+            value={dataset.endpoint}
+            onChange={(e) => onChange({ ...dataset, endpoint: e.target.value })}
+            placeholder="/sensors/readings"
+            className={inputClass}
+          />
+        </Field>
+
+        <Field
+          label="Timestamp column"
+          required
+          hint="JSON field used for freshness."
+        >
+          <input
+            type="text"
+            value={dataset.timestampColumn}
+            onChange={(e) =>
+              onChange({ ...dataset, timestampColumn: e.target.value })
+            }
+            placeholder="reading_at"
+            className={inputClass}
+          />
+        </Field>
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          disabled={!canTest || testing}
+          onClick={handleTestFetch}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md
+                     border border-[var(--border-medium)] bg-[var(--surface-raised)]
+                     text-xs font-medium text-[var(--text)]
+                     hover:border-[var(--accent)] hover:text-[var(--accent-2)]
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     transition-colors"
+        >
+          {testing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+          {testing ? 'Testing…' : 'Test fetch'}
+        </button>
+
+        {lastResult && (
+          <span
+            className={`inline-flex items-center gap-1.5 text-xs ${
+              lastResult.ok ? 'text-green-400' : 'text-red-400'
+            }`}
+          >
+            {lastResult.ok ? (
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            ) : (
+              <XCircle className="w-3.5 h-3.5" />
+            )}
+            {lastResult.ok
+              ? `Connected${
+                  lastResult.latency_ms != null
+                    ? ` (${lastResult.latency_ms} ms)`
+                    : ''
+                }`
+              : lastResult.message}
+          </span>
+        )}
       </div>
     </div>
   );
