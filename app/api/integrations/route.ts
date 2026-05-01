@@ -561,7 +561,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { type, name, credentials, config } = body;
+    const { type, name, credentials, config, probeSchedule, activate } = body;
 
     if (!type || !name) {
       return NextResponse.json({ error: 'Type and name are required' }, { status: 400 });
@@ -573,6 +573,11 @@ export async function POST(request: NextRequest) {
     // Generate connection info for display
     const connectionInfo = generateConnectionInfo(type, credentials, config);
 
+    // For CUSTOM_SOURCE, populate probe scheduling so the runner picks it up.
+    // The wizard sends `probeSchedule` (one of "hourly" | "every_6h" | "daily" |
+    // "weekly") and `activate=true`. Without nextProbeAt + ACTIVE status, the
+    // probe runner's WHERE clause filters the row out forever.
+    const isCustomSource = type === 'CUSTOM_SOURCE';
     const integration = await prisma.integration.create({
       data: {
         type,
@@ -580,8 +585,15 @@ export async function POST(request: NextRequest) {
         credentials: encryptedCredentials ? { encrypted: encryptedCredentials } : undefined,
         config,
         connectionInfo,
-        status: 'INACTIVE',
+        status: isCustomSource && activate ? 'ACTIVE' : 'INACTIVE',
         organizationId,
+        ...(isCustomSource && probeSchedule
+          ? {
+              probeSchedule,
+              // Run the first probe on the next scheduler tick (now).
+              nextProbeAt: new Date(),
+            }
+          : {}),
       },
     });
 

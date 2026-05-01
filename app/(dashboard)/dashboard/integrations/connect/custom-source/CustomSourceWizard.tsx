@@ -59,10 +59,65 @@ const STEP_LABELS: ReadonlyArray<{ step: Step; label: string }> = [
 export default function CustomSourceWizard() {
   const [step, setStep] = useState<Step>(1);
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const updateState = (patch: Partial<WizardState>) => {
     setState((prev) => ({ ...prev, ...patch }));
   };
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      // Split auth into credentials (the secret) and config.auth (everything else).
+      // The route's POST handler encrypts the entire `credentials` object, so the
+      // probe runner's _resolve_secret() will decrypt and read the `secret` key.
+      // Non-secret auth metadata (kind, header_name, username) lives in config.auth
+      // because it isn't sensitive and the probe runner consumes it directly.
+      const { secret, ...nonSecretAuth } = state.auth;
+
+      const r = await fetch('/api/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'CUSTOM_SOURCE',
+          name: state.name,
+          credentials: { secret },
+          config: {
+            platform_label: state.platformLabel,
+            base_url: state.baseUrl,
+            auth: nonSecretAuth,
+            datasets: state.datasets.map((d) => ({
+              id: d.id,
+              endpoint: d.endpoint,
+              timestamp_column: d.timestampColumn,
+              ...(d.cursorParam ? { cursor_param: d.cursorParam } : {}),
+              ...(d.jsonRoot ? { json_root: d.jsonRoot } : {}),
+              ...(d.landsIn ? { lands_in: d.landsIn } : {}),
+            })),
+            schedule: state.schedule,
+          },
+          // Top-level hints that the route uses to populate Integration's
+          // probeSchedule + nextProbeAt + status, so the runner picks it up.
+          probeSchedule: state.schedule,
+          activate: true,
+        }),
+      });
+      if (r.ok) {
+        window.location.href = '/dashboard/integrations';
+      } else {
+        const err = await r.json().catch(() => ({}));
+        setSaveError(
+          err.message || err.error || `Failed to save (HTTP ${r.status})`,
+        );
+      }
+    } catch (exc: unknown) {
+      setSaveError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -102,10 +157,22 @@ export default function CustomSourceWizard() {
             onNext={() => setStep(4)}
           />
         )}
-        {step > 3 && (
-          <div className="text-sm text-[var(--text-faint)]">
-            Step {step} not yet implemented.
-          </div>
+        {step === 4 && (
+          <ScheduleStep
+            state={state}
+            onChange={updateState}
+            onBack={() => setStep(3)}
+            onNext={() => setStep(5)}
+          />
+        )}
+        {step === 5 && (
+          <ReviewStep
+            state={state}
+            saving={saving}
+            saveError={saveError}
+            onBack={() => setStep(4)}
+            onSave={handleSave}
+          />
         )}
       </div>
     </div>
@@ -659,6 +726,194 @@ function DatasetCard({
               : lastResult.message}
           </span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 4: Schedule + lands_in ───────────────────────────────────
+
+function ScheduleStep({
+  state,
+  onChange,
+  onBack,
+  onNext,
+}: {
+  state: WizardState;
+  onChange: (patch: Partial<WizardState>) => void;
+  onBack: () => void;
+  onNext: () => void;
+}) {
+  const inputClass =
+    'w-full px-3 py-2.5 bg-[var(--overlay-bg)] border border-[var(--border-medium)] rounded-lg ' +
+    'text-[var(--text)] placeholder-[var(--text-faint)] ' +
+    'focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] ' +
+    'transition-colors text-sm';
+
+  const updateLandsIn = (index: number, value: string) => {
+    const next = state.datasets.map((d, i) =>
+      i === index ? { ...d, landsIn: value } : d,
+    );
+    onChange({ datasets: next });
+  };
+
+  const scheduleOptions: ReadonlyArray<{
+    value: WizardState['schedule'];
+    label: string;
+  }> = [
+    { value: 'hourly', label: 'Hourly' },
+    { value: 'every_6h', label: 'Every 6 hours' },
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-[var(--text)]">Schedule</h2>
+        <p className="mt-1 text-sm text-[var(--text-tertiary)]">
+          How often Pallisade should probe these endpoints, and (optionally) where
+          their data lands in your warehouse so we can wire lineage.
+        </p>
+      </div>
+
+      <Field
+        label="Probe schedule"
+        hint="Defaults to daily. The runner advances the next probe time after each tick."
+      >
+        <select
+          value={state.schedule}
+          onChange={(e) =>
+            onChange({ schedule: e.target.value as WizardState['schedule'] })
+          }
+          className={inputClass}
+        >
+          {scheduleOptions.map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      {state.datasets.length > 0 && (
+        <fieldset className="rounded-lg border border-[var(--subtle-border)] p-4 space-y-3">
+          <legend className="px-1.5 text-sm font-medium text-[var(--text)]">
+            Where each dataset lands (optional)
+          </legend>
+          <p className="text-xs text-[var(--text-faint)]">
+            Format: <code>warehouse.schema.table</code> (e.g.{' '}
+            <code>snowflake.raw.water_meters</code>). Leave blank to skip auto-edges.
+          </p>
+          {state.datasets.map((ds, i) => (
+            <Field
+              key={i}
+              label={`${ds.id || `Dataset ${i + 1}`}: lands in`}
+            >
+              <input
+                type="text"
+                value={ds.landsIn ?? ''}
+                onChange={(e) => updateLandsIn(i, e.target.value)}
+                placeholder="e.g. snowflake.raw.water_meters"
+                className={inputClass}
+              />
+            </Field>
+          ))}
+        </fieldset>
+      )}
+
+      <div className="flex justify-between pt-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="px-4 py-2 rounded-lg border border-[var(--border-medium)] bg-[var(--overlay-bg)]
+                     text-[var(--text)] text-sm font-medium
+                     hover:bg-[var(--surface-raised)] transition-colors"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          className="px-4 py-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium
+                     hover:bg-[var(--accent-2)] transition-colors"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Step 5: Review + save ─────────────────────────────────────────
+
+function ReviewStep({
+  state,
+  saving,
+  saveError,
+  onBack,
+  onSave,
+}: {
+  state: WizardState;
+  saving: boolean;
+  saveError: string | null;
+  onBack: () => void;
+  onSave: () => void;
+}) {
+  // Mask the secret in the preview so it never appears in plaintext on screen.
+  const masked = {
+    ...state,
+    auth: { ...state.auth, secret: state.auth.secret ? '•••' : '' },
+  };
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-[var(--text)]">Review</h2>
+        <p className="mt-1 text-sm text-[var(--text-tertiary)]">
+          Double-check the configuration. Saving creates the integration and the
+          scheduler will probe it on the next tick.
+        </p>
+      </div>
+
+      <pre
+        className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg p-3
+                   text-xs text-[var(--text)] overflow-auto max-h-96"
+      >
+        {JSON.stringify(masked, null, 2)}
+      </pre>
+
+      {saveError && (
+        <p className="text-sm text-red-400" role="alert">
+          {saveError}
+        </p>
+      )}
+
+      <div className="flex justify-between pt-2">
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={saving}
+          className="px-4 py-2 rounded-lg border border-[var(--border-medium)] bg-[var(--overlay-bg)]
+                     text-[var(--text)] text-sm font-medium
+                     hover:bg-[var(--surface-raised)]
+                     disabled:opacity-50 disabled:cursor-not-allowed
+                     transition-colors"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--accent)]
+                     text-white text-sm font-medium
+                     hover:bg-[var(--accent-2)] disabled:opacity-50 disabled:cursor-not-allowed
+                     transition-colors"
+        >
+          {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+          {saving ? 'Saving…' : 'Save'}
+        </button>
       </div>
     </div>
   );
