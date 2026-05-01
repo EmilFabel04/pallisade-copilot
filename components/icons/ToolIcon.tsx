@@ -156,6 +156,7 @@ const TOOL_LABELS: Record<string, string> = {
   bitbucket: 'Bitbucket',
   linux_server: 'Linux Server',
   custom_webhook: 'Custom Webhook',
+  custom_source: 'Custom Source',
 };
 
 // ─── External SVG files (public/icon_logos/) ────────────────
@@ -206,6 +207,8 @@ const EXTERNAL_SVG_MAP: Record<string, SvgEntry> = {
   asana: '/icon_logos/asana.svg',
   // Infrastructure
   linux_server: '/icon_logos/linux.svg',
+  // Custom Source (generic HTTP/JSON API)
+  custom_source: '/icon_logos/custom-source.svg',
 };
 
 // ─── Fallback colours for future unknown tools ──────────────

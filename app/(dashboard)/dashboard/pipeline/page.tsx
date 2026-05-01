@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, CircleAlert, Info, Loader2, Pencil, Search, Trash2, Unplug, X } from 'lucide-react';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import { usePipeline } from '@/contexts/PipelineContext';
@@ -31,9 +31,11 @@ interface ConnectorCard {
   name: string;
   description: string;
   group: ConnectorGroup;
-  mode: 'pipeline' | 'integration';
+  mode: 'pipeline' | 'integration' | 'wizard';
   layer?: PipelineLayer;
   integration?: IntegrationDefinition;
+  // For wizard-mode connectors: route to navigate to instead of opening a modal.
+  href?: string;
 }
 
 interface IntegrationRecord {
@@ -146,6 +148,7 @@ function buildAutoEdges(nodes: PipelineNode[], existingEdges: PipelineEdge[]): P
 }
 
 export default function PipelinePage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
   const lastPipelineIdRef = useRef<string | null>(null);
@@ -178,7 +181,18 @@ export default function PipelinePage() {
     const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS).flat().map((i) => ({
       id: i.id, name: i.name, description: i.description, group: categoryToGroup(i.category), mode: 'integration' as const, integration: i,
     }));
-    return [...coreConnectors, ...alertConnectors];
+    const wizardConnectors: ConnectorCard[] = [
+      {
+        id: 'custom_source',
+        name: 'Custom Source',
+        description: 'Any HTTPS-accessible application with a JSON API. Configure it in 5 steps.',
+        group: 'INGESTION',
+        mode: 'wizard',
+        layer: 'INGESTION',
+        href: '/dashboard/integrations/connect/custom-source',
+      },
+    ];
+    return [...coreConnectors, ...wizardConnectors, ...alertConnectors];
   }, []);
 
   const connectedFromStack = useMemo(() => new Set(
@@ -456,6 +470,7 @@ export default function PipelinePage() {
 
   // ─── Handlers ─────────────────────────────────────────────
   const handleConnect = useCallback((connector: ConnectorCard) => {
+    if (connector.mode === 'wizard' && connector.href) { router.push(connector.href); return; }
     if (connector.mode === 'integration' && connector.integration) { setIntegrationModal(connector.integration); return; }
     const existingNode = stack.nodes.find((n) => n.toolType === connector.id);
     if (existingNode) { setNodeModal(existingNode); return; }
@@ -464,7 +479,7 @@ export default function PipelinePage() {
     const newNode = createNodeForTool(connector.id, layer, stack.nodes);
     setStack((prev) => ({ ...prev, nodes: [...prev.nodes, newNode], edges: buildAutoEdges([...prev.nodes, newNode], prev.edges) }));
     setNodeModal(newNode);
-  }, [stack.nodes]);
+  }, [router, stack.nodes]);
 
   const handleNodeConfigSaved = useCallback((config: Record<string, any>) => {
     if (!nodeModal) return;
