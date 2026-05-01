@@ -62,8 +62,52 @@ class CustomSourceDriver(IntegrationDriver):
         return ConfigValidation(valid=not errors, errors=errors)
 
     def test_connection(self, config: Dict[str, Any]) -> ConnectionResult:
-        # Implemented in Task 11
-        return ConnectionResult(ok=False, message="not yet implemented")
+        from scanner.adapters.http_probe import HttpProbeAdapter, ProbeError
+        from datetime import datetime
+        import time
+
+        datasets = config.get("datasets") or []
+        if not datasets:
+            return ConnectionResult(ok=False, message="no datasets configured")
+
+        adapter = HttpProbeAdapter(
+            base_url=config["base_url"],
+            auth=config["auth"],
+        )
+
+        first = datasets[0]
+        start = time.time()
+        try:
+            adapter.probe({
+                "endpoint": first["endpoint"],
+                "timestamp_column": first.get("timestamp_column"),
+                "json_root": first.get("json_root"),
+            })
+            latency = int((time.time() - start) * 1000)
+            return ConnectionResult(
+                ok=True,
+                message=f"Connected; first dataset {first['id']!r} returned data",
+                connected_at=datetime.utcnow(),
+                latency_ms=latency,
+            )
+        except ProbeError as exc:
+            latency = int((time.time() - start) * 1000)
+            return ConnectionResult(
+                ok=False,
+                message=f"connection failed ({exc.code}): {exc.message}",
+                latency_ms=latency,
+            )
+
+    def extract_metadata(self, config: Dict[str, Any]) -> List[AssetSummary]:
+        datasets = config.get("datasets") or []
+        return [
+            AssetSummary(
+                asset_type="dataset",
+                count=1,
+                sample_names=[ds.get("id", "<unnamed>")],
+            )
+            for ds in datasets
+        ]
 
     def capabilities(self) -> DriverCapabilities:
         return DriverCapabilities(
