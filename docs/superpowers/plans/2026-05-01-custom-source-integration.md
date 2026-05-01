@@ -152,20 +152,27 @@ In the same `Integration` block, add:
   probeSchedule String?   // "hourly" | "every_6h" | "daily" | "weekly" | null
 ```
 
-- [ ] **Step 4: Generate migration**
+- [ ] **Step 4: Push schema to dev DB**
 
-Run: `cd /Users/emilfabel/pallisade-copilot && npx prisma migrate dev --name add_custom_source_probe_run --create-only`
-Expected: a new SQL file under `prisma/migrations/<timestamp>_add_custom_source_probe_run/migration.sql`. Open it and verify it creates `CustomSourceProbeRun` table, `ProbeRunStatus` enum, and the two new `Integration` columns.
+This repo uses `prisma db push` (not `prisma migrate`). There is no `prisma/migrations/` directory and the project explicitly adopted db-push (see commit `0abd61b` "adopt db push workflow"). Do NOT run `prisma migrate dev` or `prisma migrate deploy`.
 
-- [ ] **Step 5: Apply migration**
+Run: `npx prisma db push`
+Expected: `🚀 Your database is now in sync with your Prisma schema.` Plus regenerated client output.
 
-Run: `npx prisma migrate deploy`
-Expected: `✔ Applied migration ...`
+- [ ] **Step 5: Regenerate Prisma client (if `db push` did not already)**
 
-- [ ] **Step 6: Commit**
+Run: `npx prisma generate`
+Expected: `✔ Generated Prisma Client (...)` — `db push` usually regenerates automatically; this is a belt-and-braces step.
+
+- [ ] **Step 6: Verify the new model is in the generated client**
+
+Run: `grep "CustomSourceProbeRun\|ProbeRunStatus" node_modules/.prisma/client/index.d.ts | head -5`
+Expected: matches showing both `CustomSourceProbeRun` and `ProbeRunStatus` exported.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add prisma/schema.prisma prisma/migrations/
+git add prisma/schema.prisma
 git commit -m "feat(prisma): add CustomSourceProbeRun model + Integration probe schedule fields"
 ```
 
