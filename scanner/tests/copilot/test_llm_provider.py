@@ -15,6 +15,8 @@ from copilot.llm_provider import (
     NormalizedToolCall,
     OpenAIProvider,
     StopKind,
+    StreamFinal,
+    StreamTextDelta,
 )
 
 
@@ -99,11 +101,16 @@ class TestAnthropicParseResponse:
         )
         norm = AnthropicProvider().parse_response(resp)
         assert norm.text == "I'll check that."
-        assert norm.tool_calls == [NormalizedToolCall(
-            id="toolu_001",
-            name="query_warehouse",
-            args={"sql": "SELECT 1"},
-        )]
+        assert len(norm.tool_calls) == 1
+        tc = norm.tool_calls[0]
+        assert tc.id == "toolu_001"
+        assert tc.name == "query_warehouse"
+        assert tc.args == {"sql": "SELECT 1"}
+        # args_raw is a deterministic JSON serialization of the dict
+        # (Anthropic gives us a dict; we synthesize the string for
+        # parity with OpenAI's exact-string preservation).
+        assert tc.args_raw is not None
+        assert json.loads(tc.args_raw) == {"sql": "SELECT 1"}
         assert norm.stop_kind is StopKind.TOOL_USE
 
     def test_max_tokens_canonicalized(self):
@@ -173,15 +180,31 @@ class TestAnthropicWireFormat:
     def test_assistant_turn_round_trips_content(self):
         raw = _anthropic_response(
             content=[_anthropic_text_block("ok"), _anthropic_tool_use_block(
-                id="toolu_1", name="t", input={},
+                id="toolu_1", name="t", input={"k": 1},
             )],
             stop_reason="tool_use",
         )
         norm = AnthropicProvider().parse_response(raw)
         turn = AnthropicProvider().assistant_turn_for_tool_use(norm)
         assert turn["role"] == "assistant"
-        # Anthropic re-accepts its own content-blocks list verbatim.
-        assert turn["content"] is raw.content
+        # Built from normalized fields (works for both streaming and
+        # non-streaming) — text + tool_use blocks reconstructed.
+        assert turn["content"] == [
+            {"type": "text", "text": "ok"},
+            {"type": "tool_use", "id": "toolu_1", "name": "t", "input": {"k": 1}},
+        ]
+
+    def test_assistant_turn_omits_text_when_empty(self):
+        raw = _anthropic_response(
+            content=[_anthropic_tool_use_block(id="toolu_1", name="t", input={})],
+            stop_reason="tool_use",
+        )
+        norm = AnthropicProvider().parse_response(raw)
+        turn = AnthropicProvider().assistant_turn_for_tool_use(norm)
+        # No text block when the model produced none.
+        assert turn["content"] == [
+            {"type": "tool_use", "id": "toolu_1", "name": "t", "input": {}},
+        ]
 
     def test_tool_result_message_shape(self):
         msg = AnthropicProvider().tool_result_message(
@@ -210,6 +233,7 @@ class TestOpenAIParseResponse:
         assert norm.output_tokens == 20
 
     def test_tool_calls_finish_reason(self):
+        raw_args = json.dumps({"sql": "SELECT 1"})
         resp = _openai_response(
             content=None,
             finish_reason="tool_calls",
@@ -217,17 +241,20 @@ class TestOpenAIParseResponse:
                 _openai_tool_call(
                     id="call_001",
                     name="query_warehouse",
-                    args_json=json.dumps({"sql": "SELECT 1"}),
+                    args_json=raw_args,
                 )
             ],
         )
         norm = OpenAIProvider().parse_response(resp)
         assert norm.text == ""
-        assert norm.tool_calls == [NormalizedToolCall(
-            id="call_001",
-            name="query_warehouse",
-            args={"sql": "SELECT 1"},
-        )]
+        assert len(norm.tool_calls) == 1
+        tc = norm.tool_calls[0]
+        assert tc.id == "call_001"
+        assert tc.name == "query_warehouse"
+        assert tc.args == {"sql": "SELECT 1"}
+        # args_raw preserves the EXACT bytes the model produced, not a
+        # re-serialization.
+        assert tc.args_raw == raw_args
         assert norm.stop_kind is StopKind.TOOL_USE
 
     def test_malformed_arguments_fall_back_to_empty_dict(self):
@@ -346,12 +373,30 @@ class TestOpenAIWireFormat:
         turn = OpenAIProvider().assistant_turn_for_tool_use(norm)
         assert turn["role"] == "assistant"
         assert turn["content"] == "thinking"
+        # Tool-call args round-trip the EXACT JSON string the model
+        # produced (args_raw), not a re-serialization. Pinning this
+        # because re-serializing whitespace/precision is the kind of
+        # subtle drift that confuses some tool consumers.
         assert turn["tool_calls"] == [
             {"id": "call_1", "type": "function",
              "function": {"name": "t", "arguments": '{"k":1}'}},
             {"id": "call_2", "type": "function",
              "function": {"name": "u", "arguments": '{}'}},
         ]
+
+    def test_assistant_turn_collapses_empty_text_to_none(self):
+        raw = _openai_response(
+            content="",
+            finish_reason="tool_calls",
+            tool_calls=[_openai_tool_call(id="c1", name="t", args_json='{}')],
+        )
+        norm = OpenAIProvider().parse_response(raw)
+        turn = OpenAIProvider().assistant_turn_for_tool_use(norm)
+        # OpenAI prefers None over "" for content when only tool_calls
+        # are present — the streaming path always returned "" or None
+        # depending on accumulator state, leading to inconsistent
+        # message shapes. Pin the unified behavior.
+        assert turn["content"] is None
 
     def test_tool_result_message_shape(self):
         msg = OpenAIProvider().tool_result_message(
@@ -367,6 +412,208 @@ class TestOpenAIWireFormat:
 # ---------------------------------------------------------------------------
 # Cross-provider invariants
 # ---------------------------------------------------------------------------
+
+
+class TestAnthropicStream:
+    """``iter_stream`` collapses Anthropic SDK events into canonical
+    StreamTextDelta / StreamFinal events."""
+
+    def _stub_stream(self, *, deltas, final_message):
+        """Build a stream stand-in that's iterable and exposes
+        ``get_final_message``. Mirrors the real SDK's context shape."""
+        events = [
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(text=t),
+            )
+            for t in deltas
+        ]
+
+        class _Stream:
+            def __iter__(self_):
+                return iter(events)
+
+            def get_final_message(self_):
+                return final_message
+
+        return _Stream()
+
+    def test_text_deltas_yield_in_order(self):
+        stream = self._stub_stream(
+            deltas=["Hel", "lo, ", "world"],
+            final_message=_anthropic_response(
+                content=[_anthropic_text_block("Hello, world")],
+                stop_reason="end_turn",
+            ),
+        )
+        events = list(AnthropicProvider().iter_stream(stream))
+        assert len(events) == 4
+        assert isinstance(events[0], StreamTextDelta)
+        assert events[0].text == "Hel"
+        assert isinstance(events[3], StreamFinal)
+        assert events[3].response.text == "Hello, world"
+        assert events[3].response.stop_kind is StopKind.COMPLETED
+
+    def test_tool_use_finalization_carries_tool_calls(self):
+        stream = self._stub_stream(
+            deltas=["thinking..."],
+            final_message=_anthropic_response(
+                content=[
+                    _anthropic_text_block("thinking..."),
+                    _anthropic_tool_use_block(
+                        id="toolu_1",
+                        name="query_warehouse",
+                        input={"sql": "SELECT 1"},
+                    ),
+                ],
+                stop_reason="tool_use",
+            ),
+        )
+        events = list(AnthropicProvider().iter_stream(stream))
+        final = events[-1]
+        assert isinstance(final, StreamFinal)
+        assert final.response.stop_kind is StopKind.TOOL_USE
+        assert len(final.response.tool_calls) == 1
+        assert final.response.tool_calls[0].name == "query_warehouse"
+        assert final.response.tool_calls[0].args == {"sql": "SELECT 1"}
+
+    def test_non_text_deltas_are_dropped(self):
+        # Only content_block_delta events with text contribute. Other
+        # SDK events (message_start, content_block_stop) flow past the
+        # filter without becoming StreamTextDelta.
+        events_with_noise = [
+            SimpleNamespace(type="message_start"),
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(text="x"),
+            ),
+            SimpleNamespace(type="content_block_stop"),
+            SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(),  # delta with no .text attr
+            ),
+        ]
+
+        class _Stream:
+            def __iter__(self_):
+                return iter(events_with_noise)
+
+            def get_final_message(self_):
+                return _anthropic_response(
+                    content=[_anthropic_text_block("x")],
+                    stop_reason="end_turn",
+                )
+
+        events = list(AnthropicProvider().iter_stream(_Stream()))
+        text_events = [e for e in events if isinstance(e, StreamTextDelta)]
+        assert len(text_events) == 1
+        assert text_events[0].text == "x"
+
+
+class TestOpenAIStream:
+    """``iter_stream`` accumulates partial chunks into a final response.
+
+    OpenAI emits tool-call args as multiple chunks indexed by
+    ``tc_delta.index``; the provider must reassemble them.
+    """
+
+    def _chunk(self, *, delta_content=None, tool_call_deltas=None,
+               finish_reason=None, usage=None):
+        delta = SimpleNamespace(
+            content=delta_content,
+            tool_calls=tool_call_deltas,
+        )
+        choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
+        chunk = SimpleNamespace(choices=[choice])
+        if usage is not None:
+            chunk.usage = usage
+        return chunk
+
+    def _tc_delta(self, *, index, id=None, name=None, args_chunk=None):
+        function = SimpleNamespace(
+            name=name,
+            arguments=args_chunk,
+        ) if (name or args_chunk) else None
+        return SimpleNamespace(index=index, id=id, function=function)
+
+    def test_text_only_completion(self):
+        stream = iter([
+            self._chunk(delta_content="Hel"),
+            self._chunk(delta_content="lo"),
+            self._chunk(finish_reason="stop"),
+        ])
+        events = list(OpenAIProvider().iter_stream(stream))
+        text_events = [e for e in events if isinstance(e, StreamTextDelta)]
+        finals = [e for e in events if isinstance(e, StreamFinal)]
+        assert "".join(e.text for e in text_events) == "Hello"
+        assert len(finals) == 1
+        assert finals[0].response.text == "Hello"
+        assert finals[0].response.stop_kind is StopKind.COMPLETED
+
+    def test_tool_call_args_assembled_across_chunks(self):
+        # Realistic OpenAI streaming: tool call comes in as id+name in
+        # chunk 1, then args fragments across chunks 2-4.
+        stream = iter([
+            self._chunk(tool_call_deltas=[
+                self._tc_delta(index=0, id="call_1", name="query_warehouse"),
+            ]),
+            self._chunk(tool_call_deltas=[
+                self._tc_delta(index=0, args_chunk='{"sq'),
+            ]),
+            self._chunk(tool_call_deltas=[
+                self._tc_delta(index=0, args_chunk='l": "SELE'),
+            ]),
+            self._chunk(tool_call_deltas=[
+                self._tc_delta(index=0, args_chunk='CT 1"}'),
+            ]),
+            self._chunk(finish_reason="tool_calls"),
+        ])
+        events = list(OpenAIProvider().iter_stream(stream))
+        final = events[-1]
+        assert isinstance(final, StreamFinal)
+        assert final.response.stop_kind is StopKind.TOOL_USE
+        tcs = final.response.tool_calls
+        assert len(tcs) == 1
+        assert tcs[0].id == "call_1"
+        assert tcs[0].name == "query_warehouse"
+        assert tcs[0].args == {"sql": "SELECT 1"}
+        # ``args_raw`` preserves the exact assembled JSON string for
+        # round-trip into the next assistant turn.
+        assert tcs[0].args_raw == '{"sql": "SELECT 1"}'
+
+    def test_usage_accumulates_across_chunks(self):
+        stream = iter([
+            self._chunk(delta_content="x"),
+            self._chunk(
+                finish_reason="stop",
+                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5),
+            ),
+        ])
+        events = list(OpenAIProvider().iter_stream(stream))
+        final = events[-1]
+        assert final.response.input_tokens == 10
+        assert final.response.output_tokens == 5
+
+    def test_multiple_tool_calls_indexed(self):
+        # Two parallel tool calls — ``index`` distinguishes them. The
+        # provider must keep their accumulators separate.
+        stream = iter([
+            self._chunk(tool_call_deltas=[
+                self._tc_delta(index=0, id="c1", name="a"),
+                self._tc_delta(index=1, id="c2", name="b"),
+            ]),
+            self._chunk(tool_call_deltas=[
+                self._tc_delta(index=0, args_chunk='{"x":1}'),
+                self._tc_delta(index=1, args_chunk='{"y":2}'),
+            ]),
+            self._chunk(finish_reason="tool_calls"),
+        ])
+        events = list(OpenAIProvider().iter_stream(stream))
+        final = events[-1]
+        assert len(final.response.tool_calls) == 2
+        assert {tc.name for tc in final.response.tool_calls} == {"a", "b"}
+        names_to_args = {tc.name: tc.args for tc in final.response.tool_calls}
+        assert names_to_args == {"a": {"x": 1}, "b": {"y": 2}}
 
 
 class TestCrossProviderInvariants:

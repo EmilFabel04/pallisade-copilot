@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, asdict
 from typing import AsyncGenerator, Dict, List, Optional, Any, Set, Union
 from datetime import datetime, date
 from enum import Enum
+import contextlib
 import logging
 import json
 import os
@@ -59,8 +60,11 @@ from .llm_provider import (
     AnthropicProvider,
     LLMProvider,
     NormalizedResponse,
+    NormalizedToolCall,
     OpenAIProvider,
     StopKind,
+    StreamFinal,
+    StreamTextDelta,
 )
 
 logger = logging.getLogger(__name__)
@@ -1263,31 +1267,33 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         system_prompt_override: Optional[str] = None,
         confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Stream chat with Anthropic Claude via SSE events."""
+        """Stream chat with Anthropic Claude via SSE events.
+
+        Thin shell: provider-specific setup (client check, prefetch,
+        MCP, pre-execution flow) plus a delegate to
+        ``_run_provider_stream_loop`` for the unified streaming body.
+        """
         if not self.anthropic_client:
             yield StreamEvent("error", {"message": "Anthropic not available. Configure ANTHROPIC_API_KEY."})
             return
 
         confirmed_tool_ids = confirmed_tool_ids or set()
-
-        # Create tool executor (same setup as _chat_anthropic)
+        provider = AnthropicProvider()
         executor = ToolExecutor(context)
-
-        # Pre-fetch warehouse schema (failures recorded on context for prompt)
         await self._prefetch_schema(context, executor, "[Stream/Anthropic]")
 
         registry = get_tool_registry()
         mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
-        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
+        available_tool_objects = registry.get_available_tools(
+            context.integration_types, exclude=mode_excluded,
+        )
         user_query = ""
         if messages:
             last_msg = messages[-1]
             user_query = last_msg.content if isinstance(last_msg.content, str) else ""
 
-        # Eager prefetch for investigative queries (no-op for benign queries).
-        # Populates context.prefetched_snapshot, which build_system_prompt
-        # renders as a "Pre-loaded Snapshot" section so the LLM has aggregate
-        # state (monitor counts etc.) without burning an iteration on it.
+        # Eager prefetch for investigative queries — populates
+        # context.prefetched_snapshot for the system prompt.
         if user_query and context.prefetched_snapshot is None:
             try:
                 from .prefetch import prefetch_for_query
@@ -1298,11 +1304,12 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 logger.debug(f"Prefetch skipped: {e}")
 
         system = system_prompt_override if system_prompt_override else self.build_system_prompt(
-            context, query=user_query, available_tools=available_tool_objects
+            context, query=user_query, available_tools=available_tool_objects,
         )
-        tools = registry.to_anthropic_tools(context.integration_types, exclude=mode_excluded)
+        tools: Optional[List[Dict[str, Any]]] = registry.to_anthropic_tools(
+            context.integration_types, exclude=mode_excluded,
+        )
 
-        # Start MCP servers
         mcp_manager = None
         try:
             from scanner.mcp_bridge.client import MCPClientManager
@@ -1315,7 +1322,10 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             if mcp_manager.has_servers:
                 mcp_tools = await mcp_manager.discover_tools(format="anthropic")
                 tools = tools + mcp_tools
-                logger.info(f"[Stream/Anthropic] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                logger.info(
+                    f"[Stream/Anthropic] MCP: {len(mcp_tools)} tools "
+                    f"from {mcp_manager.active_servers}"
+                )
                 context.mcp_enabled = True
         except Exception as e:
             logger.warning(f"[Stream/Anthropic] MCP init failed: {e}")
@@ -1323,444 +1333,92 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
         try:
             anthropic_messages = self._convert_messages(messages)
-            total_input_tokens = 0
-            total_output_tokens = 0
             all_tool_calls: List[Dict[str, Any]] = _BoundedList(maxlen=50)
-            fired_adjacent_rules: Set[str] = set()
 
-            # If we have a pending tool call from confirmation flow,
-            # execute it directly and inject result into messages
+            # Pre-execute pending tool call (resume from confirmation flow).
             if pending_tool_call:
                 ptc_name = pending_tool_call["tool_name"]
                 ptc_args = pending_tool_call.get("arguments", {})
-                ptc_id = pending_tool_call.get("tool_use_id", f"toolu_confirmed_{ptc_name}")
+                ptc_id = pending_tool_call.get(
+                    "tool_use_id", f"toolu_confirmed_{ptc_name}",
+                )
+                async for ev in self._emit_pre_executed_tool(
+                    provider=provider,
+                    messages=anthropic_messages,
+                    executor=executor,
+                    mcp_manager=mcp_manager,
+                    tool_use_id=ptc_id,
+                    tool_name=ptc_name,
+                    tool_args=ptc_args,
+                    all_tool_calls=all_tool_calls,
+                    log_prefix="[Stream/Anthropic]",
+                ):
+                    yield ev
 
-                logger.info(f"[Stream/Anthropic] Pre-executing confirmed tool: {ptc_name}")
-                yield StreamEvent("tool_call_start", {
-                    "tool_use_id": ptc_id,
-                    "tool_name": ptc_name,
-                    "arguments": ptc_args,
-                })
-
-                try:
-                    if ptc_name.startswith("mcp_") and mcp_manager:
-                        mcp_result = await mcp_manager.call_tool(ptc_name, ptc_args)
-                        result = ToolResult(
-                            success=mcp_result.get("success", False),
-                            data=mcp_result.get("data"),
-                            error=mcp_result.get("error"),
-                        )
-                    else:
-                        result = await executor.execute(ptc_name, ptc_args)
-                except Exception as e:
-                    result = ToolResult(success=False, error=str(e))
-
-                yield StreamEvent("tool_call_result", {
-                    "tool_use_id": ptc_id,
-                    "tool_name": ptc_name,
-                    "result": result.to_dict(),
-                })
-
-                all_tool_calls.append({
-                    "tool": ptc_name,
-                    "input": ptc_args,
-                    "result": result.to_dict(),
-                })
-
-                # Inject tool call + result into Anthropic messages
-                anthropic_messages.append({
-                    "role": "assistant",
-                    "content": [{
-                        "type": "tool_use",
-                        "id": ptc_id,
-                        "name": ptc_name,
-                        "input": ptc_args,
-                    }],
-                })
-                anthropic_messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": ptc_id,
-                        "content": json.dumps(result.to_dict(), default=_safe_json_default),
-                    }],
-                })
-
-            # Pre-execute confirmed artifacts before LLM call
+            # Pre-execute confirmed artifacts.
             if confirmed_artifacts:
                 for art_id, art_data in list(confirmed_artifacts.items()):
                     art_tool = art_data.get("tool_name", "")
                     if not art_tool:
                         continue
-                    logger.info(f"[Stream/Anthropic] Pre-executing confirmed artifact '{art_id}' for tool '{art_tool}'")
-                    art_use_id = f"toolu_artifact_{art_id}"
-
-                    yield StreamEvent("tool_call_start", {
-                        "tool_use_id": art_use_id,
-                        "tool_name": art_tool,
-                        "arguments": art_data,
-                    })
-
-                    try:
-                        art_result = await executor.execute_confirmed(art_tool, art_data)
-                    except Exception as e:
-                        art_result = ToolResult(success=False, error=str(e))
-
-                    yield StreamEvent("tool_call_result", {
-                        "tool_use_id": art_use_id,
-                        "tool_name": art_tool,
-                        "result": art_result.to_dict(),
-                    })
-
-                    all_tool_calls.append({
-                        "tool": art_tool,
-                        "input": art_data,
-                        "result": art_result.to_dict(),
-                    })
-
-                    # Inject into messages so LLM can summarize what happened
-                    anthropic_messages.append({
-                        "role": "assistant",
-                        "content": [{
-                            "type": "tool_use",
-                            "id": art_use_id,
-                            "name": art_tool,
-                            "input": art_data,
-                        }],
-                    })
-                    anthropic_messages.append({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": art_use_id,
-                            "content": json.dumps(art_result.to_dict(), default=_safe_json_default),
-                        }],
-                    })
-                # Tell the LLM the action is done — do NOT re-call the tool
+                    async for ev in self._emit_pre_executed_tool(
+                        provider=provider,
+                        messages=anthropic_messages,
+                        executor=executor,
+                        mcp_manager=mcp_manager,
+                        tool_use_id=f"toolu_artifact_{art_id}",
+                        tool_name=art_tool,
+                        tool_args=art_data,
+                        all_tool_calls=all_tool_calls,
+                        log_prefix="[Stream/Anthropic]",
+                        use_execute_confirmed=True,
+                    ):
+                        yield ev
+                # Tell the LLM the action is done — do NOT re-call the tool.
                 anthropic_messages.append({
                     "role": "user",
-                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitor has already been created.",
+                    "content": (
+                        "The user confirmed and the action above was executed "
+                        "successfully. Summarize the result in text. Do NOT "
+                        "call create_watch or any write tool again — the "
+                        "monitor has already been created."
+                    ),
                 })
-                # Clear so the in-loop guard doesn't re-execute
+                # Clear so the in-loop guard doesn't re-execute.
                 confirmed_artifacts = None
-                # Limit to 1 iteration so LLM can only summarize, not call tools again
                 max_tool_iterations = 1
-                # Remove all tools so LLM can only produce text (no duplicate create_watch)
                 tools = []
 
-            has_artifact = False
-            for iteration in range(max_tool_iterations):
-                yield StreamEvent("iteration_start", {
-                    "iteration": iteration + 1,
-                    "reason": "tool_use" if iteration > 0 else ("confirmed_tool" if pending_tool_call else "initial"),
-                })
-
-                try:
-                    stream_kwargs: Dict[str, Any] = {
-                        "model": self.model,
-                        "system": _cached_system(system),
-                        "messages": anthropic_messages,
-                        "tools": tools if tools else anthropic.NOT_GIVEN,
-                        "max_tokens": 16384,
-                    }
-                    if iteration == 0 and tools and _should_force_initial_tool(user_query):
-                        stream_kwargs["tool_choice"] = {"type": "any"}
-                        logger.info("[Stream/Anthropic] Forcing tool call on iter 0 for investigative query")
-
-                    # Use the streaming API
-                    with self.anthropic_client.messages.stream(**stream_kwargs) as stream:
-                        for event in stream:
-                            if event.type == "content_block_delta":
-                                if hasattr(event.delta, "text"):
-                                    yield StreamEvent("text_delta", {"content": event.delta.text})
-
-                        # Get final message after stream completes
-                        final_message = stream.get_final_message()
-
-                    total_input_tokens += final_message.usage.input_tokens
-                    total_output_tokens += final_message.usage.output_tokens
-
-                except Exception as e:
-                    logger.exception("[Stream/Anthropic] Error in streaming call")
-                    yield StreamEvent("error", {"message": f"Error communicating with AI: {str(e)}"})
-                    return
-
-                # Check stop reason
-                if final_message.stop_reason == "end_turn":
-                    yield StreamEvent("done", {
-                        "input_tokens": total_input_tokens,
-                        "output_tokens": total_output_tokens,
-                        "model": self.model,
-                        "stop_reason": "end_turn",
-                        "tool_calls": all_tool_calls,
-                        "iterations_used": iteration + 1,
-                    })
-                    return
-
-                if final_message.stop_reason == "tool_use":
-                    tool_results = []
-
-                    for block in final_message.content:
-                        if block.type != "tool_use":
-                            continue
-
-                        tool_name = block.name
-                        tool_input = block.input
-                        tool_use_id = block.id
-
-                        yield StreamEvent("tool_call_start", {
-                            "tool_use_id": tool_use_id,
-                            "tool_name": tool_name,
-                            "arguments": tool_input,
-                        })
-
-                        # Check if this tool needs user confirmation
-                        # confirmed_tool_ids may contain tool use IDs or tool names
-                        tool_def = registry.get_tool(tool_name)
-                        needs_confirmation = (
-                            tool_def
-                            and tool_def.requires_confirmation
-                            and tool_use_id not in confirmed_tool_ids
-                            and tool_name not in confirmed_tool_ids
-                        )
-
-                        # For apply_change_plan: verify the plan exists before pausing for confirmation.
-                        # If the LLM hallucinated a plan_id (skipped create_change_plan), execute normally
-                        # so the error propagates back and the LLM can self-correct.
-                        if needs_confirmation and tool_name == "apply_change_plan":
-                            plan_id = tool_input.get("plan_id")
-                            if plan_id:
-                                try:
-                                    from .change_plan import get_change_plan_store
-                                    if not get_change_plan_store().get(plan_id):
-                                        logger.warning(f"[Stream/Anthropic] apply_change_plan: plan '{plan_id}' not found, skipping confirmation")
-                                        needs_confirmation = False
-                                except Exception as e:
-                                    # Don't silently disable confirmation if
-                                    # the store/import is broken — log it so
-                                    # operators can spot the infra failure.
-                                    logger.warning(
-                                        f"[Stream/Anthropic] change_plan store lookup failed: {e}"
-                                    )
-
-                        if needs_confirmation:
-                            logger.info(f"[Stream/Anthropic] Tool '{tool_name}' requires confirmation")
-                            yield StreamEvent("tool_confirmation_required", {
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "arguments": tool_input,
-                                "description": f"The AI wants to execute '{tool_name}' which may modify external systems.",
-                            })
-                            yield StreamEvent("done", {
-                                "input_tokens": total_input_tokens,
-                                "output_tokens": total_output_tokens,
-                                "model": self.model,
-                                "stop_reason": "confirmation_required",
-                                "tool_calls": all_tool_calls,
-                                "iterations_used": iteration + 1,
-                            })
-                            return
-
-                        # Check if this is a confirmed artifact being executed
-                        if tool_name in WRITE_TOOLS and confirmed_artifacts:
-                            matched_art = False
-                            for art_id, art_data in list(confirmed_artifacts.items()):
-                                if art_data.get("tool_name") == tool_name:
-                                    logger.info(f"[Stream/Anthropic] Executing confirmed artifact '{art_id}' for tool '{tool_name}'")
-                                    result = await executor.execute_confirmed(tool_name, art_data)
-                                    yield StreamEvent("tool_call_result", {
-                                        "tool_use_id": tool_use_id,
-                                        "tool_name": tool_name,
-                                        "result": result.to_dict(),
-                                    })
-                                    all_tool_calls.append({
-                                        "tool": tool_name,
-                                        "input": tool_input,
-                                        "result": result.to_dict(),
-                                    })
-                                    tool_results.append({
-                                        "type": "tool_result",
-                                        "tool_use_id": tool_use_id,
-                                        "content": json.dumps(result.to_dict(), default=_safe_json_default),
-                                    })
-                                    confirmed_artifacts.pop(art_id, None)
-                                    matched_art = True
-                                    break
-                            if matched_art:
-                                continue
-
-                        # Auto-execute safe tool
-                        logger.info(f"[Stream/Anthropic] Executing tool: {tool_name}")
-                        try:
-                            if tool_name.startswith("mcp_") and mcp_manager:
-                                mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                result = ToolResult(
-                                    success=mcp_result.get("success", False),
-                                    data=mcp_result.get("data"),
-                                    error=mcp_result.get("error"),
-                                )
-                            else:
-                                result = await executor.execute(tool_name, tool_input)
-                        except Exception as tool_err:
-                            logger.exception(f"[Stream/Anthropic] Unhandled error executing tool '{tool_name}'")
-                            result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
-
-                        # Check if the result is an artifact proposal (write tool returning ToolArtifactResult)
-                        if isinstance(result, ToolArtifactResult):
-                            artifact_data = result.to_dict()
-                            yield StreamEvent("ui_artifact", artifact_data)
-
-                            synthetic_text = result.to_synthetic_tool_result()
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": synthetic_text,
-                            })
-                            all_tool_calls.append({
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "arguments": tool_input,
-                                "result": {"artifact": artifact_data},
-                            })
-                            has_artifact = True
-                        else:
-                            all_tool_calls.append({
-                                "tool": tool_name,
-                                "input": tool_input,
-                                "result": result.to_dict(),
-                            })
-
-                            yield StreamEvent("tool_call_result", {
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "result": result.to_dict(),
-                            })
-
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "content": json.dumps(result.to_dict(), default=_safe_json_default),
-                            })
-
-                    # If an artifact was emitted, stop iterating — the user needs to confirm
-                    if has_artifact:
-                        break
-
-                    # Append to conversation and continue loop
-                    anthropic_messages.append({
-                        "role": "assistant",
-                        "content": final_message.content,
-                    })
-                    anthropic_messages.append({
-                        "role": "user",
-                        "content": tool_results,
-                    })
-
-                    # --- Adjacent-path steering (surgical, per-rule, capped) ---
-                    if iteration < max_tool_iterations - 1:
-                        for block in final_message.content:
-                            if getattr(block, "type", None) != "tool_use":
-                                continue
-                            matching = [
-                                c for c in all_tool_calls
-                                if c.get("tool") == block.name and c.get("input") == block.input
-                            ]
-                            if not matching:
-                                continue
-                            last_call = matching[-1]
-                            rd = last_call.get("result") or {}
-                            last_result = ToolResult(
-                                success=rd.get("success", False),
-                                data=rd.get("data"),
-                                error=rd.get("error"),
-                            )
-                            fired = _evaluate_adjacent_path_rule(
-                                tool_name=block.name,
-                                tool_args=block.input,
-                                tool_result=last_result,
-                                integration_types=context.integration_types,
-                                all_tool_calls=all_tool_calls,
-                                fired_rule_names=fired_adjacent_rules,
-                            )
-                            if fired is not None:
-                                rule_name, steer_msg = fired
-                                fired_adjacent_rules.add(rule_name)
-                                logger.info(f"[Stream/Anthropic] Adjacent-path steering: {rule_name}")
-                                anthropic_messages.append({
-                                    "role": "user",
-                                    "content": steer_msg,
-                                })
-
-                    # --- Root cause injection (once, after first evidence round) ---
-                    if (
-                        context.intent_result
-                        and iteration >= 1
-                        and not getattr(context, '_root_cause_resolved', False)
-                    ):
-                        try:
-                            from .intent import Intent
-                            from .root_cause import resolve_fix_owner, format_owner_hint
-
-                            primary_intent = context.intent_result.primary.intent
-                            if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
-                                owner_decision = resolve_fix_owner(
-                                    all_tool_calls, context.intent_result
-                                )
-                                context._root_cause_resolved = True
-                                hint = format_owner_hint(
-                                    owner_decision,
-                                    target_hint=context.intent_result.target_hint,
-                                )
-                                logger.info(
-                                    f"[Stream/Anthropic] Root cause: {owner_decision.owner_system.value} "
-                                    f"(confidence={owner_decision.confidence:.0%})"
-                                )
-                                # Inject as a user message with system context
-                                anthropic_messages.append({
-                                    "role": "user",
-                                    "content": f"[System context — root cause analysis]: {hint}",
-                                })
-                        except Exception as e:
-                            logger.debug(f"[Stream/Anthropic] Root cause injection skipped: {e}")
-
-                    continue
-
-                # Unexpected stop reason
-                logger.warning(f"[Stream/Anthropic] Unexpected stop reason: {final_message.stop_reason}")
-                yield StreamEvent("done", {
-                    "input_tokens": total_input_tokens,
-                    "output_tokens": total_output_tokens,
-                    "model": self.model,
-                    "stop_reason": final_message.stop_reason or "unknown",
-                    "tool_calls": all_tool_calls,
-                    "iterations_used": iteration + 1,
-                })
-                return
-
-            # Max iterations reached — emit a fallback message so the UI never
-            # renders a blank assistant turn when the LLM spent the whole budget
-            # on tool calls without reaching a summarization turn.
-            logger.warning(
-                f"[Stream/Anthropic] Max iterations ({max_tool_iterations}) reached "
-                f"without a final answer after {len(all_tool_calls)} tool calls"
-            )
-            yield StreamEvent("text_delta", {
-                "content": "\n\n*[Investigation exceeded the tool-call budget before producing a summary. Please ask a follow-up question for the analysis.]*"
-            })
-            yield StreamEvent("done", {
-                "input_tokens": total_input_tokens,
-                "output_tokens": total_output_tokens,
-                "model": self.model,
-                "stop_reason": "max_iterations",
-                "tool_calls": all_tool_calls,
-                "iterations_used": max_tool_iterations,
-            })
+            # Anthropic's stream() is a context manager; use it directly.
+            stream_factory = lambda **kw: self.anthropic_client.messages.stream(**kw)
+            # Delegate to the unified streaming loop. We need to thread
+            # ``all_tool_calls`` through, but the loop manages its own;
+            # any pre-executed tool calls are already in ``messages``.
+            async for ev in self._run_provider_stream_loop(
+                provider=provider,
+                stream_factory=stream_factory,
+                system=_cached_system(system),
+                messages=anthropic_messages,
+                tools=tools if tools else None,
+                user_query=user_query,
+                context=context,
+                executor=executor,
+                mcp_manager=mcp_manager,
+                max_tool_iterations=max_tool_iterations,
+                log_prefix="[Stream/Anthropic]",
+                confirmed_tool_ids=confirmed_tool_ids,
+                confirmed_artifacts=confirmed_artifacts,
+                reasoning_effort=None,
+            ):
+                yield ev
         finally:
             if mcp_manager:
                 try:
                     await mcp_manager.shutdown()
                 except Exception as e:
-                    logger.warning(f"[Stream/Anthropic] MCP shutdown error (ignored): {e}")
+                    logger.warning(
+                        f"[Stream/Anthropic] MCP shutdown error (ignored): {e}"
+                    )
 
     async def _chat_openai_stream(
         self,
@@ -1772,31 +1430,34 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         system_prompt_override: Optional[str] = None,
         confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Stream chat with OpenAI GPT via SSE events."""
+        """Stream chat with OpenAI GPT via SSE events.
+
+        Thin shell: provider-specific setup (client check, prefetch,
+        MCP, pre-execution flow, reasoning-model guard) plus a
+        delegate to ``_run_provider_stream_loop`` for the unified
+        streaming body.
+        """
         if not self.openai_client:
             yield StreamEvent("error", {"message": "OpenAI not available. Configure OPENAI_API_KEY."})
             return
 
         confirmed_tool_ids = confirmed_tool_ids or set()
-
-        # Create tool executor (same setup as _chat_openai)
+        provider = OpenAIProvider(
+            supports_reasoning_effort=_supports_reasoning_effort(self.model),
+        )
         executor = ToolExecutor(context)
-
-        # Pre-fetch warehouse schema (failures recorded on context for prompt)
         await self._prefetch_schema(context, executor, "[Stream/OpenAI]")
 
         registry = get_tool_registry()
         mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
-        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
+        available_tool_objects = registry.get_available_tools(
+            context.integration_types, exclude=mode_excluded,
+        )
         user_query = ""
         if messages:
             last_msg = messages[-1]
             user_query = last_msg.content if isinstance(last_msg.content, str) else ""
 
-        # Eager prefetch for investigative queries (no-op for benign queries).
-        # Populates context.prefetched_snapshot, which build_system_prompt
-        # renders as a "Pre-loaded Snapshot" section so the LLM has aggregate
-        # state (monitor counts etc.) without burning an iteration on it.
         if user_query and context.prefetched_snapshot is None:
             try:
                 from .prefetch import prefetch_for_query
@@ -1807,11 +1468,20 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 logger.debug(f"Prefetch skipped: {e}")
 
         system = system_prompt_override if system_prompt_override else self.build_system_prompt(
-            context, query=user_query, available_tools=available_tool_objects
+            context, query=user_query, available_tools=available_tool_objects,
         )
-        tools = registry.to_openai_tools(context.integration_types, exclude=mode_excluded)
 
-        # Start MCP servers
+        # Reasoning models (o1/o3) don't accept tools yet; the provider
+        # will drop the field on the request when ``tools is None``.
+        is_reasoning_model = (
+            self.model.startswith("o1") or self.model.startswith("o3")
+        )
+        tools: Optional[List[Dict[str, Any]]] = (
+            registry.to_openai_tools(context.integration_types, exclude=mode_excluded)
+            if not is_reasoning_model
+            else None
+        )
+
         mcp_manager = None
         try:
             from scanner.mcp_bridge.client import MCPClientManager
@@ -1823,8 +1493,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             await mcp_manager.start_servers()
             if mcp_manager.has_servers:
                 mcp_tools = await mcp_manager.discover_tools(format="openai")
-                tools = tools + mcp_tools
-                logger.info(f"[Stream/OpenAI] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                if tools is None:
+                    tools = list(mcp_tools)
+                else:
+                    tools = tools + mcp_tools
+                logger.info(
+                    f"[Stream/OpenAI] MCP: {len(mcp_tools)} tools "
+                    f"from {mcp_manager.active_servers}"
+                )
                 context.mcp_enabled = True
         except Exception as e:
             logger.warning(f"[Stream/OpenAI] MCP init failed: {e}")
@@ -1832,519 +1508,94 @@ The database schema could not be pre-loaded. You MUST discover table and column 
 
         try:
             openai_messages = self._convert_messages_openai(messages, system)
-            total_input_tokens = 0
-            total_output_tokens = 0
             all_tool_calls: List[Dict[str, Any]] = _BoundedList(maxlen=50)
-            fired_adjacent_rules: Set[str] = set()
-            is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
 
-            # If we have a pending tool call from confirmation flow,
-            # execute it directly and inject result into messages
+            # Pre-execute pending tool call (resume from confirmation flow).
             if pending_tool_call:
                 ptc_name = pending_tool_call["tool_name"]
                 ptc_args = pending_tool_call.get("arguments", {})
-                ptc_id = pending_tool_call.get("tool_use_id", f"call_confirmed_{ptc_name}")
+                ptc_id = pending_tool_call.get(
+                    "tool_use_id", f"call_confirmed_{ptc_name}",
+                )
+                async for ev in self._emit_pre_executed_tool(
+                    provider=provider,
+                    messages=openai_messages,
+                    executor=executor,
+                    mcp_manager=mcp_manager,
+                    tool_use_id=ptc_id,
+                    tool_name=ptc_name,
+                    tool_args=ptc_args,
+                    all_tool_calls=all_tool_calls,
+                    log_prefix="[Stream/OpenAI]",
+                ):
+                    yield ev
 
-                logger.info(f"[Stream/OpenAI] Pre-executing confirmed tool: {ptc_name}")
-                yield StreamEvent("tool_call_start", {
-                    "tool_use_id": ptc_id,
-                    "tool_name": ptc_name,
-                    "arguments": ptc_args,
-                })
-
-                try:
-                    if ptc_name.startswith("mcp_") and mcp_manager:
-                        mcp_result = await mcp_manager.call_tool(ptc_name, ptc_args)
-                        result = ToolResult(
-                            success=mcp_result.get("success", False),
-                            data=mcp_result.get("data"),
-                            error=mcp_result.get("error"),
-                        )
-                    else:
-                        result = await executor.execute(ptc_name, ptc_args)
-                except Exception as e:
-                    result = ToolResult(success=False, error=str(e))
-
-                yield StreamEvent("tool_call_result", {
-                    "tool_use_id": ptc_id,
-                    "tool_name": ptc_name,
-                    "result": result.to_dict(),
-                })
-
-                all_tool_calls.append({
-                    "tool": ptc_name,
-                    "input": ptc_args,
-                    "result": result.to_dict(),
-                })
-
-                # Inject the tool call + result into OpenAI messages
-                # so the LLM sees it was already executed
-                openai_messages.append({
-                    "role": "assistant",
-                    "tool_calls": [{
-                        "id": ptc_id,
-                        "type": "function",
-                        "function": {
-                            "name": ptc_name,
-                            "arguments": json.dumps(ptc_args, default=_safe_json_default),
-                        },
-                    }],
-                })
-                openai_messages.append({
-                    "role": "tool",
-                    "tool_call_id": ptc_id,
-                    "content": json.dumps(result.to_dict(), default=_safe_json_default),
-                })
-
-            # Pre-execute confirmed artifacts before LLM call
+            # Pre-execute confirmed artifacts.
             if confirmed_artifacts:
                 for art_id, art_data in list(confirmed_artifacts.items()):
                     art_tool = art_data.get("tool_name", "")
                     if not art_tool:
                         continue
-                    logger.info(f"[Stream/OpenAI] Pre-executing confirmed artifact '{art_id}' for tool '{art_tool}'")
-                    art_use_id = f"call_artifact_{art_id}"
-
-                    yield StreamEvent("tool_call_start", {
-                        "tool_use_id": art_use_id,
-                        "tool_name": art_tool,
-                        "arguments": art_data,
-                    })
-
-                    try:
-                        art_result = await executor.execute_confirmed(art_tool, art_data)
-                    except Exception as e:
-                        art_result = ToolResult(success=False, error=str(e))
-
-                    yield StreamEvent("tool_call_result", {
-                        "tool_use_id": art_use_id,
-                        "tool_name": art_tool,
-                        "result": art_result.to_dict(),
-                    })
-
-                    all_tool_calls.append({
-                        "tool": art_tool,
-                        "input": art_data,
-                        "result": art_result.to_dict(),
-                    })
-
-                    # Inject into messages so LLM can summarize what happened
-                    openai_messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [{
-                            "id": art_use_id,
-                            "type": "function",
-                            "function": {
-                                "name": art_tool,
-                                "arguments": json.dumps(art_data, default=_safe_json_default),
-                            },
-                        }],
-                    })
-                    openai_messages.append({
-                        "role": "tool",
-                        "tool_call_id": art_use_id,
-                        "content": json.dumps(art_result.to_dict(), default=_safe_json_default),
-                    })
-                # Tell the LLM the action is done — do NOT re-call the tool
+                    async for ev in self._emit_pre_executed_tool(
+                        provider=provider,
+                        messages=openai_messages,
+                        executor=executor,
+                        mcp_manager=mcp_manager,
+                        tool_use_id=f"call_artifact_{art_id}",
+                        tool_name=art_tool,
+                        tool_args=art_data,
+                        all_tool_calls=all_tool_calls,
+                        log_prefix="[Stream/OpenAI]",
+                        use_execute_confirmed=True,
+                    ):
+                        yield ev
                 openai_messages.append({
                     "role": "user",
-                    "content": "The user confirmed and the action above was executed successfully. Summarize the result in text. Do NOT call create_watch or any write tool again — the monitor has already been created.",
+                    "content": (
+                        "The user confirmed and the action above was executed "
+                        "successfully. Summarize the result in text. Do NOT "
+                        "call create_watch or any write tool again — the "
+                        "monitor has already been created."
+                    ),
                 })
-                # Clear so the in-loop guard doesn't re-execute
                 confirmed_artifacts = None
-                # Limit to 1 iteration so LLM can only summarize, not call tools again
                 max_tool_iterations = 1
-                # Remove all tools so LLM can only produce text (no duplicate create_watch)
                 tools = []
 
-            has_artifact = False
-            for iteration in range(max_tool_iterations):
-                yield StreamEvent("iteration_start", {
-                    "iteration": iteration + 1,
-                    "reason": "tool_use" if iteration > 0 else "initial",
-                })
+            # OpenAI streaming returns an iterable, not a context
+            # manager, so wrap in nullcontext to fit the unified
+            # surface used by ``_run_provider_stream_loop``.
+            def stream_factory(**kw):
+                return contextlib.nullcontext(
+                    self.openai_client.chat.completions.create(stream=True, **kw)
+                )
 
-                try:
-                    api_params: Dict[str, Any] = {
-                        "model": self.model,
-                        "messages": openai_messages,
-                        "stream": True,
-                    }
-
-                    is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
-                    if is_new_model:
-                        api_params["max_completion_tokens"] = 16384
-                    else:
-                        api_params["max_tokens"] = 16384
-
-                    will_have_tools = bool(tools and not is_reasoning_model)
-                    if will_have_tools:
-                        api_params["tools"] = tools
-                        if iteration == 0 and _should_force_initial_tool(user_query):
-                            api_params["tool_choice"] = "required"
-                            logger.info("[Stream/OpenAI] Forcing tool call on iter 0 for investigative query")
-
-                    # GPT-5.x on Chat Completions rejects `reasoning_effort`
-                    # when `tools` are present (OpenAI returns 400 directing
-                    # callers to /v1/responses). Until we migrate to the
-                    # Responses API, only send the param on tool-free calls.
-                    effort = _reasoning_effort_for(self.model, context)
-                    if effort and not will_have_tools:
-                        api_params["reasoning_effort"] = effort
-
-                    response_stream = self.openai_client.chat.completions.create(**api_params)
-
-                    # Accumulate chunks
-                    accumulated_text = ""
-                    tool_calls_acc: Dict[int, Dict[str, Any]] = {}
-                    finish_reason = None
-
-                    for chunk in response_stream:
-                        choice = chunk.choices[0] if chunk.choices else None
-                        if not choice:
-                            continue
-
-                        delta = choice.delta
-                        finish_reason = choice.finish_reason or finish_reason
-
-                        # Stream text deltas
-                        if delta and delta.content:
-                            accumulated_text += delta.content
-                            yield StreamEvent("text_delta", {"content": delta.content})
-
-                        # Accumulate tool call deltas
-                        if delta and delta.tool_calls:
-                            for tc_delta in delta.tool_calls:
-                                idx = tc_delta.index
-                                if idx not in tool_calls_acc:
-                                    tool_calls_acc[idx] = {
-                                        "id": tc_delta.id or "",
-                                        "name": (tc_delta.function.name if tc_delta.function else "") or "",
-                                        "arguments": "",
-                                    }
-                                else:
-                                    if tc_delta.id:
-                                        tool_calls_acc[idx]["id"] = tc_delta.id
-                                    if tc_delta.function and tc_delta.function.name:
-                                        tool_calls_acc[idx]["name"] = tc_delta.function.name
-                                if tc_delta.function and tc_delta.function.arguments:
-                                    tool_calls_acc[idx]["arguments"] += tc_delta.function.arguments
-
-                        # Track usage from stream
-                        if hasattr(chunk, "usage") and chunk.usage:
-                            total_input_tokens += chunk.usage.prompt_tokens or 0
-                            total_output_tokens += chunk.usage.completion_tokens or 0
-
-                except Exception as e:
-                    logger.exception("[Stream/OpenAI] Error in streaming call")
-                    yield StreamEvent("error", {"message": f"Error communicating with AI: {str(e)}"})
-                    return
-
-                # Process finish reason
-                if finish_reason == "stop":
-                    yield StreamEvent("done", {
-                        "input_tokens": total_input_tokens,
-                        "output_tokens": total_output_tokens,
-                        "model": self.model,
-                        "stop_reason": "end_turn",
-                        "tool_calls": all_tool_calls,
-                        "iterations_used": iteration + 1,
-                    })
-                    return
-
-                # Token limit hit — send whatever text was accumulated
-                if finish_reason == "length":
-                    if not accumulated_text:
-                        # LLM spent all tokens on tool calls, never generated text
-                        fallback = "\n\n*[Response truncated — the analysis required too many steps. Please ask a follow-up question for the summary.]*"
-                        yield StreamEvent("text_delta", {"content": fallback})
-                    yield StreamEvent("done", {
-                        "input_tokens": total_input_tokens,
-                        "output_tokens": total_output_tokens,
-                        "model": self.model,
-                        "stop_reason": "length",
-                        "tool_calls": all_tool_calls,
-                        "iterations_used": iteration + 1,
-                    })
-                    return
-
-                if finish_reason == "tool_calls" and tool_calls_acc:
-                    # Build assistant message with tool calls for context
-                    assistant_tool_calls = [
-                        {
-                            "id": tc_data["id"],
-                            "type": "function",
-                            "function": {
-                                "name": tc_data["name"],
-                                "arguments": tc_data["arguments"],
-                            }
-                        }
-                        for tc_data in tool_calls_acc.values()
-                    ]
-                    openai_messages.append({
-                        "role": "assistant",
-                        "content": accumulated_text or None,
-                        "tool_calls": assistant_tool_calls,
-                    })
-
-                    # Execute each tool call
-                    for tc_data in tool_calls_acc.values():
-                        tool_name = tc_data["name"]
-                        tool_use_id = tc_data["id"]
-                        try:
-                            tool_input = json.loads(tc_data["arguments"])
-                        except json.JSONDecodeError:
-                            tool_input = {}
-
-                        yield StreamEvent("tool_call_start", {
-                            "tool_use_id": tool_use_id,
-                            "tool_name": tool_name,
-                            "arguments": tool_input,
-                        })
-
-                        # Check confirmation
-                        # confirmed_tool_ids may contain tool use IDs or tool names
-                        tool_def = registry.get_tool(tool_name)
-                        needs_confirmation = (
-                            tool_def
-                            and tool_def.requires_confirmation
-                            and tool_use_id not in confirmed_tool_ids
-                            and tool_name not in confirmed_tool_ids
-                        )
-
-                        # For apply_change_plan: verify the plan exists before pausing for confirmation.
-                        # If the LLM hallucinated a plan_id (skipped create_change_plan), execute normally
-                        # so the error propagates back and the LLM can self-correct.
-                        if needs_confirmation and tool_name == "apply_change_plan":
-                            plan_id = tool_input.get("plan_id")
-                            if plan_id:
-                                try:
-                                    from .change_plan import get_change_plan_store
-                                    if not get_change_plan_store().get(plan_id):
-                                        logger.warning(f"[Stream/OpenAI] apply_change_plan: plan '{plan_id}' not found, skipping confirmation")
-                                        needs_confirmation = False
-                                except Exception as e:
-                                    # Don't silently disable confirmation if
-                                    # the store/import is broken — log it so
-                                    # operators can spot the infra failure.
-                                    logger.warning(
-                                        f"[Stream/OpenAI] change_plan store lookup failed: {e}"
-                                    )
-
-                        if needs_confirmation:
-                            logger.info(f"[Stream/OpenAI] Tool '{tool_name}' requires confirmation")
-                            yield StreamEvent("tool_confirmation_required", {
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "arguments": tool_input,
-                                "description": f"The AI wants to execute '{tool_name}' which may modify external systems.",
-                            })
-                            yield StreamEvent("done", {
-                                "input_tokens": total_input_tokens,
-                                "output_tokens": total_output_tokens,
-                                "model": self.model,
-                                "stop_reason": "confirmation_required",
-                                "tool_calls": all_tool_calls,
-                                "iterations_used": iteration + 1,
-                            })
-                            return
-
-                        # Check if this is a confirmed artifact being executed
-                        if tool_name in WRITE_TOOLS and confirmed_artifacts:
-                            matched_art = False
-                            for art_id, art_data in list(confirmed_artifacts.items()):
-                                if art_data.get("tool_name") == tool_name:
-                                    logger.info(f"[Stream/OpenAI] Executing confirmed artifact '{art_id}' for tool '{tool_name}'")
-                                    result = await executor.execute_confirmed(tool_name, art_data)
-                                    yield StreamEvent("tool_call_result", {
-                                        "tool_use_id": tool_use_id,
-                                        "tool_name": tool_name,
-                                        "result": result.to_dict(),
-                                    })
-                                    all_tool_calls.append({
-                                        "tool": tool_name,
-                                        "input": tool_input,
-                                        "result": result.to_dict(),
-                                    })
-                                    openai_messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": tool_use_id,
-                                        "content": json.dumps(result.to_dict(), default=_safe_json_default),
-                                    })
-                                    confirmed_artifacts.pop(art_id, None)
-                                    matched_art = True
-                                    break
-                            if matched_art:
-                                continue
-
-                        logger.info(f"[Stream/OpenAI] Executing tool: {tool_name}")
-                        try:
-                            if tool_name.startswith("mcp_") and mcp_manager:
-                                mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                result = ToolResult(
-                                    success=mcp_result.get("success", False),
-                                    data=mcp_result.get("data"),
-                                    error=mcp_result.get("error"),
-                                )
-                            else:
-                                result = await executor.execute(tool_name, tool_input)
-                        except Exception as tool_err:
-                            logger.exception(f"[Stream/OpenAI] Unhandled error executing tool '{tool_name}'")
-                            result = ToolResult(success=False, error=f"Tool execution failed: {tool_err}")
-
-                        # Check if the result is an artifact proposal (write tool returning ToolArtifactResult)
-                        if isinstance(result, ToolArtifactResult):
-                            artifact_data = result.to_dict()
-                            yield StreamEvent("ui_artifact", artifact_data)
-
-                            synthetic_text = result.to_synthetic_tool_result()
-                            openai_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_use_id,
-                                "content": synthetic_text,
-                            })
-                            all_tool_calls.append({
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "arguments": tool_input,
-                                "result": {"artifact": artifact_data},
-                            })
-                            has_artifact = True
-                        else:
-                            all_tool_calls.append({
-                                "tool": tool_name,
-                                "input": tool_input,
-                                "result": result.to_dict(),
-                            })
-
-                            yield StreamEvent("tool_call_result", {
-                                "tool_use_id": tool_use_id,
-                                "tool_name": tool_name,
-                                "result": result.to_dict(),
-                            })
-
-                            openai_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_use_id,
-                                "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
-                            })
-
-                    # If an artifact was emitted, stop iterating — the user needs to confirm
-                    if has_artifact:
-                        break
-
-                    # --- Adjacent-path steering (surgical, per-rule, capped) ---
-                    if iteration < max_tool_iterations - 1:
-                        for tc_data in tool_calls_acc.values():
-                            tn = tc_data["name"]
-                            try:
-                                ta = json.loads(tc_data["arguments"])
-                            except json.JSONDecodeError:
-                                ta = {}
-                            matching = [
-                                c for c in all_tool_calls
-                                if c.get("tool") == tn and c.get("input") == ta
-                            ]
-                            if not matching:
-                                continue
-                            last_call = matching[-1]
-                            rd = last_call.get("result") or {}
-                            last_result = ToolResult(
-                                success=rd.get("success", False),
-                                data=rd.get("data"),
-                                error=rd.get("error"),
-                            )
-                            fired = _evaluate_adjacent_path_rule(
-                                tool_name=tn,
-                                tool_args=ta,
-                                tool_result=last_result,
-                                integration_types=context.integration_types,
-                                all_tool_calls=all_tool_calls,
-                                fired_rule_names=fired_adjacent_rules,
-                            )
-                            if fired is not None:
-                                rule_name, steer_msg = fired
-                                fired_adjacent_rules.add(rule_name)
-                                logger.info(f"[Stream/OpenAI] Adjacent-path steering: {rule_name}")
-                                openai_messages.append({
-                                    "role": "user",
-                                    "content": steer_msg,
-                                })
-
-                    # --- Root cause injection (once, after first evidence round) ---
-                    if (
-                        context.intent_result
-                        and iteration >= 1
-                        and not getattr(context, '_root_cause_resolved', False)
-                    ):
-                        try:
-                            from .intent import Intent
-                            from .root_cause import resolve_fix_owner, format_owner_hint
-
-                            primary_intent = context.intent_result.primary.intent
-                            if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
-                                owner_decision = resolve_fix_owner(
-                                    all_tool_calls, context.intent_result
-                                )
-                                context._root_cause_resolved = True
-                                hint = format_owner_hint(
-                                    owner_decision,
-                                    target_hint=context.intent_result.target_hint,
-                                )
-                                logger.info(
-                                    f"[Stream/OpenAI] Root cause: {owner_decision.owner_system.value} "
-                                    f"(confidence={owner_decision.confidence:.0%})"
-                                )
-                                # Inject as user-role note rather than a mid-loop
-                                # system message: Chat Completions tolerates
-                                # role:"system" after the first turn, but it is
-                                # non-standard and the Responses API rejects it.
-                                openai_messages.append({
-                                    "role": "user",
-                                    "content": f"[system note — root cause analysis]: {hint}",
-                                })
-                        except Exception as e:
-                            logger.debug(f"[Stream/OpenAI] Root cause injection skipped: {e}")
-
-                    continue
-
-                # Unexpected finish reason
-                logger.warning(f"[Stream/OpenAI] Unexpected finish reason: {finish_reason}")
-                yield StreamEvent("done", {
-                    "input_tokens": total_input_tokens,
-                    "output_tokens": total_output_tokens,
-                    "model": self.model,
-                    "stop_reason": finish_reason or "unknown",
-                    "tool_calls": all_tool_calls,
-                    "iterations_used": iteration + 1,
-                })
-                return
-
-            # Max iterations reached — emit a fallback message so the UI never
-            # renders a blank assistant turn when the LLM spent the whole budget
-            # on tool calls without reaching a summarization turn.
-            logger.warning(
-                f"[Stream/OpenAI] Max iterations ({max_tool_iterations}) reached "
-                f"without a final answer after {len(all_tool_calls)} tool calls"
-            )
-            yield StreamEvent("text_delta", {
-                "content": "\n\n*[Investigation exceeded the tool-call budget before producing a summary. Please ask a follow-up question for the analysis.]*"
-            })
-            yield StreamEvent("done", {
-                "input_tokens": total_input_tokens,
-                "output_tokens": total_output_tokens,
-                "model": self.model,
-                "stop_reason": "max_iterations",
-                "tool_calls": all_tool_calls,
-                "iterations_used": max_tool_iterations,
-            })
+            async for ev in self._run_provider_stream_loop(
+                provider=provider,
+                stream_factory=stream_factory,
+                system="",  # OpenAI carries system in messages
+                messages=openai_messages,
+                tools=tools if tools else None,
+                user_query=user_query,
+                context=context,
+                executor=executor,
+                mcp_manager=mcp_manager,
+                max_tool_iterations=max_tool_iterations,
+                log_prefix="[Stream/OpenAI]",
+                confirmed_tool_ids=confirmed_tool_ids,
+                confirmed_artifacts=confirmed_artifacts,
+                reasoning_effort=_reasoning_effort_for(self.model, context),
+            ):
+                yield ev
         finally:
             if mcp_manager:
                 try:
                     await mcp_manager.shutdown()
                 except Exception as e:
-                    logger.warning(f"[Stream/OpenAI] MCP shutdown error (ignored): {e}")
+                    logger.warning(
+                        f"[Stream/OpenAI] MCP shutdown error (ignored): {e}"
+                    )
+
 
     async def _run_provider_loop(
         self,
@@ -2567,6 +1818,459 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             accumulated_text,
             iterations_used=max_tool_iterations,
         )
+
+    async def _emit_pre_executed_tool(
+        self,
+        *,
+        provider: LLMProvider,
+        messages: List[Dict[str, Any]],
+        executor: ToolExecutor,
+        mcp_manager: Any,
+        tool_use_id: str,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        all_tool_calls: List[Dict[str, Any]],
+        log_prefix: str,
+        use_execute_confirmed: bool = False,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute a pre-confirmed tool, emit start/result events,
+        and inject the tool-use round into ``messages``.
+
+        Used by the streaming flow when resuming from a confirmation
+        prompt (``pending_tool_call``) or pre-executing a confirmed
+        artifact. Provider-specific message wiring is delegated.
+        """
+        logger.info(f"{log_prefix} Pre-executing confirmed tool: {tool_name}")
+        yield StreamEvent("tool_call_start", {
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "arguments": tool_args,
+        })
+
+        try:
+            if use_execute_confirmed:
+                result = await executor.execute_confirmed(tool_name, tool_args)
+            elif tool_name.startswith("mcp_") and mcp_manager:
+                mcp_result = await mcp_manager.call_tool(tool_name, tool_args)
+                result = ToolResult(
+                    success=mcp_result.get("success", False),
+                    data=mcp_result.get("data"),
+                    error=mcp_result.get("error"),
+                )
+            else:
+                result = await executor.execute(tool_name, tool_args)
+        except Exception as e:
+            result = ToolResult(success=False, error=str(e))
+
+        yield StreamEvent("tool_call_result", {
+            "tool_use_id": tool_use_id,
+            "tool_name": tool_name,
+            "result": result.to_dict(),
+        })
+
+        all_tool_calls.append({
+            "tool": tool_name,
+            "input": tool_args,
+            "result": result.to_dict(),
+        })
+
+        # Inject tool-use round so the next LLM call sees already-
+        # executed history. ``append_tool_use_round`` knows the wire
+        # format for the provider.
+        fake_norm = NormalizedResponse(
+            text="",
+            tool_calls=[NormalizedToolCall(
+                id=tool_use_id, name=tool_name, args=tool_args, args_raw=None,
+            )],
+            stop_kind=StopKind.TOOL_USE,
+        )
+        provider.append_tool_use_round(messages, fake_norm, [
+            provider.tool_result_message(
+                tool_use_id,
+                json.dumps(result.to_dict(), default=_safe_json_default),
+            ),
+        ])
+
+    async def _run_provider_stream_loop(
+        self,
+        *,
+        provider: LLMProvider,
+        stream_factory: Any,
+        system: Any,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        user_query: str,
+        context: CopilotContext,
+        executor: ToolExecutor,
+        mcp_manager: Any,
+        max_tool_iterations: int,
+        log_prefix: str,
+        confirmed_tool_ids: Set[str],
+        confirmed_artifacts: Optional[Dict[str, Dict[str, Any]]],
+        reasoning_effort: Optional[str] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Unified streaming tool loop.
+
+        Replaces the duplicated bodies of ``_chat_anthropic_stream`` and
+        ``_chat_openai_stream``. Provider-shaped pieces (request kwargs,
+        stream parsing, tool-result wire format, root-cause label) are
+        delegated to ``provider``. ``stream_factory`` is a callable
+        returning a context manager around the SDK stream — Anthropic's
+        ``with messages.stream(): …`` and OpenAI's iterable both fit.
+        """
+        registry = get_tool_registry()
+        total_input_tokens = 0
+        total_output_tokens = 0
+        all_tool_calls: List[Dict[str, Any]] = _BoundedList(maxlen=50)
+        fired_adjacent_rules: Set[str] = set()
+        has_artifact = False
+
+        for iteration in range(max_tool_iterations):
+            yield StreamEvent("iteration_start", {
+                "iteration": iteration + 1,
+                "reason": "tool_use" if iteration > 0 else "initial",
+            })
+
+            try:
+                force_tool_first = (
+                    iteration == 0
+                    and bool(tools)
+                    and _should_force_initial_tool(user_query)
+                )
+                if force_tool_first:
+                    logger.info(
+                        f"{log_prefix} Forcing tool call on iter 0 for investigative query"
+                    )
+                api_kwargs = provider.request_kwargs(
+                    model=self.model,
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                    force_tool_first=force_tool_first,
+                    reasoning_effort=reasoning_effort,
+                )
+
+                final_norm: Optional[NormalizedResponse] = None
+                with stream_factory(**api_kwargs) as sdk_stream:
+                    for event in provider.iter_stream(sdk_stream):
+                        if isinstance(event, StreamTextDelta):
+                            yield StreamEvent("text_delta", {"content": event.text})
+                        elif isinstance(event, StreamFinal):
+                            final_norm = event.response
+
+                if final_norm is None:
+                    yield StreamEvent("error", {
+                        "message": "Internal error: provider stream produced no final state",
+                    })
+                    return
+
+                total_input_tokens += final_norm.input_tokens
+                total_output_tokens += final_norm.output_tokens
+
+            except Exception as e:
+                logger.exception(f"{log_prefix} Error in streaming call")
+                yield StreamEvent("error", {
+                    "message": f"Error communicating with AI: {str(e)}",
+                })
+                return
+
+            if final_norm.stop_kind is StopKind.COMPLETED:
+                yield StreamEvent("done", {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "model": self.model,
+                    "stop_reason": "end_turn",
+                    "tool_calls": all_tool_calls,
+                    "iterations_used": iteration + 1,
+                })
+                return
+
+            if final_norm.stop_kind is StopKind.MAX_TOKENS:
+                if not final_norm.text:
+                    yield StreamEvent("text_delta", {
+                        "content": (
+                            "\n\n*[Response truncated — the analysis required "
+                            "too many steps. Please ask a follow-up question "
+                            "for the summary.]*"
+                        ),
+                    })
+                yield StreamEvent("done", {
+                    "input_tokens": total_input_tokens,
+                    "output_tokens": total_output_tokens,
+                    "model": self.model,
+                    "stop_reason": final_norm.raw_stop_reason or "length",
+                    "tool_calls": all_tool_calls,
+                    "iterations_used": iteration + 1,
+                })
+                return
+
+            if final_norm.stop_kind is StopKind.TOOL_USE and final_norm.tool_calls:
+                tool_results: List[Dict[str, Any]] = []
+
+                for tc in final_norm.tool_calls:
+                    tool_name = tc.name
+                    tool_input = tc.args
+                    tool_use_id = tc.id
+
+                    yield StreamEvent("tool_call_start", {
+                        "tool_use_id": tool_use_id,
+                        "tool_name": tool_name,
+                        "arguments": tool_input,
+                    })
+
+                    # Confirmation gate. ``confirmed_tool_ids`` may
+                    # contain either tool use IDs or tool names.
+                    tool_def = registry.get_tool(tool_name)
+                    needs_confirmation = (
+                        tool_def
+                        and tool_def.requires_confirmation
+                        and tool_use_id not in confirmed_tool_ids
+                        and tool_name not in confirmed_tool_ids
+                    )
+                    # apply_change_plan: if the LLM hallucinated a
+                    # plan_id that doesn't exist, skip confirmation so
+                    # the error propagates and the LLM can self-correct.
+                    if needs_confirmation and tool_name == "apply_change_plan":
+                        plan_id = tool_input.get("plan_id")
+                        if plan_id:
+                            try:
+                                from .change_plan import get_change_plan_store
+                                if not get_change_plan_store().get(plan_id):
+                                    logger.warning(
+                                        f"{log_prefix} apply_change_plan: plan "
+                                        f"'{plan_id}' not found, skipping confirmation"
+                                    )
+                                    needs_confirmation = False
+                            except Exception as e:
+                                logger.warning(
+                                    f"{log_prefix} change_plan store lookup failed: {e}"
+                                )
+
+                    if needs_confirmation:
+                        logger.info(
+                            f"{log_prefix} Tool '{tool_name}' requires confirmation"
+                        )
+                        yield StreamEvent("tool_confirmation_required", {
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "arguments": tool_input,
+                            "description": (
+                                f"The AI wants to execute '{tool_name}' which "
+                                f"may modify external systems."
+                            ),
+                        })
+                        yield StreamEvent("done", {
+                            "input_tokens": total_input_tokens,
+                            "output_tokens": total_output_tokens,
+                            "model": self.model,
+                            "stop_reason": "confirmation_required",
+                            "tool_calls": all_tool_calls,
+                            "iterations_used": iteration + 1,
+                        })
+                        return
+
+                    # Confirmed-artifact match: a write tool's call
+                    # matches an artifact the user already approved.
+                    if tool_name in WRITE_TOOLS and confirmed_artifacts:
+                        matched_art = False
+                        for art_id, art_data in list(confirmed_artifacts.items()):
+                            if art_data.get("tool_name") == tool_name:
+                                logger.info(
+                                    f"{log_prefix} Executing confirmed artifact "
+                                    f"'{art_id}' for tool '{tool_name}'"
+                                )
+                                result = await executor.execute_confirmed(
+                                    tool_name, art_data,
+                                )
+                                yield StreamEvent("tool_call_result", {
+                                    "tool_use_id": tool_use_id,
+                                    "tool_name": tool_name,
+                                    "result": result.to_dict(),
+                                })
+                                all_tool_calls.append({
+                                    "tool": tool_name,
+                                    "input": tool_input,
+                                    "result": result.to_dict(),
+                                })
+                                tool_results.append(provider.tool_result_message(
+                                    tool_use_id,
+                                    json.dumps(
+                                        result.to_dict(),
+                                        default=_safe_json_default,
+                                    ),
+                                ))
+                                confirmed_artifacts.pop(art_id, None)
+                                matched_art = True
+                                break
+                        if matched_art:
+                            continue
+
+                    # Normal execution path.
+                    logger.info(f"{log_prefix} Executing tool: {tool_name}")
+                    try:
+                        if tool_name.startswith("mcp_") and mcp_manager:
+                            mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                            result = ToolResult(
+                                success=mcp_result.get("success", False),
+                                data=mcp_result.get("data"),
+                                error=mcp_result.get("error"),
+                            )
+                        else:
+                            result = await executor.execute(tool_name, tool_input)
+                    except Exception as tool_err:
+                        logger.exception(
+                            f"{log_prefix} Unhandled error executing tool '{tool_name}'"
+                        )
+                        result = ToolResult(
+                            success=False,
+                            error=f"Tool execution failed: {tool_err}",
+                        )
+
+                    if isinstance(result, ToolArtifactResult):
+                        artifact_data = result.to_dict()
+                        yield StreamEvent("ui_artifact", artifact_data)
+                        synthetic_text = result.to_synthetic_tool_result()
+                        tool_results.append(provider.tool_result_message(
+                            tool_use_id, synthetic_text,
+                        ))
+                        all_tool_calls.append({
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "arguments": tool_input,
+                            "result": {"artifact": artifact_data},
+                        })
+                        has_artifact = True
+                    else:
+                        all_tool_calls.append({
+                            "tool": tool_name,
+                            "input": tool_input,
+                            "result": result.to_dict(),
+                        })
+                        yield StreamEvent("tool_call_result", {
+                            "tool_use_id": tool_use_id,
+                            "tool_name": tool_name,
+                            "result": result.to_dict(),
+                        })
+                        tool_results.append(provider.tool_result_message(
+                            tool_use_id,
+                            json.dumps(
+                                result.data if result.success else {"error": result.error},
+                                default=_safe_json_default,
+                            ),
+                        ))
+
+                # If an artifact was emitted, stop iterating — the user
+                # needs to confirm before we run anything else.
+                if has_artifact:
+                    break
+
+                provider.append_tool_use_round(messages, final_norm, tool_results)
+
+                # Adjacent-path steering.
+                if iteration < max_tool_iterations - 1:
+                    for tc in final_norm.tool_calls:
+                        matching = [
+                            c for c in all_tool_calls
+                            if c.get("tool") == tc.name and c.get("input") == tc.args
+                        ]
+                        if not matching:
+                            continue
+                        last_call = matching[-1]
+                        rd = last_call.get("result") or {}
+                        last_result = ToolResult(
+                            success=rd.get("success", False),
+                            data=rd.get("data"),
+                            error=rd.get("error"),
+                        )
+                        fired = _evaluate_adjacent_path_rule(
+                            tool_name=tc.name,
+                            tool_args=tc.args,
+                            tool_result=last_result,
+                            integration_types=context.integration_types,
+                            all_tool_calls=all_tool_calls,
+                            fired_rule_names=fired_adjacent_rules,
+                        )
+                        if fired is not None:
+                            rule_name, steer_msg = fired
+                            fired_adjacent_rules.add(rule_name)
+                            logger.info(
+                                f"{log_prefix} Adjacent-path steering: {rule_name}"
+                            )
+                            messages.append({
+                                "role": "user",
+                                "content": steer_msg,
+                            })
+
+                # Root-cause injection (once).
+                if (
+                    context.intent_result
+                    and iteration >= 1
+                    and not getattr(context, '_root_cause_resolved', False)
+                ):
+                    try:
+                        from .intent import Intent
+                        from .root_cause import resolve_fix_owner, format_owner_hint
+
+                        primary_intent = context.intent_result.primary.intent
+                        if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
+                            owner_decision = resolve_fix_owner(
+                                all_tool_calls, context.intent_result
+                            )
+                            context._root_cause_resolved = True
+                            hint = format_owner_hint(
+                                owner_decision,
+                                target_hint=context.intent_result.target_hint,
+                            )
+                            logger.info(
+                                f"{log_prefix} Root cause: "
+                                f"{owner_decision.owner_system.value} "
+                                f"(confidence={owner_decision.confidence:.0%})"
+                            )
+                            messages.append({
+                                "role": "user",
+                                "content": f"{provider.root_cause_label}: {hint}",
+                            })
+                    except Exception as e:
+                        logger.debug(
+                            f"{log_prefix} Root cause injection skipped: {e}"
+                        )
+
+                continue
+
+            # Unexpected stop kind.
+            logger.warning(
+                f"{log_prefix} Unexpected stop reason: {final_norm.raw_stop_reason}"
+            )
+            yield StreamEvent("done", {
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "model": self.model,
+                "stop_reason": final_norm.raw_stop_reason or "unknown",
+                "tool_calls": all_tool_calls,
+                "iterations_used": iteration + 1,
+            })
+            return
+
+        # Max iterations reached.
+        logger.warning(
+            f"{log_prefix} Max iterations ({max_tool_iterations}) reached "
+            f"without a final answer after {len(all_tool_calls)} tool calls"
+        )
+        yield StreamEvent("text_delta", {
+            "content": (
+                "\n\n*[Investigation exceeded the tool-call budget before "
+                "producing a summary. Please ask a follow-up question for "
+                "the analysis.]*"
+            ),
+        })
+        yield StreamEvent("done", {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "model": self.model,
+            "stop_reason": "max_iterations",
+            "tool_calls": all_tool_calls,
+            "iterations_used": max_tool_iterations,
+        })
 
     async def _chat_anthropic(
         self,

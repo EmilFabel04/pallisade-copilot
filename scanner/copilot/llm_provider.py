@@ -38,7 +38,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Protocol
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +60,11 @@ class NormalizedToolCall:
     id: str                # provider-issued id (toolu_* / call_*)
     name: str
     args: Dict[str, Any]   # parsed JSON; never the raw string
+    # Original JSON-string form of args when available (OpenAI emits a
+    # string; Anthropic emits a dict). Kept so the loop can round-trip
+    # the EXACT bytes the model produced into the next assistant turn,
+    # avoiding spurious whitespace/precision drift from re-serializing.
+    args_raw: Optional[str] = None
 
 
 @dataclass
@@ -72,6 +77,29 @@ class NormalizedResponse:
     input_tokens: int = 0
     output_tokens: int = 0
     raw: Any = None                            # original SDK response
+
+
+# ---------------------------------------------------------------------------
+# Streaming events
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class StreamTextDelta:
+    """One text chunk emitted during streaming."""
+    text: str
+
+
+@dataclass
+class StreamFinal:
+    """Terminal event from a streamed turn — carries the same shape as
+    a non-streaming response so the loop body can branch on
+    ``stop_kind`` exactly the way it does for non-streaming."""
+    response: NormalizedResponse
+
+
+# Union for type hints; runtime checks use isinstance.
+StreamingEvent = Any  # StreamTextDelta | StreamFinal
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +166,19 @@ class LLMProvider(Protocol):
         one ``role: user`` content list; OpenAI emits one top-level
         ``role: tool`` message per result) so the loop can stay
         provider-agnostic."""
+        ...
+
+    def iter_stream(self, sdk_stream: Any) -> Iterable[StreamingEvent]:
+        """Yield canonical streaming events from an SDK stream object.
+
+        The two SDKs emit very different event shapes (Anthropic:
+        message_start / content_block_delta / message_delta;
+        OpenAI: chunk-shaped delta with optional partial tool_calls).
+        This method collapses them into a stream of ``StreamTextDelta``
+        chunks followed by a single terminal ``StreamFinal`` carrying a
+        ``NormalizedResponse``. Synchronous iterator because both SDKs'
+        streams are sync iterators.
+        """
         ...
 
 
@@ -224,10 +265,14 @@ class AnthropicProvider:
             if text:
                 text_chunks.append(text)
             if getattr(block, "type", None) == "tool_use":
+                args = block.input or {}
                 tool_calls.append(NormalizedToolCall(
                     id=block.id,
                     name=block.name,
-                    args=block.input or {},
+                    args=args,
+                    # Anthropic gives us a dict; preserve a deterministic
+                    # serialization for round-trip parity with OpenAI.
+                    args_raw=json.dumps(args, default=str),
                 ))
         usage = getattr(response, "usage", None)
         return NormalizedResponse(
@@ -245,12 +290,34 @@ class AnthropicProvider:
     def assistant_turn_for_tool_use(
         self, response: NormalizedResponse,
     ) -> Dict[str, Any]:
-        # Anthropic accepts the raw content-blocks list as-is — the SDK
-        # round-trips its own response objects.
-        return {
-            "role": "assistant",
-            "content": response.raw.content if response.raw else [],
-        }
+        # Build content blocks from the normalized fields. Anthropic
+        # accepts dict-shaped content blocks just as it does the SDK's
+        # objects, and constructing from normalized fields means this
+        # works equally for streaming (where ``raw`` is a stream object
+        # we can't round-trip) and non-streaming.
+        content_blocks: List[Dict[str, Any]] = []
+        if response.text:
+            content_blocks.append({"type": "text", "text": response.text})
+        for tc in response.tool_calls:
+            content_blocks.append({
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": tc.args,
+            })
+        return {"role": "assistant", "content": content_blocks}
+
+    def iter_stream(self, sdk_stream: Any) -> Iterable[StreamingEvent]:
+        # The Anthropic streaming SDK yields events; final state lives
+        # on ``stream.get_final_message()``. Caller has already entered
+        # the context manager.
+        for event in sdk_stream:
+            if getattr(event, "type", None) == "content_block_delta":
+                delta_text = getattr(getattr(event, "delta", None), "text", None)
+                if delta_text:
+                    yield StreamTextDelta(text=delta_text)
+        final_message = sdk_stream.get_final_message()
+        yield StreamFinal(response=self.parse_response(final_message))
 
     def tool_result_message(
         self, tool_use_id: str, content: str,
@@ -345,10 +412,16 @@ class OpenAIProvider:
         text = message.content or ""
         tool_calls: List[NormalizedToolCall] = []
         for tc in (getattr(message, "tool_calls", None) or []):
+            args_raw = tc.function.arguments
             tool_calls.append(NormalizedToolCall(
                 id=tc.id,
                 name=tc.function.name,
-                args=_safe_json_parse(tc.function.arguments),
+                args=_safe_json_parse(args_raw),
+                # Preserve the EXACT JSON string the model produced —
+                # the assistant turn round-trip uses this verbatim to
+                # avoid spurious whitespace / number-format drift that
+                # re-serialization would introduce.
+                args_raw=args_raw,
             ))
         usage = getattr(response, "usage", None)
         return NormalizedResponse(
@@ -366,22 +439,92 @@ class OpenAIProvider:
     def assistant_turn_for_tool_use(
         self, response: NormalizedResponse,
     ) -> Dict[str, Any]:
-        message = response.raw.choices[0].message
+        # Built from the normalized fields rather than ``response.raw``
+        # so this works for streaming (where the SDK's message object
+        # doesn't exist post-stream — only the accumulated delta).
         return {
             "role": "assistant",
-            "content": message.content,
+            "content": response.text or None,
             "tool_calls": [
                 {
                     "id": tc.id,
                     "type": "function",
                     "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
+                        "name": tc.name,
+                        # args_raw is the model's exact JSON string when
+                        # available; fall back to a deterministic
+                        # serialization for synthetic tool calls (e.g.
+                        # the pre-execution flow that injects a
+                        # confirmed tool result without ever calling
+                        # the LLM).
+                        "arguments": tc.args_raw or json.dumps(
+                            tc.args, default=str,
+                        ),
                     },
                 }
-                for tc in (message.tool_calls or [])
+                for tc in response.tool_calls
             ],
         }
+
+    def iter_stream(self, sdk_stream: Any) -> Iterable[StreamingEvent]:
+        # OpenAI streaming chunks each carry a partial delta. Tool calls
+        # arrive piecewise, indexed by ``tc_delta.index`` — accumulate
+        # them and only synthesize NormalizedToolCall objects on final.
+        accumulated_text = ""
+        tool_calls_acc: Dict[int, Dict[str, Any]] = {}
+        finish_reason: Optional[str] = None
+        input_tokens = 0
+        output_tokens = 0
+
+        for chunk in sdk_stream:
+            choice = chunk.choices[0] if getattr(chunk, "choices", None) else None
+            if not choice:
+                continue
+            delta = getattr(choice, "delta", None)
+            finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+            if delta and getattr(delta, "content", None):
+                accumulated_text += delta.content
+                yield StreamTextDelta(text=delta.content)
+            if delta and getattr(delta, "tool_calls", None):
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    bucket = tool_calls_acc.setdefault(idx, {
+                        "id": "",
+                        "name": "",
+                        "arguments": "",
+                    })
+                    if tc_delta.id:
+                        bucket["id"] = tc_delta.id
+                    if tc_delta.function and tc_delta.function.name:
+                        bucket["name"] = tc_delta.function.name
+                    if tc_delta.function and tc_delta.function.arguments:
+                        bucket["arguments"] += tc_delta.function.arguments
+            usage = getattr(chunk, "usage", None)
+            if usage:
+                input_tokens += getattr(usage, "prompt_tokens", 0) or 0
+                output_tokens += getattr(usage, "completion_tokens", 0) or 0
+
+        tool_calls = [
+            NormalizedToolCall(
+                id=tc["id"],
+                name=tc["name"],
+                args=_safe_json_parse(tc["arguments"]),
+                args_raw=tc["arguments"] or None,
+            )
+            for tc in tool_calls_acc.values()
+        ]
+        yield StreamFinal(response=NormalizedResponse(
+            text=accumulated_text,
+            tool_calls=tool_calls,
+            stop_kind=_canonical_stop(finish_reason or "", _OPENAI_STOP_MAP),
+            raw_stop_reason=finish_reason or "",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            # No SDK message object survives streaming; the loop must
+            # use the normalized fields, which is now what
+            # assistant_turn_for_tool_use does.
+            raw=None,
+        ))
 
     def tool_result_message(
         self, tool_use_id: str, content: str,
