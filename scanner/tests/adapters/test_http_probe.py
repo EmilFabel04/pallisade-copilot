@@ -201,3 +201,94 @@ def test_probe_raises_timeout(monkeypatch):
     with pytest.raises(ProbeError) as exc:
         adapter.probe({"endpoint": "/x"})
     assert exc.value.code == "timeout"
+
+
+@responses.activate
+def test_probe_navigates_json_root():
+    responses.add(
+        responses.GET, "https://api.example.com/v1/wrapped",
+        json={"data": {"items": [{"id": 1}, {"id": 2}]}},
+        status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    bundle = adapter.probe({"endpoint": "/wrapped", "json_root": "data.items"})
+    assert bundle.row_count == 2
+
+
+@responses.activate
+def test_probe_raises_on_missing_json_root():
+    from scanner.adapters.http_probe import ProbeError
+    responses.add(
+        responses.GET, "https://api.example.com/v1/wrapped",
+        json={"data": {}}, status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/wrapped", "json_root": "data.items"})
+    assert exc.value.code == "json_root_not_found"
+
+
+@responses.activate
+def test_probe_passes_cursor_param_when_configured():
+    responses.add(
+        responses.GET, "https://api.example.com/v1/readings",
+        json=[], status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    adapter.probe({
+        "endpoint": "/readings",
+        "cursor_param": "since",
+        "cursor_value": "2026-04-30T00:00:00Z",
+    })
+    assert "since=2026-04-30T00%3A00%3A00Z" in responses.calls[0].request.url
+
+
+@responses.activate
+def test_probe_handles_unix_epoch_seconds_timestamp():
+    """IoT sources often emit timestamps as Unix epoch seconds, not ISO strings."""
+    from datetime import datetime, timezone
+    responses.add(
+        responses.GET, "https://api.example.com/v1/iot",
+        json=[
+            {"id": 1, "ts": 1714478400},  # 2024-04-30 12:00:00 UTC
+            {"id": 2, "ts": 1714564800},  # 2024-05-01 12:00:00 UTC
+        ],
+        status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    bundle = adapter.probe({"endpoint": "/iot", "timestamp_column": "ts"})
+    assert bundle.latest_timestamp is not None
+    assert bundle.latest_timestamp == datetime(2024, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@responses.activate
+def test_probe_handles_unix_epoch_milliseconds_timestamp():
+    """Some IoT sources emit milliseconds (typical for JS-derived feeds)."""
+    from datetime import datetime, timezone
+    responses.add(
+        responses.GET, "https://api.example.com/v1/iot_ms",
+        json=[
+            {"id": 1, "ts": 1714478400000},  # ms
+            {"id": 2, "ts": 1714564800000},
+        ],
+        status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    bundle = adapter.probe({"endpoint": "/iot_ms", "timestamp_column": "ts"})
+    assert bundle.latest_timestamp == datetime(2024, 5, 1, 12, 0, 0, tzinfo=timezone.utc)

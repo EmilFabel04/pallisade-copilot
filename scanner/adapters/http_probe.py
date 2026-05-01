@@ -75,8 +75,14 @@ class HttpProbeAdapter:
         url = f"{self.base_url}{endpoint}"
         session = self._build_session()
 
+        params: Dict[str, Any] = {}
+        cursor_param = dataset_config.get("cursor_param")
+        cursor_value = dataset_config.get("cursor_value")
+        if cursor_param and cursor_value is not None:
+            params[cursor_param] = cursor_value
+
         try:
-            resp = session.get(url, timeout=_DEFAULT_TIMEOUT_SEC, stream=True)
+            resp = session.get(url, params=params or None, timeout=_DEFAULT_TIMEOUT_SEC, stream=True)
         except requests.Timeout:
             raise ProbeError("timeout", f"request timed out after {_DEFAULT_TIMEOUT_SEC}s")
         except requests.RequestException as exc:
@@ -151,10 +157,15 @@ class HttpProbeAdapter:
                     null_counts[name] += 1
             if timestamp_column:
                 ts_val = row.get(timestamp_column)
+                parsed: Optional[datetime] = None
                 if isinstance(ts_val, str):
                     parsed = _parse_iso8601(ts_val)
-                    if parsed and (latest_ts is None or parsed > latest_ts):
-                        latest_ts = parsed
+                elif isinstance(ts_val, bool):
+                    pass  # bool is a subclass of int — explicitly ignore
+                elif isinstance(ts_val, (int, float)):
+                    parsed = _parse_epoch(ts_val)
+                if parsed and (latest_ts is None or parsed > latest_ts):
+                    latest_ts = parsed
 
         return MetricBundle(
             probed_at=datetime.now(timezone.utc),
@@ -193,4 +204,18 @@ def _parse_iso8601(value: str) -> Optional[datetime]:
             value = value[:-1] + "+00:00"
         return datetime.fromisoformat(value)
     except ValueError:
+        return None
+
+
+def _parse_epoch(value: float) -> Optional[datetime]:
+    """Heuristic: > 1e12 means epoch-milliseconds, else epoch-seconds.
+
+    1e12 corresponds to 2001-09-09 in seconds and 1970-01-12 in ms; either
+    way the threshold cleanly separates realistic ms timestamps from
+    realistic second timestamps.
+    """
+    try:
+        seconds = value / 1000.0 if value > 1e12 else float(value)
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
         return None
