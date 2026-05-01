@@ -96,3 +96,37 @@ def test_extract_metadata_returns_one_summary_per_dataset():
     summaries = d.extract_metadata(config)
     assert len(summaries) == 2
     assert any(s.asset_type == "dataset" and "water" in s.sample_names for s in summaries)
+
+
+def test_extract_lineage_emits_one_node_per_dataset_no_edges_without_lands_in():
+    d = CustomSourceDriver()
+    config = {
+        "platform_label": "MyCiti",
+        "base_url": "https://api.example.com/v1",
+        "auth": {"kind": "bearer", "secret_ref": "s"},
+        "datasets": [
+            {"id": "water", "endpoint": "/w", "timestamp_column": "t"},
+        ],
+    }
+    nodes, edges = d.extract_lineage(config)
+    assert len(nodes) == 1
+    assert nodes[0].name == "water"
+    assert edges == []
+
+
+def test_extract_lineage_emits_edge_when_lands_in_set():
+    d = CustomSourceDriver()
+    config = {
+        "platform_label": "MyCiti",
+        "base_url": "https://api.example.com/v1",
+        "auth": {"kind": "bearer", "secret_ref": "s"},
+        "datasets": [{
+            "id": "water",
+            "endpoint": "/w",
+            "timestamp_column": "t",
+            "lands_in": "snowflake.raw.water_meters",
+        }],
+    }
+    nodes, edges = d.extract_lineage(config)
+    assert len(nodes) == 1
+    assert len(edges) == 1

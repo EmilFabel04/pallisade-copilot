@@ -16,6 +16,16 @@ from ..base import (
     IntegrationDriver,
     IntegrationLayer,
 )
+from scanner.lineage.graph import (
+    AssetKind,
+    EdgeType,
+    Evidence,
+    LineageEdge,
+    LineageNode,
+    NodeType,
+    PlatformDomain,
+)
+from scanner.lineage.engine.ids import generate_asset_id, generate_edge_id
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +118,78 @@ class CustomSourceDriver(IntegrationDriver):
             )
             for ds in datasets
         ]
+
+    def _extract_lineage_impl(
+        self, config: Dict[str, Any]
+    ) -> Tuple[List[Any], List[Any]]:
+        """Emit one source-layer node per dataset, plus a WRITES_TO edge to
+        the warehouse target when ``lands_in`` is set on the dataset."""
+        platform_label = (config.get("platform_label") or "custom_source").lower()
+        datasets = config.get("datasets") or []
+
+        nodes: List[LineageNode] = []
+        edges: List[LineageEdge] = []
+
+        for ds in datasets:
+            ds_id = ds.get("id", "")
+            asset_id = generate_asset_id(
+                "source", platform_label, "", "", ds_id,
+            )
+            node = LineageNode(
+                id=asset_id,
+                name=ds_id,
+                fqn=f"{platform_label}.{ds_id}",
+                node_type=NodeType.SOURCE,
+                platform=platform_label,
+                platform_domain=PlatformDomain.OTHER,
+                asset_kind=AssetKind.DATASET,
+            )
+            nodes.append(node)
+
+            lands_in = ds.get("lands_in")
+            if lands_in:
+                # Parse "platform.container.name" into parts so we can compute
+                # a target asset_id that matches what the warehouse-side adapter
+                # will produce. Anything beyond [platform, ..., name] becomes
+                # the container; the resolver later merges by stable identity.
+                parts = lands_in.split(".")
+                if len(parts) >= 2:
+                    target_platform = parts[0].lower()
+                    target_name = parts[-1].lower()
+                    target_container = ".".join(p.lower() for p in parts[1:-1])
+                else:
+                    target_platform = "warehouse"
+                    target_name = lands_in.lower()
+                    target_container = ""
+
+                target_id = generate_asset_id(
+                    "warehouse", target_platform, "",
+                    target_container, target_name,
+                )
+
+                evidence = Evidence(
+                    adapter_id=self.id(),
+                    source_ref="user_config",
+                    payload={"lands_in": lands_in},
+                )
+                edge_id = generate_edge_id(
+                    asset_id, target_id,
+                    EdgeType.WRITES_TO.value,
+                    "table",
+                    "user_config",
+                )
+                edge = LineageEdge(
+                    id=edge_id,
+                    source_id=asset_id,
+                    target_id=target_id,
+                    edge_type=EdgeType.WRITES_TO,
+                    confidence=0.9,
+                    discovered_from="user_config",
+                    evidence=[evidence],
+                )
+                edges.append(edge)
+
+        return nodes, edges
 
     def capabilities(self) -> DriverCapabilities:
         return DriverCapabilities(
