@@ -181,17 +181,22 @@ export default function PipelinePage() {
     const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS).flat().map((i) => ({
       id: i.id, name: i.name, description: i.description, group: categoryToGroup(i.category), mode: 'integration' as const, integration: i,
     }));
-    const wizardConnectors: ConnectorCard[] = [
-      {
-        id: 'custom_source',
-        name: 'Custom Source',
-        description: 'Any HTTPS-accessible application with a JSON API. Configure it in 5 steps.',
-        group: 'INGESTION',
-        mode: 'wizard',
-        layer: 'INGESTION',
-        href: '/dashboard/integrations/connect/custom-source',
-      },
-    ];
+    // Feature-flagged: CUSTOM_SOURCE_INTEGRATION ships dark by default.
+    // Ops sets NEXT_PUBLIC_FEATURE_CUSTOM_SOURCE_INTEGRATION=true to enable.
+    const wizardConnectors: ConnectorCard[] =
+      process.env.NEXT_PUBLIC_FEATURE_CUSTOM_SOURCE_INTEGRATION === 'true'
+        ? [
+            {
+              id: 'custom_source',
+              name: 'Custom Source',
+              description: 'Any HTTPS-accessible application with a JSON API. Configure it in 5 steps.',
+              group: 'INGESTION',
+              mode: 'wizard',
+              layer: 'INGESTION',
+              href: '/dashboard/integrations/connect/custom-source',
+            },
+          ]
+        : [];
     return [...coreConnectors, ...wizardConnectors, ...alertConnectors];
   }, []);
 

@@ -132,8 +132,14 @@ def test_extract_lineage_emits_edge_when_lands_in_set():
     assert len(edges) == 1
 
 
-def test_driver_registered_in_loader():
-    """CustomSourceDriver is discoverable via the integration_type registry."""
+def test_driver_registered_in_loader(monkeypatch):
+    """CustomSourceDriver is discoverable via the integration_type registry.
+
+    The driver is feature-flag gated (FEATURE_CUSTOM_SOURCE_INTEGRATION),
+    so the test must enable the flag before calling the loader.
+    """
+    monkeypatch.setenv("FEATURE_CUSTOM_SOURCE_INTEGRATION", "true")
+
     from scanner.drivers.loader import register_all_drivers, reset_loaded_flag
     from scanner.drivers.registry import DriverRegistry
 
