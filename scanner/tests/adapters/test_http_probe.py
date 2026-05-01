@@ -53,3 +53,63 @@ def test_probe_with_bearer_auth_computes_metrics():
     # Authorization header was sent
     sent_auth = responses.calls[0].request.headers.get("Authorization")
     assert sent_auth == "Bearer test-token"
+
+
+@responses.activate
+def test_probe_with_api_key_uses_default_header():
+    responses.add(
+        responses.GET, "https://api.example.com/v1/readings",
+        json=[{"id": 1}], status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "api_key", "secret": "abc123"},
+    )
+    adapter.probe({"endpoint": "/readings"})
+    assert responses.calls[0].request.headers.get("X-API-Key") == "abc123"
+
+
+@responses.activate
+def test_probe_with_api_key_custom_header_name():
+    responses.add(
+        responses.GET, "https://api.example.com/v1/readings",
+        json=[{"id": 1}], status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "api_key", "secret": "abc", "header_name": "X-Auth"},
+    )
+    adapter.probe({"endpoint": "/readings"})
+    assert responses.calls[0].request.headers.get("X-Auth") == "abc"
+
+
+@responses.activate
+def test_probe_with_basic_auth_sends_authorization_header():
+    responses.add(
+        responses.GET, "https://api.example.com/v1/readings",
+        json=[{"id": 1}], status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "basic", "username": "user", "secret": "pw"},
+    )
+    adapter.probe({"endpoint": "/readings"})
+    auth_header = responses.calls[0].request.headers.get("Authorization", "")
+    assert auth_header.startswith("Basic ")
+
+
+@responses.activate
+def test_probe_raises_auth_failed_on_401():
+    from scanner.adapters.http_probe import ProbeError
+    responses.add(
+        responses.GET, "https://api.example.com/v1/readings",
+        status=401,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "bad"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/readings"})
+    assert exc.value.code == "auth_failed"
