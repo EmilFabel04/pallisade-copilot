@@ -131,6 +131,7 @@ def create_app() -> FastAPI:
     from .routers.policies import router as policies_router
     from .routers.discovery import router as discovery_router
     from .routers.drift import router as drift_router
+    from .routers.integrations import router as integrations_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -176,6 +177,9 @@ def create_app() -> FastAPI:
 
     # Drift Analysis API
     app.include_router(drift_router, prefix="/api/v1", tags=["Drift Analysis"])
+
+    # Integrations operational API (probe-now, etc.)
+    app.include_router(integrations_router, prefix="/api/v1", tags=["Integrations"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 
