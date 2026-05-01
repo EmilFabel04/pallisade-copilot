@@ -87,10 +87,21 @@ class HttpProbeAdapter:
         if not (200 <= resp.status_code < 300):
             raise ProbeError("http_error", f"HTTP {resp.status_code}")
 
-        # Read with size cap
-        content = resp.raw.read(_MAX_RESPONSE_BYTES + 1, decode_content=True)
-        if len(content) > _MAX_RESPONSE_BYTES:
-            raise ProbeError("response_too_large", f"response exceeded {_MAX_RESPONSE_BYTES} bytes")
+        # Read with size cap, in chunks. iter_content works correctly through
+        # both the `responses` mock layer and real urllib3 streams (chunked,
+        # gzip-decoded, etc.), so the production codepath and test codepath
+        # are the same.
+        buf = bytearray()
+        for chunk in resp.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            if len(buf) > _MAX_RESPONSE_BYTES:
+                raise ProbeError(
+                    "response_too_large",
+                    f"response exceeded {_MAX_RESPONSE_BYTES} bytes",
+                )
+        content = bytes(buf)
 
         import json as _json
         try:

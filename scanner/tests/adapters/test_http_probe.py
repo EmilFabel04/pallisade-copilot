@@ -113,3 +113,91 @@ def test_probe_raises_auth_failed_on_401():
     with pytest.raises(ProbeError) as exc:
         adapter.probe({"endpoint": "/readings"})
     assert exc.value.code == "auth_failed"
+
+
+@responses.activate
+def test_probe_raises_on_response_too_large():
+    from scanner.adapters.http_probe import ProbeError
+    big_body = "x" * (11 * 1024 * 1024)  # 11 MiB of garbage
+    responses.add(
+        responses.GET, "https://api.example.com/v1/big",
+        body=big_body, status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/big"})
+    assert exc.value.code == "response_too_large"
+
+
+@responses.activate
+def test_probe_raises_too_many_rows():
+    from scanner.adapters.http_probe import ProbeError
+    huge = [{"id": i} for i in range(50_001)]
+    responses.add(
+        responses.GET, "https://api.example.com/v1/many",
+        json=huge, status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/many"})
+    assert exc.value.code == "too_many_rows"
+
+
+@responses.activate
+def test_probe_raises_malformed_json():
+    from scanner.adapters.http_probe import ProbeError
+    responses.add(
+        responses.GET, "https://api.example.com/v1/bad",
+        body="not json {{", status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/bad"})
+    assert exc.value.code == "malformed_json"
+
+
+@responses.activate
+def test_probe_raises_on_non_array_payload():
+    from scanner.adapters.http_probe import ProbeError
+    responses.add(
+        responses.GET, "https://api.example.com/v1/object",
+        json={"hello": "world"}, status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/object"})
+    assert exc.value.code == "not_array"
+
+
+def test_probe_raises_timeout(monkeypatch):
+    from scanner.adapters.http_probe import ProbeError
+    import requests as _requests
+
+    def _raise_timeout(*a, **kw):
+        raise _requests.Timeout()
+
+    monkeypatch.setattr(_requests.Session, "get", _raise_timeout)
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    import pytest
+    with pytest.raises(ProbeError) as exc:
+        adapter.probe({"endpoint": "/x"})
+    assert exc.value.code == "timeout"
