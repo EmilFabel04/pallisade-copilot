@@ -55,6 +55,13 @@ from .tools import get_tool_registry, ToolResult
 from .tool_executor import ToolExecutor
 from .artifacts import ToolArtifactResult, WRITE_TOOLS
 from .modes import tools_excluded_for_mode
+from .llm_provider import (
+    AnthropicProvider,
+    LLMProvider,
+    NormalizedResponse,
+    OpenAIProvider,
+    StopKind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -2339,13 +2346,240 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 except Exception as e:
                     logger.warning(f"[Stream/OpenAI] MCP shutdown error (ignored): {e}")
 
+    async def _run_provider_loop(
+        self,
+        *,
+        provider: LLMProvider,
+        client_create: Any,           # sync callable: client.create(**kwargs)
+        system: Any,                  # provider-shaped (Anthropic: cached list; OpenAI: in messages)
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        user_query: str,
+        context: CopilotContext,
+        executor: ToolExecutor,
+        mcp_manager: Any,
+        max_tool_iterations: int,
+        log_prefix: str,
+        reasoning_effort: Optional[str] = None,
+    ) -> CopilotResponse:
+        """Unified non-streaming tool loop.
+
+        Replaces the duplicated bodies of ``_chat_anthropic`` and
+        ``_chat_openai``. Provider-specific shape (request kwargs,
+        response parsing, tool-result wire format, root-cause label) is
+        delegated to ``provider``; the loop owns iteration, token
+        tracking, accumulated text, MCP dispatch, adjacent-path
+        steering, and root-cause injection.
+        """
+        total_input_tokens = 0
+        total_output_tokens = 0
+        all_tool_calls = _BoundedList(maxlen=50)
+        accumulated_text: List[str] = []
+        fired_adjacent_rules: Set[str] = set()
+
+        for iteration in range(max_tool_iterations):
+            try:
+                force_tool_first = (
+                    iteration == 0
+                    and bool(tools)
+                    and _should_force_initial_tool(user_query)
+                )
+                if force_tool_first:
+                    logger.info(
+                        f"{log_prefix} Forcing tool call on iter 0 for investigative query"
+                    )
+                api_kwargs = provider.request_kwargs(
+                    model=self.model,
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                    force_tool_first=force_tool_first,
+                    reasoning_effort=reasoning_effort,
+                )
+
+                response = client_create(**api_kwargs)
+                norm = provider.parse_response(response)
+
+                total_input_tokens += norm.input_tokens
+                total_output_tokens += norm.output_tokens
+                if norm.text:
+                    accumulated_text.append(norm.text)
+
+                if norm.stop_kind is StopKind.COMPLETED:
+                    final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
+                    return CopilotResponse(
+                        content=final_content,
+                        tool_calls=all_tool_calls,
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        model=self.model,
+                        stop_reason=norm.raw_stop_reason or StopReason.COMPLETED,
+                        iterations_used=iteration + 1,
+                    )
+
+                if norm.stop_kind is StopKind.TOOL_USE:
+                    tool_result_msgs: List[Dict[str, Any]] = []
+                    for tc in norm.tool_calls:
+                        tool_name = tc.name
+                        tool_input = tc.args
+                        tool_use_id = tc.id
+
+                        logger.info(f"Executing tool: {tool_name}")
+
+                        if tool_name.startswith("mcp_") and mcp_manager:
+                            mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
+                            result = ToolResult(
+                                success=mcp_result.get("success", False),
+                                data=mcp_result.get("data"),
+                                error=mcp_result.get("error"),
+                            )
+                        else:
+                            result = await executor.execute(tool_name, tool_input)
+
+                        if isinstance(result, ToolArtifactResult):
+                            synthetic_text = result.to_synthetic_tool_result()
+                            all_tool_calls.append({
+                                "tool": tool_name,
+                                "input": tool_input,
+                                "result": {"artifact": result.to_dict()},
+                            })
+                            tool_result_msgs.append(
+                                provider.tool_result_message(tool_use_id, synthetic_text)
+                            )
+                        else:
+                            all_tool_calls.append({
+                                "tool": tool_name,
+                                "input": tool_input,
+                                "result": result.to_dict(),
+                            })
+                            tool_result_msgs.append(provider.tool_result_message(
+                                tool_use_id,
+                                json.dumps(
+                                    result.data if result.success else {"error": result.error},
+                                    default=_safe_json_default,
+                                ),
+                            ))
+
+                    provider.append_tool_use_round(messages, norm, tool_result_msgs)
+
+                    # Adjacent-path steering: per-rule, capped, only if
+                    # we have iterations left to actually try the
+                    # alternative path.
+                    if iteration < max_tool_iterations - 1:
+                        for tc in norm.tool_calls:
+                            matching = [
+                                c for c in all_tool_calls
+                                if c.get("tool") == tc.name and c.get("input") == tc.args
+                            ]
+                            if not matching:
+                                continue
+                            last_call = matching[-1]
+                            rd = last_call.get("result") or {}
+                            last_result = ToolResult(
+                                success=rd.get("success", False),
+                                data=rd.get("data"),
+                                error=rd.get("error"),
+                            )
+                            fired = _evaluate_adjacent_path_rule(
+                                tool_name=tc.name,
+                                tool_args=tc.args,
+                                tool_result=last_result,
+                                integration_types=context.integration_types,
+                                all_tool_calls=all_tool_calls,
+                                fired_rule_names=fired_adjacent_rules,
+                            )
+                            if fired is not None:
+                                rule_name, steer_msg = fired
+                                fired_adjacent_rules.add(rule_name)
+                                logger.info(
+                                    f"{log_prefix} Adjacent-path steering: {rule_name}"
+                                )
+                                messages.append({
+                                    "role": "user",
+                                    "content": steer_msg,
+                                })
+
+                    # Root-cause injection: once, after first evidence round.
+                    if (
+                        context.intent_result
+                        and iteration >= 1
+                        and not getattr(context, '_root_cause_resolved', False)
+                    ):
+                        try:
+                            from .intent import Intent
+                            from .root_cause import resolve_fix_owner, format_owner_hint
+
+                            primary_intent = context.intent_result.primary.intent
+                            if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
+                                owner_decision = resolve_fix_owner(
+                                    all_tool_calls, context.intent_result
+                                )
+                                context._root_cause_resolved = True
+                                hint = format_owner_hint(
+                                    owner_decision,
+                                    target_hint=context.intent_result.target_hint,
+                                )
+                                logger.info(
+                                    f"{log_prefix} Root cause: "
+                                    f"{owner_decision.owner_system.value} "
+                                    f"(confidence={owner_decision.confidence:.0%})"
+                                )
+                                messages.append({
+                                    "role": "user",
+                                    "content": f"{provider.root_cause_label}: {hint}",
+                                })
+                        except Exception as e:
+                            logger.debug(
+                                f"{log_prefix} Root cause injection skipped: {e}"
+                            )
+
+                    continue
+
+                # Unexpected stop kind
+                logger.warning(
+                    f"Unexpected stop reason: {norm.raw_stop_reason}"
+                )
+                final_content = (
+                    "\n\n".join(accumulated_text)
+                    if accumulated_text
+                    else "Unexpected response from AI."
+                )
+                return CopilotResponse(
+                    content=final_content,
+                    model=self.model,
+                    stop_reason=norm.raw_stop_reason or StopReason.UNKNOWN,
+                    iterations_used=iteration + 1,
+                )
+
+            except Exception as e:
+                logger.exception(f"Error in {provider.name} chat")
+                return CopilotResponse(
+                    content=f"Error communicating with AI: {str(e)}",
+                    model=self.model,
+                    stop_reason=StopReason.ERROR,
+                    iterations_used=iteration + 1,
+                )
+
+        return self._build_max_iterations_response(
+            all_tool_calls,
+            total_input_tokens,
+            total_output_tokens,
+            accumulated_text,
+            iterations_used=max_tool_iterations,
+        )
+
     async def _chat_anthropic(
         self,
         messages: List[Message],
         context: CopilotContext,
         max_tool_iterations: int,
     ) -> CopilotResponse:
-        """Handle chat with Anthropic Claude."""
+        """Handle chat with Anthropic Claude.
+
+        Thin shell: provider-specific setup (client check, tool list
+        format, MCP discover format) plus a delegate to
+        ``_run_provider_loop`` for the unified tool loop body.
+        """
         if not self.anthropic_client:
             return CopilotResponse(
                 content="Anthropic not available. Please configure ANTHROPIC_API_KEY or switch to OpenAI.",
@@ -2353,28 +2587,25 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                 stop_reason=StopReason.ERROR,
             )
 
-        # Create tool executor first (needs adapters for schema fetch)
         executor = ToolExecutor(context)
-
-        # Pre-fetch warehouse schema (failures recorded on context for prompt)
         await self._prefetch_schema(context, executor, "[Anthropic]")
 
-        # Build system prompt (now includes schema info)
         registry = get_tool_registry()
         mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
-        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
+        available_tool_objects = registry.get_available_tools(
+            context.integration_types, exclude=mode_excluded,
+        )
         user_query = ""
         if messages:
             last_msg = messages[-1]
             user_query = last_msg.content if isinstance(last_msg.content, str) else ""
         system = self.build_system_prompt(
-            context, query=user_query, available_tools=available_tool_objects
+            context, query=user_query, available_tools=available_tool_objects,
+        )
+        tools = registry.to_anthropic_tools(
+            context.integration_types, exclude=mode_excluded,
         )
 
-        # Get available tools (legacy)
-        tools = registry.to_anthropic_tools(context.integration_types, exclude=mode_excluded)
-
-        # Start MCP servers and merge their tools
         mcp_manager = None
         try:
             from scanner.mcp_bridge.client import MCPClientManager
@@ -2387,225 +2618,33 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             if mcp_manager.has_servers:
                 mcp_tools = await mcp_manager.discover_tools(format="anthropic")
                 tools = tools + mcp_tools
-                logger.info(f"[Anthropic] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                logger.info(
+                    f"[Anthropic] MCP: {len(mcp_tools)} tools "
+                    f"from {mcp_manager.active_servers}"
+                )
                 context.mcp_enabled = True
         except Exception as e:
-            logger.warning(f"[Anthropic] MCP initialization failed (continuing without MCP): {e}")
+            logger.warning(
+                f"[Anthropic] MCP initialization failed (continuing without MCP): {e}"
+            )
             mcp_manager = None
 
         try:
-            # Convert messages to Anthropic format
-            anthropic_messages = self._convert_messages(messages)
-
-            # Track total tokens
-            total_input_tokens = 0
-            total_output_tokens = 0
-            all_tool_calls = _BoundedList(maxlen=50)
-            accumulated_text = []  # Accumulate text from ALL iterations, not just final
-            fired_adjacent_rules: Set[str] = set()
-
-            # Iterate until we get a final response
-            for iteration in range(max_tool_iterations):
-                try:
-                    # Force a tool call on the first iteration for investigative
-                    # queries so the LLM cannot open with a clarifying question.
-                    api_kwargs: Dict[str, Any] = {
-                        "model": self.model,
-                        "system": _cached_system(system),
-                        "messages": anthropic_messages,
-                        "tools": tools if tools else None,
-                        "max_tokens": 16384,
-                    }
-                    if iteration == 0 and tools and _should_force_initial_tool(user_query):
-                        api_kwargs["tool_choice"] = {"type": "any"}
-                        logger.info("[Anthropic] Forcing tool call on iter 0 for investigative query")
-
-                    # Call Claude
-                    response = self.anthropic_client.messages.create(**api_kwargs)
-
-                    # Track tokens
-                    total_input_tokens += response.usage.input_tokens
-                    total_output_tokens += response.usage.output_tokens
-
-                    # Extract text from EVERY response (not just end_turn)
-                    # This captures intermediate text like "I will create this now"
-                    for block in response.content:
-                        if hasattr(block, "text") and block.text:
-                            accumulated_text.append(block.text)
-
-                    # Check if we're done
-                    if response.stop_reason == "end_turn":
-                        # Return all accumulated text from all iterations
-                        final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
-
-                        return CopilotResponse(
-                            content=final_content,
-                            tool_calls=all_tool_calls,
-                            input_tokens=total_input_tokens,
-                            output_tokens=total_output_tokens,
-                            model=self.model,
-                            stop_reason=response.stop_reason or StopReason.COMPLETED,
-                            iterations_used=iteration + 1,
-                        )
-
-                    # Handle tool use
-                    if response.stop_reason == "tool_use":
-                        # Process tool calls
-                        tool_results = []
-
-                        for block in response.content:
-                            if block.type == "tool_use":
-                                tool_name = block.name
-                                tool_input = block.input
-                                tool_use_id = block.id
-
-                                logger.info(f"Executing tool: {tool_name}")
-
-                                # Route MCP-prefixed tools to MCP, others to legacy executor
-                                if tool_name.startswith("mcp_") and mcp_manager:
-                                    mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                    # Convert MCP result to ToolResult-compatible format
-                                    result = ToolResult(
-                                        success=mcp_result.get("success", False),
-                                        data=mcp_result.get("data"),
-                                        error=mcp_result.get("error"),
-                                    )
-                                else:
-                                    result = await executor.execute(tool_name, tool_input)
-
-                                # Handle artifact proposals from write tools
-                                if isinstance(result, ToolArtifactResult):
-                                    synthetic_text = result.to_synthetic_tool_result()
-                                    all_tool_calls.append({
-                                        "tool": tool_name,
-                                        "input": tool_input,
-                                        "result": {"artifact": result.to_dict()},
-                                    })
-                                    tool_results.append({
-                                        "type": "tool_result",
-                                        "tool_use_id": tool_use_id,
-                                        "content": synthetic_text,
-                                    })
-                                else:
-                                    # Track tool call
-                                    all_tool_calls.append({
-                                        "tool": tool_name,
-                                        "input": tool_input,
-                                        "result": result.to_dict(),
-                                    })
-
-                                    # Format result for Claude
-                                    tool_results.append({
-                                        "type": "tool_result",
-                                        "tool_use_id": tool_use_id,
-                                        "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
-                                    })
-
-                        # Add assistant message with tool use
-                        anthropic_messages.append({
-                            "role": "assistant",
-                            "content": response.content,
-                        })
-
-                        # Add tool results
-                        anthropic_messages.append({
-                            "role": "user",
-                            "content": tool_results,
-                        })
-
-                        # --- Adjacent-path steering (surgical, per-rule, capped) ---
-                        # If a primary tool returned empty/unavailable AND we have an
-                        # adjacent integration that can answer, inject a one-shot
-                        # steering message so the LLM tries that path before responding.
-                        if iteration < max_tool_iterations - 1:
-                            for block in response.content:
-                                if getattr(block, "type", None) != "tool_use":
-                                    continue
-                                tc_calls = [
-                                    tc for tc in all_tool_calls
-                                    if tc.get("tool") == block.name and tc.get("input") == block.input
-                                ]
-                                if not tc_calls:
-                                    continue
-                                last_call = tc_calls[-1]
-                                last_result = ToolResult(
-                                    success=last_call["result"].get("success", False),
-                                    data=last_call["result"].get("data"),
-                                    error=last_call["result"].get("error"),
-                                )
-                                fired = _evaluate_adjacent_path_rule(
-                                    tool_name=block.name,
-                                    tool_args=block.input,
-                                    tool_result=last_result,
-                                    integration_types=context.integration_types,
-                                    all_tool_calls=all_tool_calls,
-                                    fired_rule_names=fired_adjacent_rules,
-                                )
-                                if fired is not None:
-                                    rule_name, steer_msg = fired
-                                    fired_adjacent_rules.add(rule_name)
-                                    logger.info(f"[Anthropic] Adjacent-path steering: {rule_name}")
-                                    anthropic_messages.append({
-                                        "role": "user",
-                                        "content": steer_msg,
-                                    })
-
-                        # --- Root cause injection (once, after first evidence round) ---
-                        if (
-                            context.intent_result
-                            and iteration >= 1
-                            and not getattr(context, '_root_cause_resolved', False)
-                        ):
-                            try:
-                                from .intent import Intent
-                                from .root_cause import resolve_fix_owner, format_owner_hint
-
-                                primary_intent = context.intent_result.primary.intent
-                                if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
-                                    owner_decision = resolve_fix_owner(
-                                        all_tool_calls, context.intent_result
-                                    )
-                                    context._root_cause_resolved = True
-                                    hint = format_owner_hint(
-                                        owner_decision,
-                                        target_hint=context.intent_result.target_hint,
-                                    )
-                                    logger.info(
-                                        f"[Anthropic] Root cause: {owner_decision.owner_system.value} "
-                                        f"(confidence={owner_decision.confidence:.0%})"
-                                    )
-                                    anthropic_messages.append({
-                                        "role": "user",
-                                        "content": f"[System context — root cause analysis]: {hint}",
-                                    })
-                            except Exception as e:
-                                logger.debug(f"[Anthropic] Root cause injection skipped: {e}")
-
-                        # Continue loop
-                        continue
-
-                    # Unexpected stop reason
-                    logger.warning(f"Unexpected stop reason: {response.stop_reason}")
-                    final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
-                    return CopilotResponse(
-                        content=final_content,
-                        model=self.model,
-                        stop_reason=response.stop_reason or StopReason.UNKNOWN,
-                        iterations_used=iteration + 1,
-                    )
-
-                except Exception as e:
-                    logger.exception("Error in Anthropic chat")
-                    return CopilotResponse(
-                        content=f"Error communicating with AI: {str(e)}",
-                        model=self.model,
-                        stop_reason=StopReason.ERROR,
-                        iterations_used=iteration + 1,
-                    )
-
-            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text, iterations_used=max_tool_iterations)
+            return await self._run_provider_loop(
+                provider=AnthropicProvider(),
+                client_create=self.anthropic_client.messages.create,
+                system=_cached_system(system),
+                messages=self._convert_messages(messages),
+                tools=tools,
+                user_query=user_query,
+                context=context,
+                executor=executor,
+                mcp_manager=mcp_manager,
+                max_tool_iterations=max_tool_iterations,
+                log_prefix="[Anthropic]",
+                reasoning_effort=None,
+            )
         finally:
-            # Always shut down MCP servers
             if mcp_manager:
                 await mcp_manager.shutdown()
 
@@ -2615,37 +2654,49 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         context: CopilotContext,
         max_tool_iterations: int,
     ) -> CopilotResponse:
-        """Handle chat with OpenAI GPT."""
+        """Handle chat with OpenAI GPT.
+
+        Thin shell: provider-specific setup (client check, tool list
+        format, MCP discover format, reasoning-effort gating) plus a
+        delegate to ``_run_provider_loop`` for the unified tool loop
+        body.
+        """
         if not self.openai_client:
             return CopilotResponse(
                 content="OpenAI not available. Please configure OPENAI_API_KEY or switch to Anthropic.",
                 model=self.model,
                 stop_reason=StopReason.ERROR,
             )
-        
-        # Create tool executor first (needs adapters for schema fetch)
-        executor = ToolExecutor(context)
 
-        # Pre-fetch warehouse schema if not already populated
-        # Pre-fetch warehouse schema (failures recorded on context for prompt)
+        executor = ToolExecutor(context)
         await self._prefetch_schema(context, executor, "[OpenAI]")
 
-        # Build system prompt (now includes schema info)
         registry = get_tool_registry()
         mode_excluded = tools_excluded_for_mode(getattr(context, "mode", "ask"))
-        available_tool_objects = registry.get_available_tools(context.integration_types, exclude=mode_excluded)
+        available_tool_objects = registry.get_available_tools(
+            context.integration_types, exclude=mode_excluded,
+        )
         user_query = ""
         if messages:
             last_msg = messages[-1]
             user_query = last_msg.content if isinstance(last_msg.content, str) else ""
         system = self.build_system_prompt(
-            context, query=user_query, available_tools=available_tool_objects
+            context, query=user_query, available_tools=available_tool_objects,
         )
 
-        # Get available tools in OpenAI format (legacy)
-        tools = registry.to_openai_tools(context.integration_types, exclude=mode_excluded)
+        # Reasoning models (o1/o3) don't support tools yet; pass an
+        # empty list so the provider drops the field. They also accept
+        # ``reasoning_effort`` only on tool-free calls (see commit
+        # 3700f2b), which the provider already handles.
+        is_reasoning_model = (
+            self.model.startswith("o1") or self.model.startswith("o3")
+        )
+        tools_for_request: Optional[List[Dict[str, Any]]] = (
+            registry.to_openai_tools(context.integration_types, exclude=mode_excluded)
+            if not is_reasoning_model
+            else None
+        )
 
-        # Start MCP servers and merge their tools
         mcp_manager = None
         try:
             from scanner.mcp_bridge.client import MCPClientManager
@@ -2657,256 +2708,39 @@ The database schema could not be pre-loaded. You MUST discover table and column 
             await mcp_manager.start_servers()
             if mcp_manager.has_servers:
                 mcp_tools = await mcp_manager.discover_tools(format="openai")
-                tools = tools + mcp_tools
-                logger.info(f"[OpenAI] MCP: {len(mcp_tools)} tools from {mcp_manager.active_servers}")
+                if tools_for_request is None:
+                    tools_for_request = list(mcp_tools)
+                else:
+                    tools_for_request = tools_for_request + mcp_tools
+                logger.info(
+                    f"[OpenAI] MCP: {len(mcp_tools)} tools "
+                    f"from {mcp_manager.active_servers}"
+                )
                 context.mcp_enabled = True
         except Exception as e:
-            logger.warning(f"[OpenAI] MCP initialization failed (continuing without MCP): {e}")
+            logger.warning(
+                f"[OpenAI] MCP initialization failed (continuing without MCP): {e}"
+            )
             mcp_manager = None
 
         try:
-            # Convert messages to OpenAI format
-            openai_messages = self._convert_messages_openai(messages, system)
-
-            # Track total tokens
-            total_input_tokens = 0
-            total_output_tokens = 0
-            all_tool_calls = _BoundedList(maxlen=50)
-            accumulated_text = []  # Accumulate text from ALL iterations, not just final
-            fired_adjacent_rules: Set[str] = set()
-
-            # Check if this is a reasoning model (o1, o3) that uses different params
-            is_reasoning_model = self.model.startswith('o1') or self.model.startswith('o3')
-
-            # Iterate until we get a final response
-            for iteration in range(max_tool_iterations):
-                try:
-                    # Build API call params - reasoning models use max_completion_tokens
-                    api_params = {
-                        "model": self.model,
-                        "messages": openai_messages,
-                    }
-
-                    # GPT-5.x and reasoning models use max_completion_tokens
-                    is_new_model = self.model.startswith('gpt-5') or is_reasoning_model
-                    if is_new_model:
-                        api_params["max_completion_tokens"] = 16384
-                    else:
-                        api_params["max_tokens"] = 16384
-
-                    # Add tools (reasoning models don't support tools yet)
-                    will_have_tools = bool(tools and not is_reasoning_model)
-                    if will_have_tools:
-                        api_params["tools"] = tools
-                        if iteration == 0 and _should_force_initial_tool(user_query):
-                            api_params["tool_choice"] = "required"
-                            logger.info("[OpenAI] Forcing tool call on iter 0 for investigative query")
-
-                    # GPT-5.x on Chat Completions rejects `reasoning_effort`
-                    # when `tools` are present (OpenAI returns 400 directing
-                    # callers to /v1/responses). Until we migrate to the
-                    # Responses API, only send the param on tool-free calls.
-                    effort = _reasoning_effort_for(self.model, context)
-                    if effort and not will_have_tools:
-                        api_params["reasoning_effort"] = effort
-
-                    # Call OpenAI
-                    response = self.openai_client.chat.completions.create(**api_params)
-
-                    # Track tokens
-                    if response.usage:
-                        total_input_tokens += response.usage.prompt_tokens
-                        total_output_tokens += response.usage.completion_tokens
-
-                    message = response.choices[0].message
-                    finish_reason = response.choices[0].finish_reason
-
-                    # Extract text from EVERY response (not just stop)
-                    # This captures intermediate text like "I will create this now"
-                    if message.content:
-                        accumulated_text.append(message.content)
-
-                    # Check if we're done
-                    if finish_reason == "stop":
-                        # Return all accumulated text from all iterations
-                        final_content = "\n\n".join(accumulated_text) if accumulated_text else ""
-                        return CopilotResponse(
-                            content=final_content,
-                            tool_calls=all_tool_calls,
-                            input_tokens=total_input_tokens,
-                            output_tokens=total_output_tokens,
-                            model=self.model,
-                            stop_reason=finish_reason or StopReason.COMPLETED,
-                            iterations_used=iteration + 1,
-                        )
-
-                    # Handle tool calls
-                    if finish_reason == "tool_calls" and message.tool_calls:
-                        # Add assistant message with tool calls
-                        openai_messages.append({
-                            "role": "assistant",
-                            "content": message.content,
-                            "tool_calls": [
-                                {
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc.function.name,
-                                        "arguments": tc.function.arguments,
-                                    }
-                                }
-                                for tc in message.tool_calls
-                            ]
-                        })
-
-                        # Execute each tool
-                        for tool_call in message.tool_calls:
-                            tool_name = tool_call.function.name
-                            try:
-                                tool_input = json.loads(tool_call.function.arguments)
-                            except json.JSONDecodeError:
-                                tool_input = {}
-
-                            logger.info(f"Executing tool: {tool_name}")
-
-                            # Route MCP-prefixed tools to MCP, others to legacy executor
-                            if tool_name.startswith("mcp_") and mcp_manager:
-                                mcp_result = await mcp_manager.call_tool(tool_name, tool_input)
-                                result = ToolResult(
-                                    success=mcp_result.get("success", False),
-                                    data=mcp_result.get("data"),
-                                    error=mcp_result.get("error"),
-                                )
-                            else:
-                                result = await executor.execute(tool_name, tool_input)
-
-                            # Handle artifact proposals from write tools
-                            if isinstance(result, ToolArtifactResult):
-                                synthetic_text = result.to_synthetic_tool_result()
-                                all_tool_calls.append({
-                                    "tool": tool_name,
-                                    "input": tool_input,
-                                    "result": {"artifact": result.to_dict()},
-                                })
-                                openai_messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": synthetic_text,
-                                })
-                            else:
-                                # Track tool call
-                                all_tool_calls.append({
-                                    "tool": tool_name,
-                                    "input": tool_input,
-                                    "result": result.to_dict(),
-                                })
-
-                                # Add tool result
-                                openai_messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "content": json.dumps(result.data if result.success else {"error": result.error}, default=_safe_json_default),
-                                })
-
-                        # --- Adjacent-path steering (surgical, per-rule, capped) ---
-                        if iteration < max_tool_iterations - 1:
-                            for tc in message.tool_calls:
-                                tn = tc.function.name
-                                try:
-                                    ta = json.loads(tc.function.arguments)
-                                except json.JSONDecodeError:
-                                    ta = {}
-                                matching = [
-                                    c for c in all_tool_calls
-                                    if c.get("tool") == tn and c.get("input") == ta
-                                ]
-                                if not matching:
-                                    continue
-                                last_call = matching[-1]
-                                rd = last_call.get("result") or {}
-                                last_result = ToolResult(
-                                    success=rd.get("success", False),
-                                    data=rd.get("data"),
-                                    error=rd.get("error"),
-                                )
-                                fired = _evaluate_adjacent_path_rule(
-                                    tool_name=tn,
-                                    tool_args=ta,
-                                    tool_result=last_result,
-                                    integration_types=context.integration_types,
-                                    all_tool_calls=all_tool_calls,
-                                    fired_rule_names=fired_adjacent_rules,
-                                )
-                                if fired is not None:
-                                    rule_name, steer_msg = fired
-                                    fired_adjacent_rules.add(rule_name)
-                                    logger.info(f"[OpenAI] Adjacent-path steering: {rule_name}")
-                                    openai_messages.append({
-                                        "role": "user",
-                                        "content": steer_msg,
-                                    })
-
-                        # --- Root cause injection (once, after first evidence round) ---
-                        if (
-                            context.intent_result
-                            and iteration >= 1
-                            and not getattr(context, '_root_cause_resolved', False)
-                        ):
-                            try:
-                                from .intent import Intent
-                                from .root_cause import resolve_fix_owner, format_owner_hint
-
-                                primary_intent = context.intent_result.primary.intent
-                                if primary_intent in (Intent.DEBUG, Intent.FIX, Intent.PR):
-                                    owner_decision = resolve_fix_owner(
-                                        all_tool_calls, context.intent_result
-                                    )
-                                    context._root_cause_resolved = True
-                                    hint = format_owner_hint(
-                                        owner_decision,
-                                        target_hint=context.intent_result.target_hint,
-                                    )
-                                    logger.info(
-                                        f"[OpenAI] Root cause: {owner_decision.owner_system.value} "
-                                        f"(confidence={owner_decision.confidence:.0%})"
-                                    )
-                                    # Inject as user-role note rather than a
-                                    # mid-loop system message: Chat Completions
-                                    # tolerates role:"system" after the first
-                                    # turn, but it is non-standard and the
-                                    # Responses API rejects it.
-                                    openai_messages.append({
-                                        "role": "user",
-                                        "content": f"[system note — root cause analysis]: {hint}",
-                                    })
-                            except Exception as e:
-                                logger.debug(f"[OpenAI] Root cause injection skipped: {e}")
-
-                        # Continue loop
-                        continue
-
-                    # Unexpected finish reason
-                    logger.warning(f"Unexpected finish reason: {finish_reason}")
-                    final_content = "\n\n".join(accumulated_text) if accumulated_text else "Unexpected response from AI."
-                    return CopilotResponse(
-                        content=final_content,
-                        model=self.model,
-                        stop_reason=finish_reason or StopReason.UNKNOWN,
-                        iterations_used=iteration + 1,
-                    )
-
-                except Exception as e:
-                    logger.exception("Error in OpenAI chat")
-                    return CopilotResponse(
-                        content=f"Error communicating with AI: {str(e)}",
-                        model=self.model,
-                        stop_reason=StopReason.ERROR,
-                        iterations_used=iteration + 1,
-                    )
-
-            return self._build_max_iterations_response(all_tool_calls, total_input_tokens, total_output_tokens, accumulated_text, iterations_used=max_tool_iterations)
+            return await self._run_provider_loop(
+                provider=OpenAIProvider(
+                    supports_reasoning_effort=_supports_reasoning_effort(self.model),
+                ),
+                client_create=self.openai_client.chat.completions.create,
+                system="",  # OpenAI carries system in messages
+                messages=self._convert_messages_openai(messages, system),
+                tools=tools_for_request,
+                user_query=user_query,
+                context=context,
+                executor=executor,
+                mcp_manager=mcp_manager,
+                max_tool_iterations=max_tool_iterations,
+                log_prefix="[OpenAI]",
+                reasoning_effort=_reasoning_effort_for(self.model, context),
+            )
         finally:
-            # Always shut down MCP servers
             if mcp_manager:
                 await mcp_manager.shutdown()
     

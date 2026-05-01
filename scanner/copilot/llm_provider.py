@@ -125,6 +125,21 @@ class LLMProvider(Protocol):
         live inside a ``role: user`` turn — callers wrap accordingly."""
         ...
 
+    def append_tool_use_round(
+        self,
+        messages: List[Dict[str, Any]],
+        response: NormalizedResponse,
+        tool_results: List[Dict[str, Any]],
+    ) -> None:
+        """Mutate ``messages`` in place: append the assistant tool-use
+        turn and the tool result messages produced by ``tool_result_message``.
+
+        This hides the wire-format split (Anthropic wraps all results in
+        one ``role: user`` content list; OpenAI emits one top-level
+        ``role: tool`` message per result) so the loop can stay
+        provider-agnostic."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Stop-reason canonicalization
@@ -174,6 +189,11 @@ class AnthropicProvider:
     """Provider impl for Anthropic Messages API."""
 
     name = "anthropic"
+    # Phrasing preserved verbatim from the pre-refactor code path.
+    # OpenAI uses different wording (see OpenAIProvider.root_cause_label);
+    # the drift is historical and unifying it would change response tone
+    # in ways the eval harness should ratify before we touch.
+    root_cause_label = "[System context — root cause analysis]"
 
     def request_kwargs(
         self,
@@ -245,6 +265,17 @@ class AnthropicProvider:
             "content": content,
         }
 
+    def append_tool_use_round(
+        self,
+        messages: List[Dict[str, Any]],
+        response: NormalizedResponse,
+        tool_results: List[Dict[str, Any]],
+    ) -> None:
+        # Anthropic round-trips its own content blocks; tool results
+        # all live inside a single ``role: user`` content list.
+        messages.append(self.assistant_turn_for_tool_use(response))
+        messages.append({"role": "user", "content": tool_results})
+
 
 # ---------------------------------------------------------------------------
 # OpenAI
@@ -255,6 +286,11 @@ class OpenAIProvider:
     """Provider impl for OpenAI / GPT-5.x Chat Completions."""
 
     name = "openai"
+    # Lowercased phrasing intentional: Chat Completions tolerates
+    # ``role: "system"`` after the first turn but it's non-standard and
+    # the Responses API rejects it, so root-cause is injected as a
+    # user-role note. Anthropic keeps its older capitalized phrasing.
+    root_cause_label = "[system note — root cause analysis]"
 
     def __init__(self, *, supports_reasoning_effort: bool = True) -> None:
         # Reasoning models (o1/o3) and GPT-5.x take ``max_completion_tokens``
@@ -355,3 +391,14 @@ class OpenAIProvider:
             "tool_call_id": tool_use_id,
             "content": content,
         }
+
+    def append_tool_use_round(
+        self,
+        messages: List[Dict[str, Any]],
+        response: NormalizedResponse,
+        tool_results: List[Dict[str, Any]],
+    ) -> None:
+        # OpenAI: assistant turn carries the tool_calls field; each tool
+        # result is its own top-level ``role: tool`` message.
+        messages.append(self.assistant_turn_for_tool_use(response))
+        messages.extend(tool_results)

@@ -388,6 +388,46 @@ class TestCrossProviderInvariants:
         )
         assert a_norm.stop_kind is o_norm.stop_kind is StopKind.TOOL_USE
 
+    def test_append_tool_use_round_anthropic_wraps_results_in_one_user_turn(self):
+        raw = _anthropic_response(
+            content=[_anthropic_tool_use_block(id="toolu_1", name="t", input={})],
+            stop_reason="tool_use",
+        )
+        norm = AnthropicProvider().parse_response(raw)
+        result_block = AnthropicProvider().tool_result_message(
+            "toolu_1", '{"ok":true}',
+        )
+        msgs: list = []
+        AnthropicProvider().append_tool_use_round(msgs, norm, [result_block])
+        # Two turns: assistant (content blocks), then a single user turn
+        # whose content is the list of result blocks. Anthropic rejects
+        # tool results split across multiple user messages, so the
+        # wrapping is load-bearing.
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "assistant"
+        assert msgs[1]["role"] == "user"
+        assert msgs[1]["content"] == [result_block]
+
+    def test_append_tool_use_round_openai_emits_tool_messages(self):
+        raw = _openai_response(
+            content="thinking",
+            finish_reason="tool_calls",
+            tool_calls=[_openai_tool_call(
+                id="call_1", name="t", args_json="{}",
+            )],
+        )
+        norm = OpenAIProvider().parse_response(raw)
+        result = OpenAIProvider().tool_result_message("call_1", '{"ok":true}')
+        msgs: list = []
+        OpenAIProvider().append_tool_use_round(msgs, norm, [result])
+        # OpenAI: assistant turn (with tool_calls field), then one
+        # top-level ``role: tool`` message per result. Multiple results
+        # become multiple top-level messages — no wrapping.
+        assert len(msgs) == 2
+        assert msgs[0]["role"] == "assistant"
+        assert msgs[0]["tool_calls"][0]["id"] == "call_1"
+        assert msgs[1] == result
+
     def test_normalized_tool_call_args_are_already_dicts(self):
         """A loop using NormalizedToolCall.args directly must not need
         to know whether the source was Anthropic (already dict) or
