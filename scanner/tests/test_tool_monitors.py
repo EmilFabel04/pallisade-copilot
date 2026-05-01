@@ -243,14 +243,17 @@ class TestDagLastRunMonitor:
         assert result.status == MonitorStatus.FAIL
         assert "FAILED" in result.message
 
-    def test_warn_no_runs(self):
+    def test_error_no_runs(self):
         integration = MagicMock()
         integration.get_dag_runs.return_value = []
 
         monitor = DagLastRunMonitor({"dag_id": "my_dag"})
         result = monitor.execute(integration)
 
-        assert result.status == MonitorStatus.WARN
+        # No run history = no signal to evaluate against. Treated as ERROR
+        # rather than WARN so it surfaces as a config/integration issue, not
+        # a data-quality warning.
+        assert result.status == MonitorStatus.ERROR
 
     def test_warn_stale_run(self):
         from scanner.integrations.airflow import DAGState
@@ -494,14 +497,16 @@ class TestDbtTestFailuresMonitor:
         assert result.status == MonitorStatus.FAIL
         assert "failed" in result.message.lower() or "Error" in result.message
 
-    def test_warn_no_runs(self):
+    def test_error_no_runs(self):
         client = MagicMock()
         client.get_job_runs.return_value = []
 
         monitor = DbtTestFailuresMonitor({"job_id": 42})
         result = monitor.execute(client)
 
-        assert result.status == MonitorStatus.WARN
+        # See DagLastRunMonitor.test_error_no_runs — empty run history is
+        # an integration/config issue, surfaced as ERROR.
+        assert result.status == MonitorStatus.ERROR
 
     def test_warn_include_warnings(self):
         client = MagicMock()

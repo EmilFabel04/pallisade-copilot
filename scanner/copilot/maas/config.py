@@ -46,10 +46,32 @@ class MAASConfig:
     sql_reasoning_effort: Optional[str]
     logs_reasoning_effort: Optional[str]
 
+    # Soft deadline (seconds) for the specialist phase. When set and
+    # exceeded, the orchestrator abandons specialists and falls back to
+    # narrating from Phase-1 evidence alone. ``None`` (default) keeps
+    # today's no-deadline behavior. The conservative form of Tier-4
+    # item 5 — full speculative narration is gated on the eval harness.
+    specialist_soft_deadline_sec: Optional[float]
+
     @staticmethod
     def _parse_effort(value: str) -> Optional[str]:
         v = (value or "").strip().lower()
         return v if v in ("minimal", "low", "medium", "high") else None
+
+    @staticmethod
+    def _parse_positive_float(value: str) -> Optional[float]:
+        """Parse a strictly-positive float; non-positive or invalid → None.
+
+        Treating zero as "off" (rather than "fail immediately") avoids
+        the operator-surprise case of an accidental ``=0`` causing every
+        request to time out instantly. The unset and invalid cases all
+        collapse to None for the same reason.
+        """
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
 
     @classmethod
     def from_env(cls) -> "MAASConfig":
@@ -78,6 +100,9 @@ class MAASConfig:
             logs_reasoning_effort=(
                 cls._parse_effort(os.environ.get("MAAS_LOGS_REASONING_EFFORT", ""))
                 or default_effort
+            ),
+            specialist_soft_deadline_sec=cls._parse_positive_float(
+                os.environ.get("MAAS_SPECIALIST_SOFT_DEADLINE_SEC", "")
             ),
         )
 

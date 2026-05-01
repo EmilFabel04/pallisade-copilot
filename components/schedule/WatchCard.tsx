@@ -72,32 +72,10 @@ export function WatchCard({ watch, policyMonitorCount = 0, overrideMonitorCount 
       onClick={onClick}
     >
       {/* Status bar at top */}
-      <style>{`@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
+      <style>{`@keyframes watch-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }`}</style>
       {running ? (
-        <div className="h-1.5 relative overflow-hidden">
-          {/* Show live results underneath if available */}
-          {hasRun && totalMonitors > 0 ? (
-            <div className="flex h-full absolute inset-0">
-              {watch.passCount > 0 && (
-                <div className="bg-emerald-500 h-full transition-all duration-500" style={{ width: `${(watch.passCount / totalMonitors) * 100}%` }} />
-              )}
-              {watch.warnCount > 0 && (
-                <div className="bg-amber-500 h-full transition-all duration-500" style={{ width: `${(watch.warnCount / totalMonitors) * 100}%` }} />
-              )}
-              {watch.failCount > 0 && (
-                <div className="bg-red-500 h-full transition-all duration-500" style={{ width: `${(watch.failCount / totalMonitors) * 100}%` }} />
-              )}
-              {(watch.passCount + watch.warnCount + watch.failCount) < totalMonitors && (
-                <div className="bg-[var(--overlay-bg)] h-full flex-1" />
-              )}
-            </div>
-          ) : (
-            <div className="absolute inset-0 bg-[var(--accent)]/20" />
-          )}
-          {/* Shimmer sweep overlay */}
-          <div className="absolute inset-0">
-            <div className="h-full w-1/3 bg-white/25" style={{ animation: 'shimmer 1.5s ease-in-out infinite' }} />
-          </div>
+        <div className="h-1.5 bg-[var(--accent)]/20 overflow-hidden">
+          <div className="h-full w-1/3 bg-[var(--accent)]" style={{ animation: 'watch-shimmer 1.5s ease-in-out infinite' }} />
         </div>
       ) : hasRun && totalMonitors > 0 ? (
         <div className="flex h-1.5">

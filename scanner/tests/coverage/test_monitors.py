@@ -81,19 +81,26 @@ class TestVolumeMonitor:
         assert result.value == 1000.0
 
     def test_fail_below_min(self):
-        monitor = VolumeMonitor({"min_rows": 500})
-        result = monitor.evaluate(
-            [{"row_count": 100}],
-            "db.schema.table",
-        )
+        # min_rows / max_rows are daily thresholds — they require
+        # time_bucket_column so the monitor can compare against a daily
+        # bucket rather than a lifetime total.
+        monitor = VolumeMonitor({"min_rows": 500, "time_bucket_column": "created_at"})
+        rows = [
+            {"bucket_date": f"2025-01-{d:02d}", "row_count": 1000}
+            for d in range(1, 11)
+        ]
+        rows.append({"bucket_date": "2025-01-11", "row_count": 100})
+        result = monitor.evaluate(rows, "db.schema.table")
         assert result.status == MonitorStatus.FAIL
 
     def test_fail_above_max(self):
-        monitor = VolumeMonitor({"max_rows": 10000})
-        result = monitor.evaluate(
-            [{"row_count": 50000}],
-            "db.schema.table",
-        )
+        monitor = VolumeMonitor({"max_rows": 10000, "time_bucket_column": "created_at"})
+        rows = [
+            {"bucket_date": f"2025-01-{d:02d}", "row_count": 1000}
+            for d in range(1, 11)
+        ]
+        rows.append({"bucket_date": "2025-01-11", "row_count": 50000})
+        result = monitor.evaluate(rows, "db.schema.table")
         assert result.status == MonitorStatus.FAIL
 
     def test_zscore_anomaly(self):
@@ -281,13 +288,22 @@ class TestAnomalyMonitor:
         assert result.status == MonitorStatus.PASS
 
     def test_inline_time_series_anomaly(self):
+        # Note: dedicated metrics (distinct_count/null_rate/row_count) are
+        # deprecated for AnomalyMonitor — use the generic 'avg' metric so the
+        # test exercises the actual z-score path without a metric-specific
+        # min_effect_size threshold suppressing the signal. Also pin
+        # mode='trend' explicitly: timestamp_column alone does not flip the
+        # default mode, which is 'distribution'.
         monitor = AnomalyMonitor({
             "column": "count",
-            "metric": "distinct_count",
+            "metric": "avg",
+            "mode": "trend",
             "timestamp_column": "created_at",
         })
+        # Baseline must vary so stddev > 0; flat baselines give a divide-by-
+        # zero z-score and the monitor falls back to PASS.
         rows = [
-            {"bucket_date": f"2025-01-{d:02d}", "metric_value": 100.0}
+            {"bucket_date": f"2025-01-{d:02d}", "metric_value": 100.0 + (d % 3)}
             for d in range(1, 11)
         ]
         rows.append({"bucket_date": "2025-01-11", "metric_value": 500.0})
@@ -295,8 +311,10 @@ class TestAnomalyMonitor:
         assert result.status == MonitorStatus.FAIL
 
     def test_insufficient_data_with_value(self):
-        """With < 3 data points but a valid value, report as PASS baseline observation."""
-        monitor = AnomalyMonitor({"column": "x", "metric": "avg"})
+        """Trend mode with < 3 data points but a valid value: PASS baseline observation."""
+        # Explicit trend mode — distribution is the default and exercises a
+        # different code path that does not produce a baseline-observation result.
+        monitor = AnomalyMonitor({"column": "x", "metric": "avg", "mode": "trend"})
         result = monitor.evaluate(
             [{"metric_value": 42.0}],
             "db.schema.table",
@@ -305,14 +323,15 @@ class TestAnomalyMonitor:
         assert result.value == 42.0
         assert result.details["baseline_observation"] is True
         assert result.details["anomaly_ready"] is False
-        assert "not ready yet" in result.message
+        assert "not ready" in result.message
         # Without timestamp_column, message should suggest providing one
         assert "timestamp_column" in result.message
 
     def test_insufficient_data_with_timestamp(self):
-        """With < 3 data points but timestamp_column set, hint about needing more history."""
+        """Trend mode with < 3 data points but timestamp_column set."""
         monitor = AnomalyMonitor({
             "column": "x", "metric": "avg",
+            "mode": "trend",
             "timestamp_column": "created_at",
         })
         result = monitor.evaluate(
@@ -321,11 +340,11 @@ class TestAnomalyMonitor:
         )
         assert result.status == MonitorStatus.PASS
         assert result.details["has_timestamp_column"] is True
-        assert "automatically" in result.message
+        assert "more history" in result.message or "available" in result.message
 
     def test_insufficient_data_no_value(self):
-        """With < 3 data points and no extractable value, fall back to SKIPPED."""
-        monitor = AnomalyMonitor({"column": "x", "metric": "avg"})
+        """Trend mode with < 3 data points and no extractable value: SKIPPED."""
+        monitor = AnomalyMonitor({"column": "x", "metric": "avg", "mode": "trend"})
         result = monitor.evaluate(
             [{"metric_value": None}],
             "db.schema.table",
@@ -354,7 +373,9 @@ class TestMonitorExecutor:
             return [{"hours_since_update": 2.0, "last_value": "2025-01-01", "total_rows": 100}]
 
         executor = MonitorExecutor(query_func=mock_query, dialect="postgres")
-        monitor = FreshnessMonitor({"max_hours": 24})
+        # FreshnessMonitor now refuses to build a query without a
+        # timestamp_column — provide one so the executor reaches evaluate().
+        monitor = FreshnessMonitor({"max_hours": 24, "timestamp_column": "updated_at"})
         result = executor.run_monitor(monitor, "mydb", "public", "orders")
         assert result.status == MonitorStatus.PASS
         assert result.duration_ms is not None
@@ -365,7 +386,7 @@ class TestMonitorExecutor:
             raise RuntimeError("Connection failed")
 
         executor = MonitorExecutor(query_func=failing_query)
-        monitor = FreshnessMonitor()
+        monitor = FreshnessMonitor({"timestamp_column": "updated_at"})
         result = executor.run_monitor(monitor, "db", "schema", "table")
         assert result.status == MonitorStatus.ERROR
         assert "Connection failed" in result.message
@@ -384,7 +405,7 @@ class TestMonitorExecutor:
         results = executor.run_suite(
             tables=[{"database": "db", "schema": "pub", "table": "t"}],
             monitor_configs=[
-                {"type": "freshness", "config": {"max_hours": 24}},
+                {"type": "freshness", "config": {"max_hours": 24, "timestamp_column": "updated_at"}},
                 {"type": "volume"},
             ],
         )

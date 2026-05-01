@@ -9,9 +9,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..auth import ActingPrincipal, require_principal
 from .lineage import _get_engine_store
 
 logger = logging.getLogger(__name__)
@@ -242,7 +243,10 @@ async def delete_assignment(
 # ---------------------------------------------------------------------------
 
 @router.post("/resolve")
-async def resolve_policies(request: PolicyResolveRequest):
+async def resolve_policies(
+    request: PolicyResolveRequest,
+    principal: ActingPrincipal = Depends(require_principal),
+):
     """
     Resolve effective policies for multiple nodes.
 
@@ -266,7 +270,7 @@ async def resolve_policies(request: PolicyResolveRequest):
     # Get graph for branch resolution
     graph = None
     if request.stackId:
-        store = _get_engine_store(request.stackId)
+        store = _get_engine_store(principal.organization_id, request.stackId)
         graph = store.graph
 
     # Use DB data if passed from Next.js proxy, otherwise fall back to builtins
@@ -311,6 +315,7 @@ async def resolve_policies(request: PolicyResolveRequest):
                 "minRows": policy.volume_min_rows,
                 "maxRows": policy.volume_max_rows,
                 "growthThreshold": policy.volume_growth_threshold,
+                "timeColumn": policy.volume_time_column,
             },
             "anomaly": {
                 "enabled": policy.anomaly_enabled,
@@ -350,9 +355,10 @@ async def resolve_policies(request: PolicyResolveRequest):
 async def policy_coverage(
     stack_id: str = Query(..., alias="stackId"),
     organization_id: str = Query(..., alias="organizationId"),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Get policy coverage stats: how many nodes have explicit policies vs defaults."""
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         return {"totalNodes": 0, "withPolicy": 0, "withoutPolicy": 0, "coveragePct": 0}
 

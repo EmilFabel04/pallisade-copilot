@@ -581,11 +581,15 @@ class TestPolicyStatus:
         ]
         assert get_policy_status("db.t1", assignments) == "assigned"
 
-    def test_direct_with_overrides_returns_override(self):
+    def test_direct_with_overrides_returns_assigned(self):
+        # Node-level status is always "assigned" — customised values on a
+        # direct assignment are part of the assignment, not a separate
+        # override status. "override" only applies at the monitor-field
+        # level (see policy_resolver.get_policy_status).
         assignments = [
             {"assignmentType": "direct", "nodeFqn": "db.t1", "profileId": "p1", "overrides": {"freshnessConfig": {"maxHours": 1}}},
         ]
-        assert get_policy_status("db.t1", assignments) == "override"
+        assert get_policy_status("db.t1", assignments) == "assigned"
 
     def test_branch_coverage_returns_inherited(self):
         graph = _simple_graph()

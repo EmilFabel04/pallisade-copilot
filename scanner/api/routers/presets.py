@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ..auth import ActingPrincipal, require_principal
 from .lineage import _get_engine_store
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class SmartBuildPreviewRequest(BaseModel):
 async def list_presets(
     node_id: Optional[str] = Query(None, description="Node ID to check eligibility against"),
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Return all preset definitions with eligibility for a given node."""
     try:
@@ -58,7 +60,7 @@ async def list_presets(
 
     node = None
     if node_id:
-        store = _get_engine_store(stack_id)
+        store = _get_engine_store(principal.organization_id, stack_id)
         if store.graph:
             node = store.graph.nodes.get(node_id)
 
@@ -69,6 +71,7 @@ async def list_presets(
 async def preview_preset(
     request: PresetPreviewRequest,
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Preview what monitors a preset would create without persisting anything."""
     try:
@@ -76,7 +79,7 @@ async def preview_preset(
     except ImportError:
         from monitors.presets import preview_preset as _preview
 
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(
             status_code=404,
@@ -98,6 +101,7 @@ async def preview_preset(
 async def smart_build_preview(
     request: SmartBuildPreviewRequest,
     stack_id: Optional[str] = Query(None),
+    principal: ActingPrincipal = Depends(require_principal),
 ):
     """Auto-determine the best watches based on upstream graph shape."""
     try:
@@ -105,7 +109,7 @@ async def smart_build_preview(
     except ImportError:
         from monitors.presets import smart_build_preview as _smart_build
 
-    store = _get_engine_store(stack_id)
+    store = _get_engine_store(principal.organization_id, stack_id)
     if not store.graph:
         raise HTTPException(
             status_code=404,

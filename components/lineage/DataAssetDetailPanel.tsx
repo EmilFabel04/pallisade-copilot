@@ -402,7 +402,19 @@ export function DataAssetDetailPanel({
   const [discoveryState, setDiscoveryState] = useState<'idle' | 'loading' | 'confirm' | 'unsupported'>('idle');
   const [discoveryResult, setDiscoveryResult] = useState<{
     freshness?: { enabled: boolean; maxHours: number; warningHours: number };
-    volume?: { enabled: boolean; currentRows: number };
+    volume?: {
+      enabled: boolean;
+      // Headline daily values (only present when discovery succeeded)
+      expectedDailyRows?: number;
+      minRows?: number;
+      maxRows?: number;
+      timeColumn?: string;
+      dataPoints?: number;
+      // Reason daily computation was skipped (only present when enabled === false)
+      disabledReason?: string;
+      // Supplementary context only — not the primary signal
+      currentRows?: number;
+    };
     quality?: { enabled: boolean; maxNullRate: number };
     schema?: { enabled: boolean; strictness: string; allowEvolution: boolean; columnCount: number; columns?: { name: string; type: string; nullable: boolean; ordinal: number }[] };
     uniqueness?: { enabled: boolean; duplicateRate: number; primaryKeyColumns: string[]; detectionMethod: string; totalRows: number; distinctRows: number; approximate: boolean; suggestedThreshold: number; skipped?: boolean; reason?: string };
@@ -1273,7 +1285,23 @@ export function DataAssetDetailPanel({
                   <div className="flex justify-between"><span className="text-[var(--muted)]">Freshness</span><span className="text-[var(--text)]">max {discoveryResult.freshness.maxHours}h, warn {discoveryResult.freshness.warningHours}h</span></div>
                 )}
                 {discoveryResult.volume && (
-                  <div className="flex justify-between"><span className="text-[var(--muted)]">Volume</span><span className="text-[var(--text)]">{(discoveryResult.volume.currentRows ?? 0).toLocaleString()} rows</span></div>
+                  <div className="flex justify-between">
+                    <span className="text-[var(--muted)]">Volume</span>
+                    <span className="text-[var(--text)] text-right">
+                      {discoveryResult.volume.enabled === false ? (
+                        <span className="text-amber-400">disabled — {discoveryResult.volume.disabledReason ?? 'no daily window'}</span>
+                      ) : discoveryResult.volume.expectedDailyRows != null ? (
+                        <>
+                          {discoveryResult.volume.expectedDailyRows.toLocaleString()} rows/day
+                          {discoveryResult.volume.timeColumn && (
+                            <span className="text-[var(--text-faint)]"> · {discoveryResult.volume.timeColumn}</span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[var(--text-faint)]">{(discoveryResult.volume.currentRows ?? 0).toLocaleString()} rows total</span>
+                      )}
+                    </span>
+                  </div>
                 )}
                 {discoveryResult.quality && (
                   <div className="flex justify-between"><span className="text-[var(--muted)]">Quality</span><span className="text-[var(--text)]">null rate ≤{Math.round(discoveryResult.quality.maxNullRate * 100)}%</span></div>

@@ -30,12 +30,19 @@ class SpecialistError(Exception):
     pass
 
 
-# Process-wide response cache. Keyed on (specialist_name, model, messages_hash).
-# Saves the full LLM round-trip when the same specialist sees the same prompt
-# inside the TTL — common during retries, repeat queries, and tests.
+# Process-wide response cache. Keyed on
+# (specialist_name, model, pipeline_id, temperature, messages_hash).
+# Pipeline_id is in the key because pipeline profiles are fully isolated
+# workspaces — a cached response built from pipeline A's data must never
+# serve pipeline B, even when the textual prompt happens to match.
+# Temperature is in the key because self-consistency fans out two calls
+# at different temperatures expecting independent samples, so collapsing
+# them into one cache slot would defeat the feature.
 _RESPONSE_CACHE_MAX = 256
 _RESPONSE_CACHE_TTL_SEC = 300.0
-_response_cache: "OrderedDict[Tuple[str, str, str], Tuple[float, BaseModel]]" = OrderedDict()
+_DEFAULT_PIPELINE_BUCKET = "_default"
+_CacheKey = Tuple[str, str, str, float, str]
+_response_cache: "OrderedDict[_CacheKey, Tuple[float, BaseModel]]" = OrderedDict()
 
 
 def _hash_messages(messages: list) -> str:
@@ -44,7 +51,7 @@ def _hash_messages(messages: list) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
-def _cache_get(key: Tuple[str, str, str]) -> Any:
+def _cache_get(key: _CacheKey) -> Any:
     entry = _response_cache.get(key)
     if entry is None:
         return None
@@ -57,7 +64,7 @@ def _cache_get(key: Tuple[str, str, str]) -> Any:
     return value
 
 
-def _cache_put(key: Tuple[str, str, str], value: Any) -> None:
+def _cache_put(key: _CacheKey, value: Any) -> None:
     _response_cache[key] = (time.time(), value)
     _response_cache.move_to_end(key)
     while len(_response_cache) > _RESPONSE_CACHE_MAX:
@@ -104,14 +111,40 @@ class BaseSpecialist(ABC):
 
         On parse failure: retry once with a correction prompt.
         On HTTP failure: raise SpecialistError (orchestrator handles fallback).
+
+        ``pipeline_id`` (kwarg, optional): pipeline-profile identifier. The
+        response cache is partitioned by it so pipeline profiles do not
+        share cached specialist responses. Callers without a pipeline
+        share a single ``_default`` bucket.
+
+        ``reasoning_effort`` (kwarg, optional): per-call override of the
+        client's effort tier. The orchestrator uses this to escalate
+        effort on a verifier-failure retry. Cache lookups are not
+        partitioned by effort — a higher-effort retry should still
+        replace a lower-effort cached entry on success.
+
+        ``temperature`` (kwarg, optional, default 0.0): sampling
+        temperature. Self-consistency fans out two calls at different
+        temperatures, so the cache key must include this — otherwise the
+        second call would just return the first's cached result.
         """
+        pipeline_id = kwargs.pop("pipeline_id", None) or _DEFAULT_PIPELINE_BUCKET
+        reasoning_effort = kwargs.pop("reasoning_effort", None)
+        temperature = kwargs.pop("temperature", 0.0)
         messages = self.build_messages(evidence, query, **kwargs)
         content = ""
 
-        # Cache lookup. Key on (name, model, prompt-hash) so different
-        # models or different prompts produce distinct entries. Hits return
-        # the parsed Pydantic model with no LLM round-trip.
-        cache_key = (self.name, self.client.model_name, _hash_messages(messages))
+        # Cache lookup. Key on (name, model, pipeline_id, temperature,
+        # prompt-hash) so different models, prompts, pipelines, or
+        # sampling temperatures all produce distinct entries. Hits
+        # return the parsed Pydantic model with no LLM round-trip.
+        cache_key: _CacheKey = (
+            self.name,
+            self.client.model_name,
+            pipeline_id,
+            temperature,
+            _hash_messages(messages),
+        )
         cached = _cache_get(cache_key)
         if cached is not None:
             logger.info(
@@ -123,8 +156,9 @@ class BaseSpecialist(ABC):
             try:
                 result = await self.client.chat_completion(
                     messages=messages,
-                    temperature=0.0,
+                    temperature=temperature,
                     response_format={"type": "json_object"},
+                    reasoning_effort=reasoning_effort,
                 )
                 content = result["content"]
                 parsed = self.response_model.model_validate_json(content)

@@ -12,6 +12,7 @@ Specialists are called via RunPod for SQL and Logs.
 import asyncio
 import hashlib
 import json
+import re
 import time
 import logging
 from typing import AsyncGenerator, Dict, List, Any, Optional, Set
@@ -45,6 +46,97 @@ def _args_hash(tool_name: str, args: Dict[str, Any]) -> str:
     """Compute a stable hash for tool call deduplication."""
     key = json.dumps({"t": tool_name, "a": args}, sort_keys=True, default=str)
     return hashlib.md5(key.encode()).hexdigest()[:12]
+
+
+# Reasoning-effort ladder. Higher tiers spend more reasoning tokens for
+# better quality; the orchestrator escalates one tier on verifier failure.
+# This only meaningfully affects specialists (SQL, Logs) — the GPT-5.4
+# narration path runs Chat Completions with tools, where reasoning_effort
+# is silently dropped (see commit 3700f2b) until the /v1/responses
+# migration lands.
+EFFORT_LADDER = ["minimal", "low", "medium", "high"]
+
+
+def _next_effort(current: Optional[str]) -> Optional[str]:
+    """Return the next-higher effort tier, or None if already at the top.
+
+    ``None``/unknown values jump to ``medium`` rather than the bottom of
+    the ladder — when no effort was configured we have no signal that the
+    floor is the right starting point for the retry.
+    """
+    if current is None or current not in EFFORT_LADDER:
+        return "medium"
+    idx = EFFORT_LADDER.index(current)
+    return EFFORT_LADDER[idx + 1] if idx < len(EFFORT_LADDER) - 1 else None
+
+
+# Words in the user's query that suggest multi-table reasoning, joins,
+# comparison, or investigation — the cases where running SQL gen at two
+# temperatures and picking the higher-confidence result is worth the
+# doubled cost. Heuristic on NL phrasing rather than the generated SQL
+# so we can decide before the first call.
+_HIGH_STAKES_PATTERNS = re.compile(
+    r"(?:"
+    # Comparison
+    r"\bcompar\w*|\bacross\b|\bbetween\b|\bvs\b|\bversus\b|"
+    # Explicit join
+    r"\bjoin(?:ed|s|ing)?\b|"
+    # Investigation / debug
+    r"\binvestigat\w*|\bwhy\s+(?:did|does|is|are|was|were)\b|"
+    r"\bwhat\s+went\s+wrong\b|\broot\s+cause\b|\bdebug\w*|"
+    # Delta / correlation
+    r"\bdifference\b|\bdiffer\w*|\bcorrelat\w*"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_high_stakes(query: str) -> bool:
+    """Whether the query warrants self-consistency fan-out.
+
+    Conservative: false negatives are fine (we just spend less), but a
+    false positive doubles SQL specialist cost. Trigger only on signals
+    that genuinely indicate multi-table or investigative work.
+    """
+    if not query:
+        return False
+    return bool(_HIGH_STAKES_PATTERNS.search(query))
+
+
+async def gather_specialists_with_deadline(
+    coros: List[Any],
+    deadline_sec: Optional[float],
+) -> "tuple[Optional[List[Any]], bool]":
+    """Run specialist coroutines under an optional soft deadline.
+
+    Returns ``(outcomes, deadline_exceeded)``:
+
+    * ``deadline_sec`` is None or 0 → behaves like ``asyncio.gather``.
+      Returns ``(outcomes, False)``.
+    * Specialists complete in time → returns ``(outcomes, False)``.
+    * Specialists exceed the deadline → cancels all of them, returns
+      ``(None, True)``. Caller is expected to fall back to a path that
+      doesn't depend on specialist output (today's ``_fallback_stream``).
+
+    Conservative form of Tier-4 item 5 (speculative narration). The
+    full speculative version that runs narration in parallel with
+    specialists has streaming-UX and quality tradeoffs the eval harness
+    is needed to settle; this slice is opt-in via env var and uses the
+    existing fallback so it can ship without those measurements.
+    """
+    if not coros:
+        return [], False
+    gathered = asyncio.gather(*coros)
+    if not deadline_sec:
+        return await gathered, False
+    try:
+        outcomes = await asyncio.wait_for(gathered, timeout=deadline_sec)
+        return outcomes, False
+    except asyncio.TimeoutError:
+        # asyncio.wait_for already cancelled the inner gather; awaiting
+        # the gathered future would raise CancelledError. Caller handles
+        # the fallback path.
+        return None, True
 
 
 class MAASOrchestrator:
@@ -311,14 +403,54 @@ class MAASOrchestrator:
                             f"[MAAS] Calling {spec_name} "
                             f"endpoint={c.base_url} model={c.model_name}"
                         )
-                    result = await specialist.call(
+                    common_kwargs = dict(
                         evidence=evidence_blob,
                         query=query,
                         max_retries=route.budget.max_revisions,
                         warehouse_type=warehouse_filter or "bigquery",
                         available_tools=context.available_tools,
                         available_warehouses=available_warehouses,
+                        pipeline_id=context.pipeline_stack_id,
                     )
+
+                    self_consistency_used = False
+                    self_consistency_picked: Optional[str] = None
+
+                    if spec_name == "sql" and _is_high_stakes(query):
+                        # Self-consistency: same prompt, two temperatures.
+                        # Doubles SQL specialist cost so it's gated by the
+                        # high-stakes heuristic. Pick the result that
+                        # passes the verifier with higher confidence; on
+                        # ties, prefer A (the deterministic temp=0.0
+                        # result) to keep behavior reproducible.
+                        logger.info(
+                            f"[MAAS] {spec_name} high-stakes — running "
+                            f"self-consistency fan-out (temp=0.0 || 0.7)"
+                        )
+                        result_a, result_b = await asyncio.gather(
+                            specialist.call(temperature=0.0, **common_kwargs),
+                            specialist.call(temperature=0.7, **common_kwargs),
+                        )
+                        vr_a, vr_b = await asyncio.gather(
+                            self._verify_specialist(spec_name, result_a, context),
+                            self._verify_specialist(spec_name, result_b, context),
+                        )
+                        conf_a = vr_a.get("confidence", 1.0 if vr_a["passed"] else 0.0)
+                        conf_b = vr_b.get("confidence", 1.0 if vr_b["passed"] else 0.0)
+                        # Strictly higher → B; otherwise A (stable default).
+                        if conf_b > conf_a:
+                            result, vr, self_consistency_picked = result_b, vr_b, "B"
+                        else:
+                            result, vr, self_consistency_picked = result_a, vr_a, "A"
+                        self_consistency_used = True
+                        logger.info(
+                            f"[MAAS] {spec_name} self-consistency picked "
+                            f"{self_consistency_picked} "
+                            f"(conf_a={conf_a:.2f}, conf_b={conf_b:.2f})"
+                        )
+                    else:
+                        result = await specialist.call(**common_kwargs)
+                        vr = await self._verify_specialist(spec_name, result, context)
                     latency = int((time.monotonic() - start_time) * 1000)
                     sql_preview = (
                         result.sql[:200] if hasattr(result, "sql") else "n/a"
@@ -327,11 +459,26 @@ class MAASOrchestrator:
                         f"[MAAS] {spec_name} returned "
                         f"latency={latency}ms sql={sql_preview}"
                     )
-                    vr = await self._verify_specialist(spec_name, result, context)
+                    escalated_to: Optional[str] = None
                     if not vr["passed"]:
+                        # Escalate reasoning_effort one tier for the retry.
+                        # Specialists run JSON-only, no tools, so the
+                        # effort param actually flows through (unlike the
+                        # narration path on Chat Completions). At-most-one
+                        # escalation per call keeps cost bounded.
+                        current_effort = (
+                            self._clients[spec_name].reasoning_effort
+                            if spec_name in self._clients
+                            else None
+                        )
+                        escalated_to = _next_effort(current_effort)
                         logger.warning(
                             f"[MAAS] {spec_name} failed verification: "
                             f"{vr['errors']}, retrying"
+                            + (
+                                f" with reasoning_effort={escalated_to}"
+                                if escalated_to else ""
+                            )
                         )
                         result = await specialist.call(
                             evidence=evidence_blob,
@@ -340,6 +487,8 @@ class MAASOrchestrator:
                             warehouse_type=warehouse_filter or "bigquery",
                             available_tools=context.available_tools,
                             available_warehouses=available_warehouses,
+                            pipeline_id=context.pipeline_stack_id,
+                            reasoning_effort=escalated_to,
                         )
                         vr = await self._verify_specialist(spec_name, result, context)
                     return {
@@ -350,6 +499,9 @@ class MAASOrchestrator:
                         "vr": vr,
                         "latency": latency,
                         "error": None,
+                        "escalated_to": escalated_to,
+                        "self_consistency_used": self_consistency_used,
+                        "self_consistency_picked": self_consistency_picked,
                     }
                 except SpecialistError as e:
                     latency = int((time.monotonic() - start_time) * 1000)
@@ -364,9 +516,28 @@ class MAASOrchestrator:
                         "error": e,
                     }
 
-            outcomes = await asyncio.gather(*[
-                _call_and_verify(n) for n in spec_plan
-            ]) if spec_plan else []
+            outcomes, deadline_exceeded = await gather_specialists_with_deadline(
+                [_call_and_verify(n) for n in spec_plan],
+                deadline_sec=self.config.specialist_soft_deadline_sec,
+            )
+            if deadline_exceeded:
+                # Soft deadline tripped. Specialists are cancelled; route
+                # through the existing fallback path which narrates from
+                # Phase-1 evidence alone. Trace the reason so latency
+                # tuning has a signal.
+                logger.warning(
+                    f"[MAAS] Specialist soft deadline "
+                    f"({self.config.specialist_soft_deadline_sec}s) exceeded; "
+                    f"falling back to phase-1 narration"
+                )
+                trace.fallback_reason = "specialist_soft_deadline"
+                async for event in self._fallback_stream(
+                    messages, context, confirmed_tool_ids,
+                    pending_tool_call, trace,
+                    evidence_store=evidence_store, query=query,
+                ):
+                    yield event
+                return
 
             # --- Sequential post-processing in plan order ---
             for outcome in outcomes:
@@ -415,6 +586,9 @@ class MAASOrchestrator:
                         f"({conf:.2f}); warnings={vr.get('warnings', [])}"
                     )
 
+                escalated_to = outcome.get("escalated_to")
+                sc_used = outcome.get("self_consistency_used", False)
+                sc_picked = outcome.get("self_consistency_picked")
                 if vr["passed"]:
                     specialist_results[spec_name] = {
                         "result": result,
@@ -424,6 +598,9 @@ class MAASOrchestrator:
                         specialist=spec_name,
                         latency_ms=latency,
                         success=True,
+                        escalated_to=escalated_to,
+                        self_consistency_used=sc_used,
+                        self_consistency_picked=sc_picked,
                     ))
                 else:
                     # Both attempts failed verification. Drop the result and
@@ -439,6 +616,9 @@ class MAASOrchestrator:
                         latency_ms=latency,
                         success=False,
                         error=f"verification failed: {vr.get('errors', [])}",
+                        escalated_to=escalated_to,
+                        self_consistency_used=sc_used,
+                        self_consistency_picked=sc_picked,
                     ))
                     continue
 
@@ -605,6 +785,8 @@ class MAASOrchestrator:
                                 query=query,
                                 max_retries=0,
                                 warehouse_type=warehouse_filter or "bigquery",
+                                pipeline_id=context.pipeline_stack_id,
+                                repair_mode=True,
                             )
                             vr = await self._verify_specialist(
                                 "sql", repaired, context

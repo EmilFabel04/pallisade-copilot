@@ -92,6 +92,15 @@ class SpecialistInvocation(BaseModel):
     success: bool
     retry_count: int = 0
     error: Optional[str] = None
+    # Set when the verifier-failure retry escalated reasoning_effort one
+    # tier above the original. Useful for trace inspection and for
+    # measuring how often escalation happens in production.
+    escalated_to: Optional[str] = None
+    # True when the orchestrator ran two parallel SQL calls at different
+    # temperatures and picked the higher-confidence result. Records which
+    # branch (A=temp 0.0, B=temp 0.7) was selected.
+    self_consistency_used: bool = False
+    self_consistency_picked: Optional[str] = None  # "A" or "B"
 
 
 class ToolCallRecord(BaseModel):

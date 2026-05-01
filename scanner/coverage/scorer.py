@@ -317,11 +317,6 @@ class CoverageScorer:
             or "UNIQUENESS" in ext_checks
             or any(c in ext_checks for c in ("uniqueness", "unique", "distinct"))
             or bool(contract.get("maxDuplicateRate"))
-            or any(
-                m.get("config", {}).get("metric") == "distinct_count"
-                for m in monitors.values()
-                if isinstance(m, dict)
-            )
         )
         return DimensionScore(
             dimension=CoverageDimension.UNIQUENESS_CHECK,

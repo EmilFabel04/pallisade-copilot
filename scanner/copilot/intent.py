@@ -20,6 +20,15 @@ class Intent(Enum):
     PR = "pr"
     PLAN = "plan"
     EXPLAIN = "explain"
+    # InteractionMode has CREATE/BUNDLE/ONBOARD/SUGGEST defined with full
+    # prompts and tool wiring, but until these intents existed they were
+    # only reachable via slash commands. NL classification now routes
+    # phrases like "create a watch", "bundle these monitors", "set up
+    # snowflake", "suggest some checks" into the matching mode.
+    CREATE = "create"
+    BUNDLE = "bundle"
+    ONBOARD = "onboard"
+    SUGGEST = "suggest"
 
 
 @dataclass
@@ -134,6 +143,39 @@ _KEYWORD_SIGNALS: Dict[Intent, List[Tuple[str, float]]] = {
         (r"\bwhat is the difference\b", 0.7),
         (r"\btell me about\b", 0.5),
     ],
+    Intent.CREATE: [
+        # "create/add/new/set up/configure" + monitor/watch/check/alert.
+        # The verb alone is too generic (matches "create a PR", "add a
+        # column"), so the pairing with monitoring nouns is what disambiguates.
+        (r"\b(create|add|set up|configure)\s+(?:a\s+|an\s+|the\s+)?(watch|monitor|alert|check)\b", 0.95),
+        (r"\bnew\s+(watch|monitor|alert|check)\b", 0.9),
+        (r"\bgenerate\s+(?:a\s+)?(watch|monitor|alert|check)\b", 0.9),
+        (r"\bbuild\s+(?:a\s+)?(watch|monitor|alert|check)\b", 0.85),
+        (r"\bgenerate\s+(?:a\s+)?(dbt\s+model|dbt\s+test)\b", 0.9),
+    ],
+    Intent.BUNDLE: [
+        # Verbs that mean "merge multiple existing things into one".
+        (r"\bbundle\b", 0.9),
+        (r"\b(combine|consolidate|merge|group)\s+(?:these\s+|the\s+|all\s+)?(monitor|alert|check|watch)", 0.9),
+        (r"\bpackage\s+(?:these\s+|the\s+|up\s+)", 0.7),
+    ],
+    Intent.ONBOARD: [
+        # Setting up an integration / connecting a new tool.
+        (r"\bonboard\b", 0.95),
+        (r"\bconnect\s+(?:my\s+|a\s+|the\s+)?\w+", 0.7),
+        (r"\bset\s+up\s+(?:my\s+|a\s+|the\s+)?(snowflake|bigquery|postgres|redshift|databricks|airflow|dbt|fivetran|airbyte|integration|warehouse|connection)\b", 0.95),
+        (r"\bintegrate\s+(?:my\s+|a\s+|the\s+)?\w+", 0.7),
+        (r"\bwire\s+up\b", 0.85),
+    ],
+    Intent.SUGGEST: [
+        # Recommendation requests — "what should I", "suggest", "recommend".
+        (r"\bsuggest\b", 0.85),
+        (r"\brecommend\b", 0.85),
+        (r"\bpropose\b", 0.8),
+        (r"\bbest practice", 0.7),
+        (r"\bwhat\s+should\s+i\s+(?:improve|monitor|check|watch|add)\b", 0.9),
+        (r"\bhow\s+can\s+i\s+make\s+.+\s+better\b", 0.8),
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -164,6 +206,16 @@ _QUESTION_FORM_SIGNALS: List[Tuple[str, Intent, float]] = [
     (r"^(can you |please )?explain\b", Intent.EXPLAIN, 0.85),
     (r"^how\s+does\b", Intent.EXPLAIN, 0.7),
     (r"^what\s+is\s+a?\s*\w+\s*\?", Intent.EXPLAIN, 0.5),
+    # CREATE forms
+    (r"^(can you |please )?(create|add|set up|configure)\s+(?:a\s+|an\s+)?(watch|monitor|alert|check)\b", Intent.CREATE, 0.95),
+    # BUNDLE forms
+    (r"^(can you |please )?(bundle|combine|consolidate|merge|group)\s+(?:these\s+|the\s+|all\s+)", Intent.BUNDLE, 0.9),
+    # ONBOARD forms
+    (r"^(can you |please )?(connect|onboard|integrate|wire\s+up)\b", Intent.ONBOARD, 0.85),
+    (r"^(can you |please )?set\s+up\s+(?:my\s+|a\s+|the\s+)?(snowflake|bigquery|postgres|redshift|databricks|airflow|dbt|fivetran|airbyte|integration|warehouse)", Intent.ONBOARD, 0.95),
+    # SUGGEST forms
+    (r"^(can you |please )?(suggest|recommend|propose)\b", Intent.SUGGEST, 0.9),
+    (r"^what\s+should\s+i\s+(improve|monitor|check|watch|add)\b", Intent.SUGGEST, 0.9),
 ]
 
 # ---------------------------------------------------------------------------
@@ -412,6 +464,10 @@ def intent_to_mode(result: IntentResult) -> str:
         Intent.PR: "fix",  # PR uses FIX mode's tools
         Intent.PLAN: "plan",
         Intent.EXPLAIN: "explain",
+        Intent.CREATE: "create",
+        Intent.BUNDLE: "bundle",
+        Intent.ONBOARD: "onboard",
+        Intent.SUGGEST: "suggest",
     }
 
     # Multi-intent: DEBUG+PR or DEBUG+FIX → use FIX mode

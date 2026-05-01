@@ -1,0 +1,131 @@
+# Copilot eval corpus.
+#
+# Each entry is one representative user query plus the behaviors a
+# correct response must exhibit. The runner loads this file, runs each
+# query through the copilot, and checks the response against the
+# `expect` clauses.
+#
+# Schema (all fields are optional unless noted):
+#   id         (required)  Stable identifier for the case.
+#   query      (required)  The user's natural-language message.
+#   intent     (optional)  Expected top-1 Intent classification.
+#   mode       (optional)  Expected InteractionMode mapped from the intent.
+#   expect:
+#     tool_calls           List of tool names that must appear in the trace.
+#     forbidden_tools      List of tool names that must NOT appear.
+#     sql_pattern          Regex the generated SQL must match.
+#     mentions             Substrings the response text must contain.
+#     forbidden_mentions   Substrings the response must not contain.
+#     intent_confidence    Minimum primary-intent confidence score.
+#
+# Keep the corpus tight — quality over quantity. Every entry should
+# pin a behavior worth pinning.
+
+cases:
+
+  # ---------- INFO ----------
+  - id: info_simple_count
+    query: "how many orders are there?"
+    intent: INFO
+    mode: ask
+    expect:
+      tool_calls: [query_warehouse]
+      sql_pattern: "(?i)select\\s+count"
+      intent_confidence: 0.2
+
+  - id: info_top_n
+    query: "show me the top 10 customers by revenue"
+    intent: INFO
+    mode: ask
+    expect:
+      tool_calls: [query_warehouse]
+      sql_pattern: "(?i)order\\s+by"
+      intent_confidence: 0.2
+
+  - id: info_list_tables
+    query: "list all tables in my warehouse"
+    intent: INFO
+    mode: ask
+
+  # ---------- DEBUG ----------
+  - id: debug_dag_failure
+    query: "why did my orders DAG fail last night?"
+    intent: DEBUG
+    mode: debug
+    expect:
+      mentions: [airflow]
+      intent_confidence: 0.3
+
+  - id: debug_anomaly
+    query: "investigate the spike in null values yesterday"
+    intent: DEBUG
+    mode: debug
+
+  # ---------- FIX ----------
+  - id: fix_broken_step
+    query: "fix the broken create_table step in my dag"
+    intent: FIX
+    mode: fix
+
+  # ---------- PLAN ----------
+  - id: plan_migration
+    query: "how should I plan the migration from Snowflake to BigQuery?"
+    intent: PLAN
+    mode: plan
+
+  # ---------- EXPLAIN ----------
+  - id: explain_concept
+    query: "explain how lineage extraction works in this product"
+    intent: EXPLAIN
+    mode: explain
+
+  # ---------- CREATE (Tier-4 item 6) ----------
+  - id: create_watch
+    query: "create a watch for my orders table"
+    intent: CREATE
+    mode: create
+
+  - id: create_monitor
+    query: "add a monitor on the events table for null rate"
+    intent: CREATE
+    mode: create
+
+  # ---------- BUNDLE ----------
+  - id: bundle_monitors
+    query: "bundle these monitors into one group"
+    intent: BUNDLE
+    mode: bundle
+
+  # ---------- ONBOARD ----------
+  - id: onboard_warehouse
+    query: "set up my snowflake warehouse"
+    intent: ONBOARD
+    mode: onboard
+
+  - id: onboard_connect_dbt
+    query: "connect dbt to this project"
+    intent: ONBOARD
+    mode: onboard
+
+  # ---------- SUGGEST ----------
+  - id: suggest_monitors
+    query: "suggest some monitors for my orders table"
+    intent: SUGGEST
+    mode: suggest
+
+  - id: suggest_recommend
+    query: "recommend checks for the events pipeline"
+    intent: SUGGEST
+    mode: suggest
+
+  # ---------- High-stakes (Tier-4 item 4) ----------
+  # Intent-wise this is an INFO query (analytics), not DEBUG. The
+  # high-stakes heuristic in maas/orchestrator._is_high_stakes is
+  # orthogonal to intent — it triggers self-consistency fan-out for
+  # SQL gen quality on multi-table / comparison queries.
+  - id: high_stakes_compare
+    query: "compare order volume across regions for Q4"
+    intent: INFO
+    mode: ask
+    expect:
+      sql_pattern: "(?i)group\\s+by"

@@ -29,6 +29,10 @@ def _mock_config():
     config.logs_model = "logs-model"
     config.specialist_timeout = 30
     config.orchestrator_model = "gpt-5.4"
+    # Soft deadline is None by default. Set explicitly so the helper
+    # in gather_specialists_with_deadline doesn't see a MagicMock and
+    # try to compare it against 0 inside asyncio.wait_for.
+    config.specialist_soft_deadline_sec = None
     return config
 
 

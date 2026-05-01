@@ -22,7 +22,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from scanner.lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
+try:
+    from lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
+except ImportError:
+    from scanner.lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
 
 logger = logging.getLogger(__name__)
 
@@ -640,53 +643,76 @@ def _compute_freshness(adapter: Any, table_fqn: str, metadata: Optional[Dict[str
     }
 
 
-def _get_daily_row_counts(adapter: Any, table_fqn: str, days: int = 30) -> Optional[List[int]]:
-    """Return row counts per day for the most recent `days` days.
+def _volume_dialect_clauses(adapter: Any, table_fqn: str, ts_col: str, days: int) -> Dict[str, str]:
+    """Build dialect-specific SQL fragments for daily-volume queries.
 
-    Picks a timestamp column (preferring ingest/update patterns over created),
-    then asks the warehouse to bucket rows by day. Skips the current day to
-    avoid biasing min/max with a partial day.
+    The column is wrapped in ``CAST(... AS TIMESTAMP)`` for the lookback
+    comparison so DATETIME columns work on BigQuery (which refuses to
+    compare DATETIME against TIMESTAMP) and TIMESTAMP_NTZ vs TIMESTAMP_TZ
+    mismatches don't bite on Snowflake.
     """
-    pick = _pick_volume_timestamp_column(adapter, table_fqn)
-    if pick.column is None:
-        return None
-    ts_col = pick.column
-
     dialect = getattr(adapter, "dialect", "").lower()
     db, schema, tbl = _parse_fqn(adapter, table_fqn)
 
     if dialect == "bigquery":
-        q = lambda c: f"`{c}`"
+        quoted_col = f"`{ts_col}`"
         quoted_table = f"`{db}`.`{schema}`.`{tbl}`"
-        date_expr = f"DATE({q(ts_col)})"
-        lookback = f"{q(ts_col)} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {days + 1} DAY)"
+        ts_cast = f"CAST({quoted_col} AS TIMESTAMP)"
+        date_expr = f"DATE({ts_cast})"
+        lookback = (
+            f"{ts_cast} >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), "
+            f"INTERVAL {days + 1} DAY)"
+        )
         today_excl = f"{date_expr} < CURRENT_DATE()"
     elif dialect == "snowflake":
-        q = lambda c: f'"{c}"'
+        quoted_col = f'"{ts_col}"'
         quoted_table = f'{db}.{schema}."{tbl}"'
-        date_expr = f"CAST({q(ts_col)} AS DATE)"
-        lookback = f"{q(ts_col)} >= DATEADD(day, -{days + 1}, CURRENT_TIMESTAMP())"
+        ts_cast = f"CAST({quoted_col} AS TIMESTAMP_NTZ)"
+        date_expr = f"CAST({ts_cast} AS DATE)"
+        lookback = (
+            f"{ts_cast} >= DATEADD(day, -{days + 1}, "
+            f"CAST(CURRENT_TIMESTAMP() AS TIMESTAMP_NTZ))"
+        )
         today_excl = f"{date_expr} < CURRENT_DATE()"
     else:
-        q = lambda c: f'"{c}"'
+        quoted_col = f'"{ts_col}"'
         quoted_table = f'"{schema}"."{tbl}"' if schema else f'"{tbl}"'
-        date_expr = f"CAST({q(ts_col)} AS DATE)"
-        lookback = f"{q(ts_col)} >= CURRENT_TIMESTAMP - INTERVAL '{days + 1} days'"
+        ts_cast = f"CAST({quoted_col} AS TIMESTAMP)"
+        date_expr = f"CAST({ts_cast} AS DATE)"
+        lookback = (
+            f"{ts_cast} >= CURRENT_TIMESTAMP - INTERVAL '{days + 1} days'"
+        )
         today_excl = f"{date_expr} < CURRENT_DATE"
 
-    query = f"""
-        SELECT {date_expr} AS day, COUNT(*) AS row_count
-        FROM {quoted_table}
-        WHERE {lookback} AND {today_excl}
-        GROUP BY day
-        ORDER BY day DESC
-        LIMIT {days}
-    """
+    return {
+        "quoted_col": quoted_col,
+        "quoted_table": quoted_table,
+        "date_expr": date_expr,
+        "lookback": lookback,
+        "today_excl": today_excl,
+    }
 
+
+def _run_daily_count_query(
+    adapter: Any, clauses: Dict[str, str], days: int, *, exclude_today: bool,
+) -> Optional[List[int]]:
+    """Execute a per-day COUNT(*) query. None on adapter exception."""
+    where = clauses["lookback"]
+    if exclude_today:
+        where = f"{where} AND {clauses['today_excl']}"
+    query = (
+        f"SELECT {clauses['date_expr']} AS day, COUNT(*) AS row_count "
+        f"FROM {clauses['quoted_table']} "
+        f"WHERE {where} "
+        f"GROUP BY day ORDER BY day DESC LIMIT {days}"
+    )
     try:
         rows = adapter.execute_query(query)
     except Exception as e:
-        logger.debug("[SLA Discovery] %s: daily-volume scan failed: %s", table_fqn, e)
+        logger.warning(
+            "[SLA Discovery] daily-volume scan failed (exclude_today=%s): %s",
+            exclude_today, e,
+        )
         return None
 
     counts: List[int] = []
@@ -698,7 +724,121 @@ def _get_daily_row_counts(adapter: Any, table_fqn: str, days: int = 30) -> Optio
             counts.append(int(val))
         except (TypeError, ValueError):
             continue
-    return counts or None
+    return counts
+
+
+def _probe_volume_column(
+    adapter: Any, clauses: Dict[str, str], ts_col: str,
+) -> Optional[Dict[str, Any]]:
+    """Sample the timestamp column once so we can explain *why* the daily
+    query came back empty (all-null, all-today, data too old, etc.).
+
+    Returns a dict with ``total_rows``, ``non_null_rows``, ``min_ts``,
+    ``max_ts`` — or ``None`` if the probe itself fails.
+    """
+    query = (
+        f"SELECT "
+        f"COUNT(*) AS total_rows, "
+        f"COUNT({clauses['quoted_col']}) AS non_null_rows, "
+        f"MIN({clauses['quoted_col']}) AS min_ts, "
+        f"MAX({clauses['quoted_col']}) AS max_ts "
+        f"FROM {clauses['quoted_table']}"
+    )
+    try:
+        rows = adapter.execute_query(query)
+    except Exception as e:
+        logger.warning(
+            "[SLA Discovery] volume column probe failed (ts_col=%s): %s",
+            ts_col, e,
+        )
+        return None
+    if not rows:
+        return None
+    row = rows[0] if isinstance(rows, list) else rows
+    return {
+        "total_rows": int(row.get("total_rows") or 0),
+        "non_null_rows": int(row.get("non_null_rows") or 0),
+        "min_ts": row.get("min_ts"),
+        "max_ts": row.get("max_ts"),
+    }
+
+
+def _explain_empty_volume(probe: Optional[Dict[str, Any]], ts_col: str, days: int) -> str:
+    """Translate a probe result into a human-readable disabled reason."""
+    if probe is None:
+        return (
+            f"Daily-volume query against `{ts_col}` returned no rows and the "
+            "diagnostic probe failed. Check warehouse permissions or pick a "
+            "different timestamp column."
+        )
+    total = probe.get("total_rows") or 0
+    non_null = probe.get("non_null_rows") or 0
+    if total == 0:
+        return f"Table is empty — no daily volume to learn from `{ts_col}`."
+    if non_null == 0:
+        return (
+            f"All values in `{ts_col}` are NULL — pick a different timestamp "
+            "column for daily volume bucketing."
+        )
+    max_ts = probe.get("max_ts")
+    if max_ts is None:
+        return (
+            f"Daily-volume query against `{ts_col}` returned no rows "
+            "(reason unclear). Pick a different timestamp column or disable "
+            "volume monitoring."
+        )
+    return (
+        f"`{ts_col}` has {non_null:,} non-null values but none fall within "
+        f"the last {days} days (latest is {max_ts}). The data may be "
+        "older than the lookback window or the column may carry placeholder "
+        "values — pick a different timestamp column."
+    )
+
+
+def _get_daily_row_counts(
+    adapter: Any, table_fqn: str, ts_col: str, days: int = 30,
+) -> Dict[str, Any]:
+    """Per-day COUNT(*) with a forgiving fallback and a diagnostic probe.
+
+    Strategy:
+    1. Strict pass excluding today — gives clean min/max for stable tables.
+    2. If the strict pass is empty (common on newly-loaded tables where every
+       row carries today's load timestamp), retry without ``today_excl`` so
+       the table at least gets *some* daily history.
+    3. If both passes are empty, run a one-shot probe to explain *why* —
+       the user can then act on a specific reason instead of a generic
+       "returned no data".
+
+    Returns a dict the caller pattern-matches on::
+
+        {"ok": True,  "counts": [...], "includesToday": False}
+        {"ok": True,  "counts": [...], "includesToday": True}   # newly-loaded
+        {"ok": False, "reason": "<actionable message>"}
+    """
+    clauses = _volume_dialect_clauses(adapter, table_fqn, ts_col, days)
+
+    counts = _run_daily_count_query(adapter, clauses, days, exclude_today=True)
+    if counts is None:
+        # Adapter raised — surface the failure rather than silently degrade.
+        return {
+            "ok": False,
+            "reason": (
+                f"Daily-volume query against `{ts_col}` failed. Check "
+                "warehouse permissions or pick a different timestamp column."
+            ),
+        }
+    if counts:
+        return {"ok": True, "counts": counts, "includesToday": False}
+
+    # Strict pass empty — the table may have only just started loading and
+    # every row carries today's date. Retry including today.
+    counts = _run_daily_count_query(adapter, clauses, days, exclude_today=False)
+    if counts:
+        return {"ok": True, "counts": counts, "includesToday": True}
+
+    # Both passes empty: find out why.
+    probe = _probe_volume_column(adapter, clauses, ts_col)
+    return {"ok": False, "reason": _explain_empty_volume(probe, ts_col, days)}
 
 
 def _round_volume(n: float, *, down: bool) -> int:
@@ -721,10 +861,20 @@ def _compute_volume(
 ) -> Optional[Dict[str, Any]]:
     """Derive expected daily volume thresholds from historical row counts.
 
-    Queries row counts per day for the last ~30 days via a timestamp column,
-    then emits minRows/maxRows as `avg ± 2·stddev` (clamped and rounded) so
-    the user sees expected daily ingest, not a static snapshot of total rows.
-    Falls back to just currentRows when no timestamp column is usable.
+    Volume monitoring is *daily by definition* in this platform — the
+    monitor compares yesterday's row count against a learned daily window,
+    so the discovery output mirrors that contract: daily values are the
+    headline, ``currentRows`` is supplementary context only.
+
+    The result always carries a ``timeColumn`` when daily computation
+    succeeds; downstream wiring threads that into the running monitor's
+    ``time_bucket_column`` so SLA thresholds and monitor checks measure
+    the same thing.
+
+    Returns ``{enabled: False, disabledReason}`` when daily volume cannot
+    be computed (no timestamp column, query fails, or <3 days of history).
+    Refusing to fall back to a static total is intentional — comparing a
+    daily threshold against a lifetime total produces meaningless checks.
 
     When ``pipeline_stack_id`` is supplied and the timestamp picker's
     confidence falls below ``CONFIG.confidence_threshold``, this function
@@ -739,10 +889,11 @@ def _compute_volume(
     )
 
     count = metadata.get("row_count") if metadata else None
+    current_rows = int(count) if count is not None and count >= 0 else None
 
-    # Run the picker + clarification emit regardless of row data — the column
-    # choice is independent of row counts, and an empty table still needs a
-    # timestamp column for future volume monitoring.
+    # Run the picker + clarification emit regardless of how the rest of
+    # discovery turns out. The column-choice question is meaningful even
+    # for empty tables (future loads still need to be bucketed correctly).
     pick = _pick_volume_timestamp_column(adapter, table_fqn)
     clarification = _try_emit_timestamp_clarification(
         table_fqn=table_fqn,
@@ -751,34 +902,64 @@ def _compute_volume(
         organization_id=organization_id,
     )
 
-    if not count or count <= 0:
-        # No row data. Preserve the historical None return so dimension
-        # aggregation skips this monitor cleanly — UNLESS we just created a
-        # clarification, in which case we surface a minimal tentative result
-        # so the UI can show the popup linkage.
+    def _attach_clarification(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Tag the result with tentative + context_request_id when one was emitted."""
         if clarification and clarification.get("context_request_id") and not clarification.get("suppressed"):
-            return {
-                "enabled": False,
-                "tentative": True,
-                "context_request_id": clarification["context_request_id"],
-            }
-        return None
+            payload["tentative"] = True
+            payload["context_request_id"] = clarification["context_request_id"]
+        return payload
 
-    result: Dict[str, Any] = {
-        "enabled": True,
-        "currentRows": int(count),
-    }
-    if clarification and clarification.get("context_request_id") and not clarification.get("suppressed"):
-        result["tentative"] = True
-        result["context_request_id"] = clarification["context_request_id"]
+    if pick.column is None:
+        return _attach_clarification({
+            "enabled": False,
+            "disabledReason": (
+                "No timestamp/date column found — daily volume cannot be "
+                "computed. Add a column like loaded_at, updated_at, or "
+                "created_at, or disable volume monitoring for this table."
+            ),
+            **({"currentRows": current_rows} if current_rows is not None else {}),
+        })
 
-    daily = _get_daily_row_counts(adapter, table_fqn)
-    if not daily or len(daily) < 3:
-        return result
+    ts_col = pick.column
 
-    n = len(daily)
-    avg = sum(daily) / n
-    variance = sum((x - avg) ** 2 for x in daily) / (n - 1)
+    daily_result = _get_daily_row_counts(adapter, table_fqn, ts_col)
+    if not daily_result.get("ok"):
+        return _attach_clarification({
+            "enabled": False,
+            "disabledReason": daily_result.get("reason") or (
+                f"Daily-volume query against `{ts_col}` returned no rows."
+            ),
+            "timeColumn": ts_col,
+            **({"currentRows": current_rows} if current_rows is not None else {}),
+        })
+
+    daily: List[int] = daily_result["counts"]
+    includes_today = daily_result.get("includesToday", False)
+
+    if len(daily) < 3:
+        return _attach_clarification({
+            "enabled": False,
+            "disabledReason": (
+                f"Only {len(daily)} day(s) of history under `{ts_col}` — "
+                "need at least 3 to learn a stable daily window. Re-run "
+                "discovery once the table has more history."
+            ),
+            "timeColumn": ts_col,
+            "dataPoints": len(daily),
+            **({"currentRows": current_rows} if current_rows is not None else {}),
+        })
+
+    # When the latest bucket is today's partial day, drop it from the
+    # statistics — a half-day count would bias both ``avg`` and ``stddev``
+    # downward. ``daily`` is ordered DESC by day, so daily[0] is the newest.
+    if includes_today and len(daily) > 3:
+        stats_daily = daily[1:]
+    else:
+        stats_daily = daily
+
+    n = len(stats_daily)
+    avg = sum(stats_daily) / n
+    variance = sum((x - avg) ** 2 for x in stats_daily) / (n - 1) if n > 1 else 0.0
     stddev = math.sqrt(variance)
 
     # ±2σ window, clamped and rounded to human-friendly numbers.
@@ -790,13 +971,19 @@ def _compute_volume(
         max_rows = _round_volume(avg * 1.5 + 1, down=False)
         min_rows = _round_volume(avg * 0.5, down=True)
 
-    result.update({
+    result: Dict[str, Any] = {
+        "enabled": True,
         "expectedDailyRows": int(round(avg)),
         "minRows": int(min_rows),
         "maxRows": int(max_rows),
+        "timeColumn": ts_col,
         "dataPoints": n,
-    })
-    return result
+    }
+    if includes_today:
+        result["partialToday"] = True
+    if current_rows is not None:
+        result["currentRows"] = current_rows
+    return _attach_clarification(result)
 
 
 # ---------------------------------------------------------------------------
