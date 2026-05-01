@@ -32,6 +32,13 @@ def register_all_drivers() -> None:
 
     _register = DriverRegistry.register
 
+    # ── Sources (DATA_PLANE) ───────────────────────────────────────────
+    try:
+        from .source.custom_source_driver import CustomSourceDriver
+        _register("CUSTOM_SOURCE", CustomSourceDriver)
+    except Exception as e:
+        logger.debug("Custom Source driver not loaded: %s", e)
+
     # ── Warehouses (DATA_PLANE) ────────────────────────────────────────
     try:
         from .warehouse.bigquery_driver import BigQueryDriver

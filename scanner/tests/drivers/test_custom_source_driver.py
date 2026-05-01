@@ -130,3 +130,22 @@ def test_extract_lineage_emits_edge_when_lands_in_set():
     nodes, edges = d.extract_lineage(config)
     assert len(nodes) == 1
     assert len(edges) == 1
+
+
+def test_driver_registered_in_loader():
+    """CustomSourceDriver is discoverable via the integration_type registry."""
+    from scanner.drivers.loader import register_all_drivers, reset_loaded_flag
+    from scanner.drivers.registry import DriverRegistry
+
+    # Ensure registry is populated (idempotent — register_all_drivers
+    # short-circuits if already loaded; reset_loaded_flag forces a fresh
+    # registration in case a prior test reset the registry).
+    reset_loaded_flag()
+    DriverRegistry.reset()
+    register_all_drivers()
+
+    driver_cls = DriverRegistry.get("CUSTOM_SOURCE")
+    assert driver_cls is not None
+    driver = driver_cls()
+    assert driver.__class__.__name__ == "CustomSourceDriver"
+    assert driver.integration_type() == "CUSTOM_SOURCE"

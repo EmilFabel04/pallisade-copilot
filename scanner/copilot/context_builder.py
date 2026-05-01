@@ -130,6 +130,7 @@ def score_table_relevance(
 
 class IntegrationLayer(Enum):
     """Layers in the data stack."""
+    SOURCE = "source"
     INGESTION = "ingestion"
     TRANSFORMATION = "transformation"
     WAREHOUSE = "warehouse"
@@ -718,6 +719,8 @@ class CopilotContextBuilder:
     
     # Mapping of integration types to layers
     INTEGRATION_LAYERS = {
+        # Sources
+        "CUSTOM_SOURCE": IntegrationLayer.SOURCE,
         # Warehouse
         "SNOWFLAKE": IntegrationLayer.WAREHOUSE,
         "BIGQUERY": IntegrationLayer.WAREHOUSE,
