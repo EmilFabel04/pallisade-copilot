@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMonitor, MonitorResult, MonitorStatus
+from .borderline import classify_severity
 from .stats import score_anomaly, build_confidence_info
 
 # Default maximum null rate before FAIL (5%).
@@ -328,6 +329,11 @@ class NullCheckMonitor(BaseMonitor):
             )
 
             col_status = MonitorStatus.PASS
+            severity = classify_severity(
+                z_score=score.z_score,
+                sensitivity_threshold=score.threshold_used,
+            )
+
             # Check baseline anomaly
             if score.is_anomaly:
                 col_status = MonitorStatus.FAIL
@@ -336,11 +342,37 @@ class NullCheckMonitor(BaseMonitor):
             # Also check hard threshold as a floor
             elif self.max_null_rate is not None and current > self.max_null_rate:
                 col_status = MonitorStatus.FAIL
+            elif severity == "borderline":
+                if self._is_dampened(
+                    target_fqn=target_fqn,
+                    column=col,
+                    abs_z=abs(float(score.z_score)),
+                ):
+                    # User already marked this column's noise as expected; pass.
+                    col_status = MonitorStatus.PASS
+                else:
+                    col_status = MonitorStatus.BORDERLINE
+                    self._emit_borderline_failure_review(
+                        target_fqn=target_fqn,
+                        column=col,
+                        observed=float(current),
+                        z_score=float(score.z_score),
+                        baseline_mean=float(score.baseline_mean),
+                        baseline_stddev=float(score.baseline_stddev),
+                        threshold_used=float(score.threshold_used),
+                    )
 
             if col_status == MonitorStatus.FAIL:
                 worst_status = MonitorStatus.FAIL
-            elif col_status == MonitorStatus.WARN and worst_status != MonitorStatus.FAIL:
+            elif col_status == MonitorStatus.WARN and worst_status not in (
+                MonitorStatus.FAIL,
+            ):
                 worst_status = MonitorStatus.WARN
+            elif col_status == MonitorStatus.BORDERLINE and worst_status not in (
+                MonitorStatus.FAIL,
+                MonitorStatus.WARN,
+            ):
+                worst_status = MonitorStatus.BORDERLINE
 
             if current > worst_rate:
                 worst_rate = current
@@ -409,3 +441,84 @@ class NullCheckMonitor(BaseMonitor):
                 ),
             },
         )
+
+    def _is_dampened(self, *, target_fqn: str, column: str, abs_z: float) -> bool:
+        """Suppress repeat clarifications when the user already marked this
+        column's null-rate noise as expected. Best-effort; any failure → False."""
+        pipeline_stack_id = self.config.get("pipeline_stack_id")
+        organization_id = self.config.get("organization_id")
+        if not pipeline_stack_id or not organization_id:
+            return False
+        try:
+            try:
+                from copilot.clarifications.emit import (
+                    fetch_conventions_via_nextjs,
+                    is_dampened,
+                )
+            except ImportError:
+                from scanner.copilot.clarifications.emit import (  # type: ignore
+                    fetch_conventions_via_nextjs,
+                    is_dampened,
+                )
+            conventions = fetch_conventions_via_nextjs(
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+            )
+            return is_dampened(
+                conventions=conventions,
+                scope_ref=f"{target_fqn}::{column}",
+                metric="null_rate",
+                abs_z=abs_z,
+            )
+        except Exception:
+            return False
+
+    def _emit_borderline_failure_review(
+        self,
+        *,
+        target_fqn: str,
+        column: str,
+        observed: float,
+        z_score: float,
+        baseline_mean: float,
+        baseline_stddev: float,
+        threshold_used: float,
+    ) -> None:
+        """Best-effort failure_review emit for borderline null-rate drift."""
+        pipeline_stack_id = self.config.get("pipeline_stack_id")
+        organization_id = self.config.get("organization_id")
+        if not pipeline_stack_id:
+            return
+        if baseline_stddev > 0:
+            range_min = max(0.0, baseline_mean - threshold_used * baseline_stddev)
+            range_max = min(1.0, baseline_mean + threshold_used * baseline_stddev)
+        else:
+            range_min = baseline_mean
+            range_max = baseline_mean
+        try:
+            try:
+                from copilot.clarifications.emit import emit_via_nextjs
+            except ImportError:
+                from scanner.copilot.clarifications.emit import emit_via_nextjs  # type: ignore
+
+            emit_via_nextjs(
+                pipeline_stack_id=pipeline_stack_id,
+                organization_id=organization_id,
+                kind="failure_review",
+                scope_type="node",
+                scope_ref=f"{target_fqn}::{column}",
+                payload={
+                    "node_fqn": target_fqn,
+                    "metric": f"null_rate[{column}]",
+                    "observed": float(observed),
+                    "expected_range": [float(range_min), float(range_max)],
+                    "z_score": float(z_score),
+                    "sample_window": self.config.get(
+                        "history_window",
+                        f"{self.lookback_days}d",
+                    ),
+                },
+                priority="high",
+            )
+        except Exception:
+            return

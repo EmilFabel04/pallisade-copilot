@@ -39,10 +39,16 @@ export async function POST(
         );
       }
 
+      const userRow = await prisma.user.findUnique({
+        where: { email: session.user.email! },
+        select: { organizationId: true },
+      });
+      const organizationId = userRow?.organizationId ?? undefined;
+
       const res = await scannerClient.fetch(session, '/api/v1/discovery/direct', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, tableFqn, credentials }),
+        body: JSON.stringify({ platform, tableFqn, credentials, stackId, organizationId }),
         signal: AbortSignal.timeout(60000),
       });
 

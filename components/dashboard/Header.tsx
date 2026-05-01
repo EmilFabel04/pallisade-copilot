@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { PipelineSelector } from './PipelineSelector';
 import BillingBanner from './BillingBanner';
+import { LLMBell } from '@/components/clarifications/LLMBell';
 
 // Map routes to page titles
 const pageTitles: Record<string, string> = {
@@ -302,6 +303,9 @@ export function DashboardHeader() {
             <span className="text-[11px]">⌘</span>K
           </kbd>
         </button>
+
+        {/* Clarifications (LLM follow-up requests) */}
+        <LLMBell />
 
         {/* Notifications */}
         <button

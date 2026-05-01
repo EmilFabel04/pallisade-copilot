@@ -258,6 +258,13 @@ class CopilotContext:
     mode: str = "ask"
     mode_config: Optional[Any] = None  # ModeConfig from modes.py
 
+    # Loaded ContextRequest payload for CLARIFY mode. Passed into
+    # build_context by the API layer (which holds the Prisma client and
+    # already has the request hydrated). Shape:
+    #   {"id", "kind", "scope_type", "scope_ref", "payload", "priority"}
+    # The kind-specific prompt fragment is appended in llm.build_system_prompt.
+    clarification_request: Optional[Dict[str, Any]] = None
+
     # Pipeline context from onboarding (learned knowledge about user's setup)
     pipeline_context: Optional[Dict[str, Any]] = None
 
@@ -760,6 +767,7 @@ class CopilotContextBuilder:
         lineage_data: Optional[Dict[str, Any]] = None,
         engine_graph: Optional[LineageGraph] = None,
         intent_result: Optional[Any] = None,
+        clarification_request: Optional[Dict[str, Any]] = None,
     ) -> CopilotContext:
         """
         Build the AI context for a given organization.
@@ -867,6 +875,17 @@ class CopilotContextBuilder:
             mode_config=mode_config,
             intent_result=intent_result,
         )
+
+        # Attach loaded ContextRequest payload when CLARIFY mode is active.
+        # The API layer hydrates this from Prisma and passes it in — the
+        # builder is intentionally storage-agnostic (no Prisma client here).
+        if clarification_request and mode == "clarify":
+            cr = dict(clarification_request)
+            payload = dict(cr.get("payload") or {})
+            # Ensure the kind handler's prompt template can find the request id.
+            payload.setdefault("__request_id", cr.get("id", ""))
+            cr["payload"] = payload
+            context.clarification_request = cr
 
         return context
     
