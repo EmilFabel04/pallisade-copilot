@@ -134,9 +134,10 @@ class HttpProbeAdapter:
         if len(rows) > _MAX_ROWS:
             raise ProbeError("too_many_rows", f"more than {_MAX_ROWS} rows")
 
+        from datasketch import HyperLogLog
+
         row_count = len(rows)
 
-        # Determine schema from first non-empty row
         column_schema: List[Dict[str, Any]] = []
         if rows:
             sample = rows[0]
@@ -144,28 +145,47 @@ class HttpProbeAdapter:
                 column_schema.append({
                     "name": col_name,
                     "data_type": _infer_type(value),
-                    "is_nullable": True,  # JSON has no nullability concept
+                    "is_nullable": True,
                 })
 
         null_counts: Dict[str, int] = {col["name"]: 0 for col in column_schema}
+        hlls: Dict[str, Any] = {col["name"]: HyperLogLog(p=12) for col in column_schema}
+        numeric_min_max: Dict[str, Tuple[float, float]] = {}
         latest_ts: Optional[datetime] = None
 
         for row in rows:
             for col in column_schema:
                 name = col["name"]
-                if row.get(name) is None:
+                value = row.get(name)
+                if value is None:
                     null_counts[name] += 1
+                    continue
+                hlls[name].update(str(value).encode("utf-8"))
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    fv = float(value)
+                    cur = numeric_min_max.get(name)
+                    if cur is None:
+                        numeric_min_max[name] = (fv, fv)
+                    else:
+                        numeric_min_max[name] = (min(cur[0], fv), max(cur[1], fv))
             if timestamp_column:
                 ts_val = row.get(timestamp_column)
                 parsed: Optional[datetime] = None
                 if isinstance(ts_val, str):
                     parsed = _parse_iso8601(ts_val)
                 elif isinstance(ts_val, bool):
-                    pass  # bool is a subclass of int — explicitly ignore
+                    pass
                 elif isinstance(ts_val, (int, float)):
                     parsed = _parse_epoch(ts_val)
                 if parsed and (latest_ts is None or parsed > latest_ts):
                     latest_ts = parsed
+
+        distinct_counts = {name: int(hll.count()) for name, hll in hlls.items()}
+        fingerprints: Dict[str, bytes] = {}
+        for name, hll in hlls.items():
+            buf = bytearray(hll.bytesize())
+            hll.serialize(buf)
+            fingerprints[name] = bytes(buf)
 
         return MetricBundle(
             probed_at=datetime.now(timezone.utc),
@@ -173,9 +193,9 @@ class HttpProbeAdapter:
             latest_timestamp=latest_ts,
             column_schema=column_schema,
             null_counts=null_counts,
-            distinct_counts={},        # filled in Task 9
-            value_fingerprints={},     # filled in Task 9
-            min_max_numeric={},        # filled in Task 9
+            distinct_counts=distinct_counts,
+            value_fingerprints=fingerprints,
+            min_max_numeric=numeric_min_max,
         )
 
 

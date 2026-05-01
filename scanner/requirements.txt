@@ -23,6 +23,7 @@ pyodbc>=5.0.1  # SQL Server / Azure SQL / Azure Synapse
 sqlalchemy>=2.0.0
 pandas>=2.2.0  # Updated for Python 3.14 compatibility
 numpy>=1.26.0  # Updated for Python 3.14 compatibility
+datasketch>=1.6.0  # HyperLogLog for HttpProbeAdapter distinct counts / value fingerprints
 
 # DuckDB for sandbox testing (in-memory, fast, SQL-compatible)
 duckdb>=0.9.2

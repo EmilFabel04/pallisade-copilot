@@ -292,3 +292,36 @@ def test_probe_handles_unix_epoch_milliseconds_timestamp():
     )
     bundle = adapter.probe({"endpoint": "/iot_ms", "timestamp_column": "ts"})
     assert bundle.latest_timestamp == datetime(2024, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+@responses.activate
+def test_probe_computes_distinct_counts_and_min_max():
+    responses.add(
+        responses.GET, "https://api.example.com/v1/readings",
+        json=[
+            {"id": 1, "sensor": "A", "value": 10.0},
+            {"id": 2, "sensor": "A", "value": 20.0},
+            {"id": 3, "sensor": "B", "value": 30.0},
+        ],
+        status=200,
+    )
+    adapter = HttpProbeAdapter(
+        base_url="https://api.example.com/v1",
+        auth={"kind": "bearer", "secret": "t"},
+    )
+    bundle = adapter.probe({"endpoint": "/readings"})
+
+    # Distinct counts (HLL is approximate but should be exact for small N)
+    assert bundle.distinct_counts["sensor"] == 2
+    assert bundle.distinct_counts["id"] == 3
+    # Min/max for numeric columns
+    assert bundle.min_max_numeric["value"] == (10.0, 30.0)
+    assert bundle.min_max_numeric["id"] == (1.0, 3.0)
+    # No min/max for string columns
+    assert "sensor" not in bundle.min_max_numeric
+    # Fingerprints exist for every column
+    assert "sensor" in bundle.value_fingerprints
+    assert "id" in bundle.value_fingerprints
+    assert "value" in bundle.value_fingerprints
+    # Fingerprints are bytes (HLL serialized)
+    assert isinstance(bundle.value_fingerprints["sensor"], bytes)
