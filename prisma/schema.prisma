@@ -1794,6 +1794,11 @@ enum IntegrationType {
   DATABRICKS // Databricks Lakehouse Platform
 
   // ===========================================
+  // SOURCE (Layer: SOURCE) — operational sources
+  // ===========================================
+  CUSTOM_SOURCE // Customer-configured web-hosted source (REST API)
+
+  // ===========================================
   // CLOUD STORAGE
   // ===========================================
   AMAZON_S3 // Amazon S3 object storage
