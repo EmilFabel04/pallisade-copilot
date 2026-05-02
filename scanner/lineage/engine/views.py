@@ -42,6 +42,7 @@ from .canonical import (
 from .zones import (
     ActorCapability,
     DatasetZone,
+    DataPlaneRole,
     FunctionalRole,
     PipelineLane,
     LANE_ORDER,
@@ -53,10 +54,12 @@ from .zones import (
     WAREHOUSE_PLATFORMS,
     assign_lane,
     classify_actor_capability,
-    classify_data_plane_layer,
+    classify_data_plane_role,
     classify_dataset_zone,
     resolve_functional_role,
+    role_to_layer_name,
 )
+from .endpoints import EndpointKind, EndpointClassification, classify_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -3286,14 +3289,18 @@ def _semantic_topological_layout(
     graph: LineageGraph,
 ) -> Dict[str, Tuple[float, float]]:
     """
-    Compute layered layout using semantic layer assignment + topological refinement.
+    Compute layered layout using capability-role assignment + endpoint anchoring
+    + topological refinement.
 
     Algorithm:
-    1. Assign each node a semantic layer (0-6) based on metadata
-    2. If all same layer (no diversity), fall back to pure topological sort
-    3. Enforce edge consistency: source layer < target layer
-    4. Within each layer, sort by (cluster_id, topo_order, name)
-    5. Convert to pixel positions
+      1. Assign each node a capability role (DataPlaneRole, 0-7) using metadata
+      2. Classify each node's endpoint kind (source / internal / sink / orphan)
+      3. Anchor source-endpoints at column 0; anchor sink-endpoints at the
+         rightmost column among non-anchored nodes
+      4. If only one role represented (no diversity), fall back to pure topo sort
+      5. Enforce edge consistency: source layer < target layer
+      6. Within each layer, sort by (cluster_id, topo_order, name)
+      7. Convert to pixel positions
     """
     if not nodes:
         return {}
@@ -3301,48 +3308,100 @@ def _semantic_topological_layout(
     node_ids = {n.id for n in nodes}
     node_map = {n.id: n for n in nodes}
 
-    # Build out-degree for downstream detection
+    # Build degree maps for role classification + endpoint detection
+    in_degree: Dict[str, int] = {n.id: 0 for n in nodes}
     out_degree: Dict[str, int] = {n.id: 0 for n in nodes}
     for e in edges:
         if e.source_id in node_ids and e.target_id in node_ids:
             out_degree[e.source_id] = out_degree.get(e.source_id, 0) + 1
+            in_degree[e.target_id] = in_degree.get(e.target_id, 0) + 1
 
-    # Step 1: Assign semantic layer to each node
-    semantic_layer: Dict[str, int] = {}
+    # Step 1: Assign capability role to each node
+    role_layer: Dict[str, int] = {}
     for vn in nodes:
         graph_node = graph.nodes.get(vn.id)
+        has_up = in_degree.get(vn.id, 0) > 0
+        has_down = out_degree.get(vn.id, 0) > 0
         if graph_node:
             ct = graph_node.canonical_type or map_node_type(graph_node).value
-            has_downstream = out_degree.get(vn.id, 0) > 0
-            semantic_layer[vn.id] = classify_data_plane_layer(
-                graph_node, ct, has_downstream_data_edges=has_downstream,
+            role_layer[vn.id] = classify_data_plane_role(
+                graph_node, ct,
+                has_upstream_data_edges=has_up,
+                has_downstream_data_edges=has_down,
             )
         else:
-            # ViewNode without a graph node — derive from metadata
-            semantic_layer[vn.id] = 6 if vn.canonical_type == "semantic" else 1
+            # ViewNode without backing graph node — derive from canonical_type
+            if vn.canonical_type == "semantic":
+                role_layer[vn.id] = DataPlaneRole.SERVE.value
+            elif not has_up and has_down:
+                role_layer[vn.id] = DataPlaneRole.SOURCE.value
+            elif has_up and not has_down:
+                role_layer[vn.id] = DataPlaneRole.STORE_SERVE.value
+            else:
+                role_layer[vn.id] = DataPlaneRole.STORE_RAW.value
 
-    # Check diversity — fall back to pure topo if all same layer
-    if len(set(semantic_layer.values())) <= 1:
+    # Step 2: Classify endpoint kind
+    endpoint_kind: Dict[str, EndpointKind] = {}
+    for vn in nodes:
+        graph_node = graph.nodes.get(vn.id)
+        has_up = in_degree.get(vn.id, 0) > 0
+        has_down = out_degree.get(vn.id, 0) > 0
+        if graph_node:
+            ct = graph_node.canonical_type or map_node_type(graph_node).value
+            cls = classify_endpoint(graph_node, ct, has_up, has_down)
+        else:
+            # Pure topology fallback for nodes without graph entry
+            if not has_up and not has_down:
+                cls_kind = EndpointKind.ORPHAN
+            elif not has_up and has_down:
+                cls_kind = EndpointKind.SOURCE
+            elif has_up and not has_down:
+                cls_kind = EndpointKind.SINK
+            else:
+                cls_kind = EndpointKind.INTERNAL
+            cls = EndpointClassification(kind=cls_kind, reason="topology only", confidence=0.7)
+        endpoint_kind[vn.id] = cls.kind
+
+    # Diversity check — if no role diversity, fall back to pure topo
+    if len(set(role_layer.values())) <= 1:
         return _topological_layout(nodes, edges)
 
-    # Step 2: Enforce edge consistency (source layer < target layer)
+    # Step 4: Edge-consistency pass — push targets forward when source >= target
     changed = True
     iterations = 0
     while changed and iterations < 20:
         changed = False
         iterations += 1
         for e in edges:
-            if e.source_id in semantic_layer and e.target_id in semantic_layer:
-                if semantic_layer[e.source_id] >= semantic_layer[e.target_id]:
-                    semantic_layer[e.target_id] = semantic_layer[e.source_id] + 1
+            if e.source_id in role_layer and e.target_id in role_layer:
+                if role_layer[e.source_id] >= role_layer[e.target_id]:
+                    role_layer[e.target_id] = role_layer[e.source_id] + 1
                     changed = True
 
-    # Step 3: Compute topo order for intra-layer sorting
+    # Step 5: Apply endpoint anchors AFTER edge consistency
+    # Endpoint kind is topology-driven; capability role is metadata-driven. They
+    # can disagree — e.g., a warehouse leaf with no upstream gets role=STORE_RAW
+    # (flow-driven fallback) but endpoint=SOURCE (no incoming edges). The anchor
+    # forces topology to win for the leftmost/rightmost positions, which is what
+    # the visual claim "sources at the left, sinks at the right" requires.
+    non_orphan_layers = [
+        role_layer[nid] for nid, k in endpoint_kind.items()
+        if k != EndpointKind.ORPHAN
+    ]
+    max_layer = max(non_orphan_layers) if non_orphan_layers else 0
+
+    for nid, kind in endpoint_kind.items():
+        if kind == EndpointKind.SINK:
+            role_layer[nid] = max_layer
+        elif kind == EndpointKind.SOURCE:
+            role_layer[nid] = 0
+
+    # Step 6: Compute topo order for intra-layer sorting
     topo_order = _compute_topo_order(nodes, edges)
 
-    # Step 4: Group by layer, sort within
+    # Step 7: Group by layer, sort within
     by_layer: Dict[int, List[str]] = defaultdict(list)
-    for nid, layer in semantic_layer.items():
+    for nid, layer in role_layer.items():
         by_layer[layer].append(nid)
 
     for layer in by_layer:
@@ -3352,7 +3411,7 @@ def _semantic_topological_layout(
             node_map[nid].name,
         ))
 
-    # Step 5: Pixel positions
+    # Step 8: Convert to pixel positions
     positions: Dict[str, Tuple[float, float]] = {}
     for layer_idx, layer in enumerate(sorted(by_layer.keys())):
         for node_idx, nid in enumerate(by_layer[layer]):

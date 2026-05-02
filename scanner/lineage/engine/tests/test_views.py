@@ -687,3 +687,85 @@ class TestTopologicalLayout:
     def test_empty_graph(self):
         positions = _topological_layout([], [])
         assert positions == {}
+
+
+# ── Capability-role + endpoint-anchored layout tests ──────────────────────
+
+def test_semantic_layout_anchors_source_at_layer_zero():
+    """A source-endpoint node must end up at the leftmost column."""
+    from scanner.lineage.engine.views import _semantic_topological_layout, ViewNode, ViewEdge
+    from scanner.lineage.graph import LineageGraph
+
+    # Build a graph: source_table → mart_table → looker_dashboard
+    nodes = [
+        ViewNode(
+            id="src", name="src", canonical_type="dataset",
+            original_type="table", platform="postgres_app",
+            platform_domain="app", layer="SOURCE", cluster_id="db.app",
+            x=0, y=0, inferred=False, needs_mapping=False,
+            metadata={"fqn": "app.public.users"},
+        ),
+        ViewNode(
+            id="mart", name="dim_users", canonical_type="dataset",
+            original_type="table", platform="bigquery",
+            platform_domain="warehouse", layer="WAREHOUSE", cluster_id="bq.marts",
+            x=0, y=0, inferred=False, needs_mapping=False,
+            metadata={"fqn": "bq.marts.dim_users"},
+        ),
+        ViewNode(
+            id="dash", name="exec_dash", canonical_type="semantic",
+            original_type="dashboard", platform="looker",
+            platform_domain="bi", layer="REPORTING", cluster_id="looker",
+            x=0, y=0, inferred=False, needs_mapping=False,
+            metadata={"fqn": "looker.exec_dash"},
+        ),
+    ]
+    edges = [
+        ViewEdge(id="e1", source_id="src", target_id="mart",
+                 canonical_type="derives", original_type="depends_on",
+                 confidence=1.0, inferred=False, evidence_count=1),
+        ViewEdge(id="e2", source_id="mart", target_id="dash",
+                 canonical_type="serves", original_type="references",
+                 confidence=1.0, inferred=False, evidence_count=1),
+    ]
+
+    # Empty graph (test fixture doesn't need full LineageGraph)
+    graph = LineageGraph()
+    positions = _semantic_topological_layout(nodes, edges, graph)
+
+    # Source must be at x=0
+    assert positions["src"][0] == 0
+    # Dashboard must be rightmost
+    max_x = max(p[0] for p in positions.values())
+    assert positions["dash"][0] == max_x
+    # Mart must be between
+    assert 0 < positions["mart"][0] < max_x
+
+
+def test_semantic_layout_uses_role_when_role_is_diverse():
+    """When nodes have multiple roles, role drives column position."""
+    from scanner.lineage.engine.views import _semantic_topological_layout, ViewNode, ViewEdge
+    from scanner.lineage.graph import LineageGraph
+
+    nodes = [
+        ViewNode(id="a", name="a", canonical_type="dataset", original_type="table",
+                 platform="bigquery", platform_domain="warehouse",
+                 layer="WAREHOUSE", cluster_id="bq.raw", x=0, y=0,
+                 inferred=False, needs_mapping=False,
+                 metadata={"fqn": "bq.raw.events"}),
+        ViewNode(id="b", name="b", canonical_type="dataset", original_type="table",
+                 platform="bigquery", platform_domain="warehouse",
+                 layer="WAREHOUSE", cluster_id="bq.marts", x=0, y=0,
+                 inferred=False, needs_mapping=False,
+                 metadata={"fqn": "bq.marts.dim_events"}),
+    ]
+    edges = [
+        ViewEdge(id="e", source_id="a", target_id="b",
+                 canonical_type="derives", original_type="depends_on",
+                 confidence=1.0, inferred=False, evidence_count=1),
+    ]
+    graph = LineageGraph()
+    positions = _semantic_topological_layout(nodes, edges, graph)
+
+    # a (raw) should be left of b (mart)
+    assert positions["a"][0] < positions["b"][0]
