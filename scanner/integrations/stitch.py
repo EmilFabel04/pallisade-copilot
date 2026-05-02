@@ -94,6 +94,15 @@ class StitchIntegration:
         api_key = config.get("api_key") or config.get("apiKey", "")
         self._client = StitchClient(api_key=api_key)
 
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
     def list_sources_with_metadata(self) -> List[Dict[str, Any]]:
         """Return sources enriched with destination type and stream (table) info.
 

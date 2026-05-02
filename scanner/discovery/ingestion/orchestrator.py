@@ -38,9 +38,11 @@ class IngestionDiscoverer:
 
         all_candidates: List[DatasetCandidate] = []
         any_match = False
+        any_driver_ran = False
         for driver in active_drivers:
             try:
                 matches = driver.find_matching_connectors(host=host)
+                any_driver_ran = True
             except Exception as e:
                 logger.warning("ingestion driver %s failed: %s", driver.driver_id(), e)
                 continue
@@ -52,6 +54,11 @@ class IngestionDiscoverer:
                 except Exception as e:
                     logger.warning("listing tables for %s/%s failed: %s", driver.driver_id(), m.connector_id, e)
 
+        if not any_driver_ran:
+            return [], DiscoveryError(
+                code='unknown',
+                message=f'all ingestion drivers failed for host {host}',
+            )
         if not any_match:
             return [], DiscoveryError(
                 code='no_connectors_connected',

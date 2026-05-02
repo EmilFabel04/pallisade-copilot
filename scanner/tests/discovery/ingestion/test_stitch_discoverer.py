@@ -8,7 +8,9 @@ Covers:
    - source='ingestion'
    - confidence=1.0
    - lands_in formed as '<dest_type>.<target_schema>.<stream_name>'
-   - timestamp_column detected from columns whose type is in the TIMESTAMP family
+   - timestamp_column is always None — Stitch's API doesn't expose source-side
+     column types, so type is always "UNKNOWN" and timestamp detection is deferred
+     to WarehouseDiscoverer (Path 3).
    - expected_schema populated
 3. No matching host → find_matching_connectors returns [].
 """
@@ -45,9 +47,9 @@ _FAKE_CONNECTORS = [
             {
                 "name": "water_meters",
                 "columns": [
-                    {"name": "id", "type": "INTEGER", "nullable": False},
-                    {"name": "recorded_at", "type": "TIMESTAMP", "nullable": False},
-                    {"name": "value", "type": "FLOAT", "nullable": True},
+                    {"name": "id", "type": "UNKNOWN", "nullable": False},
+                    {"name": "recorded_at", "type": "UNKNOWN", "nullable": False},
+                    {"name": "value", "type": "UNKNOWN", "nullable": True},
                 ],
             },
         ],
@@ -126,44 +128,12 @@ def test_list_source_tables_returns_candidate():
     assert c.source == "ingestion"
     assert c.confidence == 1.0
     assert c.lands_in == "snowflake.raw_water.water_meters"
-    assert c.timestamp_column == "recorded_at"
+    # Stitch API doesn't expose source-side types; timestamp_column is always None.
+    assert c.timestamp_column is None
     assert c.endpoint is None
     assert c.json_root is None
 
     assert len(c.expected_schema) == 3
-    assert c.expected_schema[0] == ColumnMetadata(name="id", data_type="INTEGER", is_nullable=False)
-    assert c.expected_schema[1] == ColumnMetadata(name="recorded_at", data_type="TIMESTAMP", is_nullable=False)
-    assert c.expected_schema[2] == ColumnMetadata(name="value", data_type="FLOAT", is_nullable=True)
-
-
-def test_list_source_tables_no_timestamp():
-    """When no column has a TIMESTAMP-family type, timestamp_column is None."""
-    discoverer = StitchIngestionDiscoverer(org_id=None, stack_id=None)
-    raw_config = {
-        "id": "src_no_ts",
-        "properties": {"host": {"value": "api.example.com"}},
-        "target_id": "dest_bq",
-        "destination": {"type": "bigquery"},
-        "target_schema": "raw",
-        "streams": [
-            {
-                "name": "readings",
-                "columns": [
-                    {"name": "id", "type": "INTEGER", "nullable": False},
-                    {"name": "value", "type": "FLOAT", "nullable": True},
-                ],
-            },
-        ],
-    }
-    match = ConnectorMatch(
-        driver_id="stitch",
-        connector_id="src_no_ts",
-        source_host="api.example.com",
-        raw_config=raw_config,
-    )
-
-    candidates = discoverer.list_source_tables(match)
-
-    assert len(candidates) == 1
-    assert candidates[0].timestamp_column is None
-    assert candidates[0].lands_in == "bigquery.raw.readings"
+    assert c.expected_schema[0] == ColumnMetadata(name="id", data_type="UNKNOWN", is_nullable=False)
+    assert c.expected_schema[1] == ColumnMetadata(name="recorded_at", data_type="UNKNOWN", is_nullable=False)
+    assert c.expected_schema[2] == ColumnMetadata(name="value", data_type="UNKNOWN", is_nullable=True)

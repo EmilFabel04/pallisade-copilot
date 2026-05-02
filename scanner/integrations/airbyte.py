@@ -422,6 +422,18 @@ class AirbyteClient:
             except Exception:
                 return []
 
+    def close(self) -> None:
+        """Close the underlying HTTP client if open."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
 
 class AirbyteScanner:
     """

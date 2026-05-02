@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from scanner.discovery.ingestion.airbyte import AirbyteIngestionDiscoverer
+from scanner.discovery.ingestion.airbyte import AirbyteIngestionDiscoverer, _airbyte_type_to_str
 from scanner.discovery.ingestion.base import ConnectorMatch
 from scanner.discovery.types import ColumnMetadata
 
@@ -171,3 +171,38 @@ def test_list_source_tables_no_timestamp():
     assert len(candidates) == 1
     assert candidates[0].timestamp_column is None
     assert candidates[0].lands_in == "bigquery.raw.readings"
+
+
+# ---------------------------------------------------------------------------
+# _airbyte_type_to_str unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_airbyte_type_to_str_big_integer():
+    """big_integer airbyte_type maps to BIGINT."""
+    assert _airbyte_type_to_str({"airbyte_type": "big_integer"}) == "BIGINT"
+
+
+def test_airbyte_type_to_str_big_number():
+    """big_number airbyte_type maps to NUMERIC."""
+    assert _airbyte_type_to_str({"airbyte_type": "big_number"}) == "NUMERIC"
+
+
+def test_airbyte_type_to_str_timestamp_with_timezone():
+    assert _airbyte_type_to_str({"airbyte_type": "timestamp_with_timezone"}) == "TIMESTAMPTZ"
+
+
+def test_airbyte_type_to_str_timestamp_without_timezone():
+    assert _airbyte_type_to_str({"airbyte_type": "timestamp_without_timezone"}) == "TIMESTAMP"
+
+
+def test_airbyte_type_to_str_json_integer():
+    assert _airbyte_type_to_str({"type": "integer"}) == "INTEGER"
+
+
+def test_airbyte_type_to_str_json_string():
+    assert _airbyte_type_to_str({"type": "string"}) == "VARCHAR"
+
+
+def test_airbyte_type_to_str_unknown_falls_through():
+    assert _airbyte_type_to_str({"type": "unknown_type"}) == "UNKNOWN"

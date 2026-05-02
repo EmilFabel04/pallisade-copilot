@@ -13,8 +13,6 @@ from scanner.discovery.types import (
 
 logger = logging.getLogger(__name__)
 
-_TS_TYPES = {"TIMESTAMP", "DATETIME", "TIMESTAMP_NTZ", "TIMESTAMPTZ"}
-
 
 class StitchIngestionDiscoverer(PerDriverIngestionDiscoverer):
     """Path 2 adapter for Stitch.
@@ -22,6 +20,10 @@ class StitchIngestionDiscoverer(PerDriverIngestionDiscoverer):
     Constructs a StitchIntegration per-call using credentials from the cached
     tool configs (key 'STITCH') for the calling tenant. Returns [] if not
     configured.
+
+    Column data types are always "UNKNOWN" — Stitch's API does not expose
+    source-side column types; use WarehouseDiscoverer (Path 3) to resolve
+    actual types from the destination warehouse.
 
     Internal connector dict shape (produced by _list_connectors):
     {
@@ -34,7 +36,7 @@ class StitchIngestionDiscoverer(PerDriverIngestionDiscoverer):
         "destination": {"type": "<snowflake|bigquery|...>"},
         "target_schema": "<destination schema>",
         "streams": [
-            {"name": "<table>", "columns": [{"name": "...", "type": "...", "nullable": bool}]}
+            {"name": "<table>", "columns": [{"name": "...", "type": "UNKNOWN", "nullable": bool}]}
         ],
     }
     """
@@ -80,16 +82,14 @@ class StitchIngestionDiscoverer(PerDriverIngestionDiscoverer):
                 )
                 for col in stream.get("columns", [])
             ]
-            ts = next(
-                (col["name"] for col in stream.get("columns", []) if col.get("type", "").upper() in _TS_TYPES),
-                None,
-            )
+            # timestamp_column is None — Stitch's API doesn't expose source-side
+            # column types. Use WarehouseDiscoverer (Path 3) for timestamp detection.
             lands_in = f"{wh_type}.{target_schema}.{stream['name']}".strip(".")
             candidates.append(DatasetCandidate(
                 source='ingestion',
                 endpoint=None,
                 json_root=None,
-                timestamp_column=ts,
+                timestamp_column=None,
                 expected_schema=cols,
                 lands_in=lands_in,
                 confidence=1.0,
@@ -112,8 +112,8 @@ class StitchIngestionDiscoverer(PerDriverIngestionDiscoverer):
                 logger.debug("[StitchIngestionDiscoverer] no STITCH config cached; skipping")
                 return []
 
-            integration = StitchIntegration(stitch_cfg)
-            return integration.list_sources_with_metadata()
+            with StitchIntegration(stitch_cfg) as integration:
+                return integration.list_sources_with_metadata()
         except Exception as exc:
             logger.warning("[StitchIngestionDiscoverer] _list_connectors failed: %s", exc)
             return []

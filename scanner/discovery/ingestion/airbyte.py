@@ -119,7 +119,7 @@ class AirbyteIngestionDiscoverer(PerDriverIngestionDiscoverer):
                 logger.debug("[AirbyteIngestionDiscoverer] no AIRBYTE config cached; skipping")
                 return []
 
-            client = AirbyteClient(
+            with AirbyteClient(
                 host=airbyte_cfg.get("host") or airbyte_cfg.get("base_url") or airbyte_cfg.get("baseUrl", ""),
                 client_id=airbyte_cfg.get("client_id"),
                 client_secret=airbyte_cfg.get("client_secret"),
@@ -127,111 +127,110 @@ class AirbyteIngestionDiscoverer(PerDriverIngestionDiscoverer):
                 username=airbyte_cfg.get("username"),
                 password=airbyte_cfg.get("password"),
                 workspace_id=airbyte_cfg.get("workspace_id"),
-            )
-
-            # Collect all connections across all workspaces.
-            workspace_ids: List[str] = []
-            if client.workspace_id:
-                workspace_ids = [client.workspace_id]
-            else:
-                try:
-                    workspaces = client.get_workspaces()
-                    workspace_ids = [
-                        ws.get("workspaceId") or ws.get("id", "")
-                        for ws in workspaces
-                        if ws.get("workspaceId") or ws.get("id")
-                    ]
-                except Exception as exc:
-                    logger.warning("[AirbyteIngestionDiscoverer] get_workspaces failed: %s", exc)
-
-            # Build source and destination lookups.
-            sources: dict = {}
-            destinations: dict = {}
-            for ws_id in workspace_ids:
-                try:
-                    for s in client.get_sources(ws_id):
-                        sid = s.get("sourceId") or s.get("id", "")
-                        sources[sid] = s
-                except Exception:
-                    pass
-                try:
-                    for d in client.get_destinations(ws_id):
-                        did = d.get("destinationId") or d.get("id", "")
-                        destinations[did] = d
-                except Exception:
-                    pass
-
-            result: list = []
-            for ws_id in workspace_ids:
-                try:
-                    connections = client.get_connections(ws_id)
-                except Exception as exc:
-                    logger.warning("[AirbyteIngestionDiscoverer] get_connections failed ws=%s: %s", ws_id, exc)
-                    continue
-
-                for conn in connections:
-                    conn_id = conn.get("connectionId") or conn.get("id", "")
-                    source_id = conn.get("sourceId", "")
-                    dest_id = conn.get("destinationId", "")
-                    source = sources.get(source_id, {})
-                    dest = destinations.get(dest_id, {})
-
-                    # Namespace / destination schema
-                    namespace = (
-                        conn.get("namespaceFormat")
-                        or conn.get("prefix")
-                        or ""
-                    ).strip("_").strip()
-
-                    # Catalog streams → columns
-                    discovered_catalog: list = []
+            ) as client:
+                # Collect all connections across all workspaces.
+                workspace_ids: List[str] = []
+                if client.workspace_id:
+                    workspace_ids = [client.workspace_id]
+                else:
                     try:
-                        # Airbyte OSS: /connections/get returns syncCatalog.streams
-                        # Airbyte Cloud: GET /connections/{id} returns streams in 'configurations'
-                        conn_detail = client.get_connection(conn_id)
-                        sync_catalog = (
-                            conn_detail.get("syncCatalog")
-                            or {"streams": conn_detail.get("configurations", {}).get("streams", [])}
-                        )
-                        for stream_entry in sync_catalog.get("streams", []):
-                            stream = stream_entry.get("stream", stream_entry)
-                            stream_name = stream.get("name", "")
-                            json_schema = stream.get("jsonSchema", {})
-                            properties = json_schema.get("properties", {})
-                            columns = [
-                                {
-                                    "name": prop_name,
-                                    "type": _airbyte_type_to_str(prop_info),
-                                    "nullable": True,
-                                }
-                                for prop_name, prop_info in properties.items()
-                            ]
-                            discovered_catalog.append({"name": stream_name, "columns": columns})
+                        workspaces = client.get_workspaces()
+                        workspace_ids = [
+                            ws.get("workspaceId") or ws.get("id", "")
+                            for ws in workspaces
+                            if ws.get("workspaceId") or ws.get("id")
+                        ]
                     except Exception as exc:
-                        logger.warning(
-                            "[AirbyteIngestionDiscoverer] catalog fetch failed conn=%s: %s", conn_id, exc
+                        logger.warning("[AirbyteIngestionDiscoverer] get_workspaces failed: %s", exc)
+
+                # Build source and destination lookups.
+                sources: dict = {}
+                destinations: dict = {}
+                for ws_id in workspace_ids:
+                    try:
+                        for s in client.get_sources(ws_id):
+                            sid = s.get("sourceId") or s.get("id", "")
+                            sources[sid] = s
+                    except Exception:
+                        pass
+                    try:
+                        for d in client.get_destinations(ws_id):
+                            did = d.get("destinationId") or d.get("id", "")
+                            destinations[did] = d
+                    except Exception:
+                        pass
+
+                result: list = []
+                for ws_id in workspace_ids:
+                    try:
+                        connections = client.get_connections(ws_id)
+                    except Exception as exc:
+                        logger.warning("[AirbyteIngestionDiscoverer] get_connections failed ws=%s: %s", ws_id, exc)
+                        continue
+
+                    for conn in connections:
+                        conn_id = conn.get("connectionId") or conn.get("id", "")
+                        source_id = conn.get("sourceId", "")
+                        dest_id = conn.get("destinationId", "")
+                        source = sources.get(source_id, {})
+                        dest = destinations.get(dest_id, {})
+
+                        # Namespace / destination schema
+                        namespace = (
+                            conn.get("namespaceFormat")
+                            or conn.get("prefix")
+                            or ""
+                        ).strip("_").strip()
+
+                        # Catalog streams → columns
+                        discovered_catalog: list = []
+                        try:
+                            # Airbyte OSS: /connections/get returns syncCatalog.streams
+                            # Airbyte Cloud: GET /connections/{id} returns streams in 'configurations'
+                            conn_detail = client.get_connection(conn_id)
+                            sync_catalog = (
+                                conn_detail.get("syncCatalog")
+                                or {"streams": conn_detail.get("configurations", {}).get("streams", [])}
+                            )
+                            for stream_entry in sync_catalog.get("streams", []):
+                                stream = stream_entry.get("stream", stream_entry)
+                                stream_name = stream.get("name", "")
+                                json_schema = stream.get("jsonSchema", {})
+                                properties = json_schema.get("properties", {})
+                                columns = [
+                                    {
+                                        "name": prop_name,
+                                        "type": _airbyte_type_to_str(prop_info),
+                                        "nullable": True,
+                                    }
+                                    for prop_name, prop_info in properties.items()
+                                ]
+                                discovered_catalog.append({"name": stream_name, "columns": columns})
+                        except Exception as exc:
+                            logger.warning(
+                                "[AirbyteIngestionDiscoverer] catalog fetch failed conn=%s: %s", conn_id, exc
+                            )
+
+                        dest_type = (
+                            dest.get("destinationType")
+                            or dest.get("destinationName")
+                            or "snowflake"
                         )
 
-                    dest_type = (
-                        dest.get("destinationType")
-                        or dest.get("destinationName")
-                        or "snowflake"
-                    )
+                        result.append({
+                            "id": conn_id,
+                            "source": {
+                                "connectionConfiguration": source.get("connectionConfiguration", {})
+                            },
+                            "destination": {
+                                "destinationType": dest_type,
+                                "connectionConfiguration": dest.get("connectionConfiguration", {}),
+                            },
+                            "namespace": namespace,
+                            "discovered_catalog": discovered_catalog,
+                        })
 
-                    result.append({
-                        "id": conn_id,
-                        "source": {
-                            "connectionConfiguration": source.get("connectionConfiguration", {})
-                        },
-                        "destination": {
-                            "destinationType": dest_type,
-                            "connectionConfiguration": dest.get("connectionConfiguration", {}),
-                        },
-                        "namespace": namespace,
-                        "discovered_catalog": discovered_catalog,
-                    })
-
-            return result
+                return result
         except Exception as exc:
             logger.warning("[AirbyteIngestionDiscoverer] _list_connectors failed: %s", exc)
             return []
@@ -242,6 +241,10 @@ def _airbyte_type_to_str(prop_info: dict) -> str:
     airbyte_type = prop_info.get("airbyte_type", "")
     json_type = prop_info.get("type", "")
 
+    if airbyte_type == "big_integer":
+        return "BIGINT"
+    if airbyte_type == "big_number":
+        return "NUMERIC"
     if airbyte_type == "timestamp_with_timezone":
         return "TIMESTAMPTZ"
     if airbyte_type == "timestamp_without_timezone":

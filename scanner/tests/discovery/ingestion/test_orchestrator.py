@@ -7,6 +7,7 @@ Covers:
 3. Driver exceptions are isolated — one driver raising doesn't stop others.
 4. Returns no_connectors_connected error when no driver finds matches.
 5. Returns unknown error when base_url has no parseable host.
+6. Returns unknown error (not no_connectors_connected) when ALL drivers crash.
 """
 
 from __future__ import annotations
@@ -183,3 +184,26 @@ def test_unparseable_host_returns_unknown_error():
     assert candidates == []
     assert isinstance(error, DiscoveryError)
     assert error.code == "unknown"
+
+
+def test_all_drivers_crash_returns_unknown_error():
+    """All three drivers raise on find_matching_connectors → code='unknown', not 'no_connectors_connected'."""
+    driver_a = MagicMock()
+    driver_a.driver_id.return_value = "fivetran"
+    driver_a.find_matching_connectors.side_effect = RuntimeError("fivetran API down")
+
+    driver_b = MagicMock()
+    driver_b.driver_id.return_value = "airbyte"
+    driver_b.find_matching_connectors.side_effect = RuntimeError("airbyte API down")
+
+    driver_c = MagicMock()
+    driver_c.driver_id.return_value = "stitch"
+    driver_c.find_matching_connectors.side_effect = RuntimeError("stitch API down")
+
+    discoverer = IngestionDiscoverer(drivers=[driver_a, driver_b, driver_c])
+    candidates, error = discoverer.discover("https://water-api.example.com/v1", hints=[])
+
+    assert candidates == []
+    assert isinstance(error, DiscoveryError)
+    assert error.code == "unknown"
+    assert "all ingestion drivers failed" in error.message

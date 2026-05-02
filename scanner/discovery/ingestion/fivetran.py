@@ -13,8 +13,6 @@ from scanner.discovery.types import (
 
 logger = logging.getLogger(__name__)
 
-_TS_TYPES = {"TIMESTAMP", "DATETIME", "TIMESTAMP_NTZ", "TIMESTAMPTZ"}
-
 
 class FivetranIngestionDiscoverer(PerDriverIngestionDiscoverer):
     """Path 2 adapter for Fivetran.
@@ -22,6 +20,10 @@ class FivetranIngestionDiscoverer(PerDriverIngestionDiscoverer):
     Constructs a FivetranIntegration per-call using credentials from the
     cached tool configs (keyed 'FIVETRAN') for the calling tenant. If no
     Fivetran config is cached, _list_connectors returns [] gracefully.
+
+    Column data types are always "UNKNOWN" — Fivetran's API does not expose
+    source-side column types; use WarehouseDiscoverer (Path 3) to resolve
+    actual types from the destination warehouse.
     """
 
     def __init__(self, org_id: Optional[str] = None, stack_id: Optional[str] = None) -> None:
@@ -59,16 +61,14 @@ class FivetranIngestionDiscoverer(PerDriverIngestionDiscoverer):
                 )
                 for col in tbl.get("columns", [])
             ]
-            ts = next(
-                (col["name"] for col in tbl.get("columns", []) if col.get("type", "").upper() in _TS_TYPES),
-                None,
-            )
+            # timestamp_column is None — Fivetran's API doesn't expose source-side
+            # column types. Use WarehouseDiscoverer (Path 3) for timestamp detection.
             lands_in = f"{wh_type}.{dest_schema}.{tbl['name']}".strip(".")
             candidates.append(DatasetCandidate(
                 source='ingestion',
                 endpoint=None,
                 json_root=None,
-                timestamp_column=ts,
+                timestamp_column=None,
                 expected_schema=cols,
                 lands_in=lands_in,
                 confidence=1.0,
@@ -100,8 +100,8 @@ class FivetranIngestionDiscoverer(PerDriverIngestionDiscoverer):
                 logger.debug("[FivetranIngestionDiscoverer] no FIVETRAN config cached; skipping")
                 return []
 
-            integration = FivetranIntegration(fivetran_cfg)
-            return integration.list_connectors_with_schemas()
+            with FivetranIntegration(fivetran_cfg) as integration:
+                return integration.list_connectors_with_schemas()
         except Exception as exc:
             logger.warning("[FivetranIngestionDiscoverer] _list_connectors failed: %s", exc)
             return []
