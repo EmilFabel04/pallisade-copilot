@@ -295,8 +295,8 @@ _ZONE_TO_ROLE: Dict[DatasetZone, int] = {
 def classify_data_plane_role(
     node: LineageNode,
     canonical_type: str,
-    has_upstream_data_edges: bool = True,
-    has_downstream_data_edges: bool = True,
+    has_upstream_data_edges: bool,
+    has_downstream_data_edges: bool,
 ) -> int:
     """Classify a node into a capability role for the data-plane view.
 
@@ -380,11 +380,6 @@ def classify_data_plane_role(
     # Default: anything else lives in STORE_RAW
     return DataPlaneRole.STORE_RAW.value
 
-
-# Backwards-compatibility alias for any in-flight imports.
-# Remove in a follow-up cleanup once all callers updated.
-classify_data_plane_layer = classify_data_plane_role
-DataPlaneLayer = DataPlaneRole
 
 
 def classify_actor_capability(node: LineageNode) -> Optional[ActorCapability]:
