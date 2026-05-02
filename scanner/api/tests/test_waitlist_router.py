@@ -68,13 +68,12 @@ def _make_fake_conn() -> tuple[MagicMock, MagicMock]:
 
 def test_join_waitlist_valid_connector_returns_201():
     """POST with connector_id='salesforce' → 201 with connector_id + requested_at."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
     fake_conn, fake_cursor = _make_fake_conn()
-    # First fetchone (SELECT) → None (no existing row).
-    # Second fetchone (INSERT RETURNING) → new row.
+    # ON CONFLICT upsert RETURNING (connectorId, requestedAt, inserted).
+    # inserted=True → this row was just inserted.
     fake_cursor.fetchone.side_effect = [
-        None,
-        ("salesforce", now_iso),
+        ("salesforce", now, True),
     ]
 
     with patch(
@@ -112,24 +111,32 @@ def test_join_waitlist_unknown_connector_returns_400():
 
 
 def test_join_waitlist_idempotent_second_call_returns_200():
-    """Second POST for same connector → 200 (already on waitlist)."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+    """Two POSTs for same connector → first 201, second 200 (idempotent upsert)."""
+    now = datetime.now(timezone.utc)
     fake_conn, fake_cursor = _make_fake_conn()
-    # SELECT returns an existing row.
-    existing_row = ("salesforce", now_iso)
-    fake_cursor.fetchone.return_value = existing_row
+    # ON CONFLICT upsert RETURNING (connectorId, requestedAt, inserted).
+    # 1st call: inserted=True  → just created → 201.
+    # 2nd call: inserted=False → conflict, existing row → 200.
+    fake_cursor.fetchone.side_effect = [
+        ("salesforce", now, True),
+        ("salesforce", now, False),
+    ]
 
     with patch(
         "scanner.api.routers.waitlist._get_connection",
         return_value=fake_conn,
     ):
         client = _create_test_client()
-        resp = client.post(
+        r1 = client.post(
+            "/api/v1/waitlist/source-connector",
+            json={"connector_id": "salesforce"},
+        )
+        r2 = client.post(
             "/api/v1/waitlist/source-connector",
             json={"connector_id": "salesforce"},
         )
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["connector_id"] == "salesforce"
-    assert "requested_at" in body
+    assert r1.status_code == 201, r1.text
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["connector_id"] == "salesforce"
+    assert "requested_at" in r2.json()

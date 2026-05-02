@@ -10,6 +10,7 @@ subsequent calls return 200 with the original record.
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import datetime, timezone
 
 import structlog
@@ -88,65 +89,48 @@ async def join_waitlist(
             detail=f"unknown connector_id: {body.connector_id!r}",
         )
 
+    conn = None
     conn = _get_connection()
     try:
+        new_id = str(uuid.uuid4())
         with conn.cursor() as cur:
-            # Check for an existing record (idempotency).
-            cur.execute(
-                'SELECT "connectorId", "requestedAt" '
-                'FROM "SourceConnectorWaitlist" '
-                'WHERE "userId" = %s AND "connectorId" = %s',
-                (principal.user_id, body.connector_id),
-            )
-            row = cur.fetchone()
-
-        if row:
-            connector_id, requested_at = row
-            logger.info(
-                "[Waitlist] already on waitlist",
-                user_id=principal.user_id,
-                connector_id=connector_id,
-            )
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "connector_id": connector_id,
-                    "requested_at": (
-                        requested_at.isoformat()
-                        if isinstance(requested_at, datetime)
-                        else str(requested_at)
-                    ),
-                },
-            )
-
-        # Insert new record.
-        with conn.cursor() as cur:
+            # Single atomic upsert — eliminates the SELECT-then-INSERT race condition.
+            # (xmax = 0) is True only when this row was just inserted (not a conflict).
+            # Python-side UUID avoids a pgcrypto dependency on gen_random_uuid().
             cur.execute(
                 'INSERT INTO "SourceConnectorWaitlist" '
                 '("id", "userId", "connectorId", "requestedAt") '
-                "VALUES (gen_random_uuid()::text, %s, %s, NOW()) "
-                'RETURNING "connectorId", "requestedAt"',
-                (principal.user_id, body.connector_id),
+                'VALUES (%s, %s, %s, NOW()) '
+                'ON CONFLICT ("userId", "connectorId") DO UPDATE '
+                'SET "connectorId" = EXCLUDED."connectorId" '
+                'RETURNING "connectorId", "requestedAt", (xmax = 0) AS inserted',
+                (new_id, principal.user_id, body.connector_id),
             )
-            new_row = cur.fetchone()
+            row = cur.fetchone()
         conn.commit()
 
-        connector_id, requested_at = new_row
+        connector_id, requested_at, inserted = row
+        status_code = 201 if inserted else 200
         logger.info(
-            "[Waitlist] joined waitlist",
+            "[Waitlist] %s waitlist",
+            "joined" if inserted else "already on",
             user_id=principal.user_id,
             connector_id=connector_id,
         )
         return JSONResponse(
-            status_code=201,
+            status_code=status_code,
             content={
                 "connector_id": connector_id,
                 "requested_at": (
                     requested_at.isoformat()
-                    if isinstance(requested_at, datetime)
+                    if hasattr(requested_at, "isoformat")
                     else str(requested_at)
                 ),
             },
         )
     finally:
-        conn.close()
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

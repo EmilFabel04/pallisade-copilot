@@ -11,6 +11,8 @@ const CONNECT_ROUTES: Partial<Record<string, string>> = {
   // future live tiles add their wizard routes here
 };
 
+// Keep in sync with PipelineLayer. NOTIFICATIONS / UNCATEGORIZED intentionally
+// excluded — they have no live or coming-soon tools.
 const CATEGORY_ORDER: PipelineLayer[] = [
   'SOURCE',
   'INGESTION',
@@ -22,6 +24,14 @@ const CATEGORY_ORDER: PipelineLayer[] = [
   'VERSION_CONTROL',
   'INFRASTRUCTURE',
 ];
+
+if (process.env.NODE_ENV !== 'production') {
+  const missingLayers = (Object.keys(TOOLS) as PipelineLayer[])
+    .filter((l) => TOOLS[l].length > 0 && !CATEGORY_ORDER.includes(l));
+  if (missingLayers.length > 0) {
+    console.warn('[ConnectPage] These layers have tools but are missing from CATEGORY_ORDER:', missingLayers);
+  }
+}
 
 type ComingSoonId = 'salesforce' | 'shopify' | 'hubspot';
 
@@ -53,6 +63,14 @@ export default function ConnectPage() {
               {tools.map((tool) => {
                 const status = tool.status ?? 'live';
                 const route = CONNECT_ROUTES[tool.id];
+
+                // Live tools without a wizard route are hidden — likely a missing CONNECT_ROUTES entry.
+                if (status === 'live' && !route) {
+                  if (process.env.NODE_ENV !== 'production') {
+                    console.warn(`[ConnectPage] Live tool ${tool.id} has no CONNECT_ROUTES entry — hiding`);
+                  }
+                  return null;
+                }
 
                 if (status === 'live' && route) {
                   return (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 
 interface Props {
@@ -12,6 +12,15 @@ interface Props {
 
 export function RequestAccessModal({ connectorId, connectorName, open, onClose }: Props) {
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+
+    if (open) document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [open, onClose]);
 
   if (!open) return null;
 
@@ -39,10 +48,13 @@ export function RequestAccessModal({ connectorId, connectorName, open, onClose }
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="request-access-title"
         className="bg-[var(--surface)] border border-[var(--subtle-border)] rounded-2xl w-full max-w-md p-6 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold mb-2 text-[var(--text-primary)]">
+        <h2 id="request-access-title" className="text-lg font-semibold mb-2 text-[var(--text-primary)]">
           {connectorName} source &mdash; coming soon
         </h2>
         <p className="text-sm text-[var(--text-secondary)] mb-6">
