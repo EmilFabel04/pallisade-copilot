@@ -90,9 +90,9 @@ def test_timestamp_column_detected_by_type():
 
     assert error is None
     assert len(candidates) == 1
-    # "occurred" matches name hint before "event_time" which matches DATETIME type —
-    # both are valid; just confirm one is detected
-    assert candidates[0].timestamp_column is not None
+    # "occurred" is in _TIMESTAMP_NAME_HINTS and appears before "event_time" in the schema,
+    # so _detect_ts_col returns it deterministically on first match.
+    assert candidates[0].timestamp_column == "occurred"
 
 
 def test_empty_hints_returns_error():

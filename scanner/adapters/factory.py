@@ -297,8 +297,10 @@ def build_adapter_from_fqn(
         tool_configs = _lineage_cache.get_tool_configs(org_id, stack_id)
         cfg = tool_configs.get(warehouse_type)
     else:
-        # Fallback: search all cached entries (used in tests / CLI contexts where
-        # the principal is not threaded through to the discoverer).
+        # org_id=None path: tests/CLI only. Production HTTP middleware enforces a
+        # non-empty x-acting-org header before any handler runs, so the FastAPI route
+        # always passes a real org_id. This branch exists so unit tests and ad-hoc
+        # scripts can resolve adapters without spinning up the full auth stack.
         for entry in _lineage_cache._engine_tool_configs_map.values():
             candidate = entry.get(warehouse_type)
             if candidate:

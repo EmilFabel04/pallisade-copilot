@@ -139,6 +139,11 @@ export function DiscoveryStep({
           },
           ingestion_hints: [],
           warehouse_hints: hints,
+          // stack_id is null when no pipeline profile is selected; the backend treats
+          // null as the "default" cache slot, which means warehouse FQN resolution
+          // falls back to whatever configs were cached during the most recent
+          // no-stack investigation. Users without a selected pipeline may see no
+          // candidates surface.
           stack_id: selectedPipelineId,
         }),
       });

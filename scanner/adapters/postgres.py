@@ -345,7 +345,10 @@ class PostgresAdapter(DatabaseAdapter):
         """
         # Strip leading warehouse-type prefix if present (e.g. "postgres.public.t" → "public.t")
         parts = fqn.split(".")
-        table_ref = ".".join(parts[1:]) if len(parts) >= 3 else fqn
+        if len(parts) >= 2 and parts[0].lower() == "postgres":
+            table_ref = ".".join(parts[1:])
+        else:
+            table_ref = fqn
         cols = self.get_columns(table_ref)
         return [
             {"column_name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
