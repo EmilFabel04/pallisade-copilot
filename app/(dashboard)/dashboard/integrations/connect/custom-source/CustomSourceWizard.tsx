@@ -32,6 +32,11 @@ interface VerifyState {
   /** undefined = verify hasn't started yet */
   allPass: boolean | undefined;
   datasets: Record<string, DatasetVerifyStatus>;
+  /**
+   * HMAC-signed token issued by FastAPI when all_pass=true.
+   * Forwarded to POST /api/integrations to close the server-side verify gate.
+   */
+  verifyToken?: string;
 }
 
 type AuthKind = 'bearer' | 'api_key' | 'basic';
@@ -51,7 +56,14 @@ export interface WizardState {
   baseUrl: string;
   auth: {
     kind: AuthKind;
+    /** Raw credential — cleared from state after stashing (never sent downstream). */
     secret: string;
+    /**
+     * Opaque stash ref returned by POST /api/v1/integrations/source/stash-secret.
+     * Set after step 2 advances; all downstream calls (discover, verify, persist)
+     * use this ref, not the raw ``secret``.
+     */
+    secretRef?: string;
     headerName?: string;
     username?: string;
   };
@@ -82,6 +94,7 @@ export default function CustomSourceWizard() {
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [stashError, setStashError] = useState<string | null>(null);
   const [verifyState, setVerifyState] = useState<VerifyState>({
     inFlight: false,
     allPass: undefined,
@@ -93,6 +106,40 @@ export default function CustomSourceWizard() {
   const updateState = (patch: Partial<WizardState>) => {
     setState((prev) => ({ ...prev, ...patch }));
   };
+
+  /**
+   * POST the raw secret to /stash-secret, store the returned ref in state,
+   * and clear the raw secret.  Returns true on success, false on failure.
+   */
+  const stashAndAdvance = useCallback(
+    async (currentState: WizardState, onSuccess: () => void): Promise<void> => {
+      setStashError(null);
+      try {
+        const resp = await fetch('/api/v1/integrations/source/stash-secret', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ secret: currentState.auth.secret }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          setStashError(
+            err.detail || err.error || `Failed to secure credentials (HTTP ${resp.status})`,
+          );
+          return;
+        }
+        const { secret_ref } = await resp.json();
+        // Store the ref and clear the raw secret from state.
+        setState((prev) => ({
+          ...prev,
+          auth: { ...prev.auth, secret: '', secretRef: secret_ref },
+        }));
+        onSuccess();
+      } catch (exc: unknown) {
+        setStashError(exc instanceof Error ? exc.message : String(exc));
+      }
+    },
+    [],
+  );
 
   /** Fire the /verify SSE stream and update verifyState as events arrive. */
   const runVerify = useCallback(
@@ -107,6 +154,9 @@ export default function CustomSourceWizard() {
       }
       setVerifyState({ inFlight: true, allPass: undefined, datasets: initialDatasets });
 
+      // Use the stash ref (not the raw secret) for all downstream calls.
+      const secretRef = currentState.auth.secretRef ?? '';
+
       const body = {
         name: currentState.name,
         platform_label: currentState.platformLabel,
@@ -115,7 +165,7 @@ export default function CustomSourceWizard() {
           kind: currentState.auth.kind,
           header_name: currentState.auth.headerName ?? null,
           username: currentState.auth.username ?? null,
-          secret_ref: currentState.auth.secret,
+          secret_ref: secretRef,
         },
         schedule: currentState.schedule,
         stack_id: selectedPipelineId,
@@ -170,7 +220,15 @@ export default function CustomSourceWizard() {
             } else if (eventName === 'complete') {
               setVerifyState((prev) => {
                 if (verifyRunRef.current !== runId) return prev;
-                return { ...prev, inFlight: false, allPass: payload.all_pass as boolean };
+                return {
+                  ...prev,
+                  inFlight: false,
+                  allPass: payload.all_pass as boolean,
+                  // Capture the server-issued verify token (present only on all_pass=true).
+                  verifyToken: typeof payload.verify_token === 'string'
+                    ? payload.verify_token
+                    : prev.verifyToken,
+                };
               });
             }
           } catch {
@@ -229,12 +287,11 @@ export default function CustomSourceWizard() {
     setSaving(true);
     setSaveError(null);
     try {
-      // Split auth into credentials (the secret) and config.auth (everything else).
-      // The route's POST handler encrypts the entire `credentials` object, so the
-      // probe runner's _resolve_secret() will decrypt and read the `secret` key.
       // Non-secret auth metadata (kind, header_name, username) lives in config.auth
       // because it isn't sensitive and the probe runner consumes it directly.
-      const { secret, ...nonSecretAuth } = state.auth;
+      // The raw secret has already been cleared from state after step 2; the persist
+      // route resolves it from the stash via the secretRef before writing to DB.
+      const { secret: _rawSecret, secretRef, ...nonSecretAuth } = state.auth;
 
       const r = await fetch('/api/integrations', {
         method: 'POST',
@@ -242,11 +299,12 @@ export default function CustomSourceWizard() {
         body: JSON.stringify({
           type: 'CUSTOM_SOURCE',
           name: state.name,
-          credentials: { secret },
           config: {
             platform_label: state.platformLabel,
             base_url: state.baseUrl,
-            auth: nonSecretAuth,
+            // secret_ref is the stash ref; the Next.js persist route resolves it
+            // and stores the resolved secret durably.
+            auth: { ...nonSecretAuth, secret_ref: secretRef },
             datasets: state.datasets.map((d) => ({
               id: d.id,
               endpoint: d.endpoint,
@@ -257,6 +315,8 @@ export default function CustomSourceWizard() {
             })),
             schedule: state.schedule,
           },
+          // Server-issued HMAC token that proves /verify passed for this exact config.
+          verify_token: verifyState.verifyToken,
           // Top-level hints that the route uses to populate Integration's
           // probeSchedule + nextProbeAt + status, so the runner picks it up.
           probeSchedule: state.schedule,
@@ -305,7 +365,8 @@ export default function CustomSourceWizard() {
             state={state}
             onChange={updateState}
             onBack={() => setStep(1)}
-            onNext={() => setStep(3)}
+            onNext={() => stashAndAdvance(state, () => setStep(3))}
+            stashError={stashError}
           />
         )}
         {step === 3 && (
@@ -325,7 +386,7 @@ export default function CustomSourceWizard() {
               setStep(5);
               // Reset verify state and kick off the SSE stream whenever the user
               // enters the Review step (including if they go back and come forward again).
-              setVerifyState({ inFlight: false, allPass: undefined, datasets: {} });
+              setVerifyState({ inFlight: false, allPass: undefined, datasets: {}, verifyToken: undefined });
               runVerify(state);
             }}
           />
@@ -463,15 +524,19 @@ function ConnectionStep({
   onChange,
   onBack,
   onNext,
+  stashError,
 }: {
   state: WizardState;
   onChange: (patch: Partial<WizardState>) => void;
   onBack: () => void;
   onNext: () => void;
+  stashError?: string | null;
 }) {
   const { auth } = state;
   const isHttps = state.baseUrl.startsWith('https://');
-  const hasSecret = auth.secret.length > 0;
+  // Allow proceeding if we already have a stash ref (secret was already stashed),
+  // or if the user has typed a new secret.
+  const hasSecret = auth.secret.length > 0 || !!auth.secretRef;
   const hasUsername = auth.kind !== 'basic' || (auth.username ?? '').trim().length > 0;
   const canProceed = isHttps && hasSecret && hasUsername;
 
@@ -589,6 +654,12 @@ function ConnectionStep({
           />
         </Field>
       </fieldset>
+
+      {stashError && (
+        <p className="text-sm text-red-400" role="alert">
+          {stashError}
+        </p>
+      )}
 
       <div className="flex justify-between pt-2">
         <button
@@ -727,8 +798,8 @@ function ReviewStep({
   const hasAnyError = Object.values(verifyState.datasets).some(
     (s) => typeof s === 'object' && s.status === 'error',
   );
-  // Save is only enabled when verify has completed with all-pass.
-  const canSave = !saving && verifyState.allPass === true;
+  // Save is only enabled when verify has completed with all-pass AND we have the verify token.
+  const canSave = !saving && verifyState.allPass === true && !!verifyState.verifyToken;
   const saveLabel =
     verifyState.inFlight
       ? 'Verifying…'

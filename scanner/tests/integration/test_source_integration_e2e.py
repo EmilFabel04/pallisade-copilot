@@ -52,6 +52,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from scanner.adapters.http_probe import MetricBundle
+from scanner.secret_stash.stash import stash_secret, _STASH
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -91,37 +92,47 @@ _FIXTURE_BUNDLE = MetricBundle(
     min_max_numeric={"value": (12.3, 78.9)},
 )
 
-_VERIFY_BODY: Dict[str, Any] = {
-    "name": "MyCiti water sensors",
-    "platform_label": "MyCiti",
-    "base_url": _BASE_URL,
-    "auth": {"kind": "bearer", "header_name": None, "secret_ref": "stub-token"},
-    "schedule": "daily",
-    "stack_id": None,
-    "datasets": [
-        {
-            "id": _DATASET_ID,
-            "endpoint": _ENDPOINT,
-            "json_root": None,
-            "timestamp_column": _TIMESTAMP_COL,
-            "lands_in": None,
-        }
-    ],
-}
+_E2E_USER_ID = "user_e2e"
 
-_DISCOVER_BODY: Dict[str, Any] = {
-    "base_url": _BASE_URL,
-    "endpoint": _ENDPOINT,
-    "auth": {"kind": "bearer", "header_name": None, "secret_ref": "stub-token"},
-    "ingestion_hints": [],
-    "warehouse_hints": [],
-    "stack_id": None,
-}
+# Note: _VERIFY_BODY and _DISCOVER_BODY are constructed dynamically in the test
+# because they require a freshly stashed secret_ref.  See _build_e2e_bodies().
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _build_e2e_bodies() -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Stash a test secret for _E2E_USER_ID and build DISCOVER_BODY + VERIFY_BODY."""
+    _STASH.clear()
+    secret_ref = stash_secret("stub-token", owner_id=_E2E_USER_ID)
+    verify_body: Dict[str, Any] = {
+        "name": "MyCiti water sensors",
+        "platform_label": "MyCiti",
+        "base_url": _BASE_URL,
+        "auth": {"kind": "bearer", "header_name": None, "secret_ref": secret_ref},
+        "schedule": "daily",
+        "stack_id": None,
+        "datasets": [
+            {
+                "id": _DATASET_ID,
+                "endpoint": _ENDPOINT,
+                "json_root": None,
+                "timestamp_column": _TIMESTAMP_COL,
+                "lands_in": None,
+            }
+        ],
+    }
+    discover_body: Dict[str, Any] = {
+        "base_url": _BASE_URL,
+        "endpoint": _ENDPOINT,
+        "auth": {"kind": "bearer", "header_name": None, "secret_ref": secret_ref},
+        "ingestion_hints": [],
+        "warehouse_hints": [],
+        "stack_id": None,
+    }
+    return discover_body, verify_body
 
 
 def _make_fake_conn(rowcount: int = 1) -> MagicMock:
@@ -142,7 +153,7 @@ def _build_app() -> FastAPI:
     from scanner.api.auth import ActingPrincipal, require_principal
 
     fixed_principal = ActingPrincipal(
-        user_id="user_e2e",
+        user_id=_E2E_USER_ID,
         organization_id="org_e2e",
         request_id="req-e2e",
     )
@@ -214,6 +225,9 @@ def test_full_source_integration_round_trip(monkeypatch):
     # Force feature flag so probe_runner doesn't short-circuit.
     monkeypatch.setenv("FEATURE_SOURCES_CATEGORY", "1")
 
+    # Build request bodies with a freshly stashed secret ref.
+    _DISCOVER_BODY, _VERIFY_BODY = _build_e2e_bodies()
+
     app = _build_app()
 
     # ── Step 2: discover ──────────────────────────────────────────────────────
@@ -250,6 +264,10 @@ def test_full_source_integration_round_trip(monkeypatch):
     )
 
     # ── Step 3: verify via SSE ─────────────────────────────────────────────────
+    # Re-stash so the ref is fresh for the verify call (discover didn't invalidate
+    # the stash, but we re-stash defensively to avoid TTL edge cases in CI).
+    _DISCOVER_BODY_VERIFY, _VERIFY_BODY = _build_e2e_bodies()
+
     with patch(
         "scanner.adapters.http_probe.HttpProbeAdapter.probe",
         return_value=_FIXTURE_BUNDLE,
@@ -299,6 +317,15 @@ def test_full_source_integration_round_trip(monkeypatch):
     )
     assert complete_event["data"]["failed_count"] == 0, (
         f"[Step 3 — Verify] expected failed_count=0, got: {complete_event['data']}"
+    )
+
+    # CRITICAL: verify_token must be present in the complete event when all_pass=true.
+    captured_verify_token = complete_event["data"].get("verify_token")
+    assert captured_verify_token is not None, (
+        f"[Step 3 — Verify] complete event missing verify_token: {complete_event['data']}"
+    )
+    assert isinstance(captured_verify_token, str) and "." in captured_verify_token, (
+        f"[Step 3 — Verify] verify_token format invalid: {captured_verify_token!r}"
     )
 
     # CRITICAL: verify must never write to DB.  The integration router's

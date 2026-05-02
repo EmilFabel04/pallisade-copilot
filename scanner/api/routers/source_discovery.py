@@ -21,6 +21,7 @@ from scanner.discovery.source_discovery import SourceDiscoveryOrchestrator
 from scanner.discovery.probe.source_probe_discoverer import SourceProbeDiscoverer
 from scanner.discovery.warehouse.warehouse_discoverer import WarehouseDiscoverer
 from scanner.discovery.ingestion.orchestrator import IngestionDiscoverer
+from scanner.secret_stash.stash import resolve_secret_ref
 
 from ..auth import require_principal, ActingPrincipal
 
@@ -38,6 +39,14 @@ _CACHE: TTLCache = TTLCache(maxsize=512, ttl=60)
 
 
 class AuthBody(BaseModel):
+    """Authentication config sent by the wizard.
+
+    ``secret_ref`` is an opaque stash reference created by
+    POST /api/v1/integrations/source/stash-secret — NOT the raw credential.
+    The endpoint resolves it via :func:`~scanner.secret_stash.stash.resolve_secret_ref`
+    before passing the real secret to the probe adapter.
+    """
+
     kind: str
     header_name: Optional[str] = None
     username: Optional[str] = None
@@ -112,14 +121,20 @@ async def discover(
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    # TODO: resolve secret_ref via secret store when helper available.
-    # The verify endpoint in Task 6 will wire this up properly.
-    # For now we use the secret_ref directly as the runtime secret value.
+    # Resolve the stash ref to the runtime secret.  The wizard stashes the raw
+    # credential via POST /stash-secret before calling /discover, so secret_ref
+    # is always an opaque ``stash_<uuid>`` string at this point.
+    secret_value = resolve_secret_ref(body.auth.secret_ref, owner_id=principal.user_id)
+    if secret_value is None:
+        raise HTTPException(
+            status_code=400,
+            detail="secret_ref invalid or expired — re-enter credentials",
+        )
     runtime_auth = {
         "kind": body.auth.kind,
         "header_name": body.auth.header_name,
         "username": body.auth.username,
-        "secret": body.auth.secret_ref,  # TODO: resolve via secret store if helper exists
+        "secret": secret_value,
     }
 
     result = await _orchestrator(

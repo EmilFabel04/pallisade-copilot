@@ -20,6 +20,11 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from scanner.adapters.http_probe import HttpProbeAdapter, ProbeError
+from scanner.secret_stash.stash import resolve_secret_ref
+from scanner.api.security.verify_token import (
+    issue_verify_token,
+    compute_config_hash,
+)
 from ..auth import require_principal, ActingPrincipal
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,14 @@ router = APIRouter(prefix="/api/v1/integrations/source", tags=["source-verify"])
 
 
 class AuthBody(BaseModel):
+    """Authentication config sent by the wizard.
+
+    ``secret_ref`` is an opaque stash reference created by
+    POST /api/v1/integrations/source/stash-secret — NOT the raw credential.
+    The endpoint resolves it via :func:`~scanner.secret_stash.stash.resolve_secret_ref`
+    before passing the real secret to the probe adapter.
+    """
+
     kind: str
     header_name: Optional[str] = None
     username: Optional[str] = None
@@ -64,13 +77,18 @@ class VerifyRequest(BaseModel):
 
 
 def _resolve_secret(auth: AuthBody, principal: ActingPrincipal) -> str:
-    """Resolve secret_ref to runtime secret value.
+    """Resolve secret_ref to runtime secret value via the stash.
 
-    TODO: replace with real secret-store resolution when helper exists.
-    For now the wizard sends the real secret as secret_ref (same TODO as
-    source_discovery.py), so we use it directly.
+    Raises HTTPException(400) if the ref is expired, unknown, or owned by a
+    different user.
     """
-    return auth.secret_ref
+    secret = resolve_secret_ref(auth.secret_ref, owner_id=principal.user_id)
+    if secret is None:
+        raise HTTPException(
+            status_code=400,
+            detail="secret_ref invalid or expired — re-enter credentials",
+        )
+    return secret
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +122,21 @@ async def verify(
             "secret": secret_value,
         },
     )
+
+    # Pre-compute the config hash from the config-equivalent subset of the verify
+    # body.  We hash only the fields that the wizard will send in body.config when
+    # calling POST /api/integrations — name, stack_id, and verify_token are excluded
+    # because they don't affect probe semantics and may differ at persist-time.
+    # The Next.js side hashes body.config over the same keys (computeConfigHash in
+    # lib/server/verify-token.ts), so both sides must produce the same digest.
+    config_equiv: dict = {
+        "platform_label": body.platform_label,
+        "base_url": body.base_url,
+        "auth": body.auth.model_dump(),
+        "datasets": [ds.model_dump() for ds in body.datasets],
+        "schedule": body.schedule,
+    }
+    config_hash = compute_config_hash(config_equiv)
 
     async def event_stream():
         all_pass = True
@@ -157,9 +190,19 @@ async def verify(
 
             yield {"event": "dataset_result", "data": json.dumps(payload)}
 
+        complete_payload: dict = {"all_pass": all_pass, "failed_count": failed}
+        if all_pass:
+            # Issue a short-lived HMAC-signed token so the Next.js persist route
+            # can verify that this exact config was successfully probed.
+            verify_token = issue_verify_token({
+                "org_id": principal.organization_id,
+                "config_hash": config_hash,
+            })
+            complete_payload["verify_token"] = verify_token
+
         yield {
             "event": "complete",
-            "data": json.dumps({"all_pass": all_pass, "failed_count": failed}),
+            "data": json.dumps(complete_payload),
         }
 
     return EventSourceResponse(event_stream())

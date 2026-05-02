@@ -135,6 +135,7 @@ def create_app() -> FastAPI:
     from .routers.waitlist import router as waitlist_router
     from .routers.source_discovery import router as source_discovery_router
     from .routers.source_verify import router as source_verify_router
+    from .routers.source_secrets import router as source_secrets_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -192,6 +193,9 @@ def create_app() -> FastAPI:
 
     # Source Verify API (router already has /api/v1/integrations/source prefix)
     app.include_router(source_verify_router)
+
+    # Source Secrets API — stash-secret + resolve-secret
+    app.include_router(source_secrets_router)
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

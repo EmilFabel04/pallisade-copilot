@@ -2,12 +2,15 @@
 Tests for the /api/v1/integrations/source/verify endpoint.
 
 Covers:
-1. POST with a config containing one valid dataset → SSE response with one
-   `dataset_result` event (status=ok, row_count populated) and a `complete`
-   event with `all_pass: true`.
+1. POST with a config containing one valid dataset + stash ref → SSE response
+   with one `dataset_result` event (status=ok, row_count populated) and a
+   `complete` event with `all_pass: true` and a `verify_token`.
 2. POST with a config that triggers ProbeError → SSE response with one
    `dataset_result` event with status=error, and a `complete` event with
-   `all_pass: false`. CRITICAL: asserts no Integration row was persisted.
+   `all_pass: false` (no verify_token). CRITICAL: asserts no Integration row
+   was persisted.
+3. POST with empty datasets → 422.
+4. POST with invalid/expired secret_ref → 400.
 """
 
 from __future__ import annotations
@@ -18,6 +21,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from scanner.secret_stash.stash import stash_secret, _STASH
 
 _TEST_USER_ID = "user_abc123"
 _TEST_ORG_ID = "org_xyz"
@@ -43,12 +48,20 @@ def _create_test_client() -> TestClient:
     return TestClient(app)
 
 
-def _verify_body() -> dict:
+def _make_stash_ref(secret: str = "stub-api-key") -> str:
+    """Stash a secret for _TEST_USER_ID and return the opaque ref."""
+    _STASH.clear()
+    return stash_secret(secret, owner_id=_TEST_USER_ID)
+
+
+def _verify_body(secret_ref: str | None = None) -> dict:
+    if secret_ref is None:
+        secret_ref = _make_stash_ref()
     return {
         "name": "MyCiti — water sensors",
         "platform_label": "MyCiti",
         "base_url": "https://portal.example.com/api/v1",
-        "auth": {"kind": "api_key", "header_name": "X-API-Key", "secret_ref": "stub"},
+        "auth": {"kind": "api_key", "header_name": "X-API-Key", "secret_ref": secret_ref},
         "schedule": "daily",
         "stack_id": None,
         "datasets": [
@@ -109,7 +122,7 @@ def _make_db_mock() -> tuple[MagicMock, MagicMock]:
 
 
 def test_verify_valid_dataset_streams_ok_then_complete():
-    """POST with one valid dataset → dataset_result(status=ok) + complete(all_pass=true).
+    """POST with one valid dataset + stash ref → dataset_result(status=ok) + complete(all_pass=true, verify_token set).
 
     The key DB-no-write assertion is the mock_get_conn.call_count == 0 check:
     it proves that the integrations _get_connection helper (the only module that
@@ -172,6 +185,12 @@ def test_verify_valid_dataset_streams_ok_then_complete():
     assert comp.get("event") == "complete"
     assert comp["data"]["all_pass"] is True
     assert comp["data"]["failed_count"] == 0
+    # CRITICAL: all_pass=true must include a verify_token for the server-side gate.
+    assert "verify_token" in comp["data"], (
+        "complete event with all_pass=true must include verify_token"
+    )
+    assert isinstance(comp["data"]["verify_token"], str)
+    assert "." in comp["data"]["verify_token"], "verify_token must be dot-separated"
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +231,7 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
             headers={"Accept": "text/event-stream"},
         )
 
+
     assert resp.status_code == 200, resp.text
 
     events = _parse_sse_events(resp)
@@ -228,6 +248,10 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
     assert comp.get("event") == "complete"
     assert comp["data"]["all_pass"] is False
     assert comp["data"]["failed_count"] == 1
+    # CRITICAL: no verify_token should be present when all_pass=false.
+    assert "verify_token" not in comp["data"], (
+        "complete event with all_pass=false must NOT include a verify_token"
+    )
 
     # CRITICAL: mock-patched _get_connection is never called — proves the verify
     # endpoint cannot transitively reach a DB write path.
@@ -235,6 +259,28 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
         f"source_verify must NEVER call _get_connection — it must not persist Integration rows, "
         f"but _get_connection was called {mock_get_conn.call_count} time(s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 4: invalid secret_ref → 400
+# ---------------------------------------------------------------------------
+
+
+def test_verify_invalid_secret_ref_returns_400():
+    """POST with an expired/unknown secret_ref must be rejected with 400."""
+    _STASH.clear()  # ensure no stash refs exist
+
+    body = _verify_body(secret_ref="stash_does_not_exist")
+    client = _create_test_client()
+    resp = client.post(
+        "/api/v1/integrations/source/verify",
+        json=body,
+        headers={"Accept": "text/event-stream"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    detail = resp.json().get("detail", "")
+    assert "secret_ref" in detail.lower()
 
 
 # ---------------------------------------------------------------------------

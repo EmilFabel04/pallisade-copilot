@@ -2,9 +2,10 @@
 Tests for the /discover endpoint.
 
 Covers:
-1. POST with valid HTTPS base_url + auth + endpoint → 200, response shape
+1. POST with valid HTTPS base_url + auth + stash ref → 200, response shape
    includes candidates_by_path.probe. Probe HTTP call is mocked.
 2. POST with http:// (non-HTTPS) base_url → 400.
+3. POST with an invalid/expired secret_ref → 400.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from scanner.secret_stash.stash import stash_secret, _STASH
 
 _TEST_USER_ID = "user_abc123"
 _TEST_ORG_ID = "org_xyz"
@@ -38,8 +41,14 @@ def _create_test_client() -> TestClient:
     return TestClient(app)
 
 
+def _make_stash_ref(secret: str = "test-api-key") -> str:
+    """Stash a secret for _TEST_USER_ID and return the opaque ref."""
+    _STASH.clear()
+    return stash_secret(secret, owner_id=_TEST_USER_ID)
+
+
 def test_discover_valid_https_returns_200_with_probe_key():
-    """POST with valid HTTPS base_url + auth + endpoint → 200, response has candidates_by_path.probe."""
+    """POST with valid HTTPS base_url + auth + stash ref → 200, response has candidates_by_path.probe."""
     from scanner.discovery.types import DatasetCandidate, DiscoveryError, DiscoveryResult
 
     probe_candidate = DatasetCandidate(
@@ -70,6 +79,9 @@ def test_discover_valid_https_returns_200_with_probe_key():
     mock_orchestrator = MagicMock()
     mock_orchestrator.discover = _fake_discover
 
+    # Stash a secret so the endpoint can resolve the ref.
+    secret_ref = _make_stash_ref("test-api-key")
+
     with patch(
         "scanner.api.routers.source_discovery._orchestrator",
         return_value=mock_orchestrator,
@@ -82,7 +94,7 @@ def test_discover_valid_https_returns_200_with_probe_key():
                 "endpoint": "/sensors",
                 "auth": {
                     "kind": "bearer",
-                    "secret_ref": "my-secret-ref",
+                    "secret_ref": secret_ref,
                 },
             },
         )
@@ -99,6 +111,7 @@ def test_discover_valid_https_returns_200_with_probe_key():
 def test_discover_http_base_url_returns_400():
     """POST with http:// (non-HTTPS) base_url → 400."""
     client = _create_test_client()
+    # HTTP check happens before secret resolution, so any secret_ref value works.
     resp = client.post(
         "/api/v1/integrations/source/discover",
         json={
@@ -106,9 +119,33 @@ def test_discover_http_base_url_returns_400():
             "endpoint": "/sensors",
             "auth": {
                 "kind": "bearer",
-                "secret_ref": "my-secret-ref",
+                "secret_ref": "stash_any",
             },
         },
     )
 
     assert resp.status_code == 400
+
+
+def test_discover_invalid_secret_ref_returns_400():
+    """POST with an unknown / expired secret_ref → 400."""
+    _STASH.clear()
+    # Also clear the discovery TTLCache so the request doesn't return a cached result
+    # from the earlier happy-path test (which used the same base_url/endpoint).
+    from scanner.api.routers import source_discovery as _sd_mod
+    _sd_mod._CACHE.clear()
+    client = _create_test_client()
+    resp = client.post(
+        "/api/v1/integrations/source/discover",
+        json={
+            "base_url": "https://api.example.com",
+            "endpoint": "/sensors",
+            "auth": {
+                "kind": "bearer",
+                "secret_ref": "stash_does_not_exist",
+            },
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "secret_ref" in resp.json().get("detail", "").lower()
