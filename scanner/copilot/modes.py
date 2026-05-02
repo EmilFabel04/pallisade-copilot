@@ -22,6 +22,7 @@ class InteractionMode(Enum):
     SUGGEST = "suggest"
     FIX = "fix"
     ONBOARD = "onboard"
+    CLARIFY = "clarify"
 
 
 @dataclass
@@ -299,6 +300,35 @@ Summarize what you learned in a few bullets and explain how this helps:
 **Getting Started:**
 Use `get_pending_questions` to see unanswered questions. Start with the big picture
 (company, pipeline purpose) before drilling into specifics.
+"""
+
+CLARIFY_PROMPT = """
+## CLARIFY MODE ACTIVE
+
+You are helping the user resolve a single platform-detected ambiguity. The
+ContextRequest payload (kind, scope, candidates, evidence) is loaded into
+your system context.
+
+**Behaviour:**
+- Phrase ONE focused question in plain language. Keep it short.
+- Briefly explain how the answer will be used (e.g., "this is the column I'll
+  use to bucket volume" / "this dampens future alerts on this node").
+- Wait for the user's reply.
+- When the user answers, call `record_clarification_answer` with:
+    - `request_id`: from the loaded payload
+    - `structured_answer`: matching the kind's answer schema
+    - `propose_convention`: true ONLY when the answer cleanly generalises (e.g.,
+      a naming pattern that applies to many tables); otherwise false.
+- If the user is uncertain, offer 1-2 sentences of concrete reasoning, not a
+  list of options. Do not hedge.
+- If the user contradicts an existing convention, surface it: "you previously
+  preferred X for raw.* — confirm overriding to Y for raw.orders only?"
+
+**Hard rules:**
+- Do NOT ask multiple questions in one turn.
+- Do NOT speculate about answers — wait for the user.
+- Do NOT call any tool except `record_clarification_answer`, `get_node_metadata`,
+  `get_recent_rows_sample`, or `lookup_convention`.
 """
 
 SUGGEST_PROMPT = """
@@ -658,6 +688,22 @@ MODES: Dict[InteractionMode, ModeConfig] = {
             r"learn about my pipeline",
         ],
     ),
+
+    InteractionMode.CLARIFY: ModeConfig(
+        mode=InteractionMode.CLARIFY,
+        display_name="Clarify",
+        description="Resolve a platform-detected ambiguity",
+        icon="help-circle",
+        color="amber",
+        system_prompt_section=CLARIFY_PROMPT,
+        preferred_tools=[
+            "record_clarification_answer",
+        ],
+        exclusive_tools=[
+            "record_clarification_answer",
+        ],
+        auto_detect_patterns=[],  # never auto-detected; always entered explicitly
+    ),
 }
 
 
@@ -705,6 +751,7 @@ def parse_slash_command(message: str) -> tuple[Optional[InteractionMode], str]:
         "/suggest": InteractionMode.SUGGEST,
         "/fix": InteractionMode.FIX,
         "/onboard": InteractionMode.ONBOARD,
+        "/clarify": InteractionMode.CLARIFY,
     }
 
     for cmd, mode in slash_commands.items():

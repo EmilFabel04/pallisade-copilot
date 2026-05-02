@@ -556,6 +556,24 @@ When you call `run_coverage_monitor`, you are running a **one-off check that you
         if context.mode_config and context.mode != "ask":
             prompt += f"\n{context.mode_config.system_prompt_section}\n"
 
+        # CLARIFY mode: append the kind-specific prompt fragment with the
+        # loaded ContextRequest payload (table_fqn, candidates, request_id).
+        # The kinds package self-registers its handlers on first import.
+        clarification = getattr(context, "clarification_request", None)
+        if clarification and isinstance(clarification, dict):
+            try:
+                from copilot.clarifications.kinds import (  # noqa: F401  (registers kinds)
+                    timestamp_choice as _tc,
+                )
+                from copilot.clarifications.registry import get_kind_handler
+                handler = get_kind_handler(clarification["kind"])
+                fragment = handler.load_prompt(clarification.get("payload") or {})
+                prompt += "\n\n---\n\n" + fragment + "\n"
+            except Exception as e:
+                logger.warning(
+                    f"Failed to render clarification prompt fragment: {e}"
+                )
+
         # Inject Answer Contract based on intent classification
         if context.intent_result:
             try:

@@ -368,6 +368,8 @@ model PipelineStack {
   findings             Finding[]
   driftRecommendations DriftRecommendation[]
 
+  contextRequests ContextRequest[]
+
   @@index([organizationId])
   @@index([status])
 }
@@ -851,6 +853,44 @@ model PolicyAssignment {
   @@index([nodeFqn])
   @@index([nodeDomain])
   @@index([branchRootFqn])
+}
+
+model ContextRequest {
+  id              String        @id @default(cuid())
+  pipelineStackId String
+  pipelineStack   PipelineStack @relation(fields: [pipelineStackId], references: [id], onDelete: Cascade)
+
+  kind      String
+  scopeType String
+  scopeRef  String
+
+  payload Json
+
+  status   String @default("open")
+  priority String @default("normal")
+
+  createdAt      DateTime           @default(now())
+  resolvedAt     DateTime?
+  dismissedUntil DateTime?
+  resolutionId   String?            @unique
+  resolution     ContextResolution?
+
+  @@index([pipelineStackId, status])
+  @@index([scopeType, scopeRef])
+  @@index([pipelineStackId, kind, status])
+}
+
+model ContextResolution {
+  id        String         @id @default(cuid())
+  requestId String         @unique
+  request   ContextRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  answer           Json
+  transcript       Json
+  conventionUpdate Json?
+
+  answeredBy String
+  answeredAt DateTime @default(now())
 }
 
 // ============================================

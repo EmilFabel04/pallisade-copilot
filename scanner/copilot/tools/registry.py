@@ -61,6 +61,7 @@ class ToolRegistry:
             "lineage", "warehouse", "dbt", "orchestration", "ingestion",
             "reporting", "storage", "knowledge", "observability", "coverage",
             "actions", "github", "onboarding", "infrastructure",
+            "clarifications",
         )
         # Try relative import first (works when running from scanner/ dir),
         # then absolute scanner.copilot.tools path (works when running from repo root).

@@ -5605,6 +5605,104 @@ class ToolExecutor:
             return ToolResult(success=False, error=str(e))
 
     # ==========================================
+    # CLARIFICATION TOOL IMPLEMENTATIONS
+    # ==========================================
+
+    async def _execute_record_clarification_answer(self, args: Dict[str, Any]) -> ToolResult:
+        """Persist a ContextResolution for a ContextRequest.
+
+        The executor validates the answer with the registered kind handler
+        (in-process, no DB) and delegates persistence to the Next.js API
+        layer (Task 12), then emits `context_resolved` on the in-process bus
+        so guessers (sla_discovery, monitor evaluation) can react.
+
+        We do NOT use a Prisma client here because the ToolExecutor has no
+        DB attached — every write goes through Next.js, matching the
+        existing `_call_nextjs` pattern used by saved monitors and watches.
+        """
+        request_id = args.get("request_id")
+        answer = args.get("structured_answer")
+        propose_convention = bool(args.get("propose_convention", False))
+
+        if not request_id or not isinstance(request_id, str):
+            return ToolResult(success=False, error="request_id (string) is required")
+        if not isinstance(answer, dict):
+            return ToolResult(success=False, error="structured_answer (object) is required")
+
+        # Resolve the kind from the loaded clarification payload (CLARIFY mode
+        # injects this via context_builder). If absent, the API layer will
+        # look it up by request_id.
+        loaded = getattr(self.context, "clarification_request", None) or {}
+        kind = None
+        if isinstance(loaded, dict) and loaded.get("id") == request_id:
+            kind = loaded.get("kind")
+
+        # Validate against the kind handler when we know the kind. Importing
+        # lazily avoids circular imports through the tool registry.
+        if kind:
+            try:
+                from copilot.clarifications.kinds import (  # noqa: F401  (registers kinds)
+                    timestamp_choice as _tc,
+                )
+                from copilot.clarifications.registry import get_kind_handler
+                handler = get_kind_handler(kind)
+                handler.validate_answer(answer)
+            except KeyError as exc:
+                return ToolResult(success=False, error=f"Unknown clarification kind: {exc}")
+            except ValueError as exc:
+                return ToolResult(success=False, error=f"Invalid answer: {exc}")
+            except Exception as exc:
+                logger.exception("Clarification validation raised unexpectedly")
+                return ToolResult(success=False, error=f"Validation failed: {exc}")
+
+        # Persist via the Next.js clarifications API. The endpoint is wired in
+        # Task 12 of the clarifications plan; the contract is documented there.
+        try:
+            response = await self._call_nextjs(
+                "/api/clarifications/resolve",
+                {
+                    "requestId": request_id,
+                    "answer": answer,
+                    "proposeConvention": propose_convention,
+                },
+            )
+        except Exception as exc:
+            # Surface the API-layer failure to the LLM so it can retry or ask
+            # the user for help instead of pretending the answer was saved.
+            logger.exception("Clarification persistence failed for %s", request_id)
+            return ToolResult(success=False, error=f"Failed to record answer: {exc}")
+
+        # Emit the in-process event so guessers can react (e.g., sla_discovery
+        # picks up the chosen timestamp column on its next run). This is a
+        # best-effort hint — it fires only in the same process the executor
+        # ran in; cross-process consumers rely on the API layer's own bus.
+        try:
+            from copilot.clarifications.events import BUS
+            BUS.emit("context_resolved", {
+                "request_id": request_id,
+                "kind": kind or response.get("kind"),
+                "scope_type": loaded.get("scope_type") or response.get("scopeType"),
+                "scope_ref": loaded.get("scope_ref") or response.get("scopeRef"),
+                "answer": answer,
+            })
+        except Exception:
+            logger.debug("BUS.emit(context_resolved) skipped", exc_info=True)
+
+        return ToolResult(
+            success=True,
+            data={
+                "ok": True,
+                "request_id": request_id,
+                "kind": kind or response.get("kind"),
+                "applied_to": {
+                    "scope_type": loaded.get("scope_type") or response.get("scopeType"),
+                    "scope_ref": loaded.get("scope_ref") or response.get("scopeRef"),
+                },
+                "convention_updated": bool(response.get("conventionUpdated", False)),
+            },
+        )
+
+    # ==========================================
     # IMPACT ANALYSIS TOOL IMPLEMENTATIONS
     # ==========================================
 

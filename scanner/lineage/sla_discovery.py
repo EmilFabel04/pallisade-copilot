@@ -17,13 +17,47 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from scanner.lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
+try:
+    from lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
+except ImportError:
+    from scanner.lineage.graph import LineageGraph, LineageNode, NodeType, PlatformDomain
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Timestamp-pick result (used by volume + freshness inference and emitted as
+# evidence when confidence is below threshold so the clarification engine can
+# ask the user which column to use).
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TimestampPick:
+    """Result of choosing a timestamp column for volume/freshness inference.
+
+    Attributes:
+        column: The chosen timestamp column name, or None if no candidate exists.
+        candidates: ALL columns whose data type is timestamp/date-like.
+        confidence:
+            0.9 — strong match (loaded_at / ingested_at)
+            0.7 — solid match (updated_at / modified_at)
+            0.5 — weak match (any other timestamp column)
+            0.0 — no candidates at all
+    """
+
+    column: Optional[str]
+    candidates: List[str]
+    confidence: float
+
+
+# Strong / medium / weak preference patterns used to score the picker.
+_PICK_STRONG = ("loaded", "ingested")
+_PICK_MEDIUM = ("updated", "modified")
 
 # Compare by .value strings to avoid dual-import enum identity mismatches
 # (lineage.graph vs scanner.lineage.graph create separate enum classes)
@@ -425,34 +459,64 @@ def _timestamps_to_intervals(rows: List[Dict], key: str) -> Optional[List[float]
     return intervals if intervals else None
 
 
-def _infer_intervals_from_timestamp_column(adapter: Any, table_fqn: str, limit: int = 30) -> Optional[List[float]]:
-    """Fallback: find a timestamp column in the table and bucket updates by it."""
+def _pick_volume_timestamp_column(adapter: Any, table_fqn: str) -> TimestampPick:
+    """Choose the best timestamp column for volume / freshness inference.
+
+    Returns a :class:`TimestampPick` carrying the chosen column, the full list
+    of timestamp/date-like candidates discovered on the table, and a confidence
+    score the clarification engine consults before deciding whether to ask the
+    user which column to use.
+
+    Confidence model:
+        0.9 — strong match (`loaded_at` / `ingested_at`)
+        0.7 — solid match (`updated_at` / `modified_at`)
+        0.5 — weak match (any other timestamp column)
+        0.0 — no timestamp columns on the table at all
+    """
     try:
         columns = adapter.get_columns(table_fqn)
     except Exception:
-        return None
+        return TimestampPick(column=None, candidates=[], confidence=0.0)
 
     if not columns:
-        return None
+        return TimestampPick(column=None, candidates=[], confidence=0.0)
 
-    # Find a timestamp-type column (prefer updated_at, modified_at, created_at patterns)
-    ts_candidates = []
+    candidates: List[str] = []
     for c in columns:
-        dtype = getattr(c, "data_type", "").lower()
+        dtype = (getattr(c, "data_type", "") or "").lower()
+        name = getattr(c, "name", None)
+        if not name:
+            continue
         if any(t in dtype for t in ("timestamp", "datetime", "date")):
-            ts_candidates.append(c.name)
+            candidates.append(name)
 
-    if not ts_candidates:
+    if not candidates:
+        return TimestampPick(column=None, candidates=[], confidence=0.0)
+
+    def _matches(col: str, patterns: tuple) -> bool:
+        cl = col.lower()
+        return any(p in cl for p in patterns)
+
+    # Walk the preference order — strong first, then medium, then any timestamp.
+    for col in candidates:
+        if _matches(col, _PICK_STRONG):
+            return TimestampPick(column=col, candidates=candidates, confidence=0.9)
+
+    for col in candidates:
+        if _matches(col, _PICK_MEDIUM):
+            return TimestampPick(column=col, candidates=candidates, confidence=0.7)
+
+    # No preferred match — pick the first timestamp column with low confidence.
+    return TimestampPick(column=candidates[0], candidates=candidates, confidence=0.5)
+
+
+def _infer_intervals_from_timestamp_column(adapter: Any, table_fqn: str, limit: int = 30) -> Optional[List[float]]:
+    """Fallback: find a timestamp column in the table and bucket updates by it."""
+    pick = _pick_volume_timestamp_column(adapter, table_fqn)
+    if pick.column is None:
         return None
 
-    # Prefer columns with update/modified/created in the name
-    preferred = [c for c in ts_candidates if any(k in c.lower() for k in ("updated", "modified", "loaded", "ingested"))]
-    if not preferred:
-        preferred = [c for c in ts_candidates if "created" in c.lower()]
-    if not preferred:
-        preferred = ts_candidates
-
-    ts_col = preferred[0]
+    ts_col = pick.column
 
     dialect = getattr(adapter, "dialect", "").lower()
     db, schema, tbl = _parse_fqn(adapter, table_fqn)
@@ -577,36 +641,6 @@ def _compute_freshness(adapter: Any, table_fqn: str, metadata: Optional[Dict[str
         "avgIntervalHours": round(hours_since, 1),
         "dataPoints": 1,
     }
-
-
-def _pick_volume_timestamp_column(adapter: Any, table_fqn: str) -> Optional[str]:
-    """Pick the best timestamp/date column for daily-volume bucketing.
-
-    Prefers ingest/update-style names (loaded_at, ingested_at, updated_at,
-    modified_at) over created_at, since they reflect when the row was
-    written to this table rather than when the underlying entity was born.
-    """
-    try:
-        columns = adapter.get_columns(table_fqn)
-    except Exception:
-        return None
-    if not columns:
-        return None
-
-    ts_candidates = []
-    for c in columns:
-        dtype = getattr(c, "data_type", "").lower()
-        if any(t in dtype for t in ("timestamp", "datetime", "date")):
-            ts_candidates.append(c.name)
-    if not ts_candidates:
-        return None
-
-    preferred = [c for c in ts_candidates if any(k in c.lower() for k in ("loaded", "ingested", "updated", "modified"))]
-    if not preferred:
-        preferred = [c for c in ts_candidates if "created" in c.lower()]
-    if not preferred:
-        preferred = ts_candidates
-    return preferred[0]
 
 
 def _volume_dialect_clauses(adapter: Any, table_fqn: str, ts_col: str, days: int) -> Dict[str, str]:
@@ -817,7 +851,14 @@ def _round_volume(n: float, *, down: bool) -> int:
     return int(math.ceil(n / magnitude) * magnitude)
 
 
-def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+def _compute_volume(
+    adapter: Any,
+    table_fqn: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Derive expected daily volume thresholds from historical row counts.
 
     Volume monitoring is *daily by definition* in this platform — the
@@ -834,13 +875,42 @@ def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, A
     be computed (no timestamp column, query fails, or <3 days of history).
     Refusing to fall back to a static total is intentional — comparing a
     daily threshold against a lifetime total produces meaningless checks.
+
+    When ``pipeline_stack_id`` is supplied and the timestamp picker's
+    confidence falls below ``CONFIG.confidence_threshold``, this function
+    asks Next.js to create a ``timestamp_choice`` ContextRequest so the
+    user can disambiguate. The discovery result is then marked
+    ``tentative=True`` and carries a ``context_request_id`` the UI can
+    surface.
     """
+    logger.info(
+        "[Clarifications] _compute_volume entered for %s (pipeline_stack_id=%s, has_metadata=%s)",
+        table_fqn, pipeline_stack_id, metadata is not None,
+    )
+
     count = metadata.get("row_count") if metadata else None
     current_rows = int(count) if count is not None and count >= 0 else None
 
-    ts_col = _pick_volume_timestamp_column(adapter, table_fqn)
-    if not ts_col:
-        return {
+    # Run the picker + clarification emit regardless of how the rest of
+    # discovery turns out. The column-choice question is meaningful even
+    # for empty tables (future loads still need to be bucketed correctly).
+    pick = _pick_volume_timestamp_column(adapter, table_fqn)
+    clarification = _try_emit_timestamp_clarification(
+        table_fqn=table_fqn,
+        pick=pick,
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+    )
+
+    def _attach_clarification(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Tag the result with tentative + context_request_id when one was emitted."""
+        if clarification and clarification.get("context_request_id") and not clarification.get("suppressed"):
+            payload["tentative"] = True
+            payload["context_request_id"] = clarification["context_request_id"]
+        return payload
+
+    if pick.column is None:
+        return _attach_clarification({
             "enabled": False,
             "disabledReason": (
                 "No timestamp/date column found — daily volume cannot be "
@@ -848,24 +918,26 @@ def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, A
                 "created_at, or disable volume monitoring for this table."
             ),
             **({"currentRows": current_rows} if current_rows is not None else {}),
-        }
+        })
+
+    ts_col = pick.column
 
     daily_result = _get_daily_row_counts(adapter, table_fqn, ts_col)
     if not daily_result.get("ok"):
-        return {
+        return _attach_clarification({
             "enabled": False,
             "disabledReason": daily_result.get("reason") or (
                 f"Daily-volume query against `{ts_col}` returned no rows."
             ),
             "timeColumn": ts_col,
             **({"currentRows": current_rows} if current_rows is not None else {}),
-        }
+        })
 
     daily: List[int] = daily_result["counts"]
     includes_today = daily_result.get("includesToday", False)
 
     if len(daily) < 3:
-        return {
+        return _attach_clarification({
             "enabled": False,
             "disabledReason": (
                 f"Only {len(daily)} day(s) of history under `{ts_col}` — "
@@ -875,7 +947,7 @@ def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, A
             "timeColumn": ts_col,
             "dataPoints": len(daily),
             **({"currentRows": current_rows} if current_rows is not None else {}),
-        }
+        })
 
     # When the latest bucket is today's partial day, drop it from the
     # statistics — a half-day count would bias both ``avg`` and ``stddev``
@@ -911,7 +983,114 @@ def _compute_volume(adapter: Any, table_fqn: str, metadata: Optional[Dict[str, A
         result["partialToday"] = True
     if current_rows is not None:
         result["currentRows"] = current_rows
-    return result
+    return _attach_clarification(result)
+
+
+# ---------------------------------------------------------------------------
+# Clarification emission helpers (Next.js round-trip)
+# ---------------------------------------------------------------------------
+
+def _try_emit_timestamp_clarification(
+    *,
+    table_fqn: str,
+    pick: TimestampPick,
+    pipeline_stack_id: Optional[str],
+    organization_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Ask Next.js to create a ``timestamp_choice`` ContextRequest if confidence is low.
+
+    Returns ``{'context_request_id': str, 'suppressed': bool}`` when an
+    HTTP round-trip happened, or ``None`` when no emission was attempted
+    (no pipeline scope, sufficient confidence, or the picker found no
+    candidates at all — there is nothing to ask the user about in that
+    last case).
+    """
+    # Lazy import — avoid import-time cycles between sla_discovery and the
+    # clarifications package.
+    try:
+        from copilot.clarifications.config import CONFIG
+    except ImportError:
+        from scanner.copilot.clarifications.config import CONFIG
+
+    logger.info(
+        "[Clarifications] picker for %s: column=%r confidence=%.2f candidates=%s "
+        "(threshold=%.2f, pipeline_stack_id=%s)",
+        table_fqn,
+        pick.column,
+        pick.confidence,
+        pick.candidates,
+        CONFIG.confidence_threshold,
+        pipeline_stack_id,
+    )
+
+    if not pipeline_stack_id:
+        logger.info("[Clarifications] skip emit for %s: no pipeline_stack_id", table_fqn)
+        return None
+    if pick.confidence >= CONFIG.confidence_threshold:
+        logger.info(
+            "[Clarifications] skip emit for %s: confidence %.2f ≥ threshold %.2f",
+            table_fqn, pick.confidence, CONFIG.confidence_threshold,
+        )
+        return None
+    if not pick.candidates:
+        # Nothing to disambiguate between — the user can't pick a column
+        # that doesn't exist. Fall back silently.
+        logger.info("[Clarifications] skip emit for %s: no candidates", table_fqn)
+        return None
+
+    logger.info(
+        "[Clarifications] emitting timestamp_choice for %s (confidence=%.2f, %d candidates)",
+        table_fqn, pick.confidence, len(pick.candidates),
+    )
+
+    return _call_nextjs_create_context_request(
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+        kind="timestamp_choice",
+        scope_type="node",
+        scope_ref=table_fqn,
+        payload={
+            "table_fqn": table_fqn,
+            "candidates": list(pick.candidates),
+            "confidence": pick.confidence,
+            "evidence": {
+                "picked_column": pick.column,
+                "picker": "sla_discovery._pick_volume_timestamp_column",
+            },
+        },
+        priority="normal",
+    )
+
+
+def _call_nextjs_create_context_request(
+    *,
+    pipeline_stack_id: str,
+    organization_id: Optional[str],
+    kind: str,
+    scope_type: str,
+    scope_ref: str,
+    payload: Dict[str, Any],
+    priority: str = "normal",
+) -> Optional[Dict[str, Any]]:
+    """Thin wrapper over the shared emit helper for backwards-compat.
+
+    The body lives in ``copilot.clarifications.emit.emit_via_nextjs`` so other
+    FastAPI modules (e.g. monitor evaluators) can reuse it.
+    """
+    try:
+        from copilot.clarifications.emit import emit_via_nextjs
+    except ImportError:
+        from scanner.copilot.clarifications.emit import emit_via_nextjs  # type: ignore
+
+    return emit_via_nextjs(
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+        kind=kind,
+        scope_type=scope_type,
+        scope_ref=scope_ref,
+        payload=payload,
+        priority=priority,
+    )
 
 
 def _compute_quality(adapter: Any, table_fqn: str) -> Optional[Dict[str, Any]]:
@@ -1193,6 +1372,9 @@ async def discover_sla_profile(
     node: LineageNode,
     graph: LineageGraph,
     adapter: Any,
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ) -> DiscoveryResult:
     """Build an SLA profile for *node* by querying the actual table data.
 
@@ -1201,6 +1383,11 @@ async def discover_sla_profile(
     - Volume: row count
     - Quality: per-column null rates
     - Schema: column structure and types
+
+    When ``pipeline_stack_id`` and ``organization_id`` are provided, low-
+    confidence picks (currently the volume timestamp column) trigger a
+    ``timestamp_choice`` ContextRequest creation in Next.js so the user can
+    disambiguate. Without them, the clarification path is a no-op.
     """
     ancestor = _find_warehouse_ancestor(node, graph)
     if ancestor is None:
@@ -1219,7 +1406,13 @@ async def discover_sla_profile(
 
     # Step 2: Compute dimensions from metadata (no table scans)
     freshness = _compute_freshness(adapter, table_fqn, metadata=metadata)
-    volume = _compute_volume(adapter, table_fqn, metadata=metadata)
+    volume = _compute_volume(
+        adapter,
+        table_fqn,
+        metadata=metadata,
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+    )
     schema = _compute_schema(adapter, table_fqn)
 
     # Step 3: Quality — single-pass null rate scan across all columns
@@ -1255,6 +1448,9 @@ async def discover_sla_profile(
 async def discover_sla_direct(
     table_fqn: str,
     adapter: Any,
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ) -> DiscoveryResult:
     """Discover SLA profile directly from a table FQN — no lineage graph needed.
 
@@ -1267,7 +1463,13 @@ async def discover_sla_direct(
     logger.info("[SLA Discovery] %s: metadata=%s", table_fqn, metadata)
 
     freshness = _compute_freshness(adapter, table_fqn, metadata=metadata)
-    volume = _compute_volume(adapter, table_fqn, metadata=metadata)
+    volume = _compute_volume(
+        adapter,
+        table_fqn,
+        metadata=metadata,
+        pipeline_stack_id=pipeline_stack_id,
+        organization_id=organization_id,
+    )
     schema = _compute_schema(adapter, table_fqn)
     quality = _compute_quality(adapter, table_fqn)
     uniqueness = _compute_uniqueness(adapter, table_fqn)
@@ -1301,6 +1503,9 @@ async def discover_sla_profiles_bulk(
     graph: LineageGraph,
     adapter_registry: Dict[str, Any],
     node_limit: int = 100,
+    *,
+    pipeline_stack_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ) -> List[DiscoveryResult]:
     """Discover SLA profiles for a collection of nodes in priority order."""
     _CRITICALITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -1323,7 +1528,13 @@ async def discover_sla_profiles_bulk(
             ))
             continue
 
-        result = await discover_sla_profile(node, graph, adapter)
+        result = await discover_sla_profile(
+            node,
+            graph,
+            adapter,
+            pipeline_stack_id=pipeline_stack_id,
+            organization_id=organization_id,
+        )
         results.append(result)
 
     return results

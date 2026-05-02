@@ -49,6 +49,8 @@ class DirectDiscoveryRequest(BaseModel):
     platform: str = Field(..., description="Warehouse platform: bigquery, snowflake, postgres, redshift")
     tableFqn: str = Field(..., description="Fully qualified table name (e.g. project.dataset.table)")
     credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    stackId: Optional[str] = Field(None, description="Pipeline stack id; required for clarification emits")
+    organizationId: Optional[str] = Field(None, description="Caller's organization id; paired with stackId for clarifications")
 
 
 class BulkDirectDiscoveryRequest(BaseModel):
@@ -56,6 +58,8 @@ class BulkDirectDiscoveryRequest(BaseModel):
     platform: str = Field(..., description="Warehouse platform")
     tableFqns: list[str] = Field(..., description="Table FQNs to discover", max_length=50)
     credentials: Dict[str, Any] = Field(..., description="Warehouse connection credentials")
+    stackId: Optional[str] = Field(None, description="Pipeline stack id; required for clarification emits")
+    organizationId: Optional[str] = Field(None, description="Caller's organization id; paired with stackId for clarifications")
 
 
 class BulkDiscoveryRequest(BaseModel):
@@ -205,7 +209,13 @@ async def discover_node_sla(
         )
 
     try:
-        result = await discover_sla_profile(node, store.graph, adapter)
+        result = await discover_sla_profile(
+            node,
+            store.graph,
+            adapter,
+            pipeline_stack_id=stack_id,
+            organization_id=org_id,
+        )
     except Exception as e:
         logger.error("[SLA Discovery] On-demand discovery failed for %s: %s", node.fqn, e)
         raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
@@ -325,7 +335,13 @@ async def discover_bulk_sla(
                 # run in thread pool to avoid blocking the event loop
                 result = await asyncio.to_thread(
                     asyncio.run,
-                    discover_sla_profile(node, store.graph, adapter),
+                    discover_sla_profile(
+                        node,
+                        store.graph,
+                        adapter,
+                        pipeline_stack_id=stack_id,
+                        organization_id=org_id,
+                    ),
                 )
                 return NodeDiscoveryResponse(
                     node_fqn=result.node_fqn,
@@ -402,7 +418,12 @@ async def discover_direct_sla(request: DirectDiscoveryRequest):
         raise HTTPException(status_code=503, detail=f"Failed to connect to {platform}: {e}")
 
     try:
-        result = await discover_sla_direct(request.tableFqn, adapter)
+        result = await discover_sla_direct(
+            request.tableFqn,
+            adapter,
+            pipeline_stack_id=request.stackId,
+            organization_id=request.organizationId,
+        )
     except Exception as e:
         logger.error("[SLA Discovery] Direct discovery failed for %s: %s", request.tableFqn, e)
         raise HTTPException(status_code=500, detail=f"Discovery failed: {e}")
@@ -466,7 +487,12 @@ async def discover_direct_bulk_sla(request: BulkDirectDiscoveryRequest):
                     skipped_reason=f"Failed to connect to {platform}",
                 )
             try:
-                result = await discover_sla_direct(table_fqn, adapter)
+                result = await discover_sla_direct(
+                    table_fqn,
+                    adapter,
+                    pipeline_stack_id=request.stackId,
+                    organization_id=request.organizationId,
+                )
                 return NodeDiscoveryResponse(
                     node_fqn=result.node_fqn,
                     warehouse_ancestor_fqn=result.warehouse_ancestor_fqn,
