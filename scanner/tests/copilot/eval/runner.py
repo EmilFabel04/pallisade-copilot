@@ -15,10 +15,18 @@ Two modes:
 
 CLI:
     # Static (free)
-    python -m scanner.tests.copilot.eval.runner
+    python -m tests.copilot.eval.runner
 
-    # Live (real API calls)
-    python -m scanner.tests.copilot.eval.runner --live
+    # Live (real API calls — costs ~$0.50 per full corpus run)
+    OPENAI_API_KEY=sk-...  python -m tests.copilot.eval.runner --live
+    # or
+    ANTHROPIC_API_KEY=...  python -m tests.copilot.eval.runner --live
+
+Live mode constructs a synthetic ``CopilotContext`` (one BigQuery
+integration + a tiny stubbed schema for the ``orders`` and ``events``
+tables) and patches ``ToolExecutor.execute`` so tool calls return
+canned successes — we measure whether the LLM picks the right tool
+with the right SQL shape, not whether a real warehouse responds.
 
 Output: per-case pass/fail with which expectations failed, plus
 aggregate pass rate broken down by intent.
@@ -27,11 +35,14 @@ aggregate pass rate broken down by intent.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
+from unittest.mock import patch
 
 import yaml
 
@@ -295,14 +306,242 @@ def summarize(results: List[CaseResult]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _build_live_driver():  # pragma: no cover — wired in when the user opts in
-    """Factory for the real-LLM driver. Lazily imports the copilot stack
-    so that a static run doesn't pull in heavy modules (or env)."""
-    raise NotImplementedError(
-        "Live mode is not wired up yet — connect this to the copilot "
-        "chat path (e.g. CopilotLLM.chat or MAASOrchestrator.chat_stream) "
-        "and have it return {tool_calls, sql, response_text}."
+# ---------------------------------------------------------------------------
+# Live driver — wires the real copilot stack into the LiveDriver contract.
+#
+# Design notes:
+#
+# * **Synthetic context, real LLM.** Cases run against a fabricated
+#   ``CopilotContext`` with one BigQuery integration and a tiny stubbed
+#   schema (orders + events). This is enough surface for the corpus to
+#   exercise tool selection and SQL shape without needing a real
+#   warehouse connection. The intent classifier still runs on the raw
+#   query so the orchestrator's routing matches production.
+#
+# * **Stub tool executor.** ``ToolExecutor.execute`` is patched for the
+#   duration of each case so tool calls return canned successes.
+#   We care that the LLM *chose* the right tool with the right shape of
+#   arguments — not whether a real warehouse responds. Without this stub
+#   most cases would fail on the first ``query_warehouse`` call.
+#
+# * **Stream walker.** Tool calls and SQL come from
+#   ``tool_call_start`` events (which fire BEFORE execution, so the stub
+#   doesn't affect them). Response text comes from ``text_delta``.
+#
+# Cost: ~$0.50 per full corpus run with a frontier OpenAI / Anthropic
+# model. The factory checks for an API key up front so a missing key
+# fails fast instead of crashing deep in the SDK.
+# ---------------------------------------------------------------------------
+
+
+# Tools whose first argument named ``sql`` (or that contain a SQL string in
+# their args) should populate the extractor's ``sql`` field. Listed
+# explicitly so tool-name typos in the corpus don't silently match.
+_SQL_BEARING_TOOLS = {"query_warehouse"}
+
+
+def _extract_sql_from_args(tool_name: str, args: Dict[str, Any]) -> Optional[str]:
+    """Pull a SQL string out of a tool call's arguments, if any.
+
+    Only ``query_warehouse``-shaped tools are considered — see
+    ``_SQL_BEARING_TOOLS``. We don't sniff every tool's args for "looks
+    like SQL" because false positives (e.g. a description field that
+    contains the word SELECT) would corrupt the eval signal.
+    """
+    if tool_name not in _SQL_BEARING_TOOLS:
+        return None
+    sql = args.get("sql") if isinstance(args, dict) else None
+    return sql if isinstance(sql, str) and sql.strip() else None
+
+
+async def _extract_from_stream(events: AsyncIterator[Any]) -> Dict[str, Any]:
+    """Walk a StreamEvent async iterator and aggregate the eval result.
+
+    Returns the dict shape the LiveDriver contract requires:
+    ``{"tool_calls": [...], "sql": "...", "response_text": "..."}``.
+
+    Captures the FIRST SQL-bearing tool call (subsequent ones overwrite
+    only if the first didn't carry SQL) — corpus cases pin one canonical
+    SQL shape per query, so the first call is the meaningful one.
+    """
+    tool_calls: List[str] = []
+    sql: Optional[str] = None
+    text_parts: List[str] = []
+
+    async for event in events:
+        et = event.event_type
+        data = event.data or {}
+        if et == "tool_call_start":
+            name = data.get("tool_name") or ""
+            tool_calls.append(name)
+            if sql is None:
+                candidate = _extract_sql_from_args(name, data.get("arguments") or {})
+                if candidate:
+                    sql = candidate
+        elif et == "text_delta":
+            chunk = data.get("content") or ""
+            if chunk:
+                text_parts.append(chunk)
+        elif et == "error":
+            # Errors mid-stream don't abort the eval — we still return
+            # whatever we collected so the runner can report a partial
+            # result rather than a hard failure with no diagnostic.
+            text_parts.append(f"\n[stream error: {data.get('message', '')}]")
+
+    return {
+        "tool_calls": tool_calls,
+        "sql": sql,
+        "response_text": "".join(text_parts),
+    }
+
+
+def _build_synthetic_context(query: str):
+    """Construct a ``CopilotContext`` for a single eval query.
+
+    Pins one BigQuery integration with a tiny stubbed schema so the
+    orchestrator has somewhere to route SQL-bearing intents. Intent is
+    classified live (matches production routing) and the mode is mapped
+    via ``intent_to_mode``.
+    """
+    from copilot.context_builder import (
+        CopilotContext,
+        IntegrationInfo,
+        IntegrationLayer,
+        TableSchema,
     )
+
+    classified = classify_intent(query)
+    mode = intent_to_mode(classified)
+
+    integration = IntegrationInfo(
+        id="eval_bq",
+        name="Eval BigQuery",
+        type="BIGQUERY",
+        layer=IntegrationLayer.WAREHOUSE,
+        status="ACTIVE",
+        config={"project_id": "eval-project", "datasets": ["raw"]},
+    )
+
+    schema = {
+        "BIGQUERY:raw": [
+            TableSchema(
+                name="orders",
+                dataset="raw",
+                project="eval-project",
+                warehouse_type="BIGQUERY",
+                columns=[
+                    {"name": "id", "type": "STRING"},
+                    {"name": "customer_id", "type": "STRING"},
+                    {"name": "region", "type": "STRING"},
+                    {"name": "amount", "type": "NUMERIC"},
+                    {"name": "created_at", "type": "TIMESTAMP"},
+                ],
+                row_count=10000,
+            ),
+            TableSchema(
+                name="events",
+                dataset="raw",
+                project="eval-project",
+                warehouse_type="BIGQUERY",
+                columns=[
+                    {"name": "event_id", "type": "STRING"},
+                    {"name": "event_type", "type": "STRING"},
+                    {"name": "user_id", "type": "STRING"},
+                    {"name": "ts", "type": "TIMESTAMP"},
+                ],
+                row_count=500000,
+            ),
+        ],
+    }
+
+    return CopilotContext(
+        org_id="_eval",
+        query=query,
+        integrations=[integration],
+        integration_types={"BIGQUERY"},
+        warehouse_schema=schema,
+        mode=mode,
+        intent_result=classified,
+    )
+
+
+def _make_stub_executor_execute():
+    """Build the coroutine that replaces ``ToolExecutor.execute``.
+
+    Returns canned ``ToolResult.success=True`` payloads keyed by tool
+    name. Anything not specifically mocked returns an empty success so
+    the LLM keeps moving instead of branching into error narration.
+    """
+    from copilot.tools.base import ToolResult
+
+    canned: Dict[str, Any] = {
+        "query_warehouse": {"rows": [{"count": 42}], "row_count": 1},
+        "list_tables": {"tables": ["raw.orders", "raw.events"]},
+        "get_table_stats": {"row_count": 10000, "size_bytes": 1024 * 1024},
+        "get_table_stats_batch": {
+            "stats": [
+                {"table": "raw.orders", "row_count": 10000},
+                {"table": "raw.events", "row_count": 500000},
+            ]
+        },
+        "search_knowledge_base": {"results": []},
+    }
+
+    async def _stub_execute(self, tool_name: str, arguments: Dict[str, Any]):
+        data = canned.get(tool_name, {"ok": True})
+        return ToolResult(success=True, data=data)
+
+    return _stub_execute
+
+
+def _check_live_credentials() -> None:
+    """Fail fast with a useful message if no LLM key is configured.
+
+    Without this, the orchestrator falls back to a path that emits an
+    ``error`` stream event and the eval reports cryptic "no SQL" /
+    "no tool calls" failures across every case.
+    """
+    if not (os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")):
+        raise RuntimeError(
+            "Live eval requires OPENAI_API_KEY or ANTHROPIC_API_KEY in the "
+            "environment. None found. Set one and retry, or omit --live to "
+            "run static checks only."
+        )
+
+
+async def _run_query_live(query: str) -> Dict[str, Any]:
+    """Execute one eval query against the real copilot stack."""
+    from copilot.llm import Message
+    from copilot.maas.orchestrator import MAASOrchestrator
+
+    context = _build_synthetic_context(query)
+    messages = [Message(role="user", content=query)]
+    orchestrator = MAASOrchestrator()
+
+    stub_execute = _make_stub_executor_execute()
+    with patch(
+        "copilot.tool_executor.ToolExecutor.execute",
+        new=stub_execute,
+    ):
+        stream = orchestrator.run_stream(messages, context)
+        return await _extract_from_stream(stream)
+
+
+def _build_live_driver() -> LiveDriver:
+    """Factory for the real-LLM driver.
+
+    Lazy imports keep static runs from paying the heavy-module cost.
+    The returned callable is sync so it slots into the existing
+    ``LiveDriver`` contract; internally it drives ``asyncio.run`` once
+    per case (each case gets its own event loop, matching how a
+    request-per-call HTTP stack would behave).
+    """
+    _check_live_credentials()
+
+    def driver(query: str) -> Dict[str, Any]:
+        return asyncio.run(_run_query_live(query))
+
+    return driver
 
 
 def main() -> int:

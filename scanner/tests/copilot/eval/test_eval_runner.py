@@ -1,18 +1,24 @@
 """Tests for the eval runner.
 
 These pin the runner's behavior against the corpus without making any
-real LLM calls. They serve two purposes:
+real LLM calls. They serve three purposes:
 
 1. **Regression guard**: every static expectation in ``corpus.yaml``
    actually passes today. If a future intent-classifier change causes
    a corpus case to misclassify, the unit suite catches it.
 
-2. **Driver contract**: when item 8 Phase B (live driver) lands, it
-   only has to satisfy the contract these tests pin (return a dict
-   with ``tool_calls``, ``sql``, ``response_text``).
+2. **Driver contract**: live-mode drivers only have to satisfy the
+   contract these tests pin (return a dict with ``tool_calls``,
+   ``sql``, ``response_text``).
+
+3. **Extractor coverage**: the StreamEvent → dict translator at the
+   heart of the live driver is unit-tested with synthetic events so we
+   never have to spend tokens to verify it.
 """
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -196,8 +202,126 @@ class TestLiveDriverDefaultsOff:
         names = {c.name for c in results[0].checks}
         assert names == {"intent", "mode"}
 
-    def test_build_live_driver_is_explicit(self):
-        """The factory raises until a real driver is wired up — it
-        must never silently no-op."""
-        with pytest.raises(NotImplementedError):
-            runner._build_live_driver()
+    def test_build_live_driver_requires_api_key(self):
+        """The factory must fail loudly if no LLM credentials are
+        configured. A silent no-op would produce a corpus full of
+        empty results that look like prompt regressions."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OPENAI_API_KEY", None)
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            with pytest.raises(RuntimeError, match="OPENAI_API_KEY|ANTHROPIC_API_KEY"):
+                runner._build_live_driver()
+
+    def test_build_live_driver_returns_callable_when_credentials_present(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False):
+            driver = runner._build_live_driver()
+            assert callable(driver)
+
+
+# ---------------------------------------------------------------------------
+# Stream-event extractor (live-driver internal)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEvent:
+    """Minimal StreamEvent stand-in for extractor tests."""
+
+    def __init__(self, event_type: str, data: dict):
+        self.event_type = event_type
+        self.data = data
+
+
+async def _async_iter(events):
+    for e in events:
+        yield e
+
+
+class TestStreamExtractor:
+    @pytest.mark.asyncio
+    async def test_extracts_tool_names_in_order(self):
+        events = [
+            _FakeEvent("tool_call_start", {"tool_name": "list_tables", "arguments": {}}),
+            _FakeEvent("tool_call_start", {"tool_name": "query_warehouse", "arguments": {"sql": "SELECT 1"}}),
+            _FakeEvent("text_delta", {"content": "done."}),
+        ]
+        result = await runner._extract_from_stream(_async_iter(events))
+        assert result["tool_calls"] == ["list_tables", "query_warehouse"]
+
+    @pytest.mark.asyncio
+    async def test_captures_sql_only_from_sql_bearing_tools(self):
+        """A non-SQL tool whose args happen to contain the word SELECT
+        must not pollute the SQL slot — false positives would corrupt
+        the eval signal on cases that test for SQL-pattern matches."""
+        events = [
+            _FakeEvent("tool_call_start", {
+                "tool_name": "search_knowledge_base",
+                "arguments": {"query": "SELECT all matching docs"},
+            }),
+            _FakeEvent("tool_call_start", {
+                "tool_name": "query_warehouse",
+                "arguments": {"sql": "SELECT count(*) FROM orders"},
+            }),
+        ]
+        result = await runner._extract_from_stream(_async_iter(events))
+        assert result["sql"] == "SELECT count(*) FROM orders"
+
+    @pytest.mark.asyncio
+    async def test_concatenates_text_deltas(self):
+        events = [
+            _FakeEvent("text_delta", {"content": "There are "}),
+            _FakeEvent("text_delta", {"content": "42 "}),
+            _FakeEvent("text_delta", {"content": "orders."}),
+        ]
+        result = await runner._extract_from_stream(_async_iter(events))
+        assert result["response_text"] == "There are 42 orders."
+
+    @pytest.mark.asyncio
+    async def test_first_sql_wins(self):
+        """Subsequent SQL calls don't overwrite the first — corpus
+        cases pin one canonical query shape per case."""
+        events = [
+            _FakeEvent("tool_call_start", {
+                "tool_name": "query_warehouse",
+                "arguments": {"sql": "SELECT count(*) FROM orders"},
+            }),
+            _FakeEvent("tool_call_start", {
+                "tool_name": "query_warehouse",
+                "arguments": {"sql": "SELECT 99"},
+            }),
+        ]
+        result = await runner._extract_from_stream(_async_iter(events))
+        assert result["sql"] == "SELECT count(*) FROM orders"
+
+    @pytest.mark.asyncio
+    async def test_error_event_does_not_abort(self):
+        """An error mid-stream should leave us with the partial result
+        rather than a hard crash — the runner needs *something* to
+        report so the failing case is diagnosable."""
+        events = [
+            _FakeEvent("tool_call_start", {"tool_name": "query_warehouse", "arguments": {"sql": "SELECT 1"}}),
+            _FakeEvent("error", {"message": "provider timeout"}),
+        ]
+        result = await runner._extract_from_stream(_async_iter(events))
+        assert result["tool_calls"] == ["query_warehouse"]
+        assert result["sql"] == "SELECT 1"
+        assert "provider timeout" in result["response_text"]
+
+
+# ---------------------------------------------------------------------------
+# Synthetic context
+# ---------------------------------------------------------------------------
+
+
+class TestSyntheticContext:
+    def test_classifies_intent_and_maps_mode(self):
+        ctx = runner._build_synthetic_context("how many orders are there?")
+        assert ctx.intent_result is not None
+        assert ctx.intent_result.primary.intent.name == "INFO"
+        assert ctx.mode == "ask"
+
+    def test_provides_warehouse_and_schema(self):
+        ctx = runner._build_synthetic_context("count the orders")
+        assert ctx.has_warehouse()
+        assert "BIGQUERY:raw" in ctx.warehouse_schema
+        table_names = {t.name for t in ctx.warehouse_schema["BIGQUERY:raw"]}
+        assert {"orders", "events"}.issubset(table_names)
