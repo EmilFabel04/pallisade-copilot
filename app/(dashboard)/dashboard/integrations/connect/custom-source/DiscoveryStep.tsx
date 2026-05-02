@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Plus, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Trash2, Plus, X, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 
 import type { DatasetSpec, WizardState } from './CustomSourceWizard';
 import { Field } from './CustomSourceWizard';
@@ -103,6 +103,9 @@ export function DiscoveryStep({
   const [rows, setRows] = useState<EditableCandidate[]>([]);
   const [showManualForm, setShowManualForm] = useState(false);
   const [manualEndpoint, setManualEndpoint] = useState('');
+  // Warehouse hint chips — user-typed FQNs like "snowflake.raw.water_meters"
+  const [warehouseHints, setWarehouseHints] = useState<string[]>([]);
+  const [hintInput, setHintInput] = useState('');
   // hasFetched guards the auto-run on mount. Because CustomSourceWizard renders
   // steps with a `step === N ? <X /> : null` pattern, this component unmounts when
   // the user navigates away and re-mounts fresh on return — no reset needed.
@@ -114,7 +117,7 @@ export function DiscoveryStep({
     'focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] ' +
     'transition-colors text-sm';
 
-  async function runDiscover() {
+  async function runDiscover(hints: string[] = warehouseHints) {
     setLoading(true);
     setError(null);
     try {
@@ -132,7 +135,7 @@ export function DiscoveryStep({
             secret_ref: state.auth.secret,
           },
           ingestion_hints: [],
-          warehouse_hints: [],
+          warehouse_hints: hints,
         }),
       });
       if (!resp.ok) {
@@ -161,9 +164,25 @@ export function DiscoveryStep({
   useEffect(() => {
     if (hasFetched.current) return;
     hasFetched.current = true;
-    runDiscover();
+    runDiscover([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Add a warehouse hint chip and re-run discovery
+  function addWarehouseHint(raw: string) {
+    const fqn = raw.trim();
+    if (!fqn || warehouseHints.includes(fqn)) return;
+    const next = [...warehouseHints, fqn];
+    setWarehouseHints(next);
+    setHintInput('');
+    runDiscover(next);
+  }
+
+  function removeWarehouseHint(fqn: string) {
+    const next = warehouseHints.filter((h) => h !== fqn);
+    setWarehouseHints(next);
+    runDiscover(next);
+  }
 
   const updateRow = (index: number, patch: Partial<EditableCandidate>) => {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
@@ -213,6 +232,70 @@ export function DiscoveryStep({
         </p>
       </div>
 
+      {/* Warehouse landing table hints */}
+      <div className="space-y-1.5">
+        <label className="block text-xs font-medium text-[var(--text-tertiary)]">
+          Warehouse landing tables{' '}
+          <span className="text-[var(--text-faint)] font-normal">(optional)</span>
+        </label>
+        <p className="text-xs text-[var(--text-faint)]">
+          Tell Pallisade which warehouse tables this source lands in. Enter FQNs like{' '}
+          <code className="font-mono">snowflake.raw.water_meters</code> — one per line or
+          press Enter after each. Pallisade will fetch column schemas to pre-fill the
+          &quot;From your warehouse&quot; section below.
+        </p>
+        {/* Chips */}
+        {warehouseHints.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {warehouseHints.map((fqn) => (
+              <span
+                key={fqn}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full
+                           bg-[var(--surface-raised)] border border-[var(--border-medium)]
+                           text-xs text-[var(--text)] font-mono"
+              >
+                {fqn}
+                <button
+                  type="button"
+                  onClick={() => removeWarehouseHint(fqn)}
+                  aria-label={`Remove ${fqn}`}
+                  className="ml-0.5 text-[var(--text-faint)] hover:text-red-400 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        {/* Input */}
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={hintInput}
+            onChange={(e) => setHintInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); addWarehouseHint(hintInput); }
+            }}
+            placeholder="warehouse.schema.table"
+            className={
+              'flex-1 px-3 py-2 bg-[var(--overlay-bg)] border border-[var(--border-medium)] rounded-lg ' +
+              'text-[var(--text)] placeholder-[var(--text-faint)] font-mono text-xs ' +
+              'focus:outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)] ' +
+              'transition-colors'
+            }
+          />
+          <button
+            type="button"
+            onClick={() => addWarehouseHint(hintInput)}
+            disabled={!hintInput.trim()}
+            className="px-3 py-2 rounded-lg bg-[var(--accent)] text-white text-xs font-medium
+                       hover:bg-[var(--accent-2)] disabled:opacity-50 transition-colors"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+
       {loading && (
         <div className="flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
           <Loader2 className="w-4 h-4 animate-spin" />
@@ -225,7 +308,7 @@ export function DiscoveryStep({
           <p className="text-sm text-red-400">{error}</p>
           <button
             type="button"
-            onClick={runDiscover}
+            onClick={() => runDiscover(warehouseHints)}
             className="text-xs text-[var(--accent-2)] underline"
           >
             Retry
@@ -249,7 +332,7 @@ export function DiscoveryStep({
           {/* Path: warehouse */}
           <DiscoverySection
             title="From your warehouse"
-            subtitle="Tables that appear to receive data from this source. (Available in a future update.)"
+            subtitle="Column schemas from the landing tables you specified above."
             rows={warehouseRows}
             allRows={rows}
             onUpdate={updateRow}

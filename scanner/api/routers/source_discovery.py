@@ -49,6 +49,9 @@ class DiscoverRequest(BaseModel):
     auth: AuthBody
     ingestion_hints: Optional[List[str]] = None
     warehouse_hints: Optional[List[str]] = None
+    # Optional pipeline stack ID so WarehouseDiscoverer can look up the right
+    # cached adapter config from _engine_tool_configs_map.
+    stack_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +59,10 @@ class DiscoverRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _orchestrator() -> SourceDiscoveryOrchestrator:
+def _orchestrator(org_id: Optional[str] = None, stack_id: Optional[str] = None) -> SourceDiscoveryOrchestrator:
     return SourceDiscoveryOrchestrator(
         probe_discoverer=SourceProbeDiscoverer(),
-        warehouse_discoverer=WarehouseDiscoverer(),
+        warehouse_discoverer=WarehouseDiscoverer(org_id=org_id, stack_id=stack_id),
         ingestion_discoverer=IngestionDiscoverer(),
     )
 
@@ -94,8 +97,12 @@ async def discover(
 
     # auth.secret_ref is intentionally excluded from the cache key — probe-discovery
     # results reflect the public API shape and are safe to share across callers that
-    # hit the same (base_url, endpoint, hints) tuple regardless of credential.
+    # hit the same (base_url, endpoint, hints, org, stack) tuple regardless of credential.
+    # org_id + stack_id are included so warehouse schema results are not shared
+    # across tenants or pipeline stacks.
     cache_key = (
+        principal.organization_id,
+        body.stack_id,
         body.base_url,
         body.endpoint,
         tuple(sorted(body.ingestion_hints or [])),
@@ -113,7 +120,10 @@ async def discover(
         "secret": body.auth.secret_ref,  # TODO: resolve via secret store if helper exists
     }
 
-    result = await _orchestrator().discover(
+    result = await _orchestrator(
+        org_id=principal.organization_id,
+        stack_id=body.stack_id,
+    ).discover(
         base_url=body.base_url,
         endpoint=body.endpoint,
         auth=runtime_auth,

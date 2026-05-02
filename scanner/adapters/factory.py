@@ -246,11 +246,74 @@ INTEGRATION_TYPE_MAP = {
 def get_adapter_type_from_integration(integration_type: str) -> Optional[str]:
     """
     Map integration type to adapter type.
-    
+
     Args:
         integration_type: Integration type string (e.g., 'SNOWFLAKE')
-        
+
     Returns:
         Adapter type string or None if not found
     """
     return INTEGRATION_TYPE_MAP.get(integration_type.upper())
+
+
+def build_adapter_from_fqn(
+    fqn: str,
+    org_id: Optional[str] = None,
+    stack_id: Optional[str] = None,
+) -> "DatabaseAdapter":
+    """Resolve an FQN like 'snowflake.raw.water_meters' to a configured adapter instance.
+
+    Uses the pipeline-profile-scoped integration cache populated by the lineage
+    investigation pipeline (``_engine_tool_configs_map`` in
+    ``scanner/api/routers/_lineage_cache.py``).
+
+    Args:
+        fqn: Fully-qualified table name, first segment is the warehouse type
+             (e.g. ``"snowflake.raw.water_meters"``).
+        org_id: Organisation ID from the acting principal. When provided together
+                with ``stack_id``, the cache lookup is scoped to that specific
+                tenant. When omitted, all cached configs are searched (test / fallback).
+        stack_id: Pipeline stack ID (optional, defaults to ``"default"`` in the cache).
+
+    Returns:
+        A connected ``DatabaseAdapter`` instance.
+
+    Raises:
+        ValueError: If the FQN is malformed, no matching adapter config is found,
+                    or the warehouse type is unsupported.
+    """
+    parts = fqn.split(".")
+    if len(parts) < 2:
+        raise ValueError(f"invalid fqn (expected at least 2 dot-separated segments): {fqn!r}")
+    warehouse_type = parts[0].lower()
+
+    from scanner.api.routers import _lineage_cache
+
+    # --- Resolve config ---
+    cfg: Optional[Dict[str, Any]] = None
+
+    if org_id is not None:
+        # Scoped lookup — preferred path in production request context.
+        tool_configs = _lineage_cache.get_tool_configs(org_id, stack_id)
+        cfg = tool_configs.get(warehouse_type)
+    else:
+        # Fallback: search all cached entries (used in tests / CLI contexts where
+        # the principal is not threaded through to the discoverer).
+        for entry in _lineage_cache._engine_tool_configs_map.values():
+            candidate = entry.get(warehouse_type)
+            if candidate:
+                cfg = candidate
+                break
+
+    if cfg is None:
+        raise ValueError(
+            f"no configured adapter for warehouse type '{warehouse_type}'. "
+            "Re-run the pipeline investigation to populate the connection config cache."
+        )
+
+    # --- Instantiate adapter ---
+    # All adapters take a single config dict and expect field 'user' (not 'username').
+    # The frontend stores 'username'; the mapping is done at the Next.js proxy layer,
+    # so by the time configs reach _lineage_cache they should already use 'user'.
+    adapter = AdapterFactory.get_adapter(warehouse_type, cfg, auto_connect=True)
+    return adapter

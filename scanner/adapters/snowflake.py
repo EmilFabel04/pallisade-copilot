@@ -316,12 +316,24 @@ class SnowflakeAdapter(DatabaseAdapter):
             for row in result
         ]
     
+    def get_table_schema(self, fqn: str) -> List[Dict[str, Any]]:
+        """Return column metadata for *fqn* as a list of plain dicts.
+
+        Each dict contains ``column_name``, ``data_type``, and ``is_nullable``
+        (bool). This is the canonical interface used by :class:`WarehouseDiscoverer`.
+        """
+        cols = self.get_columns(fqn)
+        return [
+            {"column_name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
+            for c in cols
+        ]
+
     # =========================================================================
     # COLUMN STATISTICS
     # =========================================================================
-    
-    def get_column_stats(self, 
-                         table: str, 
+
+    def get_column_stats(self,
+                         table: str,
                          columns: Optional[List[str]] = None,
                          sample_size: Optional[int] = None) -> List[ColumnStats]:
         """Get detailed column statistics from Snowflake."""
