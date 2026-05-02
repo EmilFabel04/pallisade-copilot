@@ -15,6 +15,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { Check, Loader2, XCircle, Clock } from 'lucide-react';
 
+import { usePipeline } from '@/contexts/PipelineContext';
 import { DiscoveryStep } from './DiscoveryStep';
 
 type Step = 1 | 2 | 3 | 4 | 5;
@@ -76,6 +77,7 @@ const STEP_LABELS: ReadonlyArray<{ step: Step; label: string }> = [
 ];
 
 export default function CustomSourceWizard() {
+  const { selectedPipelineId } = usePipeline();
   const [step, setStep] = useState<Step>(1);
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
   const [saving, setSaving] = useState(false);
@@ -112,10 +114,11 @@ export default function CustomSourceWizard() {
         auth: {
           kind: currentState.auth.kind,
           header_name: currentState.auth.headerName ?? null,
+          username: currentState.auth.username ?? null,
           secret_ref: currentState.auth.secret,
         },
         schedule: currentState.schedule,
-        stack_id: null,
+        stack_id: selectedPipelineId,
         datasets: currentState.datasets.map((d) => ({
           id: d.id,
           endpoint: d.endpoint,

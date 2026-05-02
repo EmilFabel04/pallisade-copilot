@@ -15,7 +15,7 @@ export type PipelineNodeStatus = 'PENDING' | 'CONNECTED' | 'TESTING' | 'ERROR' |
 
 // Layer colors for visual distinction
 export const LAYER_COLORS: Record<PipelineLayer, string> = {
-  SOURCE: '#64748B',         // Slate
+  SOURCE: '#334155',         // Slate-700
   INGESTION: '#10B981',      // Emerald
   TRANSFORMATION: '#F59E0B', // Amber
   WAREHOUSE: '#6366F1',      // Indigo

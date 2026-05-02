@@ -22,7 +22,13 @@ class StitchDriver(IntegrationDriver):
         return ConfigValidation(valid=not errors, errors=errors)
 
     def test_connection(self, config: Dict[str, Any]) -> ConnectionResult:
-        return ConnectionResult(ok=False, message="Stitch connection test not yet implemented")
+        from scanner.integrations.stitch import StitchClient
+        try:
+            with StitchClient(api_key=config.get("api_key") or config.get("apiKey", "")) as client:
+                ok, message = client.test_connection()
+            return ConnectionResult(ok=ok, message=message)
+        except Exception as e:
+            return ConnectionResult(ok=False, message=f"Stitch test failed: {e}")
 
     def capabilities(self) -> DriverCapabilities:
         return DriverCapabilities(

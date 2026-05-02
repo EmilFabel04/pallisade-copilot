@@ -12,8 +12,8 @@ category-grouped picker, and the new wizard's discovery + verify flow.
 - **Frontend** (`NEXT_PUBLIC_FEATURE_SOURCES_CATEGORY`):
   - `app/(dashboard)/dashboard/integrations/connect/page.tsx` — connect-page picker
   - `app/(dashboard)/dashboard/integrations/connect/custom-source/page.tsx` — wizard route
-  - Pipeline page renders SOURCE-layer tiles unconditionally (the layer is part of
-    the static taxonomy); the gate is on the wizard route + connect picker.
+  - `app/(dashboard)/dashboard/pipeline/page.tsx` — SOURCE-layer tiles in the connector catalog
+  - All four surfaces (pipeline page, connect page, driver registration, probe scheduler) gate on the flag.
 - **Backend** (`FEATURE_SOURCES_CATEGORY`):
   - `scanner/drivers/loader.py` — driver registration
   - `scanner/scheduler/probe_runner.py` — scheduled probe execution

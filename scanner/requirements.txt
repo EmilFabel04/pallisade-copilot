@@ -8,7 +8,7 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.2
 python-multipart==0.0.6
 slowapi>=0.1.9  # Rate limiting
-sse-starlette>=1.6.0  # Server-Sent Events for streaming SSE endpoints
+sse-starlette>=1.6,<3  # Server-Sent Events for streaming SSE endpoints
 
 # Database connectors
 snowflake-connector-python>=3.5.0
@@ -48,7 +48,7 @@ anthropic>=0.39.0           # Claude for co-pilot (alternative)
 sqlglot==20.11.0
 
 # Security and utilities
-cachetools>=5.3.0
+cachetools>=5.3,<6
 cryptography==41.0.7
 python-dotenv==1.0.0
 

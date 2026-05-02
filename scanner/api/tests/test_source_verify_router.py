@@ -235,3 +235,25 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
         f"source_verify must NEVER call _get_connection — it must not persist Integration rows, "
         f"but _get_connection was called {mock_get_conn.call_count} time(s)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 3: empty datasets → 422
+# ---------------------------------------------------------------------------
+
+
+def test_verify_empty_datasets_returns_422():
+    """POST with datasets=[] must be rejected with HTTP 422."""
+    body = _verify_body()
+    body["datasets"] = []
+
+    client = _create_test_client()
+    resp = client.post(
+        "/api/v1/integrations/source/verify",
+        json=body,
+        headers={"Accept": "text/event-stream"},
+    )
+
+    assert resp.status_code == 422, resp.text
+    detail = resp.json().get("detail", "")
+    assert "datasets" in detail.lower() or "non-empty" in detail.lower()

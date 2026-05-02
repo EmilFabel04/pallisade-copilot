@@ -133,6 +133,7 @@ export function DiscoveryStep({
           auth: {
             kind: state.auth.kind,
             header_name: state.auth.headerName ?? null,
+            username: state.auth.username ?? null,
             // secret is passed as secret_ref — the backend uses it directly for now
             // (Task 6 will wire proper secret resolution)
             secret_ref: state.auth.secret,
@@ -169,11 +170,14 @@ export function DiscoveryStep({
     }
   }
 
-  // Run discovery automatically on mount
+  // Run discovery automatically on mount — only when baseUrl is valid.
+  // Guards against deep-link or refresh-restored partial state where baseUrl
+  // may be empty, which would cause the backend to reject with HTTP 400.
   useEffect(() => {
-    if (hasFetched.current) return;
-    hasFetched.current = true;
-    runDiscover([]);
+    if (!hasFetched.current && state.baseUrl?.startsWith('https://')) {
+      hasFetched.current = true;
+      runDiscover([]);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -304,6 +308,12 @@ export function DiscoveryStep({
           </button>
         </div>
       </div>
+
+      {!state.baseUrl?.startsWith('https://') && !loading && !result && (
+        <div className="text-sm text-[var(--text-faint)] italic">
+          Connection not configured. Please go back and enter a valid HTTPS base URL.
+        </div>
+      )}
 
       {loading && (
         <div className="flex items-center gap-2 text-sm text-[var(--text-tertiary)]">

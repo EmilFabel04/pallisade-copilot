@@ -40,6 +40,7 @@ _CACHE: TTLCache = TTLCache(maxsize=512, ttl=60)
 class AuthBody(BaseModel):
     kind: str
     header_name: Optional[str] = None
+    username: Optional[str] = None
     secret_ref: str
 
 
@@ -117,6 +118,7 @@ async def discover(
     runtime_auth = {
         "kind": body.auth.kind,
         "header_name": body.auth.header_name,
+        "username": body.auth.username,
         "secret": body.auth.secret_ref,  # TODO: resolve via secret store if helper exists
     }
 

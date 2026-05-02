@@ -7,19 +7,31 @@ Covers:
 2. Unknown integration_type → 404
 """
 
+import os
+
 import responses
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+# Ensure CUSTOM_SOURCE driver is registered regardless of the environment
+# the tests run in (CI typically doesn't set FEATURE_SOURCES_CATEGORY).
+os.environ.setdefault("FEATURE_SOURCES_CATEGORY", "true")
 
 
 def _create_test_client() -> TestClient:
     """Build a FastAPI app with the drivers router mounted at /api/v1.
 
     Drivers are loaded eagerly so the registry is populated.
+    The registry is reset before each call so the FEATURE_SOURCES_CATEGORY
+    env var (set at module level above) takes effect even when the module was
+    imported by an earlier test run that had the flag unset.
     """
-    from scanner.drivers.loader import register_all_drivers
+    from scanner.drivers.loader import register_all_drivers, reset_loaded_flag
+    from scanner.drivers.registry import DriverRegistry
     from scanner.api.routers.drivers import router
 
+    DriverRegistry.reset()
+    reset_loaded_flag()
     register_all_drivers()
 
     app = FastAPI()

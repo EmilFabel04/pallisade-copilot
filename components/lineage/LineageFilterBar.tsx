@@ -23,7 +23,7 @@ interface LineageFilterBarProps {
   activeTab?: 'data' | 'control-plane' | 'lane-overview';
 }
 
-const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
+const LAYER_ORDER: PipelineLayer[] = ['SOURCE', 'INGESTION', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'STORAGE'];
 
 const LAYER_LABELS: Record<PipelineLayer, string> = {
   SOURCE: 'Sources',

@@ -567,6 +567,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Type and name are required' }, { status: 400 });
     }
 
+    if (type === 'CUSTOM_SOURCE' &&
+        process.env.NEXT_PUBLIC_FEATURE_SOURCES_CATEGORY !== 'true') {
+      return NextResponse.json({ error: 'CUSTOM_SOURCE not enabled' }, { status: 404 });
+    }
+
     // Encrypt credentials before storing
     const encryptedCredentials = credentials ? encrypt(JSON.stringify(credentials)) : null;
 

@@ -170,8 +170,9 @@ export default function PipelinePage() {
 
   // ─── Derived data ─────────────────────────────────────────
   const connectorCatalog = useMemo<ConnectorCard[]>(() => {
+    const sourcesEnabled = process.env.NEXT_PUBLIC_FEATURE_SOURCES_CATEGORY === 'true';
     const coreConnectors: ConnectorCard[] = [
-      ...TOOLS.SOURCE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'SOURCE' as const, mode: 'pipeline' as const, layer: t.layer, status: t.status })),
+      ...(sourcesEnabled ? TOOLS.SOURCE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'SOURCE' as const, mode: 'pipeline' as const, layer: t.layer, status: t.status })) : []),
       ...TOOLS.WAREHOUSE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['dbt_cloud', 'dbt_core'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['airflow', 'dagster', 'prefect'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),

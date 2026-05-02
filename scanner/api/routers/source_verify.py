@@ -15,7 +15,7 @@ import json
 import logging
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -35,6 +35,7 @@ router = APIRouter(prefix="/api/v1/integrations/source", tags=["source-verify"])
 class AuthBody(BaseModel):
     kind: str
     header_name: Optional[str] = None
+    username: Optional[str] = None
     secret_ref: str
 
 
@@ -45,7 +46,6 @@ class DatasetBody(BaseModel):
     timestamp_column: str
     lands_in: Optional[str] = None
     cursor_param: Optional[str] = None
-    unique_key_columns: Optional[List[str]] = None
 
 
 class VerifyRequest(BaseModel):
@@ -91,12 +91,16 @@ async def verify(
 
     Never persists Integration rows.
     """
+    if not body.datasets:
+        raise HTTPException(status_code=422, detail="datasets must be non-empty")
+
     secret_value = _resolve_secret(body.auth, principal)
     adapter = HttpProbeAdapter(
         base_url=body.base_url,
         auth={
             "kind": body.auth.kind,
             "header_name": body.auth.header_name,
+            "username": body.auth.username,
             "secret": secret_value,
         },
     )
@@ -115,7 +119,6 @@ async def verify(
                         "json_root": ds.json_root,
                         "timestamp_column": ds.timestamp_column,
                         "cursor_param": ds.cursor_param,
-                        "unique_key_columns": ds.unique_key_columns or [],
                     }
                 )
                 payload: dict = {

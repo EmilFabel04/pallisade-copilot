@@ -17,8 +17,8 @@ describe('SOURCE pipeline layer', () => {
     expect(LAYER_LABELS.SOURCE).toBe('Sources');
   });
 
-  it('assigns SOURCE its own color (slate)', () => {
-    expect(LAYER_COLORS.SOURCE).toBe('#64748B');
+  it('assigns SOURCE its own color (slate-700)', () => {
+    expect(LAYER_COLORS.SOURCE).toBe('#334155');
   });
 
   it('includes SOURCE as a valid PipelineLayer key', () => {
