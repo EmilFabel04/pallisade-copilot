@@ -183,3 +183,183 @@ def test_compute_config_hash_key_order_independent():
     d_a = {"z": 1, "a": 2}
     d_b = {"a": 2, "z": 1}
     assert compute_config_hash(d_a) == compute_config_hash(d_b)
+
+
+# ---------------------------------------------------------------------------
+# 8. canonicalize_for_hash — camelCase ↔ snake_case equivalence
+# ---------------------------------------------------------------------------
+
+
+def test_canonicalize_camel_equals_snake():
+    """Wizard camelCase payload hashes identically to Pydantic snake_case model_dump."""
+    from scanner.api.security.verify_token import compute_config_hash
+
+    # Wizard-style: camelCase, optional fields omitted
+    wizard_config = {
+        "base_url": "https://api.example.com/v1",
+        "schedule": "daily",
+        "platform_label": "Test",
+        "auth": {
+            "kind": "api_key",
+            "headerName": "X-API-Key",
+            "secret_ref": "stash_abc",
+        },
+        "datasets": [
+            {
+                "id": "ds1",
+                "endpoint": "/events",
+                "timestamp_column": "ts",
+            }
+        ],
+    }
+
+    # Pydantic-style: snake_case, all optional fields explicit with None
+    pydantic_config = {
+        "base_url": "https://api.example.com/v1",
+        "schedule": "daily",
+        "platform_label": "Test",
+        "auth": {
+            "kind": "api_key",
+            "header_name": "X-API-Key",
+            "username": None,
+            "secret_ref": "stash_abc",
+        },
+        "datasets": [
+            {
+                "id": "ds1",
+                "endpoint": "/events",
+                "json_root": None,
+                "timestamp_column": "ts",
+                "lands_in": None,
+                "cursor_param": None,
+            }
+        ],
+    }
+
+    assert compute_config_hash(wizard_config) == compute_config_hash(pydantic_config), (
+        "Hash must be identical for logically equivalent camelCase and snake_case configs"
+    )
+
+
+def test_canonicalize_bearer_config():
+    """Bearer auth: no headerName in wizard payload, all Nones in Pydantic dump."""
+    from scanner.api.security.verify_token import compute_config_hash
+
+    wizard = {
+        "base_url": "https://api.example.com",
+        "schedule": "hourly",
+        "platform_label": "Bearer Test",
+        "auth": {"kind": "bearer", "secret_ref": "stash_xyz"},
+        "datasets": [
+            {"id": "x", "endpoint": "/x", "timestamp_column": "created_at"}
+        ],
+    }
+    pydantic = {
+        "base_url": "https://api.example.com",
+        "schedule": "hourly",
+        "platform_label": "Bearer Test",
+        "auth": {
+            "kind": "bearer",
+            "header_name": None,
+            "username": None,
+            "secret_ref": "stash_xyz",
+        },
+        "datasets": [
+            {
+                "id": "x",
+                "endpoint": "/x",
+                "json_root": None,
+                "timestamp_column": "created_at",
+                "lands_in": None,
+                "cursor_param": None,
+            }
+        ],
+    }
+    assert compute_config_hash(wizard) == compute_config_hash(pydantic)
+
+
+def test_canonicalize_basic_auth_config():
+    """Basic auth: username populated in both representations."""
+    from scanner.api.security.verify_token import compute_config_hash
+
+    wizard = {
+        "base_url": "https://api.example.com",
+        "schedule": "daily",
+        "platform_label": "Basic Test",
+        "auth": {
+            "kind": "basic",
+            "username": "myuser",
+            "secret_ref": "stash_basic",
+        },
+        "datasets": [
+            {"id": "y", "endpoint": "/y", "timestamp_column": "updated_at"}
+        ],
+    }
+    pydantic = {
+        "base_url": "https://api.example.com",
+        "schedule": "daily",
+        "platform_label": "Basic Test",
+        "auth": {
+            "kind": "basic",
+            "header_name": None,
+            "username": "myuser",
+            "secret_ref": "stash_basic",
+        },
+        "datasets": [
+            {
+                "id": "y",
+                "endpoint": "/y",
+                "json_root": None,
+                "timestamp_column": "updated_at",
+                "lands_in": None,
+                "cursor_param": None,
+            }
+        ],
+    }
+    assert compute_config_hash(wizard) == compute_config_hash(pydantic)
+
+
+# ---------------------------------------------------------------------------
+# 9. HMAC fail-hard in production
+# ---------------------------------------------------------------------------
+
+
+def test_hmac_fails_hard_in_production(monkeypatch):
+    """In ENVIRONMENT=production, missing SOURCES_VERIFY_HMAC_SECRET must raise."""
+    import importlib
+    import sys
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("SOURCES_VERIFY_HMAC_SECRET", raising=False)
+
+    # Remove cached module so _load_hmac_secret runs fresh.
+    sys.modules.pop("scanner.api.security.verify_token", None)
+
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError, match="SOURCES_VERIFY_HMAC_SECRET"):
+        import scanner.api.security.verify_token  # noqa: F401 — side-effect import
+
+    # Restore module state so subsequent tests aren't affected.
+    sys.modules.pop("scanner.api.security.verify_token", None)
+
+
+def test_hmac_ephemeral_allowed_in_dev(monkeypatch, caplog):
+    """In dev (no ENVIRONMENT=production), missing secret uses ephemeral key with WARNING."""
+    import importlib
+    import logging
+    import sys
+
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.delenv("SOURCES_VERIFY_HMAC_SECRET", raising=False)
+
+    sys.modules.pop("scanner.api.security.verify_token", None)
+
+    with caplog.at_level(logging.WARNING, logger="scanner.api.security.verify_token"):
+        import scanner.api.security.verify_token as vt  # noqa: F401
+
+    assert vt._HMAC_SECRET  # non-empty bytes
+    assert any("ephemeral" in r.message for r in caplog.records), (
+        "Expected a WARNING about ephemeral key in dev mode"
+    )
+
+    sys.modules.pop("scanner.api.security.verify_token", None)

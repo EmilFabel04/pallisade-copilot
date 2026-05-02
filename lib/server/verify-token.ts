@@ -17,9 +17,10 @@
  *   at call-time — this is a deploy-time misconfiguration on the Next.js side.
  *
  * Config hash canonicalization:
- *   ``computeConfigHash(obj)`` produces the SHA-256 hex digest of the canonical
- *   JSON (recursively sorted keys, no whitespace).  Must match the Python
- *   ``compute_config_hash`` in verify_token.py byte-for-byte.
+ *   ``computeConfigHash(obj)`` normalises the input to a canonical shape via
+ *   ``canonicalizeForHash`` before hashing.  This ensures that wizard-style
+ *   camelCase payloads and Pydantic snake_case model_dump() outputs produce the
+ *   same SHA-256 digest.  Must match Python ``compute_config_hash`` byte-for-byte.
  */
 
 import crypto from 'crypto';
@@ -62,19 +63,100 @@ function sortKeysDeep(value: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical projection — mirrors canonicalize_for_hash() in verify_token.py
+// ---------------------------------------------------------------------------
+
+interface CanonicalDataset {
+  id: string;
+  endpoint: string;
+  json_root: string | null;
+  timestamp_column: string;
+  lands_in: string | null;
+  cursor_param: string | null;
+}
+
+interface CanonicalAuth {
+  kind: string;
+  header_name: string | null;
+  username: string | null;
+  secret_ref: string;
+}
+
+interface CanonicalConfig {
+  base_url: string;
+  schedule: string;
+  platform_label: string;
+  auth: CanonicalAuth;
+  datasets: CanonicalDataset[];
+}
+
+/**
+ * Produce a canonical, shape-normalised representation of a source config.
+ *
+ * Accepts either:
+ * - Wizard-style camelCase payload (``headerName``, optional fields omitted)
+ * - Pydantic snake_case model_dump() (``header_name``, optional fields as null)
+ *
+ * Both inputs are mapped to the same projected shape so that
+ * ``computeConfigHash`` returns the same digest for equivalent configs.
+ * Mirrors the Python ``canonicalize_for_hash`` in verify_token.py exactly.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function canonicalizeForHash(config: any): CanonicalConfig {
+  const rawAuth = config?.auth ?? {};
+  const auth: CanonicalAuth = {
+    kind: rawAuth.kind ?? '',
+    // Accept camelCase (wizard) or snake_case (Pydantic model_dump)
+    header_name: rawAuth.header_name ?? rawAuth.headerName ?? null,
+    username: rawAuth.username ?? null,
+    secret_ref: rawAuth.secret_ref ?? rawAuth.secretRef ?? '',
+  };
+
+  // Treat falsy values (empty string, undefined) as null to match Python's
+  // ``or None`` coercion in canonicalize_for_hash.
+  const norm = (v: unknown): string | null =>
+    v != null && v !== '' ? String(v) : null;
+
+  auth.header_name = norm(auth.header_name);
+  auth.username = norm(auth.username);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawDatasets: any[] = Array.isArray(config?.datasets) ? config.datasets : [];
+  const datasets: CanonicalDataset[] = rawDatasets.map(ds => ({
+    id: ds.id ?? '',
+    endpoint: ds.endpoint ?? '',
+    json_root: norm(ds.json_root ?? ds.jsonRoot),
+    timestamp_column: ds.timestamp_column ?? ds.timestampColumn ?? '',
+    lands_in: norm(ds.lands_in ?? ds.landsIn),
+    cursor_param: norm(ds.cursor_param ?? ds.cursorParam),
+  }));
+
+  return {
+    base_url: config?.base_url ?? config?.baseUrl ?? '',
+    schedule: config?.schedule ?? '',
+    platform_label: config?.platform_label ?? config?.platformLabel ?? '',
+    auth,
+    datasets,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /**
  * Compute the SHA-256 hex digest of the canonical JSON representation of
- * ``verifyBody``.  Canonical = recursively sorted keys, no whitespace.
+ * ``config``.  Normalises via ``canonicalizeForHash`` first, then sorts keys
+ * recursively and serialises with no whitespace.
  *
  * Must produce the same hash as Python's ``compute_config_hash`` for the
- * same input — both sides use JSON with sorted keys and no separators.
+ * same logical input (wizard camelCase OR Pydantic snake_case).
  */
-export function computeConfigHash(verifyBody: object): string {
-  const canonical = JSON.stringify(sortKeysDeep(verifyBody));
-  return crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function computeConfigHash(config: any): string {
+  const canonical = canonicalizeForHash(config);
+  const serialized = JSON.stringify(sortKeysDeep(canonical));
+  return crypto.createHash('sha256').update(serialized, 'utf8').digest('hex');
 }
 
 export interface ValidateResult {

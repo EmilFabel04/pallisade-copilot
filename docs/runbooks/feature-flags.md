@@ -46,6 +46,25 @@ Spot-check at 24h, 1 week, 2 weeks:
 - Error-event log for `ProbeError` codes — group by `code` to surface common
   failure modes.
 
+### Required deploy-time environment
+
+The verify-gate and secret-stash mechanisms require these env vars set
+identically across ALL FastAPI workers AND the Next.js process:
+
+- `SOURCES_VERIFY_HMAC_SECRET` — 32+ byte secret (generate with `openssl rand -hex 32`).
+  Must be the same value on every worker. Rotation requires a coordinated restart.
+  **FastAPI will refuse to start in `ENVIRONMENT=production` if this is unset.**
+  Next.js throws an error at request-time if unset.
+
+### Pilot deployment constraint
+
+The secret-stash uses an in-process TTLCache (per-FastAPI-worker, 30-min TTL).
+For the pilot:
+- Deploy FastAPI as **single-worker** (no `--workers >1`), OR
+- Use sticky-session routing so a wizard's stash + verify + persist all hit the same worker.
+
+Multi-worker safe operation requires Redis-backed stash (tracked as follow-up).
+
 ### Default-on graduation
 
 After two weeks of stable pilot use with no critical incidents, change the

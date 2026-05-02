@@ -636,12 +636,16 @@ export async function POST(request: NextRequest) {
             );
           }
           const { secret } = await resolveResp.json();
-          // Replace the stash ref with the resolved secret in the persisted config.
+          // Strip both the stash ref and any raw secret from the persisted config
+          // so that Integration.config never contains plaintext credentials.
+          // The raw secret goes ONLY into the encrypted credentials column below.
+          const { secret_ref: _ref, secret: _existingSecret, ...nonSecretAuth } = body.config?.auth ?? {};
           body.config = {
             ...body.config,
-            auth: { ...body.config.auth, secret_ref: undefined, secret },
+            auth: nonSecretAuth,  // auth shape minus all credential fields
           };
-          // Store the durable secret in the encrypted credentials column.
+          // Store the durable secret in the encrypted credentials column only.
+          // probe_runner.py:_resolve_secret sources it from here, NOT config.auth.
           body.credentials = { secret };
         } catch {
           return NextResponse.json(
