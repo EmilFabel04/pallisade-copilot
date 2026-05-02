@@ -47,6 +47,7 @@ anthropic>=0.39.0           # Claude for co-pilot (alternative)
 sqlglot==20.11.0
 
 # Security and utilities
+cachetools>=5.3.0
 cryptography==41.0.7
 python-dotenv==1.0.0
 
