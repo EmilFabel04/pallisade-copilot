@@ -106,6 +106,8 @@ export type UnifiedNodeCategory =
   | 'version_control'   // GitHub, GitLab (VCS)
   | 'infrastructure'    // Linux servers, cloud infrastructure
   | 'storage'           // S3, GCS, ADLS (storage layer)
+  | 'activation'        // Reverse-ETL targets (Hightouch, Census, etc.)
+  | 'reverse_etl'       // Alt key for activation seen in some adapter outputs
   | 'table'             // Database table
   | 'view'              // Database view
   | 'source'            // dbt source
@@ -345,7 +347,9 @@ export const CATEGORY_LAYER_MAP: Record<UnifiedNodeCategory, PipelineLayer> = {
   storage: 'STORAGE',
   table: 'WAREHOUSE',
   view: 'WAREHOUSE',
-  source: 'INGESTION',  // dbt sources are upstream
+  source: 'SOURCE',  // external upstream — anchored leftmost in data plane
+  activation: 'ACTIVATION',
+  reverse_etl: 'ACTIVATION',
   model: 'TRANSFORMATION',
   dag: 'ORCHESTRATION',
   task: 'ORCHESTRATION',
@@ -425,6 +429,20 @@ export const CATEGORY_VISUALS: Record<UnifiedNodeCategory, {
     borderColor: LAYER_COLORS.STORAGE,
     bgColor: 'rgba(168,85,247,0.15)',
     label: 'Storage',
+  },
+  activation: {
+    icon: 'send',
+    color: LAYER_COLORS.ACTIVATION,
+    borderColor: LAYER_COLORS.ACTIVATION,
+    bgColor: 'rgba(20,184,166,0.15)',
+    label: 'Activation',
+  },
+  reverse_etl: {
+    icon: 'send',
+    color: LAYER_COLORS.ACTIVATION,
+    borderColor: LAYER_COLORS.ACTIVATION,
+    bgColor: 'rgba(20,184,166,0.15)',
+    label: 'Reverse-ETL',
   },
   table: {
     icon: 'table',
@@ -558,7 +576,7 @@ export const FILTER_PRESETS: Record<LineageFilterPreset, {
   'full': {
     label: 'Full Pipeline',
     description: 'Show all tools and data assets',
-    layers: ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION', 'VERSION_CONTROL', 'INFRASTRUCTURE', 'STORAGE'],
+    layers: ['SOURCE', 'INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ACTIVATION', 'ORCHESTRATION', 'VERSION_CONTROL', 'INFRASTRUCTURE', 'STORAGE'],
     showToolNodes: true,
     showTableNodes: true,
   },
@@ -572,14 +590,14 @@ export const FILTER_PRESETS: Record<LineageFilterPreset, {
   'etl-only': {
     label: 'ETL Only',
     description: 'Show ingestion and transformation',
-    layers: ['INGESTION', 'TRANSFORMATION', 'WAREHOUSE'],
+    layers: ['SOURCE', 'INGESTION', 'TRANSFORMATION', 'WAREHOUSE'],
     showToolNodes: true,
     showTableNodes: true,
   },
   'bi-impact': {
     label: 'BI Impact',
     description: 'Show warehouse to reporting flow',
-    layers: ['WAREHOUSE', 'REPORTING'],
+    layers: ['WAREHOUSE', 'REPORTING', 'ACTIVATION'],
     showToolNodes: true,
     showTableNodes: true,
   },
@@ -727,7 +745,7 @@ export function isDataAssetCategory(category: UnifiedNodeCategory): boolean {
 // Get the default filter state
 export function getDefaultFilterState(): LineageFilterState {
   return {
-    layers: new Set(['INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ORCHESTRATION', 'VERSION_CONTROL', 'INFRASTRUCTURE', 'STORAGE']),
+    layers: new Set(['SOURCE', 'INGESTION', 'TRANSFORMATION', 'WAREHOUSE', 'REPORTING', 'ACTIVATION', 'ORCHESTRATION', 'VERSION_CONTROL', 'INFRASTRUCTURE', 'STORAGE']),
     showToolNodes: true,
     showTableNodes: true,
     searchQuery: '',
