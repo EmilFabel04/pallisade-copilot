@@ -50,6 +50,7 @@ model User {
   auditLogs            AuditLog[]
   appliedFixes         AppliedFix[]
   artifacts            Artifact[]
+  sourceConnectorWaitlist  SourceConnectorWaitlist[]
 
   @@index([organizationId])
 }
@@ -2337,4 +2338,15 @@ model DriftRecommendation {
   @@index([monitorId])
   @@index([runId])
   @@index([pipelineStackId])
+}
+
+model SourceConnectorWaitlist {
+  id           String   @id @default(cuid())
+  userId       String
+  connectorId  String   // 'salesforce' | 'shopify' | 'hubspot'
+  requestedAt  DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, connectorId])
+  @@index([connectorId])
 }

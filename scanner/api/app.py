@@ -132,6 +132,7 @@ def create_app() -> FastAPI:
     from .routers.discovery import router as discovery_router
     from .routers.drift import router as drift_router
     from .routers.integrations import router as integrations_router
+    from .routers.waitlist import router as waitlist_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -180,6 +181,9 @@ def create_app() -> FastAPI:
 
     # Integrations operational API (probe-now, etc.)
     app.include_router(integrations_router, prefix="/api/v1", tags=["Integrations"])
+
+    # Source-connector waitlist API
+    app.include_router(waitlist_router, prefix="/api/v1", tags=["Waitlist"])
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 
