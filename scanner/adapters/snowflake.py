@@ -321,8 +321,19 @@ class SnowflakeAdapter(DatabaseAdapter):
 
         Each dict contains ``column_name``, ``data_type``, and ``is_nullable``
         (bool). This is the canonical interface used by :class:`WarehouseDiscoverer`.
+
+        Snowflake FQNs may optionally include a leading ``snowflake.`` warehouse
+        prefix (e.g. ``"snowflake.MYDB.PUBLIC.water_meters"``). The prefix is
+        stripped before passing to :meth:`get_columns`, which handles
+        ``database.schema.table`` and shorter forms.
         """
-        cols = self.get_columns(fqn)
+        # Strip leading warehouse-type prefix if present (e.g. "snowflake.DB.SCH.T" → "DB.SCH.T")
+        parts = fqn.split(".")
+        if len(parts) >= 3 and parts[0].lower() == "snowflake":
+            table_ref = ".".join(parts[1:])
+        else:
+            table_ref = fqn
+        cols = self.get_columns(table_ref)
         return [
             {"column_name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
             for c in cols

@@ -337,8 +337,19 @@ class BigQueryAdapter(DatabaseAdapter):
 
         Each dict contains ``column_name``, ``data_type``, and ``is_nullable``
         (bool). This is the canonical interface used by :class:`WarehouseDiscoverer`.
+
+        BigQuery FQNs may optionally include a leading ``bigquery.`` warehouse
+        prefix (e.g. ``"bigquery.myproject.raw.water_meters"``). The prefix is
+        stripped before passing to :meth:`get_columns`, which handles
+        ``project.dataset.table`` and shorter forms.
         """
-        cols = self.get_columns(fqn)
+        # Strip leading warehouse-type prefix if present (e.g. "bigquery.proj.ds.t" → "proj.ds.t")
+        parts = fqn.split(".")
+        if len(parts) >= 3 and parts[0].lower() == "bigquery":
+            table_ref = ".".join(parts[1:])
+        else:
+            table_ref = fqn
+        cols = self.get_columns(table_ref)
         return [
             {"column_name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
             for c in cols

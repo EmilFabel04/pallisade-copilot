@@ -13,6 +13,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Trash2, Plus, X, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 
+import { usePipeline } from '@/contexts/PipelineContext';
+
 import type { DatasetSpec, WizardState } from './CustomSourceWizard';
 import { Field } from './CustomSourceWizard';
 
@@ -97,6 +99,7 @@ export function DiscoveryStep({
   onBack: () => void;
   onNext: () => void;
 }) {
+  const { selectedPipelineId } = usePipeline();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiscoveryResponse | null>(null);
@@ -136,6 +139,7 @@ export function DiscoveryStep({
           },
           ingestion_hints: [],
           warehouse_hints: hints,
+          stack_id: selectedPipelineId,
         }),
       });
       if (!resp.ok) {
