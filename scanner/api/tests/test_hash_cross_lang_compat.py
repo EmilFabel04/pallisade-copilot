@@ -178,9 +178,9 @@ def test_python_hash_matches_expected_camel(label, config, expected_hash):
         python -c "from scanner.api.security.verify_token import compute_config_hash; ..."
     and update both this test AND the TS test in __tests__/server/verify-token.test.ts.
     """
-    from scanner.api.security.verify_token import compute_config_hash
+    from scanner.api.security import verify_token
 
-    actual = compute_config_hash(config)
+    actual = verify_token.compute_config_hash(config)
     assert actual == expected_hash, (
         f"[{label}] Hash mismatch.\n"
         f"  Expected: {expected_hash}\n"
@@ -196,9 +196,9 @@ def test_python_hash_matches_expected_snake(label, config, expected_hash):
 
     Both camelCase and snake_case variants of the same logical config must hash identically.
     """
-    from scanner.api.security.verify_token import compute_config_hash
+    from scanner.api.security import verify_token
 
-    actual = compute_config_hash(config)
+    actual = verify_token.compute_config_hash(config)
     assert actual == expected_hash, (
         f"[{label}] Hash mismatch (snake_case form).\n"
         f"  Expected: {expected_hash}\n"
@@ -214,10 +214,10 @@ def test_canonical_json_snapshot():
     string changes, the cross-language contract is broken and both tests must be
     updated together.
     """
-    from scanner.api.security.verify_token import canonicalize_for_hash
+    from scanner.api.security import verify_token
 
     config = FIXTURES[0][1]  # api_key fixture
-    canonical = canonicalize_for_hash(config)
+    canonical = verify_token.canonicalize_for_hash(config)
     serialized = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
 
     expected_json = (
