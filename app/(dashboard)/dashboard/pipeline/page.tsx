@@ -639,18 +639,21 @@ export default function PipelinePage() {
                   const status = connectorStatusById.get(connector.id) || 'NOT_CONNECTED';
                   const isExpanded = expandedConnector === connector.id;
                   const isDisconnecting = disconnecting === connector.id;
+                  const isComingSoon = connector.status === 'coming_soon';
 
                   return (
                     <div
                       key={connector.id}
-                      className={`rounded-xl border p-4 transition-all cursor-pointer group ${
-                        status === 'CONNECTED'
-                          ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07]'
+                      className={`rounded-xl border p-4 transition-all group ${
+                        isComingSoon
+                          ? 'border-[var(--border-medium)] bg-[var(--overlay-faint)] opacity-50 cursor-not-allowed'
+                          : status === 'CONNECTED'
+                          ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07] cursor-pointer'
                           : status === 'NEEDS_ATTENTION'
-                          ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07]'
-                          : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)]'
+                          ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07] cursor-pointer'
+                          : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)] cursor-pointer'
                       }`}
-                      onClick={() => setExpandedConnector(isExpanded ? null : connector.id)}
+                      onClick={() => { if (!isComingSoon) setExpandedConnector(isExpanded ? null : connector.id); }}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-3 min-w-0">
@@ -682,7 +685,14 @@ export default function PipelinePage() {
 
                       {/* Action buttons — always visible at bottom */}
                       <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] flex items-center gap-2">
-                        {status === 'CONNECTED' ? (
+                        {isComingSoon ? (
+                          <button
+                            disabled
+                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] text-[var(--muted)] cursor-not-allowed"
+                          >
+                            Coming soon
+                          </button>
+                        ) : status === 'CONNECTED' ? (
                           <>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}

@@ -789,6 +789,8 @@ export const GRAPH_DOMAIN_MAP: Record<string, GraphDomain> = {
   asana: 'CONTROL_PLANE',
   // Infrastructure — CONTROL_PLANE
   linux_server: 'CONTROL_PLANE',
+  // Sources — DATA_PLANE
+  custom_source: 'DATA_PLANE',
   // Other — CONTROL_PLANE
   custom_webhook: 'CONTROL_PLANE',
 };

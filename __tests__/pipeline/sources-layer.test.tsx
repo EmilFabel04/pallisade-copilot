@@ -21,7 +21,7 @@ describe('SOURCE pipeline layer', () => {
     expect(LAYER_COLORS.SOURCE).toBe('#64748B');
   });
 
-  it('positions SOURCE leftmost in PipelineLayer type via runtime check', () => {
+  it('includes SOURCE as a valid PipelineLayer key', () => {
     const sentinel: Record<PipelineLayer, true> = {
       SOURCE: true, INGESTION: true, TRANSFORMATION: true, WAREHOUSE: true,
       REPORTING: true, STORAGE: true, VERSION_CONTROL: true,
