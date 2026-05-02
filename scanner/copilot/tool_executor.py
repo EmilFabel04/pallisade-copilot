@@ -241,16 +241,86 @@ class ToolExecutor:
         """Look up a loaded IntegrationDriver by type."""
         return self._drivers.get(integration_type.upper())
 
+    async def _execute_check_integration_health(self, args: Dict[str, Any]) -> ToolResult:
+        """Tool dispatch for ``check_integration_health``."""
+        integration_type = args.get("integration_type", "")
+        if not integration_type:
+            return ToolResult(success=False, error="integration_type is required")
+        return await self.execute_driver_health_check(integration_type)
+
+    async def _execute_annotate_integration_health(self, args: Dict[str, Any]) -> ToolResult:
+        """Attach a user-provided correction to the latest snapshot.
+
+        Surface for the workflow described in the integration-health
+        design: when the user says "it's billing, I cancelled my
+        trial," the LLM calls this with the user's verbatim
+        explanation. Subsequent ``check_integration_health`` calls will
+        return that annotation alongside the auto-classification, so
+        future answers are anchored on the user's high-signal
+        correction rather than the (now stale) classifier guess.
+        """
+        integration_type = args.get("integration_type", "")
+        annotation = args.get("annotation", "")
+        if not integration_type or not annotation:
+            return ToolResult(
+                success=False,
+                error="Both integration_type and annotation are required.",
+            )
+        from scanner.integrations.health import get_default_store
+        updated = get_default_store().annotate(
+            integration_type,
+            annotation,
+            org_id=getattr(self.context, "org_id", None),
+            pipeline_id=getattr(self.context, "pipeline_stack_id", None),
+        )
+        if updated is None:
+            return ToolResult(
+                success=False,
+                error=(
+                    f"No health snapshot exists yet for {integration_type}. "
+                    f"Call check_integration_health first to observe the "
+                    f"current state, then annotate."
+                ),
+            )
+        return ToolResult(success=True, data=updated.to_dict())
+
     async def execute_driver_health_check(self, integration_type: str) -> ToolResult:
-        """Run health_check via the driver for a given integration."""
+        """Run health_check via the driver for a given integration.
+
+        Augments the raw ``ConnectionResult`` with the latest
+        structured ``IntegrationHealth`` snapshot — the LLM gets the
+        ``failure_category`` (AUTH / BILLING / NETWORK / etc.) plus any
+        user-provided annotation. Without the snapshot, "Metabase down"
+        looked the same to the LLM whether it was bad creds, an
+        expired trial, or DNS — which is exactly the failure mode that
+        prompted this work.
+        """
         driver = self.get_driver(integration_type)
         if not driver:
             return ToolResult(success=False, error=f"No driver for {integration_type}")
-        # Find config from context
         for integ in self.context.integrations:
             if integ.type.upper() == integration_type.upper():
                 result = driver.health_check(integ.config)
-                return ToolResult(success=result.ok, data=result.to_dict(), error=None if result.ok else result.message)
+                payload: Dict[str, Any] = {
+                    "connection_result": result.to_dict(),
+                }
+                # Attach the latest snapshot if the driver recorded one.
+                try:
+                    from scanner.integrations.health import get_default_store
+                    snap = get_default_store().get(
+                        integration_type,
+                        org_id=getattr(self.context, "org_id", None),
+                        pipeline_id=getattr(self.context, "pipeline_stack_id", None),
+                    )
+                    if snap is not None:
+                        payload["health"] = snap.to_dict()
+                except Exception as e:
+                    logger.debug(f"Health snapshot lookup skipped: {e}")
+                return ToolResult(
+                    success=result.ok,
+                    data=payload,
+                    error=None if result.ok else result.message,
+                )
         return ToolResult(success=False, error=f"Integration {integration_type} not connected")
 
     async def execute_driver_metadata(self, integration_type: str) -> ToolResult:

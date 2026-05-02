@@ -112,7 +112,13 @@ def _meta_list_server_services():
     name="check_integration_health",
     description=(
         "Check the health / connectivity of a connected integration. "
-        "Returns OK/FAIL status, latency, and last-checked timestamp."
+        "Returns OK/FAIL plus a structured 'health' payload with "
+        "failure_category (AUTH / NOT_FOUND / BILLING / RATE_LIMIT / "
+        "CONFIG / NETWORK / SERVER / UNKNOWN), is_retryable, observed_at, "
+        "and any user-provided annotation. Prefer the failure_category "
+        "field over the raw message when explaining why a connection "
+        "failed — it survives between requests so you do not need to "
+        "re-probe a degraded endpoint."
     ),
     category=ToolCategory.INFRASTRUCTURE,
     parameters=[
@@ -124,6 +130,35 @@ def _meta_list_server_services():
     ],
 )
 def _meta_check_integration_health():
+    pass
+
+
+@register_tool(
+    name="annotate_integration_health",
+    description=(
+        "Attach a user-provided correction to the latest health snapshot "
+        "for an integration. Use this when the user gives a high-signal "
+        "explanation (e.g. 'I cancelled my Metabase trial', 'we hit our "
+        "Looker rate limit on purpose') that the auto-classifier might "
+        "miss. The annotation persists with the snapshot and surfaces on "
+        "subsequent check_integration_health calls."
+    ),
+    category=ToolCategory.INFRASTRUCTURE,
+    parameters=[
+        ToolParameter(
+            "integration_type", "string",
+            "The integration type the annotation applies to (e.g. METABASE).",
+            required=True,
+        ),
+        ToolParameter(
+            "annotation", "string",
+            "Short user-provided explanation, verbatim or paraphrased "
+            "(e.g. 'Trial expired, will renew next week').",
+            required=True,
+        ),
+    ],
+)
+def _meta_annotate_integration_health():
     pass
 
 
