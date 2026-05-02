@@ -221,6 +221,7 @@ export default function CustomSourceWizard() {
     [],
   );
 
+  // Save can only be invoked when verifyState.allPass === true (gated in canSave below). No persist-on-fail path exists.
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
