@@ -24,7 +24,7 @@ describe('SOURCE pipeline layer', () => {
   it('includes SOURCE as a valid PipelineLayer key', () => {
     const sentinel: Record<PipelineLayer, true> = {
       SOURCE: true, INGESTION: true, TRANSFORMATION: true, WAREHOUSE: true,
-      REPORTING: true, STORAGE: true, VERSION_CONTROL: true,
+      REPORTING: true, ACTIVATION: true, STORAGE: true, VERSION_CONTROL: true,
       ORCHESTRATION: true, INFRASTRUCTURE: true, NOTIFICATIONS: true, UNCATEGORIZED: true,
     };
     expect(sentinel.SOURCE).toBe(true);

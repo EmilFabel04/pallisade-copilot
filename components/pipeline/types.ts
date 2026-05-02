@@ -5,7 +5,7 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'SOURCE' | 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'NOTIFICATIONS' | 'UNCATEGORIZED';
+export type PipelineLayer = 'SOURCE' | 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'ACTIVATION' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'NOTIFICATIONS' | 'UNCATEGORIZED';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
 export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING';
@@ -20,6 +20,7 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   TRANSFORMATION: '#F59E0B', // Amber
   WAREHOUSE: '#6366F1',      // Indigo
   REPORTING: '#06B6D4',      // Cyan
+  ACTIVATION: '#14B8A6',     // Teal — reverse-ETL / activation targets
   STORAGE: '#A855F7',        // Purple-500
   VERSION_CONTROL: '#8B5CF6', // Purple
   ORCHESTRATION: '#F97316',  // Orange
@@ -50,6 +51,7 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',
+  ACTIVATION: 'Activation',
   STORAGE: 'Storage',
   VERSION_CONTROL: 'Version Control',
   ORCHESTRATION: 'Orchestration',
@@ -592,6 +594,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       ],
     },
   ],
+  ACTIVATION: [],
   NOTIFICATIONS: [],
   UNCATEGORIZED: [],
 };

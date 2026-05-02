@@ -120,7 +120,7 @@ function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: 
   const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
   const layerX: Record<PipelineLayer, number> = {
     SOURCE: 0, INGESTION: 180, VERSION_CONTROL: 360, ORCHESTRATION: 360, TRANSFORMATION: 540,
-    WAREHOUSE: 720, REPORTING: 900, STORAGE: 720, INFRASTRUCTURE: 900,
+    WAREHOUSE: 720, REPORTING: 900, ACTIVATION: 1080, STORAGE: 720, INFRASTRUCTURE: 900,
     NOTIFICATIONS: 1300, UNCATEGORIZED: 1080,
   };
   return {

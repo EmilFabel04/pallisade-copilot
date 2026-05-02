@@ -33,6 +33,7 @@ const LAYER_LABELS: Record<PipelineLayer, string> = {
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
   REPORTING: 'Reporting',
+  ACTIVATION: 'Activation',
   STORAGE: 'Storage',
   INFRASTRUCTURE: 'Infrastructure',
   NOTIFICATIONS: 'Notifications',
