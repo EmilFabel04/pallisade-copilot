@@ -28,6 +28,13 @@ Design decisions:
 - Persistence (Step 4) is bypassed: save_probe_run is patched to capture
   the bundle without writing to DB.  DATABASE_URL is not required.
 - FEATURE_SOURCES_CATEGORY env var is forced to "1".
+
+Limitations:
+- HttpProbeAdapter.probe is patched (see Step 1 above), so the Step 6
+  row-leak assertion validates that _FIXTURE_BUNDLE was constructed correctly —
+  NOT that the real _compute_metrics() avoids leaks. A true probe-code-path
+  leak test requires running with datasketch installed and without the
+  probe() patch. This is tracked as a follow-up.
 """
 
 from __future__ import annotations
@@ -366,6 +373,9 @@ def test_full_source_integration_round_trip(monkeypatch):
         # Wire mock_run_due_probes to call the real runner so we exercise
         # _fetch_due_integrations → HttpProbeAdapter → save_probe_run.
         from scanner.scheduler.probe_runner import run_due_probes as _real_runner
+        # Note: _real_runner is imported from scanner.scheduler.probe_runner — different
+        # module than the patch target (scanner.api.routers.integrations.run_due_probes).
+        # That separation is what lets us call the real implementation through the mock.
         mock_run_due_probes.side_effect = _real_runner
 
         with TestClient(app) as client:
@@ -392,8 +402,16 @@ def test_full_source_integration_round_trip(monkeypatch):
     #
     # Note on numeric values (12.3, 78.9): these ARE the min/max of the
     # `value` column and therefore DO appear in min_max_numeric as a legitimate
-    # derived aggregate. The row-leak check targets raw string row identifiers,
-    # not numeric extremes.
+    # derived aggregate. The value 45.6 is a middle-of-range data point that
+    # should ONLY appear in a row leak (it is neither a min nor max), so it is
+    # checked here. The row-leak check targets raw data that would constitute
+    # a violation, not numeric extremes.
+    #
+    # Limitation: HttpProbeAdapter.probe is patched (see module docstring),
+    # so this assertion validates that _FIXTURE_BUNDLE was constructed correctly —
+    # NOT that the real _compute_metrics() avoids leaks. A true probe-code-path
+    # leak test requires running with datasketch installed and without the
+    # probe() patch. Tracked as a follow-up; see module docstring "Limitations".
 
     assert len(captured_bundles) >= 1, (
         "[Step 6 — Row-leak] no MetricBundle was captured; "
@@ -423,6 +441,7 @@ def test_full_source_integration_round_trip(monkeypatch):
         "sensor_id_2",
         "sensor_id_3",
         "2026-05-01T10:00:00Z",  # raw timestamp string from row 0
+        "45.6",  # middle-of-range value that is neither min nor max; only appears in raw rows
     ]
     for raw_value in row_string_leak_checks:
         assert raw_value not in bundle_serialised, (
