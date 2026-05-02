@@ -134,6 +134,7 @@ def create_app() -> FastAPI:
     from .routers.integrations import router as integrations_router
     from .routers.waitlist import router as waitlist_router
     from .routers.source_discovery import router as source_discovery_router
+    from .routers.source_verify import router as source_verify_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -188,6 +189,9 @@ def create_app() -> FastAPI:
 
     # Source Discovery API (router already has /api/v1/integrations/source prefix)
     app.include_router(source_discovery_router)
+
+    # Source Verify API (router already has /api/v1/integrations/source prefix)
+    app.include_router(source_verify_router)
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

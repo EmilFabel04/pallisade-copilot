@@ -12,12 +12,26 @@
  * Step 5 (Review)     — JSON summary + save.
  */
 
-import { useState } from 'react';
-import { Check, Loader2 } from 'lucide-react';
+import { useCallback, useRef, useState } from 'react';
+import { Check, Loader2, XCircle, Clock } from 'lucide-react';
 
 import { DiscoveryStep } from './DiscoveryStep';
 
 type Step = 1 | 2 | 3 | 4 | 5;
+
+// ─── Verify types ───────────────────────────────────────────────────
+
+type DatasetVerifyStatus =
+  | 'pending'
+  | 'ok'
+  | { status: 'error'; code: string; message: string };
+
+interface VerifyState {
+  inFlight: boolean;
+  /** undefined = verify hasn't started yet */
+  allPass: boolean | undefined;
+  datasets: Record<string, DatasetVerifyStatus>;
+}
 
 type AuthKind = 'bearer' | 'api_key' | 'basic';
 
@@ -66,10 +80,136 @@ export default function CustomSourceWizard() {
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [verifyState, setVerifyState] = useState<VerifyState>({
+    inFlight: false,
+    allPass: undefined,
+    datasets: {},
+  });
+  // Track the current verify run to avoid double-firing on re-renders.
+  const verifyRunRef = useRef<symbol | null>(null);
 
   const updateState = (patch: Partial<WizardState>) => {
     setState((prev) => ({ ...prev, ...patch }));
   };
+
+  /** Fire the /verify SSE stream and update verifyState as events arrive. */
+  const runVerify = useCallback(
+    async (currentState: WizardState) => {
+      const runId = Symbol('verify-run');
+      verifyRunRef.current = runId;
+
+      // Initialise all datasets to pending.
+      const initialDatasets: Record<string, DatasetVerifyStatus> = {};
+      for (const ds of currentState.datasets) {
+        initialDatasets[ds.id] = 'pending';
+      }
+      setVerifyState({ inFlight: true, allPass: undefined, datasets: initialDatasets });
+
+      const body = {
+        name: currentState.name,
+        platform_label: currentState.platformLabel,
+        base_url: currentState.baseUrl,
+        auth: {
+          kind: currentState.auth.kind,
+          header_name: currentState.auth.headerName ?? null,
+          secret_ref: currentState.auth.secret,
+        },
+        schedule: currentState.schedule,
+        stack_id: null,
+        datasets: currentState.datasets.map((d) => ({
+          id: d.id,
+          endpoint: d.endpoint,
+          json_root: d.jsonRoot ?? null,
+          timestamp_column: d.timestampColumn,
+          lands_in: d.landsIn ?? null,
+          cursor_param: d.cursorParam ?? null,
+        })),
+      };
+
+      try {
+        const resp = await fetch('/api/v1/integrations/source/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify(body),
+        });
+
+        if (!resp.ok || !resp.body) {
+          setVerifyState((prev) => ({ ...prev, inFlight: false, allPass: false }));
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        // SSE parsing: accumulate lines into a rolling buffer.
+        // Each SSE message is separated by a blank line.
+        let currentEventName = '';
+        let currentDataLine = '';
+
+        const processMessage = (eventName: string, dataLine: string) => {
+          if (!dataLine) return;
+          try {
+            const payload = JSON.parse(dataLine);
+
+            if (eventName === 'dataset_result') {
+              setVerifyState((prev) => {
+                if (verifyRunRef.current !== runId) return prev;
+                const ds: DatasetVerifyStatus =
+                  payload.status === 'ok'
+                    ? 'ok'
+                    : { status: 'error', code: payload.code, message: payload.message };
+                return {
+                  ...prev,
+                  datasets: { ...prev.datasets, [payload.dataset_id]: ds },
+                };
+              });
+            } else if (eventName === 'complete') {
+              setVerifyState((prev) => {
+                if (verifyRunRef.current !== runId) return prev;
+                return { ...prev, inFlight: false, allPass: payload.all_pass as boolean };
+              });
+            }
+          } catch {
+            // Malformed JSON in SSE data — ignore.
+          }
+        };
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+
+          // Split on newlines and process complete lines.
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? ''; // last element may be an incomplete line
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEventName = line.slice('event: '.length).trim();
+            } else if (line.startsWith('data: ')) {
+              currentDataLine = line.slice('data: '.length).trim();
+            } else if (line.trim() === '') {
+              // Blank line = end of SSE event block.
+              processMessage(currentEventName, currentDataLine);
+              currentEventName = '';
+              currentDataLine = '';
+            }
+          }
+        }
+        // Flush any remaining buffered event (stream ended without trailing blank line).
+        if (currentEventName && currentDataLine) {
+          processMessage(currentEventName, currentDataLine);
+        }
+      } catch {
+        if (verifyRunRef.current === runId) {
+          setVerifyState((prev) => ({ ...prev, inFlight: false, allPass: false }));
+        }
+      }
+    },
+    [],
+  );
 
   async function handleSave() {
     setSaving(true);
@@ -167,7 +307,13 @@ export default function CustomSourceWizard() {
             state={state}
             onChange={updateState}
             onBack={() => setStep(3)}
-            onNext={() => setStep(5)}
+            onNext={() => {
+              setStep(5);
+              // Reset verify state and kick off the SSE stream whenever the user
+              // enters the Review step (including if they go back and come forward again).
+              setVerifyState({ inFlight: false, allPass: undefined, datasets: {} });
+              runVerify(state);
+            }}
           />
         )}
         {step === 5 && (
@@ -175,7 +321,9 @@ export default function CustomSourceWizard() {
             state={state}
             saving={saving}
             saveError={saveError}
+            verifyState={verifyState}
             onBack={() => setStep(4)}
+            onBackToDiscovery={() => setStep(3)}
             onSave={handleSave}
           />
         )}
@@ -543,13 +691,17 @@ function ReviewStep({
   state,
   saving,
   saveError,
+  verifyState,
   onBack,
+  onBackToDiscovery,
   onSave,
 }: {
   state: WizardState;
   saving: boolean;
   saveError: string | null;
+  verifyState: VerifyState;
   onBack: () => void;
+  onBackToDiscovery: () => void;
   onSave: () => void;
 }) {
   // Mask the secret in the preview so it never appears in plaintext on screen.
@@ -558,19 +710,110 @@ function ReviewStep({
     auth: { ...state.auth, secret: state.auth.secret ? '•••' : '' },
   };
 
+  const hasAnyError = Object.values(verifyState.datasets).some(
+    (s) => typeof s === 'object' && s.status === 'error',
+  );
+  // Save is only enabled when verify has completed with all-pass.
+  const canSave = !saving && verifyState.allPass === true;
+  const saveLabel =
+    verifyState.inFlight
+      ? 'Verifying…'
+      : saving
+        ? 'Saving…'
+        : verifyState.allPass === false
+          ? 'Save (blocked)'
+          : 'Save';
+
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-base font-semibold text-[var(--text)]">Review</h2>
         <p className="mt-1 text-sm text-[var(--text-tertiary)]">
-          Double-check the configuration. Saving creates the integration and the
-          scheduler will probe it on the next tick.
+          Pallisade is probing each endpoint before saving. All datasets must pass
+          before the integration is persisted.
         </p>
       </div>
 
+      {/* Per-dataset verification status */}
+      {state.datasets.length > 0 && (
+        <div className="rounded-lg border border-[var(--subtle-border)] overflow-hidden">
+          <div className="px-3 py-2 bg-[var(--overlay-bg)] border-b border-[var(--subtle-border)]">
+            <span className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wide">
+              Endpoint verification
+            </span>
+          </div>
+          <ul className="divide-y divide-[var(--subtle-border)]">
+            {state.datasets.map((ds) => {
+              const status = verifyState.datasets[ds.id] ?? 'pending';
+              const isOk = status === 'ok';
+              const isError = typeof status === 'object' && status.status === 'error';
+              const isPending = status === 'pending';
+
+              return (
+                <li key={ds.id} className="px-3 py-2.5 space-y-1">
+                  <div className="flex items-center gap-2">
+                    {isPending && (
+                      <Clock className="w-4 h-4 text-[var(--text-faint)] shrink-0" />
+                    )}
+                    {isOk && (
+                      <Check className="w-4 h-4 text-green-400 shrink-0" />
+                    )}
+                    {isError && (
+                      <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+                    )}
+                    <span className="text-sm text-[var(--text)] font-medium">{ds.id}</span>
+                    <span className="text-xs text-[var(--text-faint)]">{ds.endpoint}</span>
+                    <span
+                      className={`ml-auto text-xs font-medium px-1.5 py-0.5 rounded-full
+                        ${isPending ? 'bg-[var(--overlay-bg)] text-[var(--text-faint)]' : ''}
+                        ${isOk ? 'bg-green-500/10 text-green-400' : ''}
+                        ${isError ? 'bg-red-500/10 text-red-400' : ''}
+                      `}
+                    >
+                      {isPending ? 'pending' : isOk ? 'ok' : 'error'}
+                    </span>
+                  </div>
+                  {isError && typeof status === 'object' && (
+                    <p className="text-xs text-red-400 pl-6">
+                      <span className="font-mono">{status.code}</span>: {status.message}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* "Back to Discovery" shortcut when any dataset errored */}
+      {hasAnyError && !verifyState.inFlight && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+          <XCircle className="w-4 h-4 text-red-400 shrink-0" />
+          <span className="text-sm text-red-400 flex-1">
+            One or more endpoints failed verification. Fix the endpoint configuration and re-run.
+          </span>
+          <button
+            type="button"
+            onClick={onBackToDiscovery}
+            className="text-xs text-red-400 underline whitespace-nowrap hover:text-red-300 transition-colors"
+          >
+            Back to Discovery to fix
+          </button>
+        </div>
+      )}
+
+      {/* Inline loading indicator while SSE is in flight */}
+      {verifyState.inFlight && (
+        <div className="flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          <span>Verifying endpoints…</span>
+        </div>
+      )}
+
+      {/* Config JSON preview */}
       <pre
         className="bg-[var(--overlay-bg)] border border-[var(--subtle-border)] rounded-lg p-3
-                   text-xs text-[var(--text)] overflow-auto max-h-96"
+                   text-xs text-[var(--text)] overflow-auto max-h-72"
       >
         {JSON.stringify(masked, null, 2)}
       </pre>
@@ -597,14 +840,14 @@ function ReviewStep({
         <button
           type="button"
           onClick={onSave}
-          disabled={saving}
+          disabled={!canSave}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[var(--accent)]
                      text-white text-sm font-medium
                      hover:bg-[var(--accent-2)] disabled:opacity-50 disabled:cursor-not-allowed
                      transition-colors"
         >
-          {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          {saving ? 'Saving…' : 'Save'}
+          {(verifyState.inFlight || saving) && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+          {saveLabel}
         </button>
       </div>
     </div>
