@@ -63,7 +63,7 @@ def _orchestrator(org_id: Optional[str] = None, stack_id: Optional[str] = None) 
     return SourceDiscoveryOrchestrator(
         probe_discoverer=SourceProbeDiscoverer(),
         warehouse_discoverer=WarehouseDiscoverer(org_id=org_id, stack_id=stack_id),
-        ingestion_discoverer=IngestionDiscoverer(),
+        ingestion_discoverer=IngestionDiscoverer(org_id=org_id, stack_id=stack_id),
     )
 
 

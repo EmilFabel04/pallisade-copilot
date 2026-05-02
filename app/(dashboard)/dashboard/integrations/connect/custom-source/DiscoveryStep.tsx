@@ -351,8 +351,8 @@ export function DiscoveryStep({
 
           {/* Path: ingestion */}
           <DiscoverySection
-            title="From Fivetran / Airbyte / Stitch"
-            subtitle="Connectors detected in your ingestion tools. (Available in a future update.)"
+            title="From your ingestion platforms"
+            subtitle="Source tables detected from Fivetran, Airbyte, or Stitch connectors that route to this host."
             rows={ingestionRows}
             allRows={rows}
             onUpdate={updateRow}
