@@ -237,6 +237,52 @@ def classify_dataset_zone(
 # Data-plane layer classification (for semantic layout)
 # ---------------------------------------------------------------------------
 
+# Reverse-ETL / activation platforms (data flows OUT of the warehouse to SaaS).
+# Used by classify_data_plane_role to detect ACTIVATE role.
+_REVERSE_ETL_PLATFORMS: frozenset = frozenset({
+    "hightouch",
+    "census",
+    "polytomic",
+    "rudderstack_reverse",
+    "grouparoo",
+})
+
+
+class DataPlaneRole(Enum):
+    """Capability roles for the data-plane view (left → right).
+
+    Replaces DataPlaneLayer. The integer value drives column position;
+    the enum name drives the frontend layer string.
+
+    NOTE: There is no OBSERVE role. Pallisade IS the observability layer;
+    third-party observability/monitoring tools (Elementary, Great Expectations,
+    Monte Carlo, Soda, etc.) are not represented as lineage nodes.
+    """
+    SOURCE = 0       # External upstream: app DBs, SaaS sources, event streams, file drops
+    INGEST = 1       # Connectors and pre-warehouse loaders (Fivetran, Airbyte, n8n)
+    STORE_RAW = 2    # Raw/landing tables inside the warehouse
+    TRANSFORM = 3    # Staging/intermediate transformations (dbt staging, Spark jobs)
+    STORE_SERVE = 4  # Marts, analytics, feature stores ready for consumption
+    SERVE = 5        # BI / semantic / dashboards / reports
+    ACTIVATE = 6     # Reverse-ETL targets, ML inference endpoints, exports
+
+
+_ROLE_TO_LAYER_NAME: dict = {
+    DataPlaneRole.SOURCE.value: "SOURCE",
+    DataPlaneRole.INGEST.value: "INGESTION",
+    DataPlaneRole.STORE_RAW.value: "WAREHOUSE",
+    DataPlaneRole.TRANSFORM.value: "TRANSFORMATION",
+    DataPlaneRole.STORE_SERVE.value: "WAREHOUSE",
+    DataPlaneRole.SERVE.value: "REPORTING",
+    DataPlaneRole.ACTIVATE.value: "ACTIVATION",
+}
+
+
+def role_to_layer_name(role_value: int) -> str:
+    """Map a DataPlaneRole integer to the frontend layer string."""
+    return _ROLE_TO_LAYER_NAME.get(role_value, "WAREHOUSE")
+
+
 class DataPlaneLayer(Enum):
     """Semantic layers for the data-plane view (left → right)."""
     INGESTION = 0       # n8n, Fivetran, Airbyte connectors
