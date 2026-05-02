@@ -283,74 +283,108 @@ def role_to_layer_name(role_value: int) -> str:
     return _ROLE_TO_LAYER_NAME.get(role_value, "WAREHOUSE")
 
 
-class DataPlaneLayer(Enum):
-    """Semantic layers for the data-plane view (left → right)."""
-    INGESTION = 0       # n8n, Fivetran, Airbyte connectors
-    RAW = 1             # Raw/landing tables
-    STAGING = 2         # dbt staging models, stg_ schemas
-    INTERMEDIATE = 3    # dbt intermediate models
-    MART = 4            # dbt marts, dim_/fct_ tables, analytics
-    SERVING = 5         # Leaf dataset nodes (no downstream data edges)
-    REPORTING = 6       # Dashboards, reports, BI objects
-
-
-_ZONE_TO_LAYER = {
-    DatasetZone.RAW: DataPlaneLayer.RAW.value,
-    DatasetZone.STAGING: DataPlaneLayer.STAGING.value,
-    DatasetZone.INTERMEDIATE: DataPlaneLayer.INTERMEDIATE.value,
-    DatasetZone.MART: DataPlaneLayer.MART.value,
-    DatasetZone.ANALYTICS: DataPlaneLayer.MART.value,
+_ZONE_TO_ROLE: Dict[DatasetZone, int] = {
+    DatasetZone.RAW: DataPlaneRole.STORE_RAW.value,
+    DatasetZone.STAGING: DataPlaneRole.TRANSFORM.value,
+    DatasetZone.INTERMEDIATE: DataPlaneRole.TRANSFORM.value,
+    DatasetZone.MART: DataPlaneRole.STORE_SERVE.value,
+    DatasetZone.ANALYTICS: DataPlaneRole.STORE_SERVE.value,
 }
 
 
-def classify_data_plane_layer(
+def classify_data_plane_role(
     node: LineageNode,
     canonical_type: str,
+    has_upstream_data_edges: bool = True,
     has_downstream_data_edges: bool = True,
 ) -> int:
+    """Classify a node into a capability role for the data-plane view.
+
+    Returns an integer matching DataPlaneRole.<X>.value.
+
+    Resolution order:
+      1. ACTIVATE — reverse-ETL platform OR explicit activation_target metadata
+      2. SERVE — semantic canonical type OR BI platform domain
+      3. SOURCE — external upstream (no incoming edges, not a warehouse leaf
+                  unless tagged as a dbt source)
+      4. INGEST — connector platforms / ingestion domain
+      5. Dataset role by zone (STORE_RAW / TRANSFORM / STORE_SERVE).
+         For RAW zones in warehouse domain that came from the default heuristic
+         (no explicit naming signal, not a dbt source), demote to UNKNOWN so
+         flow-driven fallback applies.
+      6. Flow-driven fallback for unknown-zone datasets
+
+    Note: There is no OBSERVE branch. Pallisade is the observability layer;
+    third-party observability/monitoring tools should not appear as nodes.
+    Any such node that does appear (e.g., from an Elementary dbt-test import)
+    falls through to STORE_RAW or its dataset-zone classification.
     """
-    Classify a node into a semantic data-plane layer for layout.
-
-    Uses metadata signals in priority order:
-    1. Canonical type (semantic → REPORTING)
-    2. Platform domain (ingestion → INGESTION, BI → REPORTING)
-    3. Existing classify_dataset_zone() for datasets
-    4. Graph position (leaf nodes → SERVING)
-
-    Returns an integer layer index (0-6).
-    """
-    # Semantic nodes (dashboards, reports) → REPORTING
-    if canonical_type == "semantic":
-        return DataPlaneLayer.REPORTING.value
-
-    # Ingestion platforms → INGESTION (but NOT destination tables in warehouses)
+    rm = node.raw_metadata or {}
     platform = (node.platform or "").lower()
-    if (platform in INGESTION_PLATFORMS and node.platform_domain != PlatformDomain.WAREHOUSE) or node.platform_domain == PlatformDomain.INGESTION:
-        return DataPlaneLayer.INGESTION.value
 
-    # BI platforms → REPORTING
+    # 1. ACTIVATE — reverse-ETL or explicit activation
+    if platform in _REVERSE_ETL_PLATFORMS:
+        return DataPlaneRole.ACTIVATE.value
+    if rm.get("activation_target"):
+        return DataPlaneRole.ACTIVATE.value
+
+    # 2. SERVE — BI / semantic
+    if canonical_type == "semantic":
+        return DataPlaneRole.SERVE.value
     if node.platform_domain == PlatformDomain.BI:
-        return DataPlaneLayer.REPORTING.value
+        return DataPlaneRole.SERVE.value
 
-    # Dataset nodes: classify by zone
+    # 3. SOURCE — external upstream
+    is_dbt_source = rm.get("dbt_resource_type") == "source"
+    if canonical_type == "dataset" and not has_upstream_data_edges:
+        if node.platform_domain != PlatformDomain.WAREHOUSE or is_dbt_source:
+            return DataPlaneRole.SOURCE.value
+
+    # 4. INGEST — connectors / loaders
+    is_ingestion_domain = node.platform_domain == PlatformDomain.INGESTION
+    is_ingestion_platform = (
+        platform in INGESTION_PLATFORMS
+        and node.platform_domain != PlatformDomain.WAREHOUSE
+    )
+    if is_ingestion_domain or is_ingestion_platform:
+        return DataPlaneRole.INGEST.value
+
+    # 5. Dataset by zone
     if canonical_type == "dataset":
         zone = classify_dataset_zone(node)
-        layer = _ZONE_TO_LAYER.get(zone)
-        if layer is not None:
-            return layer
 
-        # UNKNOWN zone — additional heuristics
-        dbt_type = node.raw_metadata.get("dbt_resource_type", "")
-        if dbt_type == "model":
-            return DataPlaneLayer.MART.value
+        # If RAW came from the warehouse-default heuristic with no explicit naming
+        # signal, demote to UNKNOWN so flow-driven fallback applies. dbt-sources
+        # are always explicitly RAW and bypass this.  Explicit naming (schema
+        # "raw", "landing", etc.) always wins.
+        if zone == DatasetZone.RAW and node.platform_domain == PlatformDomain.WAREHOUSE and not is_dbt_source:
+            schema_lower = (node.schema or "").lower()
+            name_lower = node.name.lower()
+            fqn_lower = (node.fqn or "").lower()
+            search_text = f"{schema_lower} {name_lower} {fqn_lower}"
+            explicit_raw = any(re.search(p, search_text) for p in _RAW_PATTERNS)
+            if not explicit_raw:
+                zone = DatasetZone.UNKNOWN
 
+        zone_role = _ZONE_TO_ROLE.get(zone)
+        if zone_role is not None:
+            return zone_role
+
+        # 6. Flow-driven fallback for UNKNOWN zone
         if not has_downstream_data_edges:
-            return DataPlaneLayer.SERVING.value
+            return DataPlaneRole.STORE_SERVE.value
+        if not has_upstream_data_edges:
+            return DataPlaneRole.STORE_RAW.value
+        return DataPlaneRole.TRANSFORM.value
 
-        return DataPlaneLayer.RAW.value
+    # Default: anything else lives in STORE_RAW
+    return DataPlaneRole.STORE_RAW.value
 
-    # Fallback
-    return DataPlaneLayer.RAW.value
+
+# Backwards-compatibility alias for any in-flight imports.
+# Remove in a follow-up cleanup once all callers updated.
+classify_data_plane_layer = classify_data_plane_role
+DataPlaneLayer = DataPlaneRole
 
 
 def classify_actor_capability(node: LineageNode) -> Optional[ActorCapability]:
