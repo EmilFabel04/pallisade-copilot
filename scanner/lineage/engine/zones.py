@@ -308,11 +308,10 @@ def classify_data_plane_role(
       3. SOURCE — external upstream (no incoming edges, not a warehouse leaf
                   unless tagged as a dbt source)
       4. INGEST — connector platforms / ingestion domain
-      5. Dataset role by zone (STORE_RAW / TRANSFORM / STORE_SERVE).
-         For RAW zones in warehouse domain that came from the default heuristic
-         (no explicit naming signal, not a dbt source), demote to UNKNOWN so
-         flow-driven fallback applies.
-      6. Flow-driven fallback for unknown-zone datasets
+      5. Dataset role by zone (STORE_RAW / TRANSFORM / STORE_SERVE)
+      6. Flow-driven fallback for genuinely UNKNOWN-zone datasets
+         (only reachable for non-warehouse nodes; warehouse nodes always
+         get the warehouse-default RAW classification from classify_dataset_zone).
 
     Note: There is no OBSERVE branch. Pallisade is the observability layer;
     third-party observability/monitoring tools should not appear as nodes.
@@ -349,28 +348,19 @@ def classify_data_plane_role(
     if is_ingestion_domain or is_ingestion_platform:
         return DataPlaneRole.INGEST.value
 
-    # 5. Dataset by zone
+    # 5. Dataset by zone — trust classify_dataset_zone's classification.
+    # Warehouse defaults (no explicit naming signal) → RAW is the right answer
+    # for typical Fivetran/Airbyte landings; these are the warehouse's raw layer
+    # even when the schema is named "public" or similar. Don't second-guess.
     if canonical_type == "dataset":
         zone = classify_dataset_zone(node)
-
-        # If RAW came from the warehouse-default heuristic with no explicit naming
-        # signal, demote to UNKNOWN so flow-driven fallback applies. dbt-sources
-        # are always explicitly RAW and bypass this.  Explicit naming (schema
-        # "raw", "landing", etc.) always wins.
-        if zone == DatasetZone.RAW and node.platform_domain == PlatformDomain.WAREHOUSE and not is_dbt_source:
-            schema_lower = (node.schema or "").lower()
-            name_lower = node.name.lower()
-            fqn_lower = (node.fqn or "").lower()
-            search_text = f"{schema_lower} {name_lower} {fqn_lower}"
-            explicit_raw = any(re.search(p, search_text) for p in _RAW_PATTERNS)
-            if not explicit_raw:
-                zone = DatasetZone.UNKNOWN
-
         zone_role = _ZONE_TO_ROLE.get(zone)
         if zone_role is not None:
             return zone_role
 
-        # 6. Flow-driven fallback for UNKNOWN zone
+        # 6. Flow-driven fallback for UNKNOWN zone (only reachable for
+        # non-warehouse nodes that don't match any naming pattern, since
+        # warehouse nodes always get the warehouse-default RAW classification).
         if not has_downstream_data_edges:
             return DataPlaneRole.STORE_SERVE.value
         if not has_upstream_data_edges:

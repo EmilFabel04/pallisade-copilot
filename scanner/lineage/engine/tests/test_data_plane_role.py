@@ -21,6 +21,7 @@ def _node(
     schema: str = "",
     fqn: str = "",
     raw_metadata: dict = None,
+    sources: list = None,
 ) -> LineageNode:
     return LineageNode(
         id=f"node:{platform}:{name}",
@@ -31,6 +32,7 @@ def _node(
         platform_domain=platform_domain,
         schema=schema,
         raw_metadata=raw_metadata or {},
+        sources=sources or [],
     )
 
 
@@ -121,7 +123,9 @@ def test_explicit_activation_metadata_returns_activate():
 
 
 def test_unknown_zone_leaf_returns_store_serve():
-    n = _node(schema="custom", name="thing_table")
+    """Genuine UNKNOWN-zone leaf — sources=['dbt'] bypasses the warehouse-default
+    RAW heuristic in classify_dataset_zone, exercising the flow-driven fallback."""
+    n = _node(schema="custom", name="thing_table", sources=["dbt_core"])
     role = classify_data_plane_role(
         n, canonical_type="dataset",
         has_upstream_data_edges=True, has_downstream_data_edges=False,
@@ -130,7 +134,7 @@ def test_unknown_zone_leaf_returns_store_serve():
 
 
 def test_unknown_zone_root_returns_store_raw():
-    n = _node(schema="custom", name="thing_table")
+    n = _node(schema="custom", name="thing_table", sources=["dbt_core"])
     role = classify_data_plane_role(
         n, canonical_type="dataset",
         has_upstream_data_edges=False, has_downstream_data_edges=True,
@@ -139,7 +143,7 @@ def test_unknown_zone_root_returns_store_raw():
 
 
 def test_unknown_zone_middle_returns_transform():
-    n = _node(schema="custom", name="thing_table")
+    n = _node(schema="custom", name="thing_table", sources=["dbt_core"])
     role = classify_data_plane_role(
         n, canonical_type="dataset",
         has_upstream_data_edges=True, has_downstream_data_edges=True,
@@ -147,14 +151,30 @@ def test_unknown_zone_middle_returns_transform():
     assert role == DataPlaneRole.TRANSFORM.value
 
 
-def test_dbt_source_with_generic_schema_and_upstream_returns_store_raw():
-    """A dbt source node should land in STORE_RAW even with generic schema name,
-    and even when has_upstream_data_edges=True (which triggers the inline
-    RAW-vs-UNKNOWN heuristic for non-source nodes)."""
+def test_dbt_source_with_generic_schema_returns_store_raw():
+    """A dbt source node should land in STORE_RAW (via DatasetZone.RAW) even with
+    a generic schema name, regardless of edge topology."""
     n = _node(
         platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
         schema="", name="n",
         raw_metadata={"dbt_resource_type": "source"},
+    )
+    role = classify_data_plane_role(
+        n, canonical_type="dataset",
+        has_upstream_data_edges=True, has_downstream_data_edges=True,
+    )
+    assert role == DataPlaneRole.STORE_RAW.value
+
+
+def test_fivetran_landed_warehouse_table_returns_store_raw():
+    """A typical Fivetran-loaded table in a 'public' schema (no naming signal)
+    should land in STORE_RAW via the warehouse-default heuristic in
+    classify_dataset_zone — NOT get demoted to TRANSFORM via flow-driven fallback.
+    Regression guard against an earlier inline heuristic that misclassified these."""
+    n = _node(
+        platform="bigquery", platform_domain=PlatformDomain.WAREHOUSE,
+        schema="public", name="customers",
+        fqn="acme-484520.public.customers",
     )
     role = classify_data_plane_role(
         n, canonical_type="dataset",
