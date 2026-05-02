@@ -118,9 +118,9 @@ def run_due_probes() -> int:
     advances nextProbeAt — even on failure — so a broken integration
     cannot indefinitely lock its row.
     """
-    # Feature-flag kill-switch: if CUSTOM_SOURCE is disabled, don't even
+    # Feature-flag kill-switch: if SOURCES_CATEGORY is disabled, don't even
     # touch the DB. Mirrors the gate in scanner/drivers/loader.py.
-    if os.environ.get("FEATURE_CUSTOM_SOURCE_INTEGRATION", "").lower() not in ("1", "true", "yes"):
+    if os.environ.get("FEATURE_SOURCES_CATEGORY", "").lower() not in ("1", "true", "yes"):
         return 0
 
     integrations = _fetch_due_integrations()

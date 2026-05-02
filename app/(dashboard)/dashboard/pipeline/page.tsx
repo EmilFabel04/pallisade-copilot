@@ -24,7 +24,7 @@ import {
 } from '@/components/pipeline/types';
 
 type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
-type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
+type ConnectorGroup = 'SOURCE' | 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
 
 interface ConnectorCard {
   id: string;
@@ -36,6 +36,7 @@ interface ConnectorCard {
   integration?: IntegrationDefinition;
   // For wizard-mode connectors: route to navigate to instead of opening a modal.
   href?: string;
+  status?: 'live' | 'coming_soon';
 }
 
 interface IntegrationRecord {
@@ -46,8 +47,8 @@ interface IntegrationRecord {
   lastError?: string | null;
 }
 
-const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
-const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
+const CORE_GROUP_ORDER: ConnectorGroup[] = ['SOURCE', 'WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
+const LAYER_ORDER: PipelineLayer[] = ['SOURCE', 'INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
 
 const CONNECTION_STATUS_CATEGORIES: Array<{ key: string; label: string; connectorIds: string[] }> = [
   { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'] },
@@ -67,6 +68,7 @@ const VCS_PROVIDERS = [
 ];
 
 const GROUP_COLORS: Record<ConnectorGroup, string> = {
+  SOURCE: LAYER_COLORS.SOURCE,
   WAREHOUSE: LAYER_COLORS.WAREHOUSE,
   TRANSFORM: LAYER_COLORS.TRANSFORMATION,
   ORCHESTRATION: LAYER_COLORS.ORCHESTRATION,
@@ -108,7 +110,7 @@ function categoryToGroup(category: string): ConnectorGroup {
 
 function groupLabel(group: ConnectorGroup): string {
   const labels: Record<ConnectorGroup, string> = {
-    WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration', VERSION_CONTROL: 'Version Control',
+    SOURCE: 'Sources', WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration', VERSION_CONTROL: 'Version Control',
     BI: 'BI / Reporting', INGESTION: 'Ingestion', STORAGE: 'Storage', INFRASTRUCTURE: 'Infrastructure', ALERTS: 'Alerts & Integrations',
   };
   return labels[group];
@@ -117,8 +119,9 @@ function groupLabel(group: ConnectorGroup): string {
 function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: PipelineNode[]): PipelineNode {
   const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
   const layerX: Record<PipelineLayer, number> = {
-    INGESTION: 120, VERSION_CONTROL: 300, ORCHESTRATION: 300, TRANSFORMATION: 480,
-    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040, INFRASTRUCTURE: 1160, UNCATEGORIZED: 0,
+    SOURCE: 0, INGESTION: 180, VERSION_CONTROL: 360, ORCHESTRATION: 360, TRANSFORMATION: 540,
+    WAREHOUSE: 720, REPORTING: 900, STORAGE: 720, INFRASTRUCTURE: 900,
+    NOTIFICATIONS: 1080, UNCATEGORIZED: 1080,
   };
   return {
     id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -168,6 +171,7 @@ export default function PipelinePage() {
   // ─── Derived data ─────────────────────────────────────────
   const connectorCatalog = useMemo<ConnectorCard[]>(() => {
     const coreConnectors: ConnectorCard[] = [
+      ...TOOLS.SOURCE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'SOURCE' as const, mode: 'pipeline' as const, layer: t.layer, status: t.status })),
       ...TOOLS.WAREHOUSE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['dbt_cloud', 'dbt_core'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['airflow', 'dagster', 'prefect'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),
@@ -181,23 +185,7 @@ export default function PipelinePage() {
     const alertConnectors: ConnectorCard[] = Object.values(INTEGRATIONS).flat().map((i) => ({
       id: i.id, name: i.name, description: i.description, group: categoryToGroup(i.category), mode: 'integration' as const, integration: i,
     }));
-    // Feature-flagged: CUSTOM_SOURCE_INTEGRATION ships dark by default.
-    // Ops sets NEXT_PUBLIC_FEATURE_CUSTOM_SOURCE_INTEGRATION=true to enable.
-    const wizardConnectors: ConnectorCard[] =
-      process.env.NEXT_PUBLIC_FEATURE_CUSTOM_SOURCE_INTEGRATION === 'true'
-        ? [
-            {
-              id: 'custom_source',
-              name: 'Custom Source',
-              description: 'Any HTTPS-accessible application with a JSON API. Configure it in 5 steps.',
-              group: 'INGESTION',
-              mode: 'wizard',
-              layer: 'INGESTION',
-              href: '/dashboard/integrations/connect/custom-source',
-            },
-          ]
-        : [];
-    return [...coreConnectors, ...wizardConnectors, ...alertConnectors];
+    return [...coreConnectors, ...alertConnectors];
   }, []);
 
   const connectedFromStack = useMemo(() => new Set(

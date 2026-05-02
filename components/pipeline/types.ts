@@ -5,7 +5,7 @@
  */
 
 // Pipeline layers in data flow order
-export type PipelineLayer = 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'NOTIFICATIONS' | 'UNCATEGORIZED';
+export type PipelineLayer = 'SOURCE' | 'INGESTION' | 'TRANSFORMATION' | 'WAREHOUSE' | 'REPORTING' | 'STORAGE' | 'VERSION_CONTROL' | 'ORCHESTRATION' | 'INFRASTRUCTURE' | 'NOTIFICATIONS' | 'UNCATEGORIZED';
 
 // Integration types (for non-pipeline integrations like notifications/ticketing)
 export type IntegrationType = 'NOTIFICATIONS' | 'TICKETING';
@@ -15,6 +15,7 @@ export type PipelineNodeStatus = 'PENDING' | 'CONNECTED' | 'TESTING' | 'ERROR' |
 
 // Layer colors for visual distinction
 export const LAYER_COLORS: Record<PipelineLayer, string> = {
+  SOURCE: '#64748B',         // Slate
   INGESTION: '#10B981',      // Emerald
   TRANSFORMATION: '#F59E0B', // Amber
   WAREHOUSE: '#6366F1',      // Indigo
@@ -23,6 +24,7 @@ export const LAYER_COLORS: Record<PipelineLayer, string> = {
   VERSION_CONTROL: '#8B5CF6', // Purple
   ORCHESTRATION: '#F97316',  // Orange
   INFRASTRUCTURE: '#94A3B8', // Slate
+  NOTIFICATIONS: '#EC4899',  // Pink
   UNCATEGORIZED: '#78716C',  // Stone — neutral for unknown platforms
 };
 
@@ -43,6 +45,7 @@ export const STATUS_COLORS: Record<PipelineNodeStatus, string> = {
 
 // Layer labels for UI
 export const LAYER_LABELS: Record<PipelineLayer, string> = {
+  SOURCE: 'Sources',
   INGESTION: 'Ingestion',
   TRANSFORMATION: 'Transformation',
   WAREHOUSE: 'Warehouse',
@@ -51,6 +54,7 @@ export const LAYER_LABELS: Record<PipelineLayer, string> = {
   VERSION_CONTROL: 'Version Control',
   ORCHESTRATION: 'Orchestration',
   INFRASTRUCTURE: 'Infrastructure',
+  NOTIFICATIONS: 'Notifications',
   UNCATEGORIZED: 'Uncategorized',
 };
 
@@ -99,6 +103,8 @@ export interface ToolDefinition {
   // Multi-role: additional layers this tool can serve beyond its primary layer.
   // Detected at connection time via observed_capabilities() on the backend.
   additionalLayers?: PipelineLayer[];
+  // Tile display status — defaults to 'live' when absent
+  status?: 'live' | 'coming_soon';
 }
 
 // Multi-role display configuration
@@ -134,6 +140,40 @@ export function getMultiRoleInfo(toolId: string): RoleInfo[] | undefined {
 
 // All available tools organized by layer with their config fields
 export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
+  SOURCE: [
+    {
+      id: 'custom_source',
+      name: 'Custom Source',
+      description: 'Monitor any HTTPS-accessible REST API as a source — IoT portals, vertical-SaaS platforms, custom internal services.',
+      layer: 'SOURCE',
+      status: 'live',
+      configFields: [],
+    },
+    {
+      id: 'salesforce',
+      name: 'Salesforce',
+      description: 'Monitor Salesforce objects as pipeline sources. Coming soon.',
+      layer: 'SOURCE',
+      status: 'coming_soon',
+      configFields: [],
+    },
+    {
+      id: 'shopify',
+      name: 'Shopify',
+      description: 'Monitor Shopify orders, customers, and products. Coming soon.',
+      layer: 'SOURCE',
+      status: 'coming_soon',
+      configFields: [],
+    },
+    {
+      id: 'hubspot',
+      name: 'HubSpot',
+      description: 'Monitor HubSpot CRM objects as pipeline sources. Coming soon.',
+      layer: 'SOURCE',
+      status: 'coming_soon',
+      configFields: [],
+    },
+  ],
   INGESTION: [
     { 
       id: 'fivetran', 
@@ -552,6 +592,7 @@ export const TOOLS: Record<PipelineLayer, ToolDefinition[]> = {
       ],
     },
   ],
+  NOTIFICATIONS: [],
   UNCATEGORIZED: [],
 };
 

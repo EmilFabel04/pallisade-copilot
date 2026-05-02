@@ -34,9 +34,9 @@ def register_all_drivers() -> None:
     _register = DriverRegistry.register
 
     # ── Sources (DATA_PLANE) ───────────────────────────────────────────
-    # Feature-flagged: CUSTOM_SOURCE_INTEGRATION ships dark by default.
-    # Ops sets FEATURE_CUSTOM_SOURCE_INTEGRATION=true to enable.
-    if os.environ.get("FEATURE_CUSTOM_SOURCE_INTEGRATION", "").lower() in ("1", "true", "yes"):
+    # Feature-flagged: SOURCES_CATEGORY ships dark by default.
+    # Ops sets FEATURE_SOURCES_CATEGORY=true to enable.
+    if os.environ.get("FEATURE_SOURCES_CATEGORY", "").lower() in ("1", "true", "yes"):
         try:
             from .source.custom_source_driver import CustomSourceDriver
             _register("CUSTOM_SOURCE", CustomSourceDriver)
