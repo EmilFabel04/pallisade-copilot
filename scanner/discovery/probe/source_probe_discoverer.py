@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,7 +33,14 @@ def _apply_auth(session: requests.Session, auth: Dict[str, Any]) -> None:
 
 
 def _find_arrays(obj: Any, path: str = "", max_depth: int = 3) -> List[Tuple[str, list]]:
-    """Walk JSON up to max_depth and return [(dotted_path, list)] for every array of objects."""
+    """Walk JSON up to max_depth and return [(dotted_path, list)] for every array of objects.
+
+    Deliberately skips empty arrays and arrays whose first element is not a dict —
+    schema cannot be inferred from those, and they would produce zero-column candidates
+    that no monitor can act on. If a discoverer needs to surface "table exists but empty"
+    (e.g., warehouse Path 3 hitting a freshly-created table), it must do so out-of-band
+    rather than relying on this walker.
+    """
     out: List[Tuple[str, list]] = []
     if max_depth < 0:
         return out
@@ -61,6 +69,12 @@ def _detect_timestamp_column(rows: list) -> Optional[str]:
 
 
 def _infer_columns(rows: list) -> List[ColumnMetadata]:
+    """Infer column metadata from the first row's keys.
+
+    Columns that appear only in later rows are silently missing from the inferred schema.
+    This is a deliberate first-approximation for probe-based discovery; warehouse-anchored
+    discovery (Path 3) gets a more authoritative schema from INFORMATION_SCHEMA.
+    """
     if not rows:
         return []
     first = rows[0]
@@ -108,8 +122,7 @@ class SourceProbeDiscoverer:
                     return [], DiscoveryError(code="response_too_large", message=f">{_MAX_BYTES} bytes")
 
         try:
-            import json as _json
-            parsed = _json.loads(body)
+            parsed = json.loads(body)
         except ValueError as e:
             return [], DiscoveryError(code="malformed_json", message=str(e))
 

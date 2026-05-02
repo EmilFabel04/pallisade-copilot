@@ -14,7 +14,12 @@ class _PathDiscoverer(Protocol):
 
 
 class SourceDiscoveryOrchestrator:
-    def __init__(self, probe_discoverer, warehouse_discoverer, ingestion_discoverer):
+    def __init__(
+        self,
+        probe_discoverer: _PathDiscoverer,
+        warehouse_discoverer: _PathDiscoverer,
+        ingestion_discoverer: _PathDiscoverer,
+    ):
         self._probe = probe_discoverer
         self._warehouse = warehouse_discoverer
         self._ingestion = ingestion_discoverer

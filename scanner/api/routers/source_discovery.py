@@ -26,6 +26,9 @@ from ..auth import require_principal, ActingPrincipal
 
 router = APIRouter(prefix="/api/v1/integrations/source", tags=["source-discovery"])
 
+# Per-worker, in-process cache. cachetools.TTLCache is NOT thread-safe; we rely on
+# FastAPI's single-threaded asyncio event loop. Do not switch to a multi-threaded
+# WSGI runner without wrapping this with a threading.Lock.
 _CACHE: TTLCache = TTLCache(maxsize=512, ttl=60)
 
 
@@ -89,9 +92,12 @@ async def discover(
     if not body.base_url.lower().startswith("https://"):
         raise HTTPException(400, "base_url must use https://")
 
+    # auth.secret_ref is intentionally excluded from the cache key — probe-discovery
+    # results reflect the public API shape and are safe to share across callers that
+    # hit the same (base_url, endpoint, hints) tuple regardless of credential.
     cache_key = (
         body.base_url,
-        body.auth.secret_ref,
+        body.endpoint,
         tuple(sorted(body.ingestion_hints or [])),
         tuple(sorted(body.warehouse_hints or [])),
     )
