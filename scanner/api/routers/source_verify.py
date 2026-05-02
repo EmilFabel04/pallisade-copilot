@@ -107,6 +107,8 @@ async def verify(
 
         for ds in body.datasets:
             try:
+                # cursor_value not threaded through verify — full-table probe is
+                # intentional for one-shot verification.
                 bundle = adapter.probe(
                     {
                         "endpoint": ds.endpoint,
@@ -125,6 +127,9 @@ async def verify(
                         if bundle.latest_timestamp
                         else None
                     ),
+                    # schema_match is reserved for future warehouse-vs-source schema
+                    # comparison; always true in V1 (we compare against expected_schema
+                    # only when it's set, which Path 1 candidates don't have).
                     "schema_match": True,
                 }
             except ProbeError as e:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -89,32 +89,18 @@ def _parse_sse_events(response) -> list[dict]:
     return events
 
 
-def _make_db_mock(integration_count: int = 5) -> tuple[MagicMock, MagicMock]:
-    """Build a MagicMock psycopg2 connection whose cursor returns a stable
-    Integration row count for SELECT COUNT(*) queries.
+def _make_db_mock() -> tuple[MagicMock, MagicMock]:
+    """Build a MagicMock psycopg2 connection.
 
-    ``integration_count`` is what the mock reports for every fetchone() call;
-    because source_verify never writes to the DB, the before- and after-counts
-    should always be identical.
+    Used only to stand in for the patched _get_connection so we can assert
+    that it was never called.  source_verify must not reach any DB write path.
     """
     fake_conn = MagicMock()
     fake_cursor = MagicMock()
     fake_cursor.rowcount = 0
-    fake_cursor.fetchone.return_value = (integration_count,)
     fake_conn.cursor.return_value.__enter__.return_value = fake_cursor
     fake_conn.cursor.return_value.__exit__.return_value = False
     return fake_conn, fake_cursor
-
-
-def _count_integration_rows(fake_conn: MagicMock) -> int:
-    """Issue a SELECT COUNT(*) FROM "Integration" via the mock connection and
-    return the count.  Mirrors the pattern used in test_waitlist_router.py
-    and test_integrations_router.py: obtain a cursor, execute, fetchone.
-    """
-    with fake_conn.cursor() as cur:
-        cur.execute('SELECT COUNT(*) FROM "Integration"')
-        row = cur.fetchone()
-    return row[0]
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +111,12 @@ def _count_integration_rows(fake_conn: MagicMock) -> int:
 def test_verify_valid_dataset_streams_ok_then_complete():
     """POST with one valid dataset → dataset_result(status=ok) + complete(all_pass=true).
 
-    Also asserts that the Integration table row count is identical before and
-    after the request — source_verify must never persist Integration rows even
-    on the happy path.
+    The key DB-no-write assertion is the mock_get_conn.call_count == 0 check:
+    it proves that the integrations _get_connection helper (the only module that
+    persists Integration rows) was never called by source_verify.  In a unit-test
+    context with a mocked DB the call-count check is the truthful equivalent of
+    "no Integration row was persisted" — a SELECT COUNT(*) on a mock always returns
+    the fixed stub value and cannot detect real writes.
     """
     from scanner.adapters.http_probe import MetricBundle
 
@@ -142,7 +131,7 @@ def test_verify_valid_dataset_streams_ok_then_complete():
         min_max_numeric={},
     )
 
-    fake_conn, _fake_cursor = _make_db_mock(integration_count=5)
+    fake_conn, _fake_cursor = _make_db_mock()
 
     with patch(
         "scanner.adapters.http_probe.HttpProbeAdapter.probe",
@@ -151,9 +140,6 @@ def test_verify_valid_dataset_streams_ok_then_complete():
         "scanner.api.routers.integrations._get_connection",
         return_value=fake_conn,
     ) as mock_get_conn:
-        # SELECT COUNT(*) BEFORE the verify POST.
-        count_before = _count_integration_rows(fake_conn)
-
         client = _create_test_client()
         resp = client.post(
             "/api/v1/integrations/source/verify",
@@ -161,18 +147,10 @@ def test_verify_valid_dataset_streams_ok_then_complete():
             headers={"Accept": "text/event-stream"},
         )
 
-        # SELECT COUNT(*) AFTER the verify POST.
-        count_after = _count_integration_rows(fake_conn)
-
     assert resp.status_code == 200, resp.text
 
-    # CRITICAL: Integration row count must not change — verify never persists.
-    assert count_before == count_after, (
-        f"Integration row count changed from {count_before} to {count_after}: "
-        "source_verify must NEVER write Integration rows"
-    )
-
-    # The integrations DB helper must not be called by source_verify itself.
+    # CRITICAL: mock-patched _get_connection is never called — proves the verify
+    # endpoint cannot transitively reach a DB write path.
     assert mock_get_conn.call_count == 0, (
         f"source_verify must NEVER call _get_connection — it must not persist "
         f"Integration rows, but _get_connection was called {mock_get_conn.call_count} time(s)"
@@ -205,17 +183,17 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
     """POST with a config that triggers ProbeError → error event + all_pass=false.
 
     CRITICAL: also asserts that NO Integration row was written to the DB.
-    Two complementary checks are applied:
+    The guard is mock_get_conn.call_count == 0: it proves that _get_connection
+    (the shared helper used by the integrations router to persist Integration rows)
+    was never called by source_verify, confirming it has no DB write path at all.
 
-    1. SELECT COUNT(*) FROM "Integration" before and after the POST — the count
-       must be identical, proving no row was inserted.
-    2. The shared _get_connection helper used by the integrations router (the only
-       module that actually persists Integration rows) must never be called by
-       source_verify, confirming it has no DB write path at all.
+    In a unit-test context with a mocked DB, the call-count check is the truthful
+    equivalent of "no Integration row was persisted" — a SELECT COUNT(*) on a mock
+    always returns the fixed stub value and cannot detect real writes.
     """
     from scanner.adapters.http_probe import ProbeError
 
-    fake_conn, _fake_cursor = _make_db_mock(integration_count=7)
+    fake_conn, _fake_cursor = _make_db_mock()
 
     with (
         patch(
@@ -227,9 +205,6 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
             return_value=fake_conn,
         ) as mock_get_conn,
     ):
-        # SELECT COUNT(*) BEFORE the verify POST.
-        count_before = _count_integration_rows(fake_conn)
-
         client = _create_test_client()
         resp = client.post(
             "/api/v1/integrations/source/verify",
@@ -237,16 +212,7 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
             headers={"Accept": "text/event-stream"},
         )
 
-        # SELECT COUNT(*) AFTER the verify POST.
-        count_after = _count_integration_rows(fake_conn)
-
     assert resp.status_code == 200, resp.text
-
-    # CRITICAL (spec): Integration row count must not change on any failure path.
-    assert count_before == count_after, (
-        f"Integration row count changed from {count_before} to {count_after}: "
-        "source_verify must NEVER write Integration rows on a failure path"
-    )
 
     events = _parse_sse_events(resp)
     assert len(events) == 2, f"expected 2 events, got {len(events)}: {events}"
@@ -263,8 +229,8 @@ def test_verify_probe_error_streams_error_and_no_row_persisted():
     assert comp["data"]["all_pass"] is False
     assert comp["data"]["failed_count"] == 1
 
-    # Belt-and-suspenders: the integrations DB helper was never called —
-    # no Integration row was persisted.
+    # CRITICAL: mock-patched _get_connection is never called — proves the verify
+    # endpoint cannot transitively reach a DB write path.
     assert mock_get_conn.call_count == 0, (
         f"source_verify must NEVER call _get_connection — it must not persist Integration rows, "
         f"but _get_connection was called {mock_get_conn.call_count} time(s)"

@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     },
   );
 
-  if (!upstream.ok && upstream.status !== 200) {
+  if (!upstream.ok) {
     // Non-streaming error from the upstream (e.g. 422 validation error).
     return new Response(await upstream.text(), { status: upstream.status });
   }

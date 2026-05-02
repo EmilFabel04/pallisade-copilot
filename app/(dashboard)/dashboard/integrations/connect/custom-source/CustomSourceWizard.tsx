@@ -202,6 +202,16 @@ export default function CustomSourceWizard() {
         if (currentEventName && currentDataLine) {
           processMessage(currentEventName, currentDataLine);
         }
+
+        // Stream ended. If we exited without seeing a `complete` event,
+        // inFlight is still true — clear it and surface as failure so the
+        // user can retry rather than the Save button hanging forever.
+        if (verifyRunRef.current === runId) {
+          setVerifyState((prev) => {
+            if (!prev.inFlight) return prev; // already finalized by `complete` event
+            return { ...prev, inFlight: false, allPass: false };
+          });
+        }
       } catch {
         if (verifyRunRef.current === runId) {
           setVerifyState((prev) => ({ ...prev, inFlight: false, allPass: false }));
