@@ -58,6 +58,13 @@ class ValidateResponse(BaseModel):
     warnings: List[str]
 
 
+class TestConnectionResponse(BaseModel):
+    ok: bool
+    message: str
+    latency_ms: Optional[int] = None
+    connected_at: Optional[str] = None
+
+
 class MatrixRow(BaseModel):
     integration_type: str
     id: str
@@ -153,6 +160,24 @@ async def validate_config(integration_type: str, body: ValidateRequest):
         valid=result.valid,
         errors=result.errors,
         warnings=result.warnings,
+    )
+
+
+@router.post("/{integration_type}/test-connection", response_model=TestConnectionResponse)
+async def test_connection(integration_type: str, body: ValidateRequest):
+    """Test connectivity to the external service via the driver registry.
+
+    Uses the same code path for every integration type: look up the driver
+    in DriverRegistry, then call its `test_connection(config)` method. New
+    types (e.g. CUSTOM_SOURCE) are picked up automatically once registered.
+    """
+    driver = _get_driver_or_404(integration_type)
+    result = driver.test_connection(body.config)
+    return TestConnectionResponse(
+        ok=result.ok,
+        message=result.message,
+        latency_ms=result.latency_ms,
+        connected_at=result.connected_at.isoformat() if result.connected_at else None,
     )
 
 

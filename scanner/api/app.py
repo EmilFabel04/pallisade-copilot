@@ -132,6 +132,11 @@ def create_app() -> FastAPI:
     from .routers.discovery import router as discovery_router
     from .routers.drift import router as drift_router
     from .routers.context_requests import router as context_requests_router
+    from .routers.integrations import router as integrations_router
+    from .routers.waitlist import router as waitlist_router
+    from .routers.source_discovery import router as source_discovery_router
+    from .routers.source_verify import router as source_verify_router
+    from .routers.source_secrets import router as source_secrets_router
 
     # Health endpoint
     app.include_router(health_router, tags=["Health"])
@@ -189,6 +194,21 @@ def create_app() -> FastAPI:
     # queue (see scanner/lineage/sla_discovery_listeners.py for the rationale).
     from scanner.lineage.sla_discovery_listeners import register as _register_sla_clarif_listener
     _register_sla_clarif_listener()
+
+    # Integrations operational API (probe-now, etc.)
+    app.include_router(integrations_router, prefix="/api/v1", tags=["Integrations"])
+
+    # Source-connector waitlist API
+    app.include_router(waitlist_router, prefix="/api/v1", tags=["Waitlist"])
+
+    # Source Discovery API (router already has /api/v1/integrations/source prefix)
+    app.include_router(source_discovery_router)
+
+    # Source Verify API (router already has /api/v1/integrations/source prefix)
+    app.include_router(source_verify_router)
+
+    # Source Secrets API — stash-secret + resolve-secret
+    app.include_router(source_secrets_router)
 
     logger.info("app_started", version=settings.version, environment=settings.environment)
 

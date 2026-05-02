@@ -797,13 +797,101 @@ class FivetranIntegration:
             'warnings': warnings,
         }
     
+    def list_connectors_with_schemas(self) -> list:
+        """Return connectors with source config and table metadata for discovery.
+
+        Each element is a dict shaped like:
+        {
+            "id": "<fivetran_connector_id>",
+            "config": {"host": "<source_host>", ...},  # source connector config
+            "tables": [
+                {
+                    "name": "<table_name>",
+                    "columns": [
+                        {"name": "<col_name>", "type": "UNKNOWN", "nullable": True}
+                    ]
+                }
+            ],
+            "destination_schema": "<dest_schema>",
+            "destination_warehouse_type": "<snowflake|bigquery|postgres|redshift|...>",
+        }
+
+        Notes:
+        - Fivetran's schema-management API (/connectors/{id}/schemas) exposes
+          column names and sync settings, but NOT column data types — types are
+          known only at the destination warehouse. We emit type="UNKNOWN" so
+          callers can fall back to WarehouseDiscoverer for actual types.
+        - destination_warehouse_type is resolved via the group's destination.
+          If the destination lookup fails we default to "snowflake".
+        """
+        groups = self.get_groups()
+        # Build a map from group_id → destination_type in one pass.
+        group_dest_type: Dict[str, str] = {}
+        for group in groups:
+            try:
+                dest_result = self._request('GET', f'/destinations/{group.id}')
+                service = dest_result.get('data', {}).get('service', 'snowflake')
+                group_dest_type[group.id] = service.lower()
+            except Exception:
+                group_dest_type[group.id] = 'snowflake'
+
+        result: list = []
+        for group in groups:
+            try:
+                connectors_result = self._request('GET', f'/groups/{group.id}/connectors')
+                items = connectors_result.get('data', {}).get('items', [])
+            except Exception as exc:
+                logger.warning("Failed to list connectors for group %s: %s", group.id, exc)
+                continue
+
+            for conn_data in items:
+                conn_id = conn_data.get('id', '')
+                # /connectors/{id} raw config — includes source host/port/db
+                try:
+                    detail = self._request('GET', f'/connectors/{conn_id}')
+                    raw_config = detail.get('data', {}).get('config', {})
+                    dest_schema = detail.get('data', {}).get('schema', '')
+                except Exception as exc:
+                    logger.warning("Failed to fetch connector detail %s: %s", conn_id, exc)
+                    raw_config = conn_data.get('config', {})
+                    dest_schema = conn_data.get('schema', '')
+
+                # Tables from schema-management endpoint
+                tables: list = []
+                try:
+                    schema_result = self._request('GET', f'/connectors/{conn_id}/schemas')
+                    schemas_data = schema_result.get('data', {}).get('schemas', {})
+                    for _schema_name, schema_info in schemas_data.items():
+                        for table_name, table_info in schema_info.get('tables', {}).items():
+                            columns = [
+                                {
+                                    "name": col_name,
+                                    "type": "UNKNOWN",   # Fivetran doesn't expose source types
+                                    "nullable": True,
+                                }
+                                for col_name in table_info.get('columns', {}).keys()
+                            ]
+                            tables.append({"name": table_name, "columns": columns})
+                except Exception as exc:
+                    logger.warning("Failed to fetch schema for connector %s: %s", conn_id, exc)
+
+                result.append({
+                    "id": conn_id,
+                    "config": raw_config,
+                    "tables": tables,
+                    "destination_schema": dest_schema,
+                    "destination_warehouse_type": group_dest_type.get(group.id, 'snowflake'),
+                })
+
+        return result
+
     def close(self):
         """Close the HTTP client."""
         self._client.close()
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, *args):
         self.close()
 

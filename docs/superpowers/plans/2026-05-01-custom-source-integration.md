@@ -154,7 +154,7 @@ In the same `Integration` block, add:
 
 - [ ] **Step 4: Push schema to dev DB**
 
-This repo uses `prisma db push` (not `prisma migrate`) — there is no `prisma/migrations/` directory and the project explicitly adopted the db-push workflow.
+This repo uses `prisma db push` (not `prisma migrate`). There is no `prisma/migrations/` directory and the project explicitly adopted db-push (see commit `0abd61b` "adopt db push workflow"). Do NOT run `prisma migrate dev` or `prisma migrate deploy`.
 
 Run: `npx prisma db push`
 Expected: `🚀 Your database is now in sync with your Prisma schema.` Plus regenerated client output.

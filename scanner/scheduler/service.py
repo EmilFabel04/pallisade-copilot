@@ -175,6 +175,14 @@ class SchedulerService:
         while self._running:
             try:
                 await self._check_due_tasks()
+                # Custom-source probes run on their own cadence
+                try:
+                    from scanner.scheduler.probe_runner import run_due_probes
+                    n = run_due_probes()
+                    if n:
+                        logger.info("[Scheduler] Ran custom-source probes", count=n)
+                except Exception as exc:
+                    logger.warning("[Scheduler] probe runner failed", error=str(exc))
                 await self._check_drift_analysis()
                 await self._check_lineage_extraction()
             except Exception as e:

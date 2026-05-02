@@ -8,6 +8,7 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.2
 python-multipart==0.0.6
 slowapi>=0.1.9  # Rate limiting
+sse-starlette>=1.6,<3  # Server-Sent Events for streaming SSE endpoints
 
 # Database connectors
 snowflake-connector-python>=3.5.0
@@ -23,6 +24,7 @@ pyodbc>=5.0.1  # SQL Server / Azure SQL / Azure Synapse
 sqlalchemy>=2.0.0
 pandas>=2.2.0  # Updated for Python 3.14 compatibility
 numpy>=1.26.0  # Updated for Python 3.14 compatibility
+datasketch>=1.6.0  # HyperLogLog for HttpProbeAdapter distinct counts / value fingerprints
 
 # DuckDB for sandbox testing (in-memory, fast, SQL-compatible)
 duckdb>=0.9.2
@@ -46,6 +48,7 @@ anthropic>=0.39.0           # Claude for co-pilot (alternative)
 sqlglot==20.11.0
 
 # Security and utilities
+cachetools>=5.3,<6
 cryptography==41.0.7
 python-dotenv==1.0.0
 
@@ -72,6 +75,7 @@ structlog==23.2.0
 pytest>=7.4.0
 pytest-cov>=4.1.0
 pytest-asyncio>=0.21.0
+responses>=0.24.0  # HTTP request mocking for HttpProbeAdapter tests
 
 # MCP (Model Context Protocol) for dynamic tool access
 mcp>=1.0.0

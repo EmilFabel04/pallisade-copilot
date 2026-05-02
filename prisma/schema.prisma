@@ -50,6 +50,7 @@ model User {
   auditLogs            AuditLog[]
   appliedFixes         AppliedFix[]
   artifacts            Artifact[]
+  sourceConnectorWaitlist  SourceConnectorWaitlist[]
 
   @@index([organizationId])
 }
@@ -1625,6 +1626,10 @@ model Integration {
   lastSchemaExtractedAt  DateTime?
   lastLogsExtractedAt    DateTime?
 
+  // Probe scheduling (CUSTOM_SOURCE only; null otherwise)
+  nextProbeAt   DateTime?
+  probeSchedule String? // "hourly" | "every_6h" | "daily" | "weekly" | null
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1645,6 +1650,9 @@ model Integration {
 
   // Source contract (1:1)
   sourceContract SourceContract?
+
+  // Custom source probe history
+  customSourceProbeRuns CustomSourceProbeRun[]
 
   @@unique([organizationId, type, name]) // Prevent duplicate connections
   @@index([organizationId])
@@ -1832,6 +1840,11 @@ enum IntegrationType {
   // DATA WAREHOUSES (Additional)
   // ===========================================
   DATABRICKS // Databricks Lakehouse Platform
+
+  // ===========================================
+  // SOURCE (Layer: SOURCE) — operational sources
+  // ===========================================
+  CUSTOM_SOURCE // Customer-configured web-hosted source (REST API)
 
   // ===========================================
   // CLOUD STORAGE
@@ -2094,6 +2107,42 @@ model MonitorRun {
   @@index([status])
 }
 
+// Per-run record of a CUSTOM_SOURCE probe. Stores derived metrics only — raw rows are NEVER persisted.
+model CustomSourceProbeRun {
+  id            String @id @default(cuid())
+  integrationId String
+  datasetId     String // matches dataset.id from Integration.config
+
+  // Outcome
+  status       ProbeRunStatus
+  errorCode    String? // e.g. "auth_failed", "timeout", "response_too_large"
+  errorMessage String?
+
+  // Derived metrics (raw rows are NEVER persisted)
+  rowCount          Int?
+  latestTimestamp   DateTime?
+  columnSchema      Json? // [{ name, data_type, is_nullable }, ...]
+  nullCounts        Json? // { columnName: int, ... }
+  distinctCounts    Json? // { columnName: int, ... }
+  valueFingerprints Json? // { columnName: base64-encoded HLL bytes, ... }
+  minMaxNumeric     Json? // { columnName: [min, max], ... }
+
+  // Timing
+  probedAt   DateTime @default(now())
+  durationMs Int?
+
+  // Relations
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([integrationId, datasetId, probedAt])
+  @@index([probedAt])
+}
+
+enum ProbeRunStatus {
+  SUCCESS
+  FAILED
+}
+
 model MonitorBaseline {
   id String @id @default(cuid())
 
@@ -2329,4 +2378,15 @@ model DriftRecommendation {
   @@index([monitorId])
   @@index([runId])
   @@index([pipelineStackId])
+}
+
+model SourceConnectorWaitlist {
+  id           String   @id @default(cuid())
+  userId       String
+  connectorId  String   // 'salesforce' | 'shopify' | 'hubspot'
+  requestedAt  DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, connectorId])
+  @@index([connectorId])
 }

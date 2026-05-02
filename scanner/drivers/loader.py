@@ -9,6 +9,7 @@ loading (same pattern as scanner/adapters/factory.py).
 from __future__ import annotations
 
 import logging
+import os
 
 from .registry import DriverRegistry
 
@@ -31,6 +32,16 @@ def register_all_drivers() -> None:
     _loaded = True
 
     _register = DriverRegistry.register
+
+    # ── Sources (DATA_PLANE) ───────────────────────────────────────────
+    # Feature-flagged: SOURCES_CATEGORY ships dark by default.
+    # Ops sets FEATURE_SOURCES_CATEGORY=true to enable.
+    if os.environ.get("FEATURE_SOURCES_CATEGORY", "").lower() in ("1", "true", "yes"):
+        try:
+            from .source.custom_source_driver import CustomSourceDriver
+            _register("CUSTOM_SOURCE", CustomSourceDriver)
+        except Exception as e:
+            logger.debug("Custom Source driver not loaded: %s", e)
 
     # ── Warehouses (DATA_PLANE) ────────────────────────────────────────
     try:

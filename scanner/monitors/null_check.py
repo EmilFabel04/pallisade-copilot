@@ -522,3 +522,35 @@ class NullCheckMonitor(BaseMonitor):
             )
         except Exception:
             return
+
+
+def _run_null_check_for_custom_source(task: Dict[str, Any]) -> Dict[str, Any]:
+    from scanner.monitors.custom_source_results import latest_probe_run_for
+
+    integration_id = task["integrationId"]
+    config = task.get("config") or {}
+    dataset_id = config.get("dataset_id")
+    column = config.get("column")
+    if not dataset_id or not column:
+        return {"status": "ERROR", "message": "config.dataset_id and config.column required"}
+
+    run = latest_probe_run_for(integration_id, dataset_id)
+    if not run:
+        return {"status": "ERROR", "message": "no probe run yet"}
+
+    row_count = int(run.get("row_count") or 0)
+    null_counts = run.get("null_counts") or {}
+    if row_count == 0:
+        return {"status": "OK", "value": 0.0, "threshold": None, "message": "empty dataset"}
+
+    null_count = int(null_counts.get(column) or 0)
+    null_rate = null_count / row_count
+
+    threshold = float(config.get("max_null_rate", 0.0))
+    status = "ALERT" if null_rate > threshold else "OK"
+    return {
+        "status": status,
+        "value": null_rate,
+        "threshold": threshold,
+        "message": f"null rate for {column!r}: {null_rate:.3f} (max {threshold:.3f})",
+    }

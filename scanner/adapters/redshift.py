@@ -259,7 +259,29 @@ class RedshiftAdapter(DatabaseAdapter):
             ))
         
         return columns
-    
+
+    def get_table_schema(self, fqn: str) -> List[Dict[str, Any]]:
+        """Return column metadata for *fqn* as a list of plain dicts.
+
+        Each dict contains ``column_name``, ``data_type``, and ``is_nullable``
+        (bool). This is the canonical interface used by :class:`WarehouseDiscoverer`.
+
+        Redshift FQNs may optionally include a leading ``redshift.`` warehouse
+        prefix (e.g. ``"redshift.public.my_table"``). The prefix is stripped
+        before passing to :meth:`get_columns`, which handles ``schema.table``
+        and plain ``table`` forms.
+        """
+        parts = fqn.split(".")
+        if len(parts) >= 2 and parts[0].lower() == "redshift":
+            table_ref = ".".join(parts[1:])
+        else:
+            table_ref = fqn
+        cols = self.get_columns(table_ref)
+        return [
+            {"column_name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
+            for c in cols
+        ]
+
     def get_column_stats(self,
                          table: str,
                          columns: Optional[List[str]] = None,

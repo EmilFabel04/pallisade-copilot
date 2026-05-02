@@ -731,3 +731,35 @@ class VolumeMonitor(BaseMonitor):
             ),
             details=details,
         )
+
+
+def _run_volume_for_custom_source(task: Dict[str, Any]) -> Dict[str, Any]:
+    from scanner.monitors.custom_source_results import latest_probe_run_for
+
+    integration_id = task["integrationId"]
+    config = task.get("config") or {}
+    dataset_id = config.get("dataset_id")
+    if not dataset_id:
+        return {"status": "ERROR", "message": "config.dataset_id missing for CUSTOM_SOURCE volume"}
+
+    run = latest_probe_run_for(integration_id, dataset_id)
+    if not run:
+        return {"status": "ERROR", "message": "no probe run yet"}
+
+    row_count = int(run.get("row_count") or 0)
+    min_rows = config.get("min_rows")
+    max_rows = config.get("max_rows")
+
+    status = "OK"
+    msg = f"row_count={row_count}"
+    if min_rows is not None and row_count < int(min_rows):
+        status, msg = "ALERT", f"row_count {row_count} < min {min_rows}"
+    elif max_rows is not None and row_count > int(max_rows):
+        status, msg = "ALERT", f"row_count {row_count} > max {max_rows}"
+
+    return {
+        "status": status,
+        "value": float(row_count),
+        "threshold": float(min_rows) if min_rows is not None else None,
+        "message": msg,
+    }

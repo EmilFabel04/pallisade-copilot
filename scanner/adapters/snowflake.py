@@ -316,12 +316,35 @@ class SnowflakeAdapter(DatabaseAdapter):
             for row in result
         ]
     
+    def get_table_schema(self, fqn: str) -> List[Dict[str, Any]]:
+        """Return column metadata for *fqn* as a list of plain dicts.
+
+        Each dict contains ``column_name``, ``data_type``, and ``is_nullable``
+        (bool). This is the canonical interface used by :class:`WarehouseDiscoverer`.
+
+        Snowflake FQNs may optionally include a leading ``snowflake.`` warehouse
+        prefix (e.g. ``"snowflake.MYDB.PUBLIC.water_meters"``). The prefix is
+        stripped before passing to :meth:`get_columns`, which handles
+        ``database.schema.table`` and shorter forms.
+        """
+        # Strip leading warehouse-type prefix if present (e.g. "snowflake.DB.SCH.T" → "DB.SCH.T")
+        parts = fqn.split(".")
+        if len(parts) >= 3 and parts[0].lower() == "snowflake":
+            table_ref = ".".join(parts[1:])
+        else:
+            table_ref = fqn
+        cols = self.get_columns(table_ref)
+        return [
+            {"column_name": c.name, "data_type": c.data_type, "is_nullable": c.is_nullable}
+            for c in cols
+        ]
+
     # =========================================================================
     # COLUMN STATISTICS
     # =========================================================================
-    
-    def get_column_stats(self, 
-                         table: str, 
+
+    def get_column_stats(self,
+                         table: str,
                          columns: Optional[List[str]] = None,
                          sample_size: Optional[int] = None) -> List[ColumnStats]:
         """Get detailed column statistics from Snowflake."""

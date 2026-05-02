@@ -694,3 +694,34 @@ class FreshnessMonitor(BaseMonitor):
                 ),
             },
         )
+
+
+def _run_freshness_for_custom_source(task: Dict[str, Any]) -> Dict[str, Any]:
+    from scanner.monitors.custom_source_results import latest_probe_run_for
+    from datetime import datetime, timezone
+
+    integration_id = task["integrationId"]
+    dataset_id = (task.get("config") or {}).get("dataset_id")
+    if not dataset_id:
+        return {"status": "ERROR", "message": "config.dataset_id missing for CUSTOM_SOURCE freshness"}
+
+    run = latest_probe_run_for(integration_id, dataset_id)
+    if not run:
+        return {"status": "ERROR", "message": "no probe run yet"}
+
+    latest_ts = run["latest_timestamp"]
+    if latest_ts is None:
+        return {"status": "ERROR", "message": "probe captured no timestamp"}
+
+    if latest_ts.tzinfo is None:
+        latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    hours = (now - latest_ts).total_seconds() / 3600.0
+
+    threshold = float((task.get("config") or {}).get("max_hours_since_update", 24))
+    return {
+        "status": "OK" if hours <= threshold else "ALERT",
+        "value": hours,
+        "threshold": threshold,
+        "message": f"{hours:.1f} hours since last record",
+    }

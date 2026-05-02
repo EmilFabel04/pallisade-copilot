@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, CircleAlert, Info, Loader2, Pencil, Search, Trash2, Unplug, X } from 'lucide-react';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import { usePipeline } from '@/contexts/PipelineContext';
@@ -24,16 +24,19 @@ import {
 } from '@/components/pipeline/types';
 
 type ConnectorStatus = 'CONNECTED' | 'NEEDS_ATTENTION' | 'NOT_CONNECTED';
-type ConnectorGroup = 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
+type ConnectorGroup = 'SOURCE' | 'WAREHOUSE' | 'TRANSFORM' | 'ORCHESTRATION' | 'BI' | 'INGESTION' | 'STORAGE' | 'VERSION_CONTROL' | 'INFRASTRUCTURE' | 'ALERTS';
 
 interface ConnectorCard {
   id: string;
   name: string;
   description: string;
   group: ConnectorGroup;
-  mode: 'pipeline' | 'integration';
+  mode: 'pipeline' | 'integration' | 'wizard';
   layer?: PipelineLayer;
   integration?: IntegrationDefinition;
+  // For wizard-mode connectors: route to navigate to instead of opening a modal.
+  href?: string;
+  status?: 'live' | 'coming_soon';
 }
 
 interface IntegrationRecord {
@@ -44,8 +47,8 @@ interface IntegrationRecord {
   lastError?: string | null;
 }
 
-const CORE_GROUP_ORDER: ConnectorGroup[] = ['WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
-const LAYER_ORDER: PipelineLayer[] = ['INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
+const CORE_GROUP_ORDER: ConnectorGroup[] = ['SOURCE', 'WAREHOUSE', 'TRANSFORM', 'ORCHESTRATION', 'VERSION_CONTROL', 'BI', 'INGESTION', 'STORAGE', 'INFRASTRUCTURE', 'ALERTS'];
+const LAYER_ORDER: PipelineLayer[] = ['SOURCE', 'INGESTION', 'VERSION_CONTROL', 'ORCHESTRATION', 'TRANSFORMATION', 'WAREHOUSE', 'STORAGE', 'REPORTING', 'INFRASTRUCTURE'];
 
 const CONNECTION_STATUS_CATEGORIES: Array<{ key: string; label: string; connectorIds: string[] }> = [
   { key: 'warehouse', label: 'Warehouse', connectorIds: ['bigquery', 'snowflake', 'postgres', 'redshift', 'sqlserver', 'azure_sql', 'databricks'] },
@@ -65,6 +68,7 @@ const VCS_PROVIDERS = [
 ];
 
 const GROUP_COLORS: Record<ConnectorGroup, string> = {
+  SOURCE: LAYER_COLORS.SOURCE,
   WAREHOUSE: LAYER_COLORS.WAREHOUSE,
   TRANSFORM: LAYER_COLORS.TRANSFORMATION,
   ORCHESTRATION: LAYER_COLORS.ORCHESTRATION,
@@ -106,7 +110,7 @@ function categoryToGroup(category: string): ConnectorGroup {
 
 function groupLabel(group: ConnectorGroup): string {
   const labels: Record<ConnectorGroup, string> = {
-    WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration', VERSION_CONTROL: 'Version Control',
+    SOURCE: 'Sources', WAREHOUSE: 'Warehouse', TRANSFORM: 'Transform', ORCHESTRATION: 'Orchestration', VERSION_CONTROL: 'Version Control',
     BI: 'BI / Reporting', INGESTION: 'Ingestion', STORAGE: 'Storage', INFRASTRUCTURE: 'Infrastructure', ALERTS: 'Alerts & Integrations',
   };
   return labels[group];
@@ -115,8 +119,9 @@ function groupLabel(group: ConnectorGroup): string {
 function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: PipelineNode[]): PipelineNode {
   const sameLayerCount = existingNodes.filter((n) => n.layer === layer).length;
   const layerX: Record<PipelineLayer, number> = {
-    INGESTION: 120, VERSION_CONTROL: 300, ORCHESTRATION: 300, TRANSFORMATION: 480,
-    WAREHOUSE: 760, STORAGE: 880, REPORTING: 1040, INFRASTRUCTURE: 1160, UNCATEGORIZED: 0,
+    SOURCE: 0, INGESTION: 180, VERSION_CONTROL: 360, ORCHESTRATION: 360, TRANSFORMATION: 540,
+    WAREHOUSE: 720, REPORTING: 900, STORAGE: 720, INFRASTRUCTURE: 900,
+    NOTIFICATIONS: 1300, UNCATEGORIZED: 1080,
   };
   return {
     id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -146,6 +151,7 @@ function buildAutoEdges(nodes: PipelineNode[], existingEdges: PipelineEdge[]): P
 }
 
 export default function PipelinePage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { selectedPipelineId, loading: pipelineLoading } = usePipeline();
   const lastPipelineIdRef = useRef<string | null>(null);
@@ -164,7 +170,9 @@ export default function PipelinePage() {
 
   // ─── Derived data ─────────────────────────────────────────
   const connectorCatalog = useMemo<ConnectorCard[]>(() => {
+    const sourcesEnabled = process.env.NEXT_PUBLIC_FEATURE_SOURCES_CATEGORY === 'true';
     const coreConnectors: ConnectorCard[] = [
+      ...(sourcesEnabled ? TOOLS.SOURCE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'SOURCE' as const, mode: 'pipeline' as const, layer: t.layer, status: t.status })) : []),
       ...TOOLS.WAREHOUSE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['dbt_cloud', 'dbt_core'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['airflow', 'dagster', 'prefect'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),
@@ -456,6 +464,7 @@ export default function PipelinePage() {
 
   // ─── Handlers ─────────────────────────────────────────────
   const handleConnect = useCallback((connector: ConnectorCard) => {
+    if (connector.mode === 'wizard' && connector.href) { router.push(connector.href); return; }
     if (connector.mode === 'integration' && connector.integration) { setIntegrationModal(connector.integration); return; }
     const existingNode = stack.nodes.find((n) => n.toolType === connector.id);
     if (existingNode) { setNodeModal(existingNode); return; }
@@ -464,7 +473,7 @@ export default function PipelinePage() {
     const newNode = createNodeForTool(connector.id, layer, stack.nodes);
     setStack((prev) => ({ ...prev, nodes: [...prev.nodes, newNode], edges: buildAutoEdges([...prev.nodes, newNode], prev.edges) }));
     setNodeModal(newNode);
-  }, [stack.nodes]);
+  }, [router, stack.nodes]);
 
   const handleNodeConfigSaved = useCallback((config: Record<string, any>) => {
     if (!nodeModal) return;
@@ -631,18 +640,21 @@ export default function PipelinePage() {
                   const status = connectorStatusById.get(connector.id) || 'NOT_CONNECTED';
                   const isExpanded = expandedConnector === connector.id;
                   const isDisconnecting = disconnecting === connector.id;
+                  const isComingSoon = connector.status === 'coming_soon';
 
                   return (
                     <div
                       key={connector.id}
-                      className={`rounded-xl border p-4 transition-all cursor-pointer group ${
-                        status === 'CONNECTED'
-                          ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07]'
+                      className={`rounded-xl border p-4 transition-all group ${
+                        isComingSoon
+                          ? 'border-[var(--border-medium)] bg-[var(--overlay-faint)] opacity-50 cursor-not-allowed'
+                          : status === 'CONNECTED'
+                          ? 'border-emerald-500/30 bg-emerald-500/[0.04] hover:bg-emerald-500/[0.07] cursor-pointer'
                           : status === 'NEEDS_ATTENTION'
-                          ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07]'
-                          : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)]'
+                          ? 'border-amber-500/30 bg-amber-500/[0.04] hover:bg-amber-500/[0.07] cursor-pointer'
+                          : 'border-[var(--border-medium)] bg-[var(--overlay-faint)] hover:bg-[var(--subtle-bg)] hover:border-[var(--overlay-strong)] cursor-pointer'
                       }`}
-                      onClick={() => setExpandedConnector(isExpanded ? null : connector.id)}
+                      onClick={() => { if (!isComingSoon) setExpandedConnector(isExpanded ? null : connector.id); }}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-3 min-w-0">
@@ -674,7 +686,14 @@ export default function PipelinePage() {
 
                       {/* Action buttons — always visible at bottom */}
                       <div className="mt-3 pt-3 border-t border-[var(--subtle-border)] flex items-center gap-2">
-                        {status === 'CONNECTED' ? (
+                        {isComingSoon ? (
+                          <button
+                            disabled
+                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-[var(--border-medium)] text-[var(--muted)] cursor-not-allowed"
+                          >
+                            Coming soon
+                          </button>
+                        ) : status === 'CONNECTED' ? (
                           <>
                             <button
                               onClick={(e) => { e.stopPropagation(); handleConnect(connector); }}

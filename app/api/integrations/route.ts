@@ -5,6 +5,8 @@ import { encrypt, decrypt } from '@/lib/crypto';
 import { resolveEffectiveSLA } from '@/lib/contracts/resolver';
 import { PipelineSLAData, NodeSLAWithOverrides } from '@/components/contracts/types';
 import { notifyEvents } from '@/lib/notifications';
+import { validateVerifyToken, computeConfigHash } from '@/lib/server/verify-token';
+import { scannerClient } from '@/lib/scanner-client';
 
 // GET /api/integrations - List all integrations for the user's organization
 // Now includes both legacy Integrations AND Pipeline nodes for compatibility
@@ -561,27 +563,131 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { type, name, credentials, config } = body;
+    const { type, name, credentials, config, probeSchedule, activate } = body;
 
     if (!type || !name) {
       return NextResponse.json({ error: 'Type and name are required' }, { status: 400 });
     }
 
+    if (type === 'CUSTOM_SOURCE' &&
+        process.env.NEXT_PUBLIC_FEATURE_SOURCES_CATEGORY !== 'true') {
+      return NextResponse.json({ error: 'CUSTOM_SOURCE not enabled' }, { status: 404 });
+    }
+
+    // ── CUSTOM_SOURCE server-side verify gate ────────────────────────────────
+    // An integration row that exists in the DB is, by construction, working.
+    // For CUSTOM_SOURCE, this invariant is enforced here: we require a valid
+    // verify_token issued by FastAPI after a successful all-pass probe run.
+    if (type === 'CUSTOM_SOURCE') {
+      const verifyToken: string | undefined = body.verify_token;
+      if (!verifyToken) {
+        return NextResponse.json(
+          { error: 'verify_token required for CUSTOM_SOURCE' },
+          { status: 400 },
+        );
+      }
+
+      // The config hash must be computed over the same config that was verified.
+      // We hash body.config (the same shape the wizard sends to /verify as the
+      // body minus non-config keys like name, schedule, stack_id).
+      // Note: config_hash is compared against what FastAPI hashed from the full
+      // VerifyRequest body, so we hash body.config here using the same canonical
+      // algorithm that verify_token.py uses on the Python side.
+      const configHashInput = body.config ?? {};
+      const expectedConfigHash = computeConfigHash(configHashInput);
+
+      if (!organizationId) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
+      }
+
+      const { valid, reason } = validateVerifyToken(verifyToken, organizationId, expectedConfigHash);
+      if (!valid) {
+        return NextResponse.json(
+          { error: `verify_token validation failed: ${reason}` },
+          { status: 400 },
+        );
+      }
+
+      // Resolve the stash ref to the durable secret value.
+      // The wizard stores the raw secret transiently in the stash; we resolve it
+      // here so the persisted Integration config carries the real credential.
+      const secretRef: string | undefined = body.config?.auth?.secret_ref;
+      if (secretRef) {
+        try {
+          const resolveResp = await scannerClient.fetch(
+            session,
+            '/api/v1/integrations/source/resolve-secret',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ secret_ref: secretRef }),
+            },
+          );
+          if (!resolveResp.ok) {
+            const errBody = await resolveResp.json().catch(() => ({}));
+            return NextResponse.json(
+              {
+                error:
+                  (errBody as any).detail ||
+                  (errBody as any).error ||
+                  'Failed to resolve credentials — they may have expired. Re-run the wizard.',
+              },
+              { status: 400 },
+            );
+          }
+          const { secret } = await resolveResp.json();
+          // Strip both the stash ref and any raw secret from the persisted config
+          // so that Integration.config never contains plaintext credentials.
+          // The raw secret goes ONLY into the encrypted credentials column below.
+          const { secret_ref: _ref, secret: _existingSecret, ...nonSecretAuth } = body.config?.auth ?? {};
+          body.config = {
+            ...body.config,
+            auth: nonSecretAuth,  // auth shape minus all credential fields
+          };
+          // Store the durable secret in the encrypted credentials column only.
+          // probe_runner.py:_resolve_secret sources it from here, NOT config.auth.
+          body.credentials = { secret };
+        } catch {
+          return NextResponse.json(
+            { error: 'Failed to reach scanner to resolve credentials — try again' },
+            { status: 502 },
+          );
+        }
+      }
+    }
+
+    // Use body.credentials and body.config directly so CUSTOM_SOURCE can mutate them
+    // above (resolve-secret path) and have those changes picked up here.
+    const effectiveCredentials = body.credentials ?? null;
+    const effectiveConfig = body.config ?? null;
+
     // Encrypt credentials before storing
-    const encryptedCredentials = credentials ? encrypt(JSON.stringify(credentials)) : null;
+    const encryptedCredentials = effectiveCredentials ? encrypt(JSON.stringify(effectiveCredentials)) : null;
 
     // Generate connection info for display
-    const connectionInfo = generateConnectionInfo(type, credentials, config);
+    const connectionInfo = generateConnectionInfo(type, effectiveCredentials, effectiveConfig);
 
+    // For CUSTOM_SOURCE, populate probe scheduling so the runner picks it up.
+    // The wizard sends `probeSchedule` (one of "hourly" | "every_6h" | "daily" |
+    // "weekly") and `activate=true`. Without nextProbeAt + ACTIVE status, the
+    // probe runner's WHERE clause filters the row out forever.
+    const isCustomSource = type === 'CUSTOM_SOURCE';
     const integration = await prisma.integration.create({
       data: {
         type,
         name,
         credentials: encryptedCredentials ? { encrypted: encryptedCredentials } : undefined,
-        config,
+        config: effectiveConfig,
         connectionInfo,
-        status: 'INACTIVE',
+        status: isCustomSource && activate ? 'ACTIVE' : 'INACTIVE',
         organizationId,
+        ...(isCustomSource && probeSchedule
+          ? {
+              probeSchedule,
+              // Run the first probe on the next scheduler tick (now).
+              nextProbeAt: new Date(),
+            }
+          : {}),
       },
     });
 
