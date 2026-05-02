@@ -121,7 +121,7 @@ function createNodeForTool(toolId: string, layer: PipelineLayer, existingNodes: 
   const layerX: Record<PipelineLayer, number> = {
     SOURCE: 0, INGESTION: 180, VERSION_CONTROL: 360, ORCHESTRATION: 360, TRANSFORMATION: 540,
     WAREHOUSE: 720, REPORTING: 900, STORAGE: 720, INFRASTRUCTURE: 900,
-    NOTIFICATIONS: 1080, UNCATEGORIZED: 1080,
+    NOTIFICATIONS: 1300, UNCATEGORIZED: 1080,
   };
   return {
     id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
