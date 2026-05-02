@@ -149,15 +149,19 @@ DOMAIN_TO_LAYER: Dict[PlatformDomain, str] = {
 }
 
 # Layer ordering for deterministic layout (left → right)
+# Includes both domain-derived layers (used by lane Pipeline Overview)
+# and capability-role-derived layers (used by data-plane view).
 LAYER_ORDER: Dict[str, int] = {
-    "INGESTION": 0,
-    "ORCHESTRATION": 1,
-    "WAREHOUSE": 2,
-    "TRANSFORMATION": 3,
-    "REPORTING": 4,
-    "STORAGE": 5,
-    "VERSION_CONTROL": 6,
-    "INFRASTRUCTURE": 7,
+    "SOURCE": 0,
+    "INGESTION": 1,
+    "ORCHESTRATION": 2,
+    "WAREHOUSE": 3,
+    "TRANSFORMATION": 4,
+    "REPORTING": 5,
+    "ACTIVATION": 6,
+    "STORAGE": 7,
+    "VERSION_CONTROL": 8,
+    "INFRASTRUCTURE": 9,
 }
 
 
