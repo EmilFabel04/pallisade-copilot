@@ -2946,6 +2946,24 @@ class ViewBuilder:
         node_id_set: Set[str] = set()
         unmapped: List[Dict[str, Any]] = []
 
+        # Pre-compute upstream/downstream degree among the candidate dataset/
+        # semantic node set so we can classify capability role per node.
+        candidate_ids: Set[str] = {
+            n.id for n in self.graph.nodes.values()
+            if (n.canonical_type or map_node_type(n).value) in selected_types
+        }
+        in_deg: Dict[str, int] = {nid: 0 for nid in candidate_ids}
+        out_deg: Dict[str, int] = {nid: 0 for nid in candidate_ids}
+        for e in self.graph.edges.values():
+            sid = airflow_remap.get(e.source_id, e.source_id)
+            tid = airflow_remap.get(e.target_id, e.target_id)
+            sid = inferred_remap.get(sid, sid)
+            tid = inferred_remap.get(tid, tid)
+            if sid in candidate_ids:
+                out_deg[sid] = out_deg.get(sid, 0) + 1
+            if tid in candidate_ids:
+                in_deg[tid] = in_deg.get(tid, 0) + 1
+
         for node in sorted(self.graph.nodes.values(), key=lambda n: n.fqn):
             if node.id in airflow_remap or node.id in inferred_remap:
                 continue
@@ -2954,7 +2972,13 @@ class ViewBuilder:
             if ct not in selected_types:
                 continue
 
-            layer = get_layer(node)
+            # Capability role drives layer string (replaces domain-based mapping)
+            role_value = classify_data_plane_role(
+                node, ct,
+                has_upstream_data_edges=in_deg.get(node.id, 0) > 0,
+                has_downstream_data_edges=out_deg.get(node.id, 0) > 0,
+            )
+            layer = role_to_layer_name(role_value)
             nm = is_needs_mapping(node)
 
             # Cluster by database.schema for datasets, platform for semantics

@@ -769,3 +769,59 @@ def test_semantic_layout_uses_role_when_role_is_diverse():
 
     # a (raw) should be left of b (mart)
     assert positions["a"][0] < positions["b"][0]
+
+
+def test_data_plane_emits_role_based_layer_strings():
+    """build_data_plane should set ViewNode.layer to capability-role names."""
+    from scanner.lineage.engine.views import ViewBuilder
+    from scanner.lineage.engine.canonical import canonicalize_graph_in_place
+    from scanner.lineage.graph import (
+        LineageGraph, LineageNode, LineageEdge, NodeType, EdgeType,
+        PlatformDomain, Evidence, LineageLevel, LinePlane,
+    )
+
+    g = LineageGraph()
+
+    # External app source (no upstream)
+    src = LineageNode(
+        id="src", name="users", fqn="app.public.users",
+        node_type=NodeType.TABLE, platform="postgres_app",
+        platform_domain=PlatformDomain.APP, schema="public",
+    )
+    # Hightouch destination (activation)
+    activate = LineageNode(
+        id="act", name="sf_contacts", fqn="hightouch.sf_contacts",
+        node_type=NodeType.TABLE, platform="hightouch",
+        platform_domain=PlatformDomain.OTHER,
+    )
+    # Mart in between
+    mart = LineageNode(
+        id="mart", name="dim_users", fqn="bq.marts.dim_users",
+        node_type=NodeType.TABLE, platform="bigquery",
+        platform_domain=PlatformDomain.WAREHOUSE, schema="marts",
+    )
+
+    for n in (src, mart, activate):
+        g.add_node(n)
+
+    g.add_edge(LineageEdge(
+        id="e1", source_id="src", target_id="mart",
+        edge_type=EdgeType.DERIVED_FROM, lineage_level=LineageLevel.TABLE,
+        plane=LinePlane.DATA, confidence=1.0,
+        evidence=[Evidence(adapter_id="t", source_ref="t")],
+    ))
+    g.add_edge(LineageEdge(
+        id="e2", source_id="mart", target_id="act",
+        edge_type=EdgeType.DERIVED_FROM, lineage_level=LineageLevel.TABLE,
+        plane=LinePlane.DATA, confidence=1.0,
+        evidence=[Evidence(adapter_id="t", source_ref="t")],
+    ))
+
+    canonicalize_graph_in_place(g.nodes, g.edges)
+
+    view = ViewBuilder(g).build_data_plane()
+    layers = {n.id: n.layer for n in view.nodes}
+
+    assert layers["src"] == "SOURCE"
+    assert layers["act"] == "ACTIVATION"
+    assert layers["mart"] == "WAREHOUSE"
