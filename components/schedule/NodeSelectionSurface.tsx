@@ -63,6 +63,24 @@ export interface NodeSelectionSurfaceProps {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Platform-specific overrides for service nodes that don't fit cleanly under
+// a domain (e.g., Linux is "other" domain but should render as infrastructure).
+const _SERVICE_PLATFORM_TO_CATEGORY: Record<string, UnifiedNodeCategory> = {
+  github: 'version_control',
+  gitlab: 'version_control',
+  bitbucket: 'version_control',
+  linux: 'infrastructure',
+  linux_server: 'infrastructure',
+};
+
+const _DOMAIN_TO_CATEGORY: Record<string, UnifiedNodeCategory> = {
+  warehouse: 'warehouse',
+  transform: 'transformation',
+  orchestration: 'orchestration',
+  bi: 'reporting',
+  ingestion: 'ingestion',
+};
+
 function viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
   if (
     vn.platformDomain === 'ingestion' &&
@@ -78,9 +96,20 @@ function viewNodeToCategory(vn: ViewNode): UnifiedNodeCategory {
   ];
   if (known.includes(ot)) return ot;
 
-  // Fallback by canonical type
+  // Service (tool) nodes: map by platform first, then by domain. This matches
+  // the main lineage page's Pipeline Overview rendering (which colors and
+  // labels each tool by its actual role, not the literal word "connector").
+  if (vn.canonicalType === 'service') {
+    const platform = (vn.platform || '').toLowerCase();
+    const platformOverride = _SERVICE_PLATFORM_TO_CATEGORY[platform];
+    if (platformOverride) return platformOverride;
+    const domainCategory = _DOMAIN_TO_CATEGORY[vn.platformDomain || ''];
+    if (domainCategory) return domainCategory;
+    return 'connector';  // last-resort fallback for unknown service nodes
+  }
+
+  // Other canonical-type fallbacks
   switch (vn.canonicalType) {
-    case 'service': return 'connector';
     case 'job': return 'task';
     case 'dataset': return 'table';
     case 'semantic': return 'view';
