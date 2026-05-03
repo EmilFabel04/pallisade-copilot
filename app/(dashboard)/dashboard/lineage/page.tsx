@@ -1940,6 +1940,10 @@ function LineagePageInner() {
                 <>
                   {/* Layer colors */}
                   <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.SOURCE }} />
+                    <span className="text-[var(--muted)]">Sources</span>
+                  </div>
+                  <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.INGESTION }} />
                     <span className="text-[var(--muted)]">Ingestion</span>
                   </div>
@@ -1954,6 +1958,10 @@ function LineagePageInner() {
                   <div className="flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.REPORTING }} />
                     <span className="text-[var(--muted)]">Reporting</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: LAYER_COLORS.ACTIVATION }} />
+                    <span className="text-[var(--muted)]">Activation</span>
                   </div>
                   <div className="w-px h-3 bg-[var(--overlay-strong)]" />
                   <div className="flex items-center gap-1">
