@@ -258,7 +258,12 @@ export function NodeSelectionSurface({
       return { flowNodes: [], flowEdges: [], allNodeIds: [] as string[] };
     }
 
-    // Filter out service/system/job canonical types for data-plane view
+    // Filter rules:
+    //  - lineage mode: hide tool/job/system clusters; we want raw assets only.
+    //  - pipeline-overview mode: hide infrastructure (Linux/cloud) and VCS
+    //    (GitHub/GitLab) tool nodes — they're control-plane, not monitorable
+    //    targets, so they only add noise to the picker. Matches the main
+    //    lineage page's intent of keeping Linux/GitHub out of the main flow.
     const visibleNodes = mode === 'lineage'
       ? viewData.nodes.filter(
           (n) =>
@@ -266,7 +271,11 @@ export function NodeSelectionSurface({
             n.canonicalType !== 'service' &&
             n.canonicalType !== 'system',
         )
-      : viewData.nodes;
+      : viewData.nodes.filter((n) => {
+          if (n.canonicalType !== 'service') return true;
+          const cat = viewNodeToCategory(n);
+          return cat !== 'infrastructure' && cat !== 'version_control';
+        });
 
     const visibleIds = new Set(visibleNodes.map((n) => n.id));
 
