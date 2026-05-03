@@ -157,6 +157,9 @@ const TOOL_LABELS: Record<string, string> = {
   linux_server: 'Linux Server',
   custom_webhook: 'Custom Webhook',
   custom_source: 'Custom Source',
+  salesforce: 'Salesforce',
+  shopify: 'Shopify',
+  hubspot: 'HubSpot',
 };
 
 // ─── External SVG files (public/icon_logos/) ────────────────
@@ -209,6 +212,10 @@ const EXTERNAL_SVG_MAP: Record<string, SvgEntry> = {
   linux_server: '/icon_logos/linux.svg',
   // Custom Source (generic HTTP/JSON API)
   custom_source: '/icon_logos/custom-source.svg',
+  // Sources (coming soon)
+  salesforce: '/icon_logos/salesforce-2.svg',
+  shopify: '/icon_logos/shopify.svg',
+  hubspot: '/icon_logos/hubspot-1.svg',
 };
 
 // ─── Fallback colours for future unknown tools ──────────────

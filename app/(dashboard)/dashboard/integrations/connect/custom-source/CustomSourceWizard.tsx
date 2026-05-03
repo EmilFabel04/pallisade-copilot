@@ -13,10 +13,20 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { Check, Loader2, XCircle, Clock } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Check, Loader2, XCircle, Clock, X } from 'lucide-react';
 
 import { usePipeline } from '@/contexts/PipelineContext';
 import { DiscoveryStep } from './DiscoveryStep';
+
+interface CustomSourceWizardProps {
+  /**
+   * If set, the wizard renders a Cancel/close affordance and calls this on
+   * cancel or successful save instead of navigating to /dashboard/integrations.
+   * Pass this when embedding the wizard inside a modal.
+   */
+  onClose?: () => void;
+}
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -88,9 +98,22 @@ const STEP_LABELS: ReadonlyArray<{ step: Step; label: string }> = [
   { step: 5, label: 'Review' },
 ];
 
-export default function CustomSourceWizard() {
+export default function CustomSourceWizard({ onClose }: CustomSourceWizardProps = {}) {
+  const router = useRouter();
   const { selectedPipelineId } = usePipeline();
   const [step, setStep] = useState<Step>(1);
+  const handleCancel = useCallback(() => {
+    if (onClose) {
+      onClose();
+    } else {
+      // Routed mode: prefer browser back, fall back to integrations connect picker.
+      if (typeof window !== 'undefined' && window.history.length > 1) {
+        router.back();
+      } else {
+        router.push('/dashboard/integrations/connect');
+      }
+    }
+  }, [onClose, router]);
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -324,7 +347,11 @@ export default function CustomSourceWizard() {
         }),
       });
       if (r.ok) {
-        window.location.href = '/dashboard/integrations';
+        if (onClose) {
+          onClose();
+        } else {
+          window.location.href = '/dashboard/integrations';
+        }
       } else {
         const err = await r.json().catch(() => ({}));
         setSaveError(
@@ -340,14 +367,25 @@ export default function CustomSourceWizard() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold text-[var(--text)]">
-          Connect a Custom Source
-        </h1>
-        <p className="text-sm text-[var(--text-tertiary)]">
-          Probe any HTTP/JSON endpoint as a first-class data source. Pallisade will
-          monitor freshness, volume, and quality — even if it isn&apos;t a warehouse.
-        </p>
+      <header className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold text-[var(--text)]">
+            Connect a Custom Source
+          </h1>
+          <p className="text-sm text-[var(--text-tertiary)]">
+            Probe any HTTP/JSON endpoint as a first-class data source. Pallisade will
+            monitor freshness, volume, and quality — even if it isn&apos;t a warehouse.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleCancel}
+          aria-label="Cancel and close wizard"
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-md border border-[var(--subtle-border)] px-2.5 py-1.5 text-xs text-[var(--text-tertiary)] hover:text-[var(--text)] hover:bg-[var(--subtle-bg)]"
+        >
+          <X className="h-3.5 w-3.5" />
+          Cancel
+        </button>
       </header>
 
       <Stepper current={step} />

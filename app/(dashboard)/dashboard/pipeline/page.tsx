@@ -8,6 +8,7 @@ import { usePipeline } from '@/contexts/PipelineContext';
 import { toast } from 'sonner';
 import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 import NodeConfigModal from '@/components/pipeline/NodeConfigModal';
+import CustomSourceWizardModal from '@/components/pipeline/CustomSourceWizardModal';
 import { IntegrationConfigModal } from '@/components/pipeline/IntegrationConfigModal';
 import {
   INTEGRATIONS,
@@ -164,6 +165,7 @@ export default function PipelinePage() {
   const [selectedGroup, setSelectedGroup] = useState<ConnectorGroup | 'ALL'>('ALL');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<ConnectorGroup>>(new Set(CORE_GROUP_ORDER));
   const [nodeModal, setNodeModal] = useState<PipelineNode | null>(null);
+  const [customSourceWizardOpen, setCustomSourceWizardOpen] = useState(false);
   const [integrationModal, setIntegrationModal] = useState<IntegrationDefinition | null>(null);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const [expandedConnector, setExpandedConnector] = useState<string | null>(null);
@@ -172,7 +174,16 @@ export default function PipelinePage() {
   const connectorCatalog = useMemo<ConnectorCard[]>(() => {
     const sourcesEnabled = process.env.NEXT_PUBLIC_FEATURE_SOURCES_CATEGORY === 'true';
     const coreConnectors: ConnectorCard[] = [
-      ...(sourcesEnabled ? TOOLS.SOURCE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'SOURCE' as const, mode: 'pipeline' as const, layer: t.layer, status: t.status })) : []),
+      ...(sourcesEnabled ? TOOLS.SOURCE.map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+        group: 'SOURCE' as const,
+        mode: t.id === 'custom_source' ? ('wizard' as const) : ('pipeline' as const),
+        href: t.id === 'custom_source' ? '/dashboard/integrations/connect/custom-source' : undefined,
+        layer: t.layer,
+        status: t.status,
+      })) : []),
       ...TOOLS.WAREHOUSE.map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'WAREHOUSE' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['dbt_cloud', 'dbt_core'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'TRANSFORM' as const, mode: 'pipeline' as const, layer: t.layer })),
       ...TOOLS.TRANSFORMATION.filter((t) => ['airflow', 'dagster', 'prefect'].includes(t.id)).map((t) => ({ id: t.id, name: t.name, description: t.description, group: 'ORCHESTRATION' as const, mode: 'pipeline' as const, layer: 'ORCHESTRATION' as const })),
@@ -464,6 +475,7 @@ export default function PipelinePage() {
 
   // ─── Handlers ─────────────────────────────────────────────
   const handleConnect = useCallback((connector: ConnectorCard) => {
+    if (connector.id === 'custom_source') { setCustomSourceWizardOpen(true); return; }
     if (connector.mode === 'wizard' && connector.href) { router.push(connector.href); return; }
     if (connector.mode === 'integration' && connector.integration) { setIntegrationModal(connector.integration); return; }
     const existingNode = stack.nodes.find((n) => n.toolType === connector.id);
@@ -802,6 +814,16 @@ export default function PipelinePage() {
         onClose={() => setIntegrationModal(null)}
         onSuccess={fetchIntegrations}
       />
+      {customSourceWizardOpen && (
+        <CustomSourceWizardModal
+          onClose={() => {
+            setCustomSourceWizardOpen(false);
+            // Refresh integration records so the saved Custom Source shows
+            // up as CONNECTED on the canvas via the auto-discovery effect.
+            fetchIntegrations();
+          }}
+        />
+      )}
     </div>
   );
 }

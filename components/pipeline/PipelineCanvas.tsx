@@ -28,6 +28,7 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { PipelineNode, PipelineEdge, LAYER_COLORS, PipelineLayer } from './types';
 import NodeConfigModal from './NodeConfigModal';
+import CustomSourceWizardModal from './CustomSourceWizardModal';
 import { LayoutGrid, Trash2 } from 'lucide-react';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 
@@ -254,8 +255,19 @@ function PipelineCanvasInner({
   readOnly = false,
 }: PipelineCanvasProps) {
   const [configNode, setConfigNode] = useState<PipelineNode | null>(null);
+  const [customSourceWizardOpen, setCustomSourceWizardOpen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const reactFlowInstance = useReactFlow();
+
+  // Configure-action dispatch: SOURCE-layer nodes have a dedicated multi-step
+  // wizard (discovery + verify + secret stash) that NodeConfigModal can't host.
+  const openConfig = useCallback((node: PipelineNode) => {
+    if (node.toolType === 'custom_source') {
+      setCustomSourceWizardOpen(true);
+      return;
+    }
+    setConfigNode(node);
+  }, []);
 
   // Convert pipeline nodes to ReactFlow format
   const initialNodes: Node[] = useMemo(() => {
@@ -265,7 +277,7 @@ function PipelineCanvasInner({
       position: { x: node.positionX, y: node.positionY },
       data: {
         ...node,
-        onConfigure: () => setConfigNode(node),
+        onConfigure: () => openConfig(node),
         onDelete: () => {
           if (readOnly) return;
           onNodesChange(nodes.filter(n => n.id !== node.id));
@@ -274,7 +286,7 @@ function PipelineCanvasInner({
         readOnly,
       },
     }));
-  }, [nodes, edges, onNodesChange, onEdgesChange, readOnly]);
+  }, [nodes, edges, onNodesChange, onEdgesChange, readOnly, openConfig]);
 
   // Convert pipeline edges to ReactFlow format
   const initialEdges: Edge[] = useMemo(() => {
@@ -298,7 +310,7 @@ function PipelineCanvasInner({
       position: { x: node.positionX, y: node.positionY },
       data: {
         ...node,
-        onConfigure: () => setConfigNode(node),
+        onConfigure: () => openConfig(node),
         onDelete: () => {
           if (readOnly) return;
           onNodesChange(nodes.filter(n => n.id !== node.id));
@@ -308,7 +320,7 @@ function PipelineCanvasInner({
       },
     }));
     setFlowNodes(newNodes);
-  }, [nodes, onNodesChange, onEdgesChange, edges, readOnly]);
+  }, [nodes, onNodesChange, onEdgesChange, edges, readOnly, openConfig, setFlowNodes]);
 
   // Sync external edges to internal state
   useEffect(() => {
@@ -546,6 +558,11 @@ function PipelineCanvasInner({
           onSave={handleConfigSave}
           onClose={() => setConfigNode(null)}
         />
+      )}
+
+      {/* Custom Source Wizard (modal) */}
+      {!readOnly && customSourceWizardOpen && (
+        <CustomSourceWizardModal onClose={() => setCustomSourceWizardOpen(false)} />
       )}
     </div>
   );
