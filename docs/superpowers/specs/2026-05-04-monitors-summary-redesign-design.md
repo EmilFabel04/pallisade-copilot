@@ -15,7 +15,7 @@ The Pipeline Health tool tiles (Fivetran/Airflow/dbt/etc.) move out of Summary i
 
 ## Page structure (top to bottom)
 
-1. **Hero status banner.** Single colored band with the count of active incidents and the lineage-derived blast radius. Counts include `status = 'open'` only (acknowledged incidents are owned by a user and do not raise the worry signal). Three states:
+1. **Hero status banner.** Single colored band with the count of active incidents and the lineage-derived blast radius. Counts include `status = 'open'` and `muted_until <= now` only (acknowledged incidents are owned by a user, muted incidents are explicitly silenced, neither raises the worry signal). Three states:
    - Green — "All systems healthy. 28 assets monitored." (zero open incidents)
    - Amber — "1 warning. Affecting 0 dashboards." (only WARN-derived open incidents)
    - Red — "2 critical incidents · 1 warning. Affecting 3 BI dashboards and 14 downstream tables. Oldest 2h 14m." (any FAIL-derived open incidents)
@@ -40,10 +40,10 @@ The Pipeline Health tool tiles (Fivetran/Airflow/dbt/etc.) move out of Summary i
 Each card is the visual unit shown in the wireframe approved during brainstorming (B-style with collapsible evidence).
 
 **Always visible:**
-- Status dot (red/amber/grey for ack'd) + target FQN + monitor type + time-since-opened
+- Status dot (red/amber/grey for ack'd, dim purple for muted) + target FQN + monitor type + time-since-opened
 - Blast-radius badge (e.g. "3 dashboards · 14 tables") when lineage shows downstream impact
 - "Likely cause" — one paragraph rendered from the LLM hypothesis
-- Action row: `Open in Co-pilot →` (primary), `Acknowledge` (when open), `Resolve` (when ack'd), `▸ Show evidence` toggle
+- Action row: `Open in Co-pilot →` (primary), `Acknowledge` (when open), `Resolve` (when open or ack'd), `Mute ▾` (duration menu: 1h / 4h / 1d / 7d / custom datetime), `▸ Show evidence` toggle. When muted, `Mute ▾` is replaced by `Unmute (until 14:32 today)`.
 
 **Collapsed by default ("Show evidence"):**
 - Threshold and observed value (from `explainer.py` structured explanation)
@@ -59,7 +59,7 @@ Active incidents are ranked, from top:
 2. Lineage blast radius — number of downstream BI dashboards + critical tables, descending
 3. Open age, descending (oldest first)
 
-Acknowledged incidents render with reduced opacity at the bottom of the active list and do not contribute to the hero count.
+Acknowledged incidents render with reduced opacity at the bottom of the active list and do not contribute to the hero count. Muted incidents (where `muted_until > now`) are pulled out of the main list entirely and collapsed under a "+ N muted incidents (auto-unmute in …)" expandable row at the bottom of the Active Incidents section. Expanding the row reveals the muted cards in their normal style, with an `Unmute` button. When `muted_until` passes, the incident silently rejoins the main list — no notification fires, no LLM re-run is triggered by the unmute itself.
 
 ### "Open in Co-pilot" handoff
 
@@ -100,6 +100,9 @@ If the diagnosis job is still in flight when the user clicks (rare, but possible
 | `resolved_by` | string | user id (set when manual) or `'system'` (auto), nullable |
 | `resolution_type` | enum | nullable: `auto_recovered`, `fixed`, `expected`, `false_positive`, `wont_fix` |
 | `resolution_note` | text | optional free-text from the user |
+| `muted_until` | timestamp | nullable; if `> now`, incident is muted |
+| `muted_by` | string | user id who applied the mute, nullable |
+| `muted_reason` | text | optional free-text note from the user |
 
 One row per **fault episode**, not per failing run. A monitor that fails → recovers → fails again creates two incident rows. We do not modify monitor run history; incidents are derived metadata.
 
@@ -133,6 +136,8 @@ One row per **fault episode**, not per failing run. A monitor that fails → rec
 **Open** — incident created when a monitor transitions from non-fail to fail (or warn). The incident stays open while the monitor continues to fail and nobody has acknowledged.
 
 **Acknowledged** — user clicked Acknowledge. The incident remains in the active list with reduced opacity and is excluded from the hero red-count. The acknowledged user is recorded as the owner. Acknowledgement does not change the underlying monitor.
+
+**Muted** is an orthogonal flag, not a status — `muted_until` can be set on any non-resolved incident. While muted, the incident is excluded from the hero count and the main active list (collapsed under "+ N muted"). Muting does not stop the underlying monitor from running, does not block auto-recovery (a muted incident that recovers still resolves normally), and does not change LLM diagnosis behavior (signature-change re-runs still fire so the cached hypothesis stays accurate when the user un-mutes). Auto-unmute is lazy: any read with `muted_until <= now` treats the incident as un-muted; no background job is needed.
 
 **Resolved** — terminal state. Reached one of two ways:
 - *Auto-recovered:* the next monitor run after `opened_at` returns PASS. Set `resolved_by = 'system'`, `resolution_type = 'auto_recovered'`, `resolved_at = run.completed_at`.
@@ -190,13 +195,15 @@ If the LLM call fails or times out (>30s), the incident still opens but `llm_hyp
   - `GET /api/v1/incidents?stackId=…&status=…` — list
   - `POST /api/v1/incidents/{id}/acknowledge`
   - `POST /api/v1/incidents/{id}/resolve` — body: `{reason, note?}`
+  - `POST /api/v1/incidents/{id}/mute` — body: `{until: ISO8601, reason?}` — sets `muted_until`/`muted_by`/`muted_reason`
+  - `POST /api/v1/incidents/{id}/unmute` — clears the three mute fields
   - `POST /api/v1/incidents/{id}/reanalyze` — manual re-run of LLM diagnosis
   - `GET /api/v1/incidents/stats?stackId=…&window=7d` — pass-rate, MTTR, opened count, recovered count, week-over-week deltas
 
 ### Frontend
 
 - `app/api/incidents/route.ts` (new) — Next.js proxy to FastAPI
-- `app/api/incidents/[id]/acknowledge/route.ts`, `.../resolve/route.ts`, `.../reanalyze/route.ts` — proxies
+- `app/api/incidents/[id]/acknowledge/route.ts`, `.../resolve/route.ts`, `.../mute/route.ts`, `.../unmute/route.ts`, `.../reanalyze/route.ts` — proxies
 - `app/api/incidents/stats/route.ts` (new) — proxy for trend strip
 - `components/monitors/SummaryHero.tsx` (new) — colored banner with incident counts + blast radius
 - `components/monitors/ActiveIncidents.tsx` (new) — list container, sort logic, polling
@@ -250,13 +257,13 @@ recovered count in /api/v1/incidents/stats increments
 - LLM root-cause hypothesis on open + signature-change + same-signature counts < 3
 - Deterministic fallback signature + hypothesis when LLM is unavailable
 - Auto-recovery on next-run-pass
+- Mute/suppression with duration presets (1h / 4h / 1d / 7d / custom) and lazy auto-unmute on read
 - Summary page restructure: hero, active incidents, 7-day trend strip, lean asset health, coverage gaps
 - Pipeline Health tiles relocated to the Pipeline Monitors tab (this means the Pipeline Monitors tab gets a header strip showing the six tool tiles; otherwise the tab is unchanged)
 - Co-pilot handoff that pre-seeds the failure context plus the cached hypothesis
 - MTTR + MTTA computed; only MTTR exposed in the trend strip
 
 **Out of scope (v1):**
-- Mute/suppression of incidents (the mockup showed a "Mute 1h" button — drop for v1)
 - Cross-incident grouping ("3 incidents share the same root cause") — every incident stays per-monitor for v1
 - Historical incidents page/tab — incident history surfaces only on the watch detail panel for v1
 - Incident assignment to specific users beyond `acknowledged_by`
