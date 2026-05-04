@@ -12,6 +12,7 @@ import { TaskCard } from '@/components/schedule/TaskCard';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import { MonitorGroupSettingsModal } from '@/components/schedule/MonitorGroupSettingsModal';
 import { DriftSummaryTab } from '@/components/monitors/DriftSummaryTab';
+import { PipelineHealthTiles } from '@/components/monitors/PipelineHealthTiles';
 import { cn } from '@/lib/utils';
 import type { ScheduledTask } from '@/types/schedule';
 import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
@@ -539,7 +540,12 @@ export default function MonitorsPage() {
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {activeTab === 'summary' && <DriftSummaryTab watches={allWatches} tasks={tasks} loading={loading} />}
         {activeTab === 'data' && renderMonitorList(dataWatches, dataTasks)}
-        {activeTab === 'pipeline' && renderMonitorList(pipelineWatches, pipelineTasks)}
+        {activeTab === 'pipeline' && (
+          <>
+            <PipelineHealthTiles />
+            {renderMonitorList(pipelineWatches, pipelineTasks)}
+          </>
+        )}
       </div>
 
       {/* Modal */}
