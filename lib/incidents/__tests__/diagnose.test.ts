@@ -9,12 +9,17 @@ const prismaMock = {
     findUnique: jest.fn(),
     update: incidentMock.update,
   },
+  monitorRun: {
+    findUnique: jest.fn().mockResolvedValue({ value: null, threshold: null, message: '', details: {}, status: 'FAIL' }),
+  },
 } as any;
 
 beforeEach(() => {
   fetchMock.mockReset();
   incidentMock.update.mockReset();
   prismaMock.incident.findUnique.mockReset();
+  prismaMock.monitorRun.findUnique.mockReset();
+  prismaMock.monitorRun.findUnique.mockResolvedValue({ value: null, threshold: null, message: '', details: {}, status: 'FAIL' });
   __resetSemaphoresForTest();
 });
 

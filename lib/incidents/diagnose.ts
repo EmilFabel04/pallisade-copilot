@@ -45,6 +45,14 @@ export async function diagnoseIncident(incidentId: string, prisma: PrismaClient)
   } as any) as any;
   if (!incident) return;
 
+  // Fetch the originating run so we can forward its details to the scanner
+  const run = incident.openingRunId
+    ? await prisma.monitorRun.findUnique({
+        where: { id: incident.openingRunId },
+        select: { value: true, threshold: true, message: true, details: true, status: true },
+      })
+    : null;
+
   const release = await acquire(incident.pipelineStackId);
   try {
     let hypothesis: string;
@@ -65,16 +73,33 @@ export async function diagnoseIncident(incidentId: string, prisma: PrismaClient)
           monitorRunId: incident.openingRunId,
           targetFqn: incident.targetFqn,
           monitorType: incident.monitor?.monitorType ?? 'UNKNOWN',
-          runDetails: {},
+          runDetails: {
+            value: run?.value ?? null,
+            threshold: run?.threshold ?? null,
+            message: run?.message ?? '',
+            status: run?.status ?? 'FAIL',
+            ...(run?.details && typeof run.details === 'object' ? run.details as Record<string, unknown> : {}),
+          },
         }),
       });
       if (!res.ok) throw new Error(`scanner returned ${res.status}`);
       const body = await res.json();
+      console.info('[incidents.diagnose] scanner returned hypothesis', {
+        incidentId,
+        signature: body.signature,
+        ownerSystem: body.ownerSystem,
+      });
       hypothesis = body.hypothesis;
       signature = body.signature;
       ownerSystem = body.ownerSystem;
       ownerConfidence = body.ownerConfidence;
-    } catch {
+    } catch (err) {
+      console.error('[incidents.diagnose] scanner call failed', {
+        incidentId,
+        stackId: incident.pipelineStackId,
+        scannerUrl: SCANNER_URL,
+        error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      });
       // Deterministic fallback
       signature = fallbackSignature({
         monitorType: incident.monitor?.monitorType ?? 'UNKNOWN',
