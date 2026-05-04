@@ -9,6 +9,7 @@ import { SummaryHero } from './SummaryHero';
 import { ActiveIncidents } from './ActiveIncidents';
 import { TrendStrip } from './TrendStrip';
 import { AssetHealthLean } from './AssetHealthLean';
+import { PipelineHealthTiles } from './PipelineHealthTiles';
 import { CoverageGaps } from './CoverageGaps';
 import type { IncidentSummary, IncidentStats } from '@/types/incident';
 import type { DriftRecommendation } from './DriftRecommendationCard';
@@ -197,6 +198,8 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
         onRunAnalysis={() => {}}
       />
 
+      <PipelineHealthTiles />
+
       <CoverageGaps
         unmonitoredCriticalAssets={unmonitoredCritical}
         pendingRecommendations={recommendations}
@@ -204,12 +207,16 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
         onReviewRecs={() => router.push('/dashboard/monitors?tab=recommendations')}
       />
 
-      {firstLoadComplete && assetList.length === 0 && activeIncidents.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-12">
-          <Activity className="w-8 h-8 text-[var(--text-faint)] mb-3" />
-          <p className="text-[13px] text-[var(--muted)]">No monitors configured yet.</p>
-        </div>
-      )}
+      {firstLoadComplete
+        && assetList.length === 0
+        && activeIncidents.length === 0
+        && Object.keys(trendData?.pipelineHealth ?? {}).length === 0
+        && (
+          <div className="flex flex-col items-center justify-center py-12">
+            <Activity className="w-8 h-8 text-[var(--text-faint)] mb-3" />
+            <p className="text-[13px] text-[var(--muted)]">No monitors configured yet.</p>
+          </div>
+        )}
     </div>
   );
 }
