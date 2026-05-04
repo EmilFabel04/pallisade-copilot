@@ -52,3 +52,52 @@ def test_diagnose_rejects_invalid_json_with_fallback():
     assert result.signature == "freshness-unknown"
     # Hypothesis is the LLM's raw text since JSON parse failed
     assert "not json" in result.hypothesis or result.hypothesis  # non-empty
+
+
+def test_router_accepts_diagnose_request():
+    from fastapi.testclient import TestClient
+    from api.app import app
+    from api.dependencies import get_settings
+
+    # Read the actual shared secret (may be overridden by SCANNER_SHARED_SECRET env var)
+    auth_headers = {
+        "x-internal-auth": get_settings().shared_secret,
+        "x-acting-user": "test_user",
+        "x-acting-org": "test_org",
+    }
+
+    client = TestClient(app)
+    payload = {
+        "stackId": "stack_1",
+        "monitorRunId": "run_1",
+        "targetFqn": "raw.orders",
+        "monitorType": "FRESHNESS",
+        "runDetails": {"value": 26, "threshold": 24, "message": "stale"},
+    }
+    fake_result_dict = {
+        "hypothesis": "Upstream sync stalled.",
+        "signature": "fivetran-source-stalled",
+        "owner_system": "ingestion",
+        "owner_confidence": 0.85,
+    }
+
+    with patch("api.routers.copilot.diagnose_incident") as fake:
+        from copilot.incident_diagnosis import DiagnosisResult
+        fake.return_value = DiagnosisResult(
+            hypothesis=fake_result_dict["hypothesis"],
+            signature=fake_result_dict["signature"],
+            owner_system=fake_result_dict["owner_system"],
+            owner_confidence=fake_result_dict["owner_confidence"],
+        )
+        res = client.post(
+            "/api/v1/copilot/incident-diagnose",
+            json=payload,
+            headers=auth_headers,
+        )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["hypothesis"] == "Upstream sync stalled."
+    assert body["signature"] == "fivetran-source-stalled"
+    assert body["ownerSystem"] == "ingestion"
+    assert body["ownerConfidence"] == 0.85

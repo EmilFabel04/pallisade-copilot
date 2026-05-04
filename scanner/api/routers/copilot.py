@@ -763,3 +763,42 @@ async def start_debug_session(
         "copilot_session_id": "new_copilot_session",
         "status": "INVESTIGATING",
     }
+
+
+# ============================================
+# INCIDENT DIAGNOSIS
+# ============================================
+
+from copilot.incident_diagnosis import diagnose_incident, DiagnosisRequest, DiagnosisResult
+
+
+class IncidentDiagnoseRequest(BaseModel):
+    stackId: str
+    monitorRunId: str
+    targetFqn: str
+    monitorType: str
+    runDetails: Dict[str, Any]
+
+
+class IncidentDiagnoseResponse(BaseModel):
+    hypothesis: str
+    signature: str
+    ownerSystem: str
+    ownerConfidence: float
+
+
+@router.post("/incident-diagnose", response_model=IncidentDiagnoseResponse)
+def post_incident_diagnose(req: IncidentDiagnoseRequest) -> IncidentDiagnoseResponse:
+    result: DiagnosisResult = diagnose_incident(DiagnosisRequest(
+        stack_id=req.stackId,
+        monitor_run_id=req.monitorRunId,
+        target_fqn=req.targetFqn,
+        monitor_type=req.monitorType,
+        run_details=req.runDetails,
+    ))
+    return IncidentDiagnoseResponse(
+        hypothesis=result.hypothesis,
+        signature=result.signature,
+        ownerSystem=result.owner_system,
+        ownerConfidence=result.owner_confidence,
+    )
