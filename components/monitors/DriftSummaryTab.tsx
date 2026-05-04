@@ -56,7 +56,7 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
       monitorId: incident.monitorId,
       targetFqn: incident.targetFqn,
     });
-    router.push(`/dashboard/copilot?${params.toString()}`);
+    router.push(`/dashboard/assistant?${params.toString()}`);
   }, [router]);
 
   const assetList = useMemo(() => {
