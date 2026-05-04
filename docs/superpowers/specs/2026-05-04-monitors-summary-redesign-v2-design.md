@@ -129,16 +129,15 @@ Always renders (this is the entry point for proactive analysis, not just a resul
 
 **Drift-discovery button behavior:**
 
-The button kicks off the existing drift analysis pipeline (the same one that runs weekly via `scanner/scheduler/service.py:_check_drift_analysis`) on demand for the current pipeline profile. Flow:
+`POST /api/drift/run` already exists — it fans out to the scanner FastAPI drift analyzer (`scanner/api/routers/drift.py` → `scanner/monitors/drift_analyzer.py:run_drift_analysis`) synchronously and persists the resulting `DriftRecommendation` rows. The endpoint can take up to ~2 minutes for large profiles. Flow:
 
 1. User clicks `Run drift discovery`.
-2. Frontend POSTs `/api/drift/run` with `{ stackId }`.
-3. The endpoint fans out to the scanner via the same internal HTTP path used by `/api/pipeline/[stackId]/lineage/scheduled` — returns `{ jobId }` immediately and runs analysis in the background.
-4. Button enters running state: spinner + label `Running…`. Disabled until the run completes or 5 minutes pass (whichever first).
-5. The DriftSummaryTab polls `/api/drift?status=pending&stackId=…` every 10s while the button is in running state. When new recommendations land (or the 5-min timeout hits), button returns to idle and the recommendation count updates.
-6. Errors surface as a toast (`sonner`) and the button returns to idle.
+2. Frontend POSTs `/api/drift/run` with `{ stackId }` and **awaits** the response (the endpoint is synchronous, AbortSignal.timeout 120s on the FastAPI hop).
+3. Button enters running state immediately: spinner + label `Running…`. Disabled until the response lands.
+4. On 2xx response, refetch `/api/drift?status=pending&stackId=…` to refresh the recommendation count, show a success toast (`Found N recommendations` / `No threshold drift detected`), return to idle.
+5. On non-2xx or AbortError, surface the error message as a `sonner` toast and return to idle.
 
-The same `/api/drift/run` endpoint is the one the weekly scheduler will call internally, so the manual and automatic paths converge.
+No new endpoint. The weekly scheduler can also start using this same endpoint internally — but that's out of scope for this plan.
 
 ## Data flow
 
@@ -200,9 +199,7 @@ Returns one row per pipeline tool present in the profile:
 
 Computed by `groupBy(Monitor, toolType)` filtered to PIPELINE_MONITOR_TYPES, with status precedence FAIL > ERROR > WARN > PASS.
 
-**`POST /api/drift/run`**
-
-Body: `{ stackId: string }`. Returns: `{ jobId: string, startedAt: string }`. Enqueues a drift-discovery run (today the equivalent runs weekly via `scanner/scheduler/service.py:_check_drift_analysis`; the implementation is to lift that body into a callable so both the schedule loop and the new endpoint can fire it).
+**`POST /api/drift/run` (existing — wire only):** Already implemented at `app/api/drift/run/route.ts`. Synchronous, returns `{ runId, recommendationCount }` after analysis completes. The plan only adds the button that calls it; no endpoint changes needed.
 
 ### Frontend components
 
@@ -214,7 +211,7 @@ Body: `{ stackId: string }`. Returns: `{ jobId: string, startedAt: string }`. En
 
 ### State management
 
-The drift-run state (running, last started, last completed, error) lives in `DriftSummaryTab` local state. It is **not** persisted across remounts; if the user navigates away and back, we re-poll `/api/drift?status=pending` and infer running state from the presence of an in-flight job. (Keeps the design boring; no new client-side cache layer.)
+The drift-run state (idle / running / error) lives in `DriftSummaryTab` local state. Since `/api/drift/run` is synchronous and `await`-ed, there is no in-flight job to recover after a remount — if the user navigates away mid-run, the request is abandoned (the FastAPI side still completes and persists recommendations). On remount we just refetch `/api/drift` to show the latest count and `lastAnalyzedAt`.
 
 ### Loading consistency
 
@@ -241,7 +238,7 @@ All sections render their own per-section skeleton on first paint. The hero wait
 
 - The v1 components (`SummaryHero`, `CoverageGaps`, `DriftSummaryTab`) are modified, not replaced. `PipelineHealthTiles` (rich version) stays for the Pipeline Monitors tab; `PipelineTier` is new.
 - The two new endpoints (`/api/monitors/health-summary`, `/api/monitors/pipeline-status`) are additive.
-- `/api/drift/run` adds a manual trigger but does not change the weekly schedule path.
+- `/api/drift/run` is reused as-is — only the button that calls it is new.
 - No schema changes.
 
 ## Open questions
