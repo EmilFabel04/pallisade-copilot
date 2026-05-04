@@ -53,9 +53,13 @@ export async function diagnoseIncident(incidentId: string, prisma: PrismaClient)
     let ownerConfidence = 0;
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const secret = process.env.SCANNER_SHARED_SECRET;
+      if (secret) headers['X-Internal-Auth'] = secret;
+
       const res = await fetch(`${SCANNER_URL}/api/v1/copilot/incident-diagnose`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           stackId: incident.pipelineStackId,
           monitorRunId: incident.openingRunId,
