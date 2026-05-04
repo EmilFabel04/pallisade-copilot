@@ -24,7 +24,7 @@ export async function handleRun(
       monitorGroupId: true,
     },
   });
-  if (!monitor || !monitor.organizationId || !monitor.pipelineStackId) {
+  if (!monitor || !monitor.organizationId || !monitor.pipelineStackId || !monitor.targetFqn) {
     return { action: 'noop', shouldDiagnose: false };
   }
 
@@ -41,7 +41,7 @@ export async function handleRun(
           pipelineStackId: monitor.pipelineStackId,
           monitorId: monitor.id,
           monitorGroupId: monitor.monitorGroupId ?? null,
-          targetFqn: monitor.targetFqn ?? 'unknown',
+          targetFqn: monitor.targetFqn,
           status: 'OPEN',
           severity,
           openedAt: run.startedAt,

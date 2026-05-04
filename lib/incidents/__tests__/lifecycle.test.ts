@@ -93,6 +93,28 @@ describe('handleRun: opening', () => {
     const call = prisma._spies.incidentCreate.mock.calls[0][0];
     expect(call.data.severity).toBe('WARN');
   });
+
+  it('returns noop when monitor has no targetFqn (prompt-mode)', async () => {
+    const prisma = makePrismaMock({
+      monitor: {
+        id: 'mon_prompt',
+        organizationId: 'org_1',
+        pipelineStackId: 'stack_1',
+        targetFqn: '' as any, // simulate null
+      },
+      existingIncident: null,
+    });
+    const run: FakeRun = {
+      id: 'run_p',
+      monitorId: 'mon_prompt',
+      status: 'FAIL',
+      startedAt: new Date(),
+      completedAt: new Date(),
+    };
+    const result = await handleRun(run as any, prisma);
+    expect(result.action).toBe('noop');
+    expect(prisma._spies.incidentCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe('handleRun: auto-resolve', () => {
