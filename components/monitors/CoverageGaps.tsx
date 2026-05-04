@@ -44,7 +44,7 @@ export function CoverageGaps({ unmonitoredCriticalAssets, pendingRecommendations
               ? 'No drift detected in current baselines.'
               : 'Pallisade detected drift in baselines. Suggested threshold updates pending review.'}
           </p>
-          <Button size="sm" variant="outline" onClick={onReviewRecs} disabled={pendingRecommendations.length === 0}>
+          <Button size="sm" variant="secondary" onClick={onReviewRecs} disabled={pendingRecommendations.length === 0}>
             Review →
           </Button>
         </div>
