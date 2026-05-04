@@ -183,22 +183,30 @@ If the LLM call fails or times out (>30s), the incident still opens but `llm_hyp
 
 ## Architecture
 
-### Backend
+The Prisma database is owned by the Next.js side, so the `incidents` table and lifecycle logic live there. The LLM diagnosis call lives in `scanner/` (Python/FastAPI), reusing the existing co-pilot tool-calling pipeline. Next.js orchestrates: it persists the new monitor run result, runs the lifecycle logic, then (when needed) calls scanner over HTTP for the diagnosis and writes the result back to the incident row.
 
-- `scanner/incidents/` (new module)
-  - `models.py` — Pydantic + ORM definitions for the `incidents` table
-  - `lifecycle.py` — open / acknowledge / resolve / auto-recover transitions; idempotent
-  - `signature.py` — fallback deterministic signature when LLM is unavailable
-- `scanner/copilot/incident_diagnosis.py` (new) — wraps `llm.py` with the scoped prompt, JSON output validation, retry, and ownership classifier
-- `scanner/monitors/executor.py` (modify) — after each run, call `lifecycle.handle_run(result)` which decides open/update/auto-resolve based on prior incident state. `lifecycle.handle_run` is synchronous and fast (just DB writes); the LLM diagnosis is fired through `asyncio.create_task` (when called from the FastAPI request path) or a thread pool (when called from the scheduler path). A per-pipeline-profile semaphore caps concurrent diagnosis calls at a configurable default (e.g. 3) to prevent thundering-herd LLM spend when many monitors fail at once.
-- `scanner/api/routers/incidents.py` (new) — REST endpoints:
-  - `GET /api/v1/incidents?stackId=…&status=…` — list
-  - `POST /api/v1/incidents/{id}/acknowledge`
-  - `POST /api/v1/incidents/{id}/resolve` — body: `{reason, note?}`
-  - `POST /api/v1/incidents/{id}/mute` — body: `{until: ISO8601, reason?}` — sets `muted_until`/`muted_by`/`muted_reason`
-  - `POST /api/v1/incidents/{id}/unmute` — clears the three mute fields
-  - `POST /api/v1/incidents/{id}/reanalyze` — manual re-run of LLM diagnosis
-  - `GET /api/v1/incidents/stats?stackId=…&window=7d` — pass-rate, MTTR, opened count, recovered count, week-over-week deltas
+### Database (Prisma)
+
+- `prisma/schema.prisma` — add `Incident` model and `IncidentStatus` / `IncidentResolutionType` enums
+
+### Next.js (TypeScript)
+
+- `lib/incidents/lifecycle.ts` (new) — `handleRun(monitorRun, prismaClient)` — opens, updates, or auto-resolves an incident based on the run; returns `{ shouldDiagnose: boolean, incidentId?: string }`. Pure logic on top of Prisma.
+- `lib/incidents/diagnose.ts` (new) — `diagnoseIncident(incidentId)` calls scanner FastAPI `POST /api/v1/copilot/incident-diagnose`, persists `signature` / `llmHypothesis` / `ownerSystem` / `ownerConfidence` / `consecutiveCount` back to the incident row. Wrapped in a per-pipeline-profile semaphore (default concurrency 3) so a thundering herd of failing monitors does not fan out to N parallel LLM calls.
+- `lib/incidents/signature.ts` (new) — deterministic fallback signature when the LLM call fails (`hash(monitorType, thresholdBreachClass)`).
+- `app/api/schedule/tasks/[taskId]/run/route.ts` (modify) — after `prisma.monitorRun.create(...)`, call `lifecycle.handleRun(...)`; if `shouldDiagnose` is true, fire `diagnoseIncident(...)` without awaiting (it writes back to the row when done; the UI polls).
+- `app/api/incidents/route.ts` (new) — `GET /api/incidents?stackId=…&status=…` — list (Next.js queries Prisma directly).
+- `app/api/incidents/[id]/acknowledge/route.ts` — `POST` with empty body
+- `app/api/incidents/[id]/resolve/route.ts` — `POST` with `{ reason, note? }`
+- `app/api/incidents/[id]/mute/route.ts` — `POST` with `{ until: ISO8601, reason? }`
+- `app/api/incidents/[id]/unmute/route.ts` — `POST` with empty body
+- `app/api/incidents/[id]/reanalyze/route.ts` — `POST` with empty body; calls `diagnoseIncident(incidentId)` and returns the updated row
+- `app/api/incidents/stats/route.ts` — `GET /api/incidents/stats?stackId=…&window=7d` — Pass rate (from `MonitorRun`), MTTR (avg `resolvedAt − openedAt`), Opened count, Recovered count + 7-point sparkline buckets and week-over-week deltas
+
+### Scanner (Python / FastAPI)
+
+- `scanner/copilot/incident_diagnosis.py` (new) — wraps the existing `copilot/llm.py` tool-calling pipeline with: a scoped system prompt that instructs the model to return JSON `{hypothesis, signature}`, JSON output validation, a tool-call budget cap (~6), and a final pass through `copilot/root_cause.py` to attach `owner_system` / `owner_confidence`.
+- `scanner/api/routers/copilot.py` (modify) — add `POST /api/v1/copilot/incident-diagnose` accepting `{stackId, monitorRunId, targetFqn, monitorType, runDetails}` and returning `{hypothesis, signature, ownerSystem, ownerConfidence}`.
 
 ### Frontend
 
@@ -215,37 +223,44 @@ If the LLM call fails or times out (>30s), the incident still opens but `llm_hyp
 ### Data flow per failure
 
 ```
-monitor run completes (FAIL)
+monitor run completes (FAIL/WARN) — Next.js POST /api/schedule/tasks/[id]/run
    │
    ▼
-executor.py persists MonitorResult
+prisma.monitorRun.create(...)
    │
    ▼
-lifecycle.handle_run(result)
-   │ ┌── no open incident → open()
-   │ │     └── enqueue diagnosis job
-   │ ├── open incident, signature unchanged, count<3 → re-run diagnosis
-   │ ├── open incident, signature unchanged, count>=3 → increment counter only
-   │ └── open incident, signature changed → re-run diagnosis, reset counter
+lib/incidents/lifecycle.handleRun(run, prisma)
+   │ ┌── no open incident → INSERT new incident, return shouldDiagnose=true
+   │ ├── open incident, count < 3 → return shouldDiagnose=true
+   │ ├── open incident, count >= 3, signature unchanged → increment counter, return shouldDiagnose=false
+   │ └── open incident, signature change is unknown until diagnosis completes
+   │     so any of (count<3) or (no incident yet) triggers diagnosis
    ▼
-diagnosis job (async)
-   │ runs incident_diagnosis.diagnose(incident)
-   │ writes hypothesis, signature, owner_system to incidents row
+if shouldDiagnose: fire-and-forget diagnoseIncident(incidentId)
+   │ acquires per-stack semaphore
+   │ POST /api/v1/copilot/incident-diagnose to scanner
+   │ scanner returns {hypothesis, signature, ownerSystem, ownerConfidence}
+   │ Next.js writes back to incident row, comparing returned signature to existing:
+   │   ┌── signature unchanged → consecutiveCount += 1
+   │   └── signature changed   → consecutiveCount = 1, hypothesis updated
    ▼
-Summary page polls /api/v1/incidents — re-renders
+Summary page polls GET /api/incidents — re-renders
 ```
 
 ```
-monitor run completes (PASS) on a target with an open incident
+monitor run completes (PASS) — same Next.js route
    │
    ▼
-lifecycle.handle_run(result) → resolve(auto_recovered)
+lib/incidents/lifecycle.handleRun(run, prisma)
+   │ open incident exists for this monitor → mark resolved
+   ▼
+incident.resolvedAt = run.completedAt
+incident.resolvedBy = 'system'
+incident.resolutionType = 'auto_recovered'
+incident.status = 'resolved'
    │
    ▼
-incident.resolved_at = now; resolved_by = 'system'
-   │
-   ▼
-recovered count in /api/v1/incidents/stats increments
+recovered count in GET /api/incidents/stats increments
 ```
 
 ---
