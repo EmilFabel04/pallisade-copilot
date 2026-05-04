@@ -1,6 +1,6 @@
 import type { PrismaClient, MonitorRun } from '@prisma/client';
 
-export type LifecycleAction = 'opened' | 'updated' | 'noop' | 'auto_resolved';
+export type LifecycleAction = 'opened' | 'matched' | 'noop' | 'auto_resolved';
 
 export interface LifecycleResult {
   action: LifecycleAction;
@@ -52,7 +52,7 @@ export async function handleRun(
       return { action: 'opened', shouldDiagnose: true, incidentId: created.id };
     }
     // Existing open/ack incident — diagnosis decision made later in diagnose.ts
-    return { action: 'updated', shouldDiagnose: existing.consecutiveCount < 3, incidentId: existing.id };
+    return { action: 'matched', shouldDiagnose: existing.consecutiveCount < 3, incidentId: existing.id };
   }
 
   // PASS / SKIPPED on a target with an open incident → auto-resolve

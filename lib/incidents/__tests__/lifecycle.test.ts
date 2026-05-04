@@ -166,7 +166,7 @@ describe('handleRun: auto-resolve', () => {
       completedAt: new Date(),
     };
     const result = await handleRun(run as any, prisma);
-    expect(result.action).toBe('updated');
+    expect(result.action).toBe('matched');
     expect(result.shouldDiagnose).toBe(true);
     expect(result.incidentId).toBe('inc_1');
   });
@@ -184,7 +184,7 @@ describe('handleRun: auto-resolve', () => {
       completedAt: new Date(),
     };
     const result = await handleRun(run as any, prisma);
-    expect(result.action).toBe('updated');
+    expect(result.action).toBe('matched');
     expect(result.shouldDiagnose).toBe(false);
   });
 });
