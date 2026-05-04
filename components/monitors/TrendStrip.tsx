@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { IncidentStats } from '@/types/incident';
 
-interface Props { stackId: string; }
+interface Props { stats: IncidentStats | null; }
 
 function formatMs(ms: number | null): string {
   if (ms == null) return '—';
@@ -31,24 +30,7 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
   );
 }
 
-export function TrendStrip({ stackId }: Props) {
-  const [stats, setStats] = useState<IncidentStats | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    fetch(`/api/incidents/stats?stackId=${stackId}&window=7d`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => { if (active) setStats(d); })
-      .catch(() => {});
-    const t = setInterval(() => {
-      fetch(`/api/incidents/stats?stackId=${stackId}&window=7d`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((d) => { if (active) setStats(d); })
-        .catch(() => {});
-    }, 60000);
-    return () => { active = false; clearInterval(t); };
-  }, [stackId]);
-
+export function TrendStrip({ stats }: Props) {
   if (!stats) return null;
 
   const passDelta = stats.passRate.current != null && stats.passRate.prior != null

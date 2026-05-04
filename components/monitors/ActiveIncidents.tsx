@@ -1,33 +1,18 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { IncidentCard } from './IncidentCard';
 import type { IncidentSummary } from '@/types/incident';
 
 interface Props {
-  stackId: string;
+  incidents: IncidentSummary[];
+  onChanged: () => void;
   onOpenInCopilot: (i: IncidentSummary) => void;
 }
 
-export function ActiveIncidents({ stackId, onOpenInCopilot }: Props) {
-  const [incidents, setIncidents] = useState<IncidentSummary[]>([]);
+export function ActiveIncidents({ incidents, onChanged, onOpenInCopilot }: Props) {
   const [showMuted, setShowMuted] = useState(false);
 
-  const fetchIncidents = useCallback(async () => {
-    const res = await fetch(`/api/incidents?stackId=${stackId}&status=active`);
-    if (res.ok) {
-      const data = await res.json();
-      setIncidents(data.incidents || []);
-    }
-  }, [stackId]);
-
-  useEffect(() => { fetchIncidents(); }, [fetchIncidents]);
-  useEffect(() => {
-    const t = setInterval(fetchIncidents, 15000);
-    return () => clearInterval(t);
-  }, [fetchIncidents]);
-
-  // Sort: status (OPEN before ACK), then opened age desc
   const visible = incidents.filter((i) => !i.isMuted);
   const muted = incidents.filter((i) => i.isMuted);
 
@@ -44,7 +29,7 @@ export function ActiveIncidents({ stackId, onOpenInCopilot }: Props) {
         Active incidents
       </div>
       {visible.map((i) => (
-        <IncidentCard key={i.id} incident={i} onChanged={fetchIncidents} onOpenInCopilot={onOpenInCopilot} />
+        <IncidentCard key={i.id} incident={i} onChanged={onChanged} onOpenInCopilot={onOpenInCopilot} />
       ))}
       {muted.length > 0 && (
         <div className="mt-2">
@@ -54,7 +39,7 @@ export function ActiveIncidents({ stackId, onOpenInCopilot }: Props) {
           {showMuted && (
             <div className="mt-2">
               {muted.map((i) => (
-                <IncidentCard key={i.id} incident={i} onChanged={fetchIncidents} onOpenInCopilot={onOpenInCopilot} />
+                <IncidentCard key={i.id} incident={i} onChanged={onChanged} onOpenInCopilot={onOpenInCopilot} />
               ))}
             </div>
           )}
