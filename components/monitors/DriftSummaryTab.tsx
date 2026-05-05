@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Loader2, Activity } from 'lucide-react';
+import { Activity, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
@@ -9,8 +9,13 @@ import { SummaryHero } from './SummaryHero';
 import { ActiveIncidents } from './ActiveIncidents';
 import { TrendStrip } from './TrendStrip';
 import { AssetHealthLean } from './AssetHealthLean';
+import { PipelineTier } from './PipelineTier';
 import { CoverageGaps } from './CoverageGaps';
 import type { IncidentSummary, IncidentStats } from '@/types/incident';
+import type {
+  MonitorHealthSummary,
+  PipelineToolStatusResponse,
+} from '@/types/monitors-summary';
 import type { DriftRecommendation } from './DriftRecommendationCard';
 
 interface Props {
@@ -19,23 +24,38 @@ interface Props {
   loading: boolean;
 }
 
-export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
+export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) {
   const { selectedPipelineId } = usePipeline();
   const router = useRouter();
 
   const [activeIncidents, setActiveIncidents] = useState<IncidentSummary[]>([]);
+  const [health, setHealth] = useState<MonitorHealthSummary | null>(null);
   const [stats, setStats] = useState<IncidentStats | null>(null);
+  const [pipelineTools, setPipelineTools] = useState<PipelineToolStatusResponse['tools']>([]);
   const [trendData, setTrendData] = useState<any | null>(null);
   const [recommendations, setRecommendations] = useState<DriftRecommendation[]>([]);
+  const [lastAnalyzedAt, setLastAnalyzedAt] = useState<string | null>(null);
   const [unmonitoredCritical, setUnmonitoredCritical] = useState<Array<{ fqn: string; reason: string }>>([]);
+  const [lineageExtracted, setLineageExtracted] = useState(false);
   const [expandedAssetFqn, setExpandedAssetFqn] = useState<string | null>(null);
   const [activeCategories] = useState<Set<string>>(new Set());
 
-  // First paint only waits on incidents — the hero doesn't need trends, and
-  // gating on the heaviest endpoint left users staring at a skeleton for the
-  // full monitor-trends round-trip. AssetHealthLean still uses trendData but
-  // renders its own loading state.
-  const [firstLoadComplete, setFirstLoadComplete] = useState(false);
+  // Per-section ready flags. Each section paints its own skeleton; no global gate.
+  const [healthReady, setHealthReady] = useState(false);
+  const [incidentsReady, setIncidentsReady] = useState(false);
+  const [pipelineReady, setPipelineReady] = useState(false);
+  const [trendsReady, setTrendsReady] = useState(false);
+  const [coverageReady, setCoverageReady] = useState(false);
+  const [driftReady, setDriftReady] = useState(false);
+
+  const fetchHealth = useCallback(async () => {
+    if (!selectedPipelineId) return;
+    try {
+      const r = await cachedFetch(`/api/monitors/health-summary?stackId=${selectedPipelineId}`);
+      if (r.ok) setHealth(await r.json());
+    } catch {}
+    setHealthReady(true);
+  }, [selectedPipelineId]);
 
   const fetchIncidents = useCallback(async () => {
     if (!selectedPipelineId) return;
@@ -46,7 +66,7 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
         setActiveIncidents(d.incidents || []);
       }
     } catch {}
-    setFirstLoadComplete(true);
+    setIncidentsReady(true);
   }, [selectedPipelineId]);
 
   const fetchStats = useCallback(async () => {
@@ -57,12 +77,25 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
     } catch {}
   }, [selectedPipelineId]);
 
+  const fetchPipelineStatus = useCallback(async () => {
+    if (!selectedPipelineId) return;
+    try {
+      const r = await cachedFetch(`/api/monitors/pipeline-status?stackId=${selectedPipelineId}`);
+      if (r.ok) {
+        const d: PipelineToolStatusResponse = await r.json();
+        setPipelineTools(d.tools || []);
+      }
+    } catch {}
+    setPipelineReady(true);
+  }, [selectedPipelineId]);
+
   const fetchTrends = useCallback(async () => {
     if (!selectedPipelineId) return;
     try {
       const r = await cachedFetch(`/api/schedule/monitor-trends?stackId=${selectedPipelineId}`);
       if (r.ok) setTrendData(await r.json());
     } catch {}
+    setTrendsReady(true);
   }, [selectedPipelineId]);
 
   const fetchDrift = useCallback(async () => {
@@ -72,8 +105,10 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
       if (r.ok) {
         const d = await r.json();
         setRecommendations(d.recommendations || []);
+        setLastAnalyzedAt(d.lastAnalyzedAt || null);
       }
     } catch {}
+    setDriftReady(true);
   }, [selectedPipelineId]);
 
   const fetchCoverage = useCallback(async () => {
@@ -83,46 +118,71 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
       if (r.ok) {
         const d = await r.json();
         setUnmonitoredCritical(d.assets || []);
+        setLineageExtracted(!!d.lineageExtracted);
       }
     } catch {}
+    setCoverageReady(true);
   }, [selectedPipelineId]);
 
-  // Reset first-load flag when pipeline changes
+  // Reset per-section flags + state on pipeline change.
   useEffect(() => {
-    setFirstLoadComplete(false);
+    setHealth(null);
     setActiveIncidents([]);
     setStats(null);
+    setPipelineTools([]);
     setTrendData(null);
     setRecommendations([]);
+    setLastAnalyzedAt(null);
     setUnmonitoredCritical([]);
+    setLineageExtracted(false);
+    setHealthReady(false);
+    setIncidentsReady(false);
+    setPipelineReady(false);
+    setTrendsReady(false);
+    setCoverageReady(false);
+    setDriftReady(false);
   }, [selectedPipelineId]);
 
-  // Fire all five fetches independently — each section renders as its data arrives
+  // Fan out independent fetches; each section gates on its own readiness.
   useEffect(() => {
     if (!selectedPipelineId) return;
+    fetchHealth();
     fetchIncidents();
     fetchStats();
+    fetchPipelineStatus();
     fetchTrends();
     fetchDrift();
     fetchCoverage();
-  }, [selectedPipelineId, fetchIncidents, fetchStats, fetchTrends, fetchDrift, fetchCoverage]);
+  }, [
+    selectedPipelineId,
+    fetchHealth, fetchIncidents, fetchStats, fetchPipelineStatus,
+    fetchTrends, fetchDrift, fetchCoverage,
+  ]);
 
-  // Periodic refresh (no skeleton on subsequent polls)
+  // Periodic refresh — invalidate first so cachedFetch re-fetches.
   useEffect(() => {
     if (!selectedPipelineId) return;
     const t = setInterval(() => {
+      invalidateCache('/api/monitors/health-summary');
       invalidateCache('/api/incidents');
+      invalidateCache('/api/monitors/pipeline-status');
       invalidateCache('/api/schedule/monitor-trends');
       invalidateCache('/api/drift');
       invalidateCache('/api/coverage');
+      fetchHealth();
       fetchIncidents();
       fetchStats();
+      fetchPipelineStatus();
       fetchTrends();
       fetchDrift();
       fetchCoverage();
-    }, 30000);
+    }, 30_000);
     return () => clearInterval(t);
-  }, [selectedPipelineId, fetchIncidents, fetchStats, fetchTrends, fetchDrift, fetchCoverage]);
+  }, [
+    selectedPipelineId,
+    fetchHealth, fetchIncidents, fetchStats, fetchPipelineStatus,
+    fetchTrends, fetchDrift, fetchCoverage,
+  ]);
 
   const handleOpenInCopilot = useCallback((incident: IncidentSummary) => {
     const params = new URLSearchParams({
@@ -139,21 +199,15 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
     fetchIncidents();
   }, [fetchIncidents]);
 
+  const onDriftRunComplete = useCallback(() => {
+    invalidateCache('/api/drift');
+    fetchDrift();
+  }, [fetchDrift]);
+
   const assetList = useMemo(() => {
     if (!trendData?.assets) return [];
     return Object.values(trendData.assets) as any[];
   }, [trendData]);
-
-  // Use task-derived count so the hero paints without waiting for monitor-trends.
-  // Distinct targetFqn across data-tier monitors is what the spec calls "monitored assets".
-  const monitoredAssetCount = useMemo(() => {
-    const fqns = new Set<string>();
-    for (const t of tasks) {
-      const fqn = (t as any)?.targetFqn;
-      if (typeof fqn === 'string' && fqn.length > 0) fqns.add(fqn);
-    }
-    return fqns.size;
-  }, [tasks]);
 
   if (!selectedPipelineId) {
     return (
@@ -165,12 +219,8 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
 
   return (
     <div className="space-y-2">
-      {firstLoadComplete ? (
-        <SummaryHero
-          incidents={activeIncidents}
-          monitoredAssetCount={monitoredAssetCount}
-          updatedAt={trendData?.updatedAt}
-        />
+      {healthReady && incidentsReady && health ? (
+        <SummaryHero health={health} incidents={activeIncidents} />
       ) : (
         <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] px-5 py-4 mb-4 animate-pulse">
           <div className="flex items-center gap-3">
@@ -188,6 +238,12 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
 
       <TrendStrip stats={stats} />
 
+      <PipelineTier
+        tools={pipelineTools}
+        loading={!pipelineReady}
+        stackId={selectedPipelineId}
+      />
+
       <AssetHealthLean
         assets={assetList}
         expandedFqn={expandedAssetFqn}
@@ -196,16 +252,27 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
         onRunAnalysis={() => {}}
       />
 
-      <CoverageGaps
-        unmonitoredCriticalAssets={unmonitoredCritical}
-        pendingRecommendations={recommendations}
-        onAddMonitor={(fqn) => router.push(`/dashboard/monitors?createFor=${encodeURIComponent(fqn)}`)}
-        onReviewRecs={() => router.push('/dashboard/monitors?tab=recommendations')}
-      />
+      {coverageReady && driftReady && (
+        <CoverageGaps
+          unmonitoredCriticalAssets={unmonitoredCritical}
+          lineageExtracted={lineageExtracted}
+          pendingRecommendations={recommendations}
+          lastAnalyzedAt={lastAnalyzedAt}
+          stackId={selectedPipelineId}
+          onAddMonitor={(fqn) => router.push(`/dashboard/monitors?createFor=${encodeURIComponent(fqn)}`)}
+          onReviewRecs={() => router.push('/dashboard/monitors?tab=recommendations')}
+          onDriftRunComplete={onDriftRunComplete}
+        />
+      )}
 
-      {firstLoadComplete
-        && assetList.length === 0
+      {healthReady
+        && incidentsReady
+        && trendsReady
+        && pipelineReady
+        && (health?.total ?? 0) === 0
         && activeIncidents.length === 0
+        && pipelineTools.length === 0
+        && assetList.length === 0
         && (
           <div className="flex flex-col items-center justify-center py-12">
             <Activity className="w-8 h-8 text-[var(--text-faint)] mb-3" />
