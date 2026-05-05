@@ -69,6 +69,40 @@ describe('buildHeadline()', () => {
     ).toBe('3 warnings.');
   });
 
+  it('amber falls back to monitor warning count when no incident is open', () => {
+    expect(
+      buildHeadline('amber', {
+        health: { ...HEALTHY, healthy: 45, warning: 2 },
+        failIncidentCount: 0,
+        warnIncidentCount: 0,
+        oldestOpenMs: null,
+      }),
+    ).toBe('2 warnings.');
+  });
+
+  it('amber prefers incident warning count over monitor warning count', () => {
+    expect(
+      buildHeadline('amber', {
+        health: { ...HEALTHY, healthy: 44, warning: 2 },
+        failIncidentCount: 0,
+        warnIncidentCount: 1,
+        oldestOpenMs: null,
+      }),
+    ).toBe('1 warning.');
+  });
+
+  it('amber appends blast radius', () => {
+    expect(
+      buildHeadline('amber', {
+        health: { ...HEALTHY, warning: 1 },
+        failIncidentCount: 0,
+        warnIncidentCount: 0,
+        oldestOpenMs: null,
+        blastRadius: { dashboards: 5, tables: 0 },
+      }),
+    ).toBe('1 warning. Affecting 5 dashboards.');
+  });
+
   it('red headline includes critical count and warning suffix', () => {
     expect(
       buildHeadline('red', {

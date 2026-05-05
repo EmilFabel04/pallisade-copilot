@@ -40,7 +40,7 @@ export function buildHeadline(tone: HeroTone, inputs: HeadlineInputs): string {
   if (tone === 'grey') return 'Setting up. No monitors yet.';
   if (tone === 'green') return 'All systems healthy.';
   if (tone === 'amber') {
-    const n = health.warning + warnIncidentCount;
+    const n = warnIncidentCount || health.warning;
     let s = `${n} warning${n === 1 ? '' : 's'}.`;
     if (blastRadius) s += ` Affecting ${blastRadius.dashboards} dashboards.`;
     return s;
