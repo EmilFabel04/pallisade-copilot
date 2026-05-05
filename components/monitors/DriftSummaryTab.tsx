@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Loader2, Activity } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { usePipeline } from '@/contexts/PipelineContext';
@@ -9,7 +9,6 @@ import { SummaryHero } from './SummaryHero';
 import { ActiveIncidents } from './ActiveIncidents';
 import { TrendStrip } from './TrendStrip';
 import { AssetHealthLean } from './AssetHealthLean';
-import { PipelineHealthTiles } from './PipelineHealthTiles';
 import { CoverageGaps } from './CoverageGaps';
 import type { IncidentSummary, IncidentStats } from '@/types/incident';
 import type { DriftRecommendation } from './DriftRecommendationCard';
@@ -32,16 +31,11 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
   const [expandedAssetFqn, setExpandedAssetFqn] = useState<string | null>(null);
   const [activeCategories] = useState<Set<string>>(new Set());
 
-  // First-load flags: render skeleton until both incidents AND trends have arrived at least once
-  const incidentsReady = useRef(false);
-  const trendReady = useRef(false);
+  // First paint only waits on incidents — the hero doesn't need trends, and
+  // gating on the heaviest endpoint left users staring at a skeleton for the
+  // full monitor-trends round-trip. AssetHealthLean still uses trendData but
+  // renders its own loading state.
   const [firstLoadComplete, setFirstLoadComplete] = useState(false);
-
-  const checkFirstLoad = useCallback(() => {
-    if (incidentsReady.current && trendReady.current) {
-      setFirstLoadComplete(true);
-    }
-  }, []);
 
   const fetchIncidents = useCallback(async () => {
     if (!selectedPipelineId) return;
@@ -52,9 +46,8 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
         setActiveIncidents(d.incidents || []);
       }
     } catch {}
-    incidentsReady.current = true;
-    checkFirstLoad();
-  }, [selectedPipelineId, checkFirstLoad]);
+    setFirstLoadComplete(true);
+  }, [selectedPipelineId]);
 
   const fetchStats = useCallback(async () => {
     if (!selectedPipelineId) return;
@@ -70,9 +63,7 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
       const r = await cachedFetch(`/api/schedule/monitor-trends?stackId=${selectedPipelineId}`);
       if (r.ok) setTrendData(await r.json());
     } catch {}
-    trendReady.current = true;
-    checkFirstLoad();
-  }, [selectedPipelineId, checkFirstLoad]);
+  }, [selectedPipelineId]);
 
   const fetchDrift = useCallback(async () => {
     if (!selectedPipelineId) return;
@@ -96,10 +87,8 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
     } catch {}
   }, [selectedPipelineId]);
 
-  // Reset first-load flags when pipeline changes
+  // Reset first-load flag when pipeline changes
   useEffect(() => {
-    incidentsReady.current = false;
-    trendReady.current = false;
     setFirstLoadComplete(false);
     setActiveIncidents([]);
     setStats(null);
@@ -155,7 +144,16 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
     return Object.values(trendData.assets) as any[];
   }, [trendData]);
 
-  const monitoredAssetCount = assetList.length;
+  // Use task-derived count so the hero paints without waiting for monitor-trends.
+  // Distinct targetFqn across data-tier monitors is what the spec calls "monitored assets".
+  const monitoredAssetCount = useMemo(() => {
+    const fqns = new Set<string>();
+    for (const t of tasks) {
+      const fqn = (t as any)?.targetFqn;
+      if (typeof fqn === 'string' && fqn.length > 0) fqns.add(fqn);
+    }
+    return fqns.size;
+  }, [tasks]);
 
   if (!selectedPipelineId) {
     return (
@@ -198,8 +196,6 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
         onRunAnalysis={() => {}}
       />
 
-      <PipelineHealthTiles />
-
       <CoverageGaps
         unmonitoredCriticalAssets={unmonitoredCritical}
         pendingRecommendations={recommendations}
@@ -210,7 +206,6 @@ export function DriftSummaryTab({ watches, tasks, loading: _loading }: Props) {
       {firstLoadComplete
         && assetList.length === 0
         && activeIncidents.length === 0
-        && Object.keys(trendData?.pipelineHealth ?? {}).length === 0
         && (
           <div className="flex flex-col items-center justify-center py-12">
             <Activity className="w-8 h-8 text-[var(--text-faint)] mb-3" />
