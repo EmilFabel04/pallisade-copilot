@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import type { IncidentSummary } from '@/types/incident';
 
@@ -73,13 +73,33 @@ export function IncidentCard({ incident, onChanged, onOpenInCopilot }: Props) {
 
       <div className="mt-2 text-[12px] leading-snug">
         <div className="text-[9px] uppercase tracking-wider text-[var(--muted)]">Likely cause</div>
-        {incident.llmHypothesis ? (
-          <div className="text-[var(--text)]/90 mt-0.5">{incident.llmHypothesis}</div>
-        ) : (
-          <div className="text-[var(--muted)] mt-0.5 flex items-center gap-1.5">
-            <Loader2 className="w-3 h-3 animate-spin" /> Analyzing…
-          </div>
-        )}
+        {(() => {
+          const h = (incident.llmHypothesis ?? '').trim();
+          const isFallback = !h
+            || h.toLowerCase().startsWith('unable to generate hypothesis')
+            || h.toLowerCase().startsWith('backfilled');
+          if (isFallback) {
+            return (
+              <div className="mt-0.5 flex items-start gap-2">
+                <span className="text-[var(--muted)] flex-1">
+                  {h
+                    ? h
+                    : 'Hypothesis not generated yet.'}
+                </span>
+                <button
+                  disabled={busy}
+                  onClick={() => callAction(`/api/incidents/${incident.id}/reanalyze`)}
+                  className="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)] flex-shrink-0 disabled:opacity-50"
+                  aria-label="Re-analyze incident"
+                >
+                  {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  {busy ? 'Analyzing…' : 'Re-analyze'}
+                </button>
+              </div>
+            );
+          }
+          return <div className="text-[var(--text)]/90 mt-0.5">{h}</div>;
+        })()}
       </div>
 
       <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
@@ -130,13 +150,6 @@ export function IncidentCard({ incident, onChanged, onOpenInCopilot }: Props) {
           <div>Signature: <code>{incident.signature ?? '—'}</code> · count: {incident.consecutiveCount}</div>
           <div>Owner system: {incident.ownerSystem ?? '—'} ({incident.ownerConfidence != null ? `${Math.round(incident.ownerConfidence * 100)}% confidence` : 'n/a'})</div>
           <div>Opened {new Date(incident.openedAt).toLocaleString()}</div>
-          <button
-            disabled={busy}
-            onClick={() => callAction(`/api/incidents/${incident.id}/reanalyze`)}
-            className="text-[var(--accent)] hover:underline disabled:opacity-50"
-          >
-            {busy ? 'Re-analyzing…' : 'Re-analyze'}
-          </button>
         </div>
       )}
     </div>

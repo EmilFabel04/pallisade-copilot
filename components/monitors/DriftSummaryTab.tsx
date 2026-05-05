@@ -265,7 +265,6 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
           lastAnalyzedAt={lastAnalyzedAt}
           stackId={selectedPipelineId}
           onAddMonitor={(fqn) => router.push(`/dashboard/monitors?createFor=${encodeURIComponent(fqn)}`)}
-          onReviewRecs={() => router.push('/dashboard/monitors?tab=recommendations')}
           onDriftRunComplete={onDriftRunComplete}
         />
       )}

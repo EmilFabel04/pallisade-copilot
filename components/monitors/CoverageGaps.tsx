@@ -6,6 +6,7 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { DriftRecommendation } from './DriftRecommendationCard';
+import { DriftRecommendationsPanel } from './DriftRecommendationsPanel';
 
 interface Props {
   unmonitoredCriticalAssets: Array<{ fqn: string; reason: string }>;
@@ -14,7 +15,6 @@ interface Props {
   lastAnalyzedAt: string | null;
   stackId: string;
   onAddMonitor: (fqn: string) => void;
-  onReviewRecs: () => void;
   onDriftRunComplete: () => void;
 }
 
@@ -35,10 +35,10 @@ export function CoverageGaps({
   lastAnalyzedAt,
   stackId,
   onAddMonitor,
-  onReviewRecs,
   onDriftRunComplete,
 }: Props) {
   const [running, setRunning] = useState(false);
+  const [showRecs, setShowRecs] = useState(false);
   const router = useRouter();
 
   const handleRunDrift = async () => {
@@ -161,7 +161,7 @@ export function CoverageGaps({
                 )}
               </ul>
               <button
-                onClick={onReviewRecs}
+                onClick={() => setShowRecs(true)}
                 className="mt-3 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
               >
                 Review {pendingRecommendations.length} recommendation{pendingRecommendations.length === 1 ? '' : 's'} →
@@ -170,6 +170,15 @@ export function CoverageGaps({
           )}
         </div>
       </div>
+
+      {showRecs && (
+        <DriftRecommendationsPanel
+          recommendations={pendingRecommendations}
+          stackId={stackId}
+          onClose={() => setShowRecs(false)}
+          onChanged={onDriftRunComplete}
+        />
+      )}
     </section>
   );
 }
