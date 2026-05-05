@@ -56,6 +56,15 @@ def _get_connection():
     if "sslmode" in qs:
         params["sslmode"] = qs["sslmode"][0]
 
+    # Bound libpq's wait so a Neon scale-from-zero can't freeze the request
+    # thread for minutes. TCP keepalives let us notice a half-dropped pooler
+    # session before we try to use the connection.
+    params.setdefault("connect_timeout", 10)
+    params.setdefault("keepalives", 1)
+    params.setdefault("keepalives_idle", 30)
+    params.setdefault("keepalives_interval", 10)
+    params.setdefault("keepalives_count", 3)
+
     return psycopg2.connect(**params)
 
 
