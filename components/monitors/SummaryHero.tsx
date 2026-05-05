@@ -37,18 +37,27 @@ export function SummaryHero({ health, incidents, blastRadius }: Props) {
   });
 
   const styles = {
-    grey:  'from-zinc-500/12 to-zinc-500/[0.02] border-zinc-500/30 text-zinc-400',
-    green: 'from-emerald-500/12 to-emerald-500/[0.02] border-emerald-500/30 text-emerald-400',
-    amber: 'from-amber-500/12  to-amber-500/[0.02]  border-amber-500/30  text-amber-400',
-    red:   'from-red-500/12    to-red-500/[0.02]    border-red-500/30    text-red-400',
+    grey:  'from-zinc-500/[0.18] via-zinc-500/[0.08] to-transparent border-zinc-500/40',
+    green: 'from-emerald-500/[0.18] via-emerald-500/[0.06] to-transparent border-emerald-500/40',
+    amber: 'from-amber-500/[0.22] via-amber-500/[0.08] to-transparent border-amber-500/45',
+    red:   'from-red-500/[0.24] via-red-500/[0.10] to-transparent border-red-500/50',
   } as const;
 
+  const headlineColor = {
+    grey:  'text-zinc-300',
+    green: 'text-emerald-300',
+    amber: 'text-amber-300',
+    red:   'text-red-300',
+  }[tone];
+
   const dotColor = {
-    grey: 'bg-zinc-500',
+    grey:  'bg-zinc-500',
     green: 'bg-emerald-500',
     amber: 'bg-amber-500',
-    red: 'bg-red-500',
+    red:   'bg-red-500',
   }[tone];
+
+  const dotPulse = tone === 'red' || tone === 'amber';
 
   const updatedLabel = health.lastRunAt
     ? new Date(health.lastRunAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -57,9 +66,9 @@ export function SummaryHero({ health, incidents, blastRadius }: Props) {
   return (
     <div className={cn('rounded-lg border bg-gradient-to-r px-5 py-4 mb-4', styles[tone])}>
       <div className="flex items-center gap-3">
-        <div className={cn('w-2.5 h-2.5 rounded-full shadow', dotColor)} />
+        <div className={cn('w-2.5 h-2.5 rounded-full shadow-lg', dotColor, dotPulse && 'animate-pulse')} />
         <div className="flex-1">
-          <div className="text-[14px] font-semibold">{headline}</div>
+          <div className={cn('text-[14px] font-semibold', headlineColor)}>{headline}</div>
           {health.total > 0 && (
             <div className="text-[11px] opacity-70 mt-0.5">{buildSubline(health)}</div>
           )}

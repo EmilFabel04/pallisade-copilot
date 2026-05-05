@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, ExternalLink, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { PIPELINE_TYPE_TO_FAMILY } from '@/lib/monitors/families';
+import { PIPELINE_TYPE_TO_FAMILY, TOOL_TYPE_BY_INTEGRATION_TYPE } from '@/lib/monitors/families';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 import type { PipelineToolStatus } from '@/types/monitors-summary';
 
 interface Props {
@@ -45,14 +46,25 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
         if (!active) return;
         const all: any[] = d.tasks || [];
         const filtered = all.filter((t) => {
-          const integrationType = (t.integration?.type || '').toLowerCase();
-          // Direct match on integration toolType (e.g. 'fivetran')
-          if (integrationType && integrationType === tool.toolType) return true;
-          // Family match (e.g. tool.toolType === 'ingestion' and monitor is SYNC_LAG)
+          // Resolve integration.type (uppercase Prisma enum e.g. 'AIRFLOW') →
+          // canonical lowercase tool key (e.g. 'airflow') using the same map
+          // that health-summary and pipeline-status routes use.
+          const integrationKey = t.integration?.type
+            ? (TOOL_TYPE_BY_INTEGRATION_TYPE[t.integration.type] || t.integration.type.toLowerCase())
+            : null;
+          if (integrationKey && integrationKey === tool.toolType) return true;
+          // Family match (e.g. tool.toolType === 'orchestration' and monitor is DAG_LAST_RUN)
           const family = PIPELINE_TYPE_TO_FAMILY[(t.monitorType || '').toUpperCase()];
           if (family && family === tool.toolType) return true;
           return false;
         });
+        if (process.env.NODE_ENV !== 'production' && filtered.length === 0 && tool.monitorCount > 0) {
+          console.debug('[PipelineToolDetailPanel] filter returned empty', {
+            toolType: tool.toolType,
+            monitorCount: tool.monitorCount,
+            sampleTask: all[0],
+          });
+        }
         setMonitors(filtered as MonitorRow[]);
         setLoading(false);
       })
@@ -80,10 +92,11 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
         role="dialog"
         aria-label={`${tool.displayName} detail`}
       >
-        <header className="flex items-center justify-between px-4 py-3 border-b border-[var(--subtle-border)]">
-          <div>
-            <div className="text-[11px] text-[var(--muted)] uppercase tracking-wide">Pipeline tool</div>
-            <div className="text-[14px] font-semibold">{tool.displayName}</div>
+        <header className="flex items-center gap-3 px-4 py-3 border-b border-[var(--subtle-border)]">
+          <ToolIcon toolType={tool.toolType} size={28} className="flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] text-[var(--muted)] uppercase tracking-wide">Pipeline tool</div>
+            <div className="text-[14px] font-semibold truncate">{tool.displayName}</div>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-[var(--surface)]" aria-label="Close">
             <X className="w-4 h-4" />

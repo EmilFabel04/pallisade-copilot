@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { PipelineToolStatus } from '@/types/monitors-summary';
 import { PipelineToolDetailPanel } from './PipelineToolDetailPanel';
+import { ToolIcon } from '@/components/icons/ToolIcon';
 
 interface Props {
   tools: PipelineToolStatus[];
@@ -17,6 +18,14 @@ const STATUS_COLOR: Record<string, string> = {
   FAIL:      'text-red-500',
   ERROR:     'text-red-500',
   NEVER_RUN: 'text-[var(--muted)]',
+};
+
+const STATUS_ACCENT: Record<string, string> = {
+  PASS:      'bg-emerald-500',
+  WARN:      'bg-amber-500',
+  FAIL:      'bg-red-500',
+  ERROR:     'bg-red-500',
+  NEVER_RUN: 'bg-zinc-500',
 };
 
 const STATUS_LABEL: Record<string, (t: PipelineToolStatus) => string> = {
@@ -44,8 +53,13 @@ export function PipelineTier({ tools, loading, stackId }: Props) {
 
   return (
     <section className="mb-4">
-      <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-2 font-semibold">
-        Pipeline tier
+      <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-2 font-semibold flex items-center justify-between">
+        <span>Pipeline tier</span>
+        {!loading && tools.length > 0 && (
+          <span className="text-[10px] text-[var(--text-faint)] font-normal normal-case tracking-normal">
+            {tools.length} tool{tools.length === 1 ? '' : 's'}
+          </span>
+        )}
       </div>
       {loading ? (
         <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
@@ -59,15 +73,22 @@ export function PipelineTier({ tools, loading, stackId }: Props) {
             <button
               key={tool.toolType}
               onClick={() => setOpenTool(tool)}
-              className="text-left rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] hover:border-[var(--border)] transition-colors p-2.5"
+              className="text-left rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] hover:border-[var(--border)] hover:bg-[var(--overlay-bg)] transition-colors overflow-hidden group"
+              aria-label={`${tool.displayName}: ${STATUS_LABEL[tool.status](tool)}`}
             >
-              <div className="text-[11px] text-[var(--muted)] truncate">{tool.displayName}</div>
-              <div className={cn('text-[12px] font-semibold mt-0.5', STATUS_COLOR[tool.status])}>
-                {STATUS_LABEL[tool.status](tool)}
+              <div className={cn('h-0.5', STATUS_ACCENT[tool.status])} />
+              <div className="px-2.5 py-2.5 flex items-start gap-2">
+                <ToolIcon toolType={tool.toolType} size={20} className="flex-shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[12px] font-semibold truncate">{tool.displayName}</div>
+                  <div className={cn('text-[11px] mt-0.5 font-medium', STATUS_COLOR[tool.status])}>
+                    {STATUS_LABEL[tool.status](tool)}
+                  </div>
+                  {tool.lastRunAt && (
+                    <div className="text-[10px] text-[var(--text-faint)] mt-0.5">{timeSince(tool.lastRunAt)}</div>
+                  )}
+                </div>
               </div>
-              {tool.lastRunAt && (
-                <div className="text-[10px] text-[var(--text-faint)] mt-0.5">{timeSince(tool.lastRunAt)}</div>
-              )}
             </button>
           ))}
         </div>
