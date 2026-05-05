@@ -12,6 +12,8 @@ import { TaskCard } from '@/components/schedule/TaskCard';
 import { MultiMonitorModal } from '@/components/schedule/MultiMonitorModal';
 import { MonitorGroupSettingsModal } from '@/components/schedule/MonitorGroupSettingsModal';
 import { DriftSummaryTab } from '@/components/monitors/DriftSummaryTab';
+import { PipelineHealthTiles } from '@/components/monitors/PipelineHealthTiles';
+import { TabActiveIncidents } from '@/components/monitors/TabActiveIncidents';
 import { cn } from '@/lib/utils';
 import type { ScheduledTask } from '@/types/schedule';
 import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
@@ -538,8 +540,23 @@ export default function MonitorsPage() {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {activeTab === 'summary' && <DriftSummaryTab watches={allWatches} tasks={tasks} loading={loading} />}
-        {activeTab === 'data' && renderMonitorList(dataWatches, dataTasks)}
-        {activeTab === 'pipeline' && renderMonitorList(pipelineWatches, pipelineTasks)}
+        {activeTab === 'data' && (
+          <>
+            {selectedPipeline?.id && (
+              <TabActiveIncidents stackId={selectedPipeline.id} monitorTypes={DATA_MONITOR_TYPES} />
+            )}
+            {renderMonitorList(dataWatches, dataTasks)}
+          </>
+        )}
+        {activeTab === 'pipeline' && (
+          <>
+            <PipelineHealthTiles />
+            {selectedPipeline?.id && (
+              <TabActiveIncidents stackId={selectedPipeline.id} monitorTypes={PIPELINE_MONITOR_TYPES} />
+            )}
+            {renderMonitorList(pipelineWatches, pipelineTasks)}
+          </>
+        )}
       </div>
 
       {/* Modal */}

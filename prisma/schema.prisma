@@ -2071,6 +2071,7 @@ model Monitor {
   runs                 MonitorRun[]
   baselines            MonitorBaseline[]
   driftRecommendations DriftRecommendation[]
+  incidents            Incident[]
 
   @@unique([organizationId, pipelineStackId, targetFqn, monitorType])
   @@index([organizationId])
@@ -2105,6 +2106,76 @@ model MonitorRun {
   @@index([monitorId])
   @@index([startedAt])
   @@index([status])
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum IncidentResolutionType {
+  AUTO_RECOVERED
+  FIXED
+  EXPECTED
+  FALSE_POSITIVE
+  WONT_FIX
+}
+
+enum IncidentSeverity {
+  FAIL
+  WARN
+}
+
+model Incident {
+  id String @id @default(cuid())
+
+  // Tenancy
+  organizationId  String
+  pipelineStackId String
+
+  // Source monitor
+  monitorId       String
+  monitor         Monitor @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  monitorGroupId  String?
+  targetFqn       String
+
+  // Lifecycle
+  status          IncidentStatus   @default(OPEN)
+  severity        IncidentSeverity // FAIL → red hero, WARN → amber hero
+  openedAt        DateTime
+  openingRunId    String
+
+  // LLM diagnosis (nullable until first analysis completes)
+  signature         String?
+  consecutiveCount  Int     @default(1)
+  llmHypothesis     String?
+  llmHypothesisAt   DateTime?
+  ownerSystem       String?
+  ownerConfidence   Float?
+
+  // Acknowledgement
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+
+  // Resolution
+  resolvedAt     DateTime?
+  resolvedBy     String?  // user id, or 'system' for auto
+  resolutionType IncidentResolutionType?
+  resolutionNote String?
+
+  // Mute (orthogonal flag)
+  mutedUntil  DateTime?
+  mutedBy     String?
+  mutedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, pipelineStackId, status])
+  @@index([monitorId, status])
+  @@index([openedAt])
+  @@index([resolvedAt])
 }
 
 // Per-run record of a CUSTOM_SOURCE probe. Stores derived metrics only — raw rows are NEVER persisted.

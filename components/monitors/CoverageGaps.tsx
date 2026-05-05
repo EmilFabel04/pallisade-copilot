@@ -1,0 +1,184 @@
+'use client';
+
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Loader2, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
+import type { DriftRecommendation } from './DriftRecommendationCard';
+import { DriftRecommendationsPanel } from './DriftRecommendationsPanel';
+
+interface Props {
+  unmonitoredCriticalAssets: Array<{ fqn: string; reason: string }>;
+  lineageExtracted: boolean;
+  pendingRecommendations: DriftRecommendation[];
+  lastAnalyzedAt: string | null;
+  stackId: string;
+  onAddMonitor: (fqn: string) => void;
+  onDriftRunComplete: () => void;
+}
+
+function timeSince(iso: string | null): string | null {
+  if (!iso) return null;
+  const ms = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+export function CoverageGaps({
+  unmonitoredCriticalAssets,
+  lineageExtracted,
+  pendingRecommendations,
+  lastAnalyzedAt,
+  stackId,
+  onAddMonitor,
+  onDriftRunComplete,
+}: Props) {
+  const [running, setRunning] = useState(false);
+  const [showRecs, setShowRecs] = useState(false);
+  const router = useRouter();
+
+  const handleRunDrift = async () => {
+    if (running) return;
+    setRunning(true);
+    try {
+      const res = await fetch('/api/drift/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stackId }),
+        signal: AbortSignal.timeout(125_000),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `drift run failed (${res.status})`);
+      }
+      const data = await res.json();
+      const n = data.recommendationCount ?? 0;
+      toast.success(n > 0
+        ? `Drift discovery complete — ${n} recommendation${n === 1 ? '' : 's'}`
+        : 'Drift discovery complete — no threshold drift detected');
+      onDriftRunComplete();
+    } catch (e: any) {
+      toast.error(`Drift discovery failed: ${e?.message ?? 'unknown error'}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // Critical Assets card render state
+  const N = unmonitoredCriticalAssets.length;
+  const hideCritical = lineageExtracted && N === 0;
+  const lineageMissing = !lineageExtracted;
+
+  return (
+    <section className="mb-4">
+      <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] mb-2 font-semibold">
+        Coverage &amp; recommendations
+      </div>
+      <div className={cn('grid gap-3', hideCritical ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2')}>
+        {!hideCritical && (
+          <div className="rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] p-3">
+            {lineageMissing ? (
+              <>
+                <div className="text-[13px] font-semibold">Lineage not yet extracted.</div>
+                <div className="text-[11px] text-[var(--muted)] mt-1">
+                  Critical-asset coverage needs lineage to identify what feeds your BI dashboards.
+                </div>
+                <button
+                  onClick={() => router.push('/dashboard/pipeline')}
+                  className="mt-2 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
+                >
+                  Extract lineage →
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="text-[13px] font-semibold">
+                  {N} critical asset{N === 1 ? '' : 's'} unmonitored
+                </div>
+                <div className="text-[11px] text-[var(--muted)] mt-1 truncate">
+                  {unmonitoredCriticalAssets.slice(0, 3).map((a) => a.fqn).join(', ')}
+                </div>
+                <button
+                  onClick={() => onAddMonitor(unmonitoredCriticalAssets[0]?.fqn || '')}
+                  className="mt-2 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
+                >
+                  Add monitors →
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] p-4">
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div>
+              <div className="text-[13px] font-semibold">SLA recommendations</div>
+              <div className="text-[11px] text-[var(--muted)] mt-0.5">
+                {pendingRecommendations.length > 0
+                  ? `${pendingRecommendations.length} threshold${pendingRecommendations.length === 1 ? '' : 's'} drifted from last week's pattern.`
+                  : 'No threshold drift detected.'}
+                {' '}
+                {lastAnalyzedAt
+                  ? `Analyzed ${timeSince(lastAnalyzedAt)}.`
+                  : 'Drift discovery has not run yet.'}
+              </div>
+            </div>
+            <button
+              onClick={handleRunDrift}
+              disabled={running}
+              className={cn(
+                'flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md border whitespace-nowrap',
+                running
+                  ? 'border-[var(--subtle-border)] opacity-60 cursor-not-allowed'
+                  : 'border-[var(--border)] bg-[var(--overlay-bg)] hover:bg-[var(--surface)] hover:border-[var(--text-faint)]'
+              )}
+            >
+              {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {running ? 'Analyzing…' : 'Run drift discovery'}
+            </button>
+          </div>
+
+          {pendingRecommendations.length > 0 && (
+            <>
+              <ul className="mt-3 space-y-1.5 border-t border-[var(--subtle-border)] pt-3">
+                {pendingRecommendations.slice(0, 3).map((r, idx) => (
+                  <li key={idx} className="flex items-center justify-between text-[11px] gap-2">
+                    <div className="min-w-0 flex-1 truncate">
+                      <span className="text-[var(--text)] font-medium">{r.targetFqn}</span>
+                      <span className="text-[var(--muted)]"> · {r.currentField}</span>
+                    </div>
+                    <span className="text-[10px] text-[var(--text-faint)] shrink-0">drifted</span>
+                  </li>
+                ))}
+                {pendingRecommendations.length > 3 && (
+                  <li className="text-[10px] text-[var(--text-faint)]">
+                    + {pendingRecommendations.length - 3} more
+                  </li>
+                )}
+              </ul>
+              <button
+                onClick={() => setShowRecs(true)}
+                className="mt-3 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
+              >
+                Review {pendingRecommendations.length} recommendation{pendingRecommendations.length === 1 ? '' : 's'} →
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {showRecs && (
+        <DriftRecommendationsPanel
+          recommendations={pendingRecommendations}
+          stackId={stackId}
+          onClose={() => setShowRecs(false)}
+          onChanged={onDriftRunComplete}
+        />
+      )}
+    </section>
+  );
+}

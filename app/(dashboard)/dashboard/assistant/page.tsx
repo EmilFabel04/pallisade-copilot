@@ -160,6 +160,27 @@ function AssistantPageInner() {
     })() : null
   );
 
+  // Read incident context from URL params (set by IncidentCard "Open in Co-pilot").
+  // Runs synchronously during render so the data is stable before effects fire.
+  // We consume the params and clean the URL immediately to avoid double-seeding.
+  const incidentSeedData = useRef<{ incidentId: string; targetFqn: string } | null>(
+    typeof window !== 'undefined' ? (() => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('contextType') === 'incident') {
+        const incidentId = params.get('incidentId');
+        const targetFqn = params.get('targetFqn') || '';
+        if (incidentId) {
+          // Clean the URL immediately — no Next.js re-render
+          window.history.replaceState({}, '', '/dashboard/assistant');
+          return { incidentId, targetFqn };
+        }
+      }
+      return null;
+    })() : null
+  );
+  // Guard: only seed once even across Strict Mode remounts
+  const incidentSeeded = useRef(false);
+
   // Initialize messages with the deep-link user message if present.
   // Because this is a useState lazy initializer, it runs on every mount
   // (including Strict Mode remounts), so the message is always visible.
@@ -603,6 +624,57 @@ function AssistantPageInner() {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Incident context seed: inject a pre-seeded assistant message with the cached
+  // LLM hypothesis when the user opens the co-pilot from an IncidentCard.
+  // Waits for selectedPipelineId to be available before fetching the incident.
+  useEffect(() => {
+    const seed = incidentSeedData.current;
+    if (!seed || incidentSeeded.current) return;
+    if (!selectedPipelineId) return; // wait for pipeline to be ready
+    incidentSeeded.current = true;
+
+    const { incidentId, targetFqn } = seed;
+
+    fetch(`/api/incidents?stackId=${selectedPipelineId}&status=active`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        const incident = (data?.incidents as Array<{ id: string; llmHypothesis: string | null }> | null)
+          ?.find((inc) => inc.id === incidentId);
+        const hypothesis = incident?.llmHypothesis ?? null;
+        const content = hypothesis
+          ? `[Incident on \`${targetFqn}\`] Hypothesis: ${hypothesis}\n\nWhat would you like me to investigate?`
+          : `[Incident on \`${targetFqn}\`] No hypothesis available yet.\n\nWhat would you like me to investigate?`;
+        setMessages((prev) => {
+          // Don't double-seed if already present (Strict Mode remount guard)
+          if (prev.some((m) => m.id.startsWith('incident-seed-'))) return prev;
+          return [
+            ...prev,
+            {
+              id: `incident-seed-${incidentId}`,
+              role: 'assistant' as const,
+              content,
+              timestamp: new Date(),
+            },
+          ];
+        });
+      })
+      .catch(() => {
+        // Fallback: seed without hypothesis on fetch failure
+        setMessages((prev) => {
+          if (prev.some((m) => m.id.startsWith('incident-seed-'))) return prev;
+          return [
+            ...prev,
+            {
+              id: `incident-seed-${incidentId}`,
+              role: 'assistant' as const,
+              content: `[Incident on \`${targetFqn}\`]\n\nWhat would you like me to investigate?`,
+              timestamp: new Date(),
+            },
+          ];
+        });
+      });
+  }, [selectedPipelineId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch sessions on mount
   useEffect(() => {
     if (initialLoadDone.current) return;
@@ -627,9 +699,9 @@ function AssistantPageInner() {
         const data = await response.json();
         setSessions(data.sessions || []);
 
-        // If deep-link is active (from Ask Scout), don't load any session —
-        // the deep-link effect handles everything.
-        if (deepLinkData.current || promptProcessed.current) {
+        // If deep-link is active (from Ask Scout) or an incident seed is pending,
+        // don't auto-load any session — those effects handle their own state.
+        if (deepLinkData.current || promptProcessed.current || incidentSeedData.current) {
           return;
         }
 

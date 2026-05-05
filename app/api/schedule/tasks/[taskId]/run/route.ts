@@ -10,6 +10,8 @@ import {
   watchHealthStatusFromScore,
   signalsFromMonitors,
 } from '@/lib/watch-health';
+import { handleRun } from '@/lib/incidents/lifecycle';
+import { diagnoseIncident } from '@/lib/incidents/diagnose';
 
 const WAREHOUSE_TOOL_TYPES = ['bigquery', 'snowflake', 'postgres', 'redshift'];
 
@@ -26,7 +28,7 @@ async function persistEarlyErrorRun(
   timezone: string | null,
 ) {
   const now = new Date();
-  await prisma.monitorRun.create({
+  const errRun = await prisma.monitorRun.create({
     data: {
       status: 'ERROR',
       message,
@@ -36,6 +38,16 @@ async function persistEarlyErrorRun(
       monitorId,
     },
   });
+  try {
+    const lc = await handleRun(errRun as any, prisma);
+    if (lc.shouldDiagnose && lc.incidentId) {
+      void diagnoseIncident(lc.incidentId, prisma).catch((err) => {
+        console.error('[incidents] diagnose failed', err);
+      });
+    }
+  } catch (err) {
+    console.error('[incidents] lifecycle.handleRun failed', err);
+  }
   const updateData: Record<string, any> = { lastRunAt: now, lastStatus: 'ERROR' };
   if (schedule) updateData.nextRunAt = computeNextRun(schedule, timezone || 'UTC');
   await prisma.monitor.update({ where: { id: monitorId }, data: updateData });
@@ -478,6 +490,17 @@ export async function POST(
         monitorId: task.id,
       },
     });
+
+    try {
+      const lc = await handleRun(run as any, prisma);
+      if (lc.shouldDiagnose && lc.incidentId) {
+        void diagnoseIncident(lc.incidentId, prisma).catch((err) => {
+          console.error('[incidents] diagnose failed', err);
+        });
+      }
+    } catch (err) {
+      console.error('[incidents] lifecycle.handleRun failed', err);
+    }
 
     // Update the monitor's last run info + persist baseline stats
     const updateData: Record<string, any> = {
