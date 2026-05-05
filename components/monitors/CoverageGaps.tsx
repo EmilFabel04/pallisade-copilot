@@ -113,37 +113,60 @@ export function CoverageGaps({
           </div>
         )}
 
-        <div className="rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] p-3">
-          <div className="flex items-center justify-between">
-            <div className="text-[13px] font-semibold">SLA recommendations</div>
+        <div className="rounded-md border border-[var(--subtle-border)] bg-[var(--surface)] p-4">
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div>
+              <div className="text-[13px] font-semibold">SLA recommendations</div>
+              <div className="text-[11px] text-[var(--muted)] mt-0.5">
+                {pendingRecommendations.length > 0
+                  ? `${pendingRecommendations.length} threshold${pendingRecommendations.length === 1 ? '' : 's'} drifted from last week's pattern.`
+                  : 'No threshold drift detected.'}
+                {' '}
+                {lastAnalyzedAt
+                  ? `Analyzed ${timeSince(lastAnalyzedAt)}.`
+                  : 'Drift discovery has not run yet.'}
+              </div>
+            </div>
             <button
               onClick={handleRunDrift}
               disabled={running}
               className={cn(
-                'flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)]',
-                running ? 'opacity-60' : 'hover:bg-[var(--overlay-bg)]'
+                'flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-md border whitespace-nowrap',
+                running
+                  ? 'border-[var(--subtle-border)] opacity-60 cursor-not-allowed'
+                  : 'border-[var(--border)] bg-[var(--overlay-bg)] hover:bg-[var(--surface)] hover:border-[var(--text-faint)]'
               )}
             >
-              {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-              {running ? 'Running…' : 'Run drift discovery'}
+              {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              {running ? 'Analyzing…' : 'Run drift discovery'}
             </button>
           </div>
-          <div className="text-[11px] text-[var(--muted)] mt-1">
-            {pendingRecommendations.length > 0
-              ? `${pendingRecommendations.length} threshold${pendingRecommendations.length === 1 ? '' : 's'} drifted.`
-              : 'No threshold drift detected.'}
-            {' '}
-            {lastAnalyzedAt
-              ? `Last analysis ${timeSince(lastAnalyzedAt)}.`
-              : 'Drift discovery has not run yet.'}
-          </div>
+
           {pendingRecommendations.length > 0 && (
-            <button
-              onClick={onReviewRecs}
-              className="mt-2 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
-            >
-              Review recommendations →
-            </button>
+            <>
+              <ul className="mt-3 space-y-1.5 border-t border-[var(--subtle-border)] pt-3">
+                {pendingRecommendations.slice(0, 3).map((r, idx) => (
+                  <li key={idx} className="flex items-center justify-between text-[11px] gap-2">
+                    <div className="min-w-0 flex-1 truncate">
+                      <span className="text-[var(--text)] font-medium">{r.targetFqn}</span>
+                      <span className="text-[var(--muted)]"> · {r.currentField}</span>
+                    </div>
+                    <span className="text-[10px] text-[var(--text-faint)] shrink-0">drifted</span>
+                  </li>
+                ))}
+                {pendingRecommendations.length > 3 && (
+                  <li className="text-[10px] text-[var(--text-faint)]">
+                    + {pendingRecommendations.length - 3} more
+                  </li>
+                )}
+              </ul>
+              <button
+                onClick={onReviewRecs}
+                className="mt-3 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
+              >
+                Review {pendingRecommendations.length} recommendation{pendingRecommendations.length === 1 ? '' : 's'} →
+              </button>
+            </>
           )}
         </div>
       </div>

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, ExternalLink, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { PIPELINE_TYPE_TO_FAMILY, TOOL_TYPE_BY_INTEGRATION_TYPE } from '@/lib/monitors/families';
+import { PIPELINE_TYPE_TO_FAMILY, TOOL_TYPE_BY_INTEGRATION_TYPE, TOOL_TO_FAMILY } from '@/lib/monitors/families';
 import { ToolIcon } from '@/components/icons/ToolIcon';
 import type { PipelineToolStatus } from '@/types/monitors-summary';
 
@@ -45,6 +45,9 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
       .then((d) => {
         if (!active) return;
         const all: any[] = d.tasks || [];
+        // Resolve which family this tool belongs to (e.g. 'airflow' → 'orchestration').
+        // Falls back to tool.toolType itself for bare-family tiles (e.g. 'orchestration').
+        const toolFamily = TOOL_TO_FAMILY[tool.toolType] || tool.toolType;
         const filtered = all.filter((t) => {
           // Resolve integration.type (uppercase Prisma enum e.g. 'AIRFLOW') →
           // canonical lowercase tool key (e.g. 'airflow') using the same map
@@ -53,9 +56,11 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
             ? (TOOL_TYPE_BY_INTEGRATION_TYPE[t.integration.type] || t.integration.type.toLowerCase())
             : null;
           if (integrationKey && integrationKey === tool.toolType) return true;
-          // Family match (e.g. tool.toolType === 'orchestration' and monitor is DAG_LAST_RUN)
-          const family = PIPELINE_TYPE_TO_FAMILY[(t.monitorType || '').toUpperCase()];
-          if (family && family === tool.toolType) return true;
+          // Family match: include monitors whose monitorType family matches this tool's family.
+          // This handles the case where tool.toolType is 'airflow' but the monitor has no
+          // integration link and its family is 'orchestration' (same family as airflow).
+          const monitorFamily = PIPELINE_TYPE_TO_FAMILY[(t.monitorType || '').toUpperCase()];
+          if (monitorFamily && (monitorFamily === tool.toolType || monitorFamily === toolFamily)) return true;
           return false;
         });
         if (process.env.NODE_ENV !== 'production' && filtered.length === 0 && tool.monitorCount > 0) {

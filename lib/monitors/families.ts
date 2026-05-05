@@ -36,3 +36,15 @@ export const TOOL_TYPE_BY_INTEGRATION_TYPE: Record<string, string> = {
   SNOWFLAKE: 'snowflake', BIGQUERY: 'bigquery', POSTGRES: 'postgres', REDSHIFT: 'redshift',
   LINUX_SERVER: 'linux_server',
 };
+
+// Reverse map: concrete tool key → its family. Used by PipelineToolDetailPanel
+// to match monitors whose monitorType falls in the same family as the tile's toolType.
+// For example, tool.toolType === 'airflow' and monitor has no integration but is
+// DAG_LAST_RUN → family 'orchestration' === TOOL_TO_FAMILY['airflow'] → include it.
+export const TOOL_TO_FAMILY: Record<string, string> = {
+  fivetran: 'ingestion', airbyte: 'ingestion', stitch: 'ingestion',
+  airflow: 'orchestration', dagster: 'orchestration', prefect: 'orchestration', n8n: 'orchestration',
+  dbt_cloud: 'transform', dbt_core: 'transform',
+  looker: 'bi', tableau: 'bi', powerbi: 'bi', metabase: 'bi',
+  linux_server: 'infra',
+};
