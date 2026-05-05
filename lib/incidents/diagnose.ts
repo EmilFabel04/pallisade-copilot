@@ -61,7 +61,16 @@ export async function diagnoseIncident(incidentId: string, prisma: PrismaClient)
     let ownerConfidence = 0;
 
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      // Scanner requires three trust-boundary headers:
+      //   X-Internal-Auth  — shared secret (constant-time compared)
+      //   X-Acting-User    — caller identity (we use 'system' for automated diagnosis)
+      //   X-Acting-Org     — caller's organization (sourced from the incident)
+      // Missing the last two yields 400 "missing_principal" before the LLM is reached.
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'X-Acting-User': 'system',
+        'X-Acting-Org': incident.organizationId,
+      };
       const secret = process.env.SCANNER_SHARED_SECRET;
       if (secret) headers['X-Internal-Auth'] = secret;
 
