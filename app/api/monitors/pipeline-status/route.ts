@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { PIPELINE_TYPE_TO_FAMILY } from '@/lib/monitors/families';
 import type { $Enums } from '@prisma/client';
 import type {
   PipelineToolStatus,
@@ -26,15 +27,6 @@ const TOOL_TYPE_BY_INTEGRATION_TYPE: Record<string, string> = {
   TABLEAU: 'tableau', LOOKER: 'looker', POWERBI: 'powerbi', METABASE: 'metabase',
   SNOWFLAKE: 'snowflake', BIGQUERY: 'bigquery', POSTGRES: 'postgres', REDSHIFT: 'redshift',
   LINUX_SERVER: 'linux_server',
-};
-
-const FAMILY_BY_TYPE: Record<string, string> = {
-  SYNC_LAG: 'ingestion', FAILED_SYNCS: 'ingestion', CONNECTOR_SCHEMA_DRIFT: 'ingestion',
-  DAG_LAST_RUN: 'orchestration', DAG_SCHEDULE_LAG: 'orchestration', TASK_FAILURE_RATE: 'orchestration',
-  DBT_TEST_FAILURES: 'transform', DBT_MODEL_FRESHNESS: 'transform', DBT_SOURCE_FRESHNESS: 'transform',
-  DBT_CORE_SOURCE_VALIDATION: 'transform', DBT_CORE_REF_INTEGRITY: 'transform',
-  BI_FRESHNESS_PROXY: 'bi', BI_UPSTREAM_BREAK_RISK: 'bi', BI_REFRESH_FAILURE: 'bi', BI_CONTENT_HEALTH: 'bi',
-  CERTIFICATE: 'infra', SERVER_HEALTH: 'infra', LOG_ANALYSIS: 'infra',
 };
 
 const DISPLAY_OVERRIDES: Record<string, string> = {
@@ -147,7 +139,7 @@ export async function GET(request: NextRequest) {
   const toolMonitors: ToolMonitor[] = monitors.map((m) => ({
     toolType:
       (m.integration?.type ? TOOL_TYPE_BY_INTEGRATION_TYPE[m.integration.type] : null) ||
-      FAMILY_BY_TYPE[(m.monitorType || '').toUpperCase()] ||
+      PIPELINE_TYPE_TO_FAMILY[(m.monitorType || '').toUpperCase()] ||
       'unknown',
     lastStatus: m.lastStatus,
     lastRunAt: m.lastRunAt,
