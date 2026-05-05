@@ -7,7 +7,7 @@
 jest.mock('@/auth', () => ({ auth: jest.fn() }));
 jest.mock('@/lib/db', () => ({ __esModule: true, default: {} }));
 
-import { aggregateByTool } from '../pipeline-status/route';
+import { aggregateByTool } from '../pipeline-status/aggregate';
 
 function mon(toolType: string, lastStatus: string | null, lastRunAt: Date | null = new Date('2026-05-04T10:00:00Z')) {
   return { toolType, lastStatus, lastRunAt };

@@ -7,7 +7,7 @@
 jest.mock('@/auth', () => ({ auth: jest.fn() }));
 jest.mock('@/lib/db', () => ({ __esModule: true, default: {} }));
 
-import { aggregate } from '../health-summary/route';
+import { aggregate } from '../health-summary/aggregate';
 
 const DATA_FQN = 'analytics.fct_orders';
 
