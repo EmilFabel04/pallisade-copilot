@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { X, ExternalLink, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { PIPELINE_TYPE_TO_FAMILY } from '@/lib/monitors/families';
 import type { PipelineToolStatus } from '@/types/monitors-summary';
 
 interface Props {
@@ -44,10 +45,12 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
         if (!active) return;
         const all: any[] = d.tasks || [];
         const filtered = all.filter((t) => {
-          // Match either via integration.type (lowercased to match toolType)
-          // or via a monitor whose tool family resolves to the same toolType.
-          const it = (t.integration?.type || '').toLowerCase();
-          if (it && it === tool.toolType) return true;
+          const integrationType = (t.integration?.type || '').toLowerCase();
+          // Direct match on integration toolType (e.g. 'fivetran')
+          if (integrationType && integrationType === tool.toolType) return true;
+          // Family match (e.g. tool.toolType === 'ingestion' and monitor is SYNC_LAG)
+          const family = PIPELINE_TYPE_TO_FAMILY[(t.monitorType || '').toUpperCase()];
+          if (family && family === tool.toolType) return true;
           return false;
         });
         setMonitors(filtered as MonitorRow[]);

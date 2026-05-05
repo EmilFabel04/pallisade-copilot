@@ -50,10 +50,15 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
 
   const fetchHealth = useCallback(async () => {
     if (!selectedPipelineId) return;
+    let nextHealth: MonitorHealthSummary = {
+      total: 0, healthy: 0, warning: 0, failing: 0,
+      dataAssets: 0, pipelineTools: 0, lastRunAt: null,
+    };
     try {
       const r = await cachedFetch(`/api/monitors/health-summary?stackId=${selectedPipelineId}`);
-      if (r.ok) setHealth(await r.json());
+      if (r.ok) nextHealth = await r.json();
     } catch {}
+    setHealth(nextHealth);
     setHealthReady(true);
   }, [selectedPipelineId]);
 

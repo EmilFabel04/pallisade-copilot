@@ -13,12 +13,13 @@ type MonitorRow = {
   targetFqn: string | null;
   lastStatus: $Enums.MonitorRunStatus | string | null;
   lastRunAt: Date | null;
+  toolType?: string | null; // pre-resolved by the route from integration.type or family fallback
 };
 
 export function aggregate(monitors: MonitorRow[]): MonitorHealthSummary {
   let healthy = 0, warning = 0, failing = 0;
   const dataFqns = new Set<string>();
-  const pipelineFamilies = new Set<string>();
+  const pipelineTools = new Set<string>();
   let mostRecent: Date | null = null;
 
   for (const m of monitors) {
@@ -31,8 +32,12 @@ export function aggregate(monitors: MonitorRow[]): MonitorHealthSummary {
     if (DATA_MONITOR_TYPES.has(type) && m.targetFqn) {
       dataFqns.add(m.targetFqn);
     }
-    const family = PIPELINE_TYPE_TO_FAMILY[type];
-    if (family) pipelineFamilies.add(family);
+    if (m.toolType) {
+      pipelineTools.add(m.toolType);
+    } else {
+      const family = PIPELINE_TYPE_TO_FAMILY[type];
+      if (family) pipelineTools.add(family);
+    }
 
     if (m.lastRunAt && (!mostRecent || m.lastRunAt > mostRecent)) {
       mostRecent = m.lastRunAt;
@@ -45,7 +50,7 @@ export function aggregate(monitors: MonitorRow[]): MonitorHealthSummary {
     warning,
     failing,
     dataAssets: dataFqns.size,
-    pipelineTools: pipelineFamilies.size,
+    pipelineTools: pipelineTools.size,
     lastRunAt: mostRecent ? mostRecent.toISOString() : null,
   };
 }

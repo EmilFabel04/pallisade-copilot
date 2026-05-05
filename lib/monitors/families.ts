@@ -24,3 +24,15 @@ export const PIPELINE_TYPE_TO_FAMILY: Record<string, string> = {
   SERVER_HEALTH: 'infra',
   LOG_ANALYSIS: 'infra',
 };
+
+// IntegrationType enum value (uppercase) → canonical toolType string (lowercase).
+// Used by health-summary and pipeline-status routes to resolve toolType from
+// integration.type so both routes count the same way.
+export const TOOL_TYPE_BY_INTEGRATION_TYPE: Record<string, string> = {
+  FIVETRAN: 'fivetran', AIRBYTE: 'airbyte', STITCH: 'stitch',
+  AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect', N8N: 'n8n',
+  DBT_CLOUD: 'dbt_cloud', DBT_CORE: 'dbt_core',
+  TABLEAU: 'tableau', LOOKER: 'looker', POWERBI: 'powerbi', METABASE: 'metabase',
+  SNOWFLAKE: 'snowflake', BIGQUERY: 'bigquery', POSTGRES: 'postgres', REDSHIFT: 'redshift',
+  LINUX_SERVER: 'linux_server',
+};

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { TOOL_TYPE_BY_INTEGRATION_TYPE } from '@/lib/monitors/families';
 import { aggregate } from './aggregate';
 
 export async function GET(request: NextRequest) {
@@ -14,8 +15,22 @@ export async function GET(request: NextRequest) {
 
   const monitors = await prisma.monitor.findMany({
     where: { organizationId, pipelineStackId: stackId, enabled: true },
-    select: { monitorType: true, targetFqn: true, lastStatus: true, lastRunAt: true },
+    select: {
+      monitorType: true,
+      targetFqn: true,
+      lastStatus: true,
+      lastRunAt: true,
+      integration: { select: { type: true } },
+    },
   });
 
-  return NextResponse.json(aggregate(monitors));
+  const enriched = monitors.map((m) => ({
+    monitorType: m.monitorType,
+    targetFqn: m.targetFqn,
+    lastStatus: m.lastStatus,
+    lastRunAt: m.lastRunAt,
+    toolType: m.integration?.type ? TOOL_TYPE_BY_INTEGRATION_TYPE[m.integration.type] ?? null : null,
+  }));
+
+  return NextResponse.json(aggregate(enriched));
 }

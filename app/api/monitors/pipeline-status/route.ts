@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
-import { PIPELINE_TYPE_TO_FAMILY } from '@/lib/monitors/families';
+import { PIPELINE_TYPE_TO_FAMILY, TOOL_TYPE_BY_INTEGRATION_TYPE } from '@/lib/monitors/families';
 import type { $Enums } from '@prisma/client';
 import type { PipelineToolStatusResponse } from '@/types/monitors-summary';
 import { aggregateByTool, type ToolMonitor } from './aggregate';
@@ -14,17 +14,6 @@ const PIPELINE_MONITOR_TYPES: $Enums.MonitorKind[] = [
   'BI_FRESHNESS_PROXY', 'BI_UPSTREAM_BREAK_RISK', 'BI_REFRESH_FAILURE', 'BI_CONTENT_HEALTH',
   'CERTIFICATE', 'SERVER_HEALTH', 'LOG_ANALYSIS',
 ];
-
-// Map IntegrationType enum values (uppercase) to canonical toolType strings (lowercase).
-// This allows the GET handler to resolve toolType from integration.type.
-const TOOL_TYPE_BY_INTEGRATION_TYPE: Record<string, string> = {
-  FIVETRAN: 'fivetran', AIRBYTE: 'airbyte', STITCH: 'stitch',
-  AIRFLOW: 'airflow', DAGSTER: 'dagster', PREFECT: 'prefect', N8N: 'n8n',
-  DBT_CLOUD: 'dbt_cloud', DBT_CORE: 'dbt_core',
-  TABLEAU: 'tableau', LOOKER: 'looker', POWERBI: 'powerbi', METABASE: 'metabase',
-  SNOWFLAKE: 'snowflake', BIGQUERY: 'bigquery', POSTGRES: 'postgres', REDSHIFT: 'redshift',
-  LINUX_SERVER: 'linux_server',
-};
 
 export async function GET(request: NextRequest) {
   const session = await auth();

@@ -12,13 +12,15 @@ import { aggregate } from '../health-summary/aggregate';
 const DATA_FQN = 'analytics.fct_orders';
 
 function mon(over: Partial<{
-  monitorType: string; targetFqn: string | null; lastStatus: string | null; lastRunAt: Date | null;
+  monitorType: string; targetFqn: string | null; lastStatus: string | null;
+  lastRunAt: Date | null; toolType: string | null;
 }> = {}) {
   return {
     monitorType: 'FRESHNESS',
     targetFqn: DATA_FQN,
     lastStatus: 'PASS' as string | null,
     lastRunAt: new Date('2026-05-04T10:00:00Z') as Date | null,
+    toolType: null as string | null,
     ...over,
   };
 }
@@ -75,6 +77,15 @@ describe('health-summary aggregate()', () => {
       mon({ monitorType: 'DAG_SCHEDULE_LAG',  targetFqn: null }),
     ]);
     expect(out.pipelineTools).toBe(2); // ingestion (SYNC_LAG) + orchestration (DAG_*)
+  });
+
+  it('counts distinct toolType when provided, family fallback otherwise', () => {
+    const out = aggregate([
+      mon({ monitorType: 'SYNC_LAG', toolType: 'fivetran',  targetFqn: null }),
+      mon({ monitorType: 'SYNC_LAG', toolType: 'airbyte',   targetFqn: null }),
+      mon({ monitorType: 'DAG_LAST_RUN',                    targetFqn: null }), // no integration → family
+    ]);
+    expect(out.pipelineTools).toBe(3); // fivetran + airbyte + orchestration
   });
 
   it('returns the most recent lastRunAt as ISO', () => {
