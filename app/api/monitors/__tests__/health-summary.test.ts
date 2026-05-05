@@ -74,8 +74,7 @@ describe('health-summary aggregate()', () => {
       mon({ monitorType: 'DAG_LAST_RUN',      targetFqn: null }),
       mon({ monitorType: 'DAG_SCHEDULE_LAG',  targetFqn: null }),
     ]);
-    expect(out.pipelineTools).toBeGreaterThanOrEqual(1);
-    expect(out.pipelineTools).toBeLessThanOrEqual(3);
+    expect(out.pipelineTools).toBe(2); // ingestion (SYNC_LAG) + orchestration (DAG_*)
   });
 
   it('returns the most recent lastRunAt as ISO', () => {
