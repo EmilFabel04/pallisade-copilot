@@ -11,6 +11,12 @@ export async function GET(request: NextRequest) {
   const stackId = new URL(request.url).searchParams.get('stackId');
   if (!stackId) return NextResponse.json({ error: 'stackId required' }, { status: 400 });
 
+  const stack = await prisma.pipelineStack.findFirst({
+    where: { id: stackId, organizationId },
+    select: { lastLineageExtractedAt: true },
+  });
+  const lineageExtracted = !!stack?.lastLineageExtractedAt;
+
   // Find LineageNodes flagged as having downstream dashboards but no monitors targeting their FQN.
   // For v1 we use a simple proxy: pick LineageNodes whose `criticality` is 'HIGH' or 'CRITICAL',
   // intersected with the absence of a Monitor row sharing the same targetFqn.
@@ -37,5 +43,5 @@ export async function GET(request: NextRequest) {
     .map((n) => ({ fqn: n.name, reason: `criticality=${n.criticality ?? 'HIGH'}` }))
     .slice(0, 10);
 
-  return NextResponse.json({ assets });
+  return NextResponse.json({ assets, lineageExtracted });
 }
