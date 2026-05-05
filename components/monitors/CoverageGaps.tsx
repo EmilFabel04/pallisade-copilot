@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -38,6 +39,7 @@ export function CoverageGaps({
   onDriftRunComplete,
 }: Props) {
   const [running, setRunning] = useState(false);
+  const router = useRouter();
 
   const handleRunDrift = async () => {
     if (running) return;
@@ -86,7 +88,7 @@ export function CoverageGaps({
                   Critical-asset coverage needs lineage to identify what feeds your BI dashboards.
                 </div>
                 <button
-                  onClick={() => window.location.assign('/dashboard/pipeline')}
+                  onClick={() => router.push('/dashboard/pipeline')}
                   className="mt-2 text-[11px] px-2.5 py-1 rounded border border-[var(--subtle-border)] hover:bg-[var(--overlay-bg)]"
                 >
                   Extract lineage →
