@@ -69,6 +69,7 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
       <div
         className="fixed inset-0 bg-black/40 z-40"
         onClick={onClose}
+        onTouchEnd={onClose}
         aria-hidden
       />
       <aside
@@ -143,7 +144,7 @@ export function PipelineToolDetailPanel({ tool, stackId, onClose }: Props) {
 
         <footer className="border-t border-[var(--subtle-border)] px-4 py-3">
           <button
-            onClick={() => router.push(`/dashboard/monitors?tab=pipeline&tool=${tool.toolType}`)}
+            onClick={() => router.push(`/dashboard/monitors?tab=pipeline&tool=${encodeURIComponent(tool.toolType)}`)}
             className="w-full flex items-center justify-center gap-1.5 text-[12px] py-2 rounded border border-[var(--subtle-border)] hover:bg-[var(--surface)]"
           >
             View all in Pipeline Monitors <ExternalLink className="w-3 h-3" />
