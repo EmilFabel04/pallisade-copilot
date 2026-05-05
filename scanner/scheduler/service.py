@@ -513,6 +513,7 @@ class SchedulerService:
                     VALUES (
                         gen_random_uuid()::text, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
+                    RETURNING id
                     """,
                     (
                         status,
@@ -527,6 +528,7 @@ class SchedulerService:
                         task_id,
                     ),
                 )
+                run_id = cur.fetchone()[0]
 
                 # Update Monitor: lastRunAt, lastStatus, nextRunAt + baseline
                 next_run = _compute_next_run(
@@ -586,6 +588,11 @@ class SchedulerService:
                     )
 
                 conn.commit()
+
+                # Fire incident lifecycle on the freshly-persisted run so the
+                # LLM diagnosis runs for scheduled failures (matches the manual
+                # /api/schedule/tasks/[id]/run path).
+                asyncio.create_task(self._fire_incident_lifecycle(run_id))
 
                 # Keep the parent watch's cached healthScore in sync. Without
                 # this, MonitorGroup.healthScore only updates when the whole
@@ -671,9 +678,11 @@ class SchedulerService:
                         INSERT INTO "MonitorRun" (id, status, message, "startedAt",
                                                   "completedAt", "durationMs", "monitorId")
                         VALUES (gen_random_uuid()::text, 'ERROR', %s, %s, %s, %s, %s)
+                        RETURNING id
                         """,
                         (str(e), start_time, end_time, duration_ms, task_id),
                     )
+                    error_run_id = cur.fetchone()[0]
 
                     next_run = _compute_next_run(
                         task.get("schedule", "0 * * * *"),
@@ -690,6 +699,10 @@ class SchedulerService:
                         (end_time, next_run, end_time, task_id),
                     )
                     conn.commit()
+
+                    # Fire lifecycle so an ERROR run also opens an incident
+                    # and triggers LLM diagnosis on the scheduled path.
+                    asyncio.create_task(self._fire_incident_lifecycle(error_run_id))
             except Exception as save_err:
                 logger.error(f"[Scheduler] Failed to save error result: {save_err}")
             return None
@@ -895,6 +908,40 @@ class SchedulerService:
                 })
 
         return metrics
+
+    async def _fire_incident_lifecycle(self, run_id: str) -> None:
+        """Notify Next.js to run incident lifecycle + LLM diagnosis on a run.
+
+        The lifecycle and diagnose code lives in lib/incidents on the Next.js
+        side (Prisma owner). Manual /api/schedule/tasks/[id]/run already calls
+        it inline; this method gives the Python scheduler the same fan-out by
+        hitting an internal route that re-runs that logic against the freshly-
+        persisted MonitorRun id.
+        """
+        try:
+            import httpx
+
+            nextjs_url = os.environ.get("NEXTAUTH_URL", "http://localhost:3000")
+            url = f"{nextjs_url}/api/incidents/internal/handle-run"
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    url,
+                    headers={INTERNAL_API_KEY_HEADER: get_internal_api_key()},
+                    json={"runId": run_id},
+                )
+                if resp.status_code >= 300:
+                    logger.warning(
+                        "[Scheduler] Incident lifecycle dispatch failed",
+                        run_id=run_id,
+                        status=resp.status_code,
+                        body=resp.text[:200],
+                    )
+        except Exception as e:
+            logger.warning(
+                "[Scheduler] Incident lifecycle dispatch error",
+                run_id=run_id,
+                error=str(e),
+            )
 
     async def _dispatch_alert(self, task: Dict[str, Any], result: Dict[str, Any]):
         """Send alert to configured channels via the Next.js alert API."""
