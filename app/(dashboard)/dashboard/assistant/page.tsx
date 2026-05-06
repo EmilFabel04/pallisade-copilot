@@ -131,55 +131,71 @@ function AssistantPageInner() {
   // Read deep-link data from sessionStorage (primary) or URL params (fallback).
   // sessionStorage is set by the new RunHistoryTable navigateToScout().
   // URL params are the fallback for when the schedule page hasn't hot-reloaded yet.
-  // Using a ref initialized inline — runs synchronously during render, so the
-  // data is available before any effects fire. sessionStorage survives React
-  // Strict Mode remounts and Suspense re-renders (unlike useSearchParams).
+  // The initializer is read-only — sessionStorage persistence and URL cleanup
+  // happen in a useEffect below. Doing them during render updated the Next.js
+  // Router and tripped React's "setState during render" guard.
   const deepLinkData = useRef<{ prompt: string; context: string; display: string } | null>(
     typeof window !== 'undefined' ? (() => {
-      // Primary: sessionStorage (set by new RunHistoryTable code)
+      // Primary: sessionStorage (set by new RunHistoryTable code, or by our
+      // own post-render effect on Strict Mode mount #1).
       const json = sessionStorage.getItem('askScoutDeepLink');
       if (json) {
         try { return JSON.parse(json); } catch { /* fall through */ }
       }
-      // Fallback: URL params (old code or direct navigation)
+      // Fallback: URL params (old code or direct navigation).
       const params = new URLSearchParams(window.location.search);
       const prompt = params.get('prompt');
       if (prompt) {
-        const data = {
+        return {
           prompt,
           context: params.get('context') || '',
           display: params.get('display') || '',
         };
-        // Store in sessionStorage so it survives Strict Mode remounts
-        sessionStorage.setItem('askScoutDeepLink', JSON.stringify(data));
-        // Clean URL immediately — no Next.js re-render
-        window.history.replaceState({}, '', '/dashboard/assistant');
-        return data;
       }
       return null;
     })() : null
   );
 
-  // Read incident context from URL params (set by IncidentCard "Open in Co-pilot").
-  // Runs synchronously during render so the data is stable before effects fire.
-  // We consume the params and clean the URL immediately to avoid double-seeding.
+  // Read incident context (set by IncidentCard "Open in Co-pilot"). Same
+  // pattern as deepLinkData: sessionStorage first, URL fallback, side-effects
+  // deferred to useEffect.
   const incidentSeedData = useRef<{ incidentId: string; targetFqn: string } | null>(
     typeof window !== 'undefined' ? (() => {
+      const json = sessionStorage.getItem('assistantIncidentSeed');
+      if (json) {
+        try { return JSON.parse(json); } catch { /* fall through */ }
+      }
       const params = new URLSearchParams(window.location.search);
       if (params.get('contextType') === 'incident') {
         const incidentId = params.get('incidentId');
         const targetFqn = params.get('targetFqn') || '';
-        if (incidentId) {
-          // Clean the URL immediately — no Next.js re-render
-          window.history.replaceState({}, '', '/dashboard/assistant');
-          return { incidentId, targetFqn };
-        }
+        if (incidentId) return { incidentId, targetFqn };
       }
       return null;
     })() : null
   );
   // Guard: only seed once even across Strict Mode remounts
   const incidentSeeded = useRef(false);
+
+  // After the first render, persist URL-derived seed data into sessionStorage
+  // (so Strict Mode mount #2 still finds it) and clean the query params off
+  // the URL. Done in an effect rather than inline in the useRef initializers
+  // so we don't update the Next.js Router during render.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const hasPrompt = !!params.get('prompt');
+    const hasIncident = params.get('contextType') === 'incident' && !!params.get('incidentId');
+    if (hasPrompt && deepLinkData.current && !sessionStorage.getItem('askScoutDeepLink')) {
+      sessionStorage.setItem('askScoutDeepLink', JSON.stringify(deepLinkData.current));
+    }
+    if (hasIncident && incidentSeedData.current && !sessionStorage.getItem('assistantIncidentSeed')) {
+      sessionStorage.setItem('assistantIncidentSeed', JSON.stringify(incidentSeedData.current));
+    }
+    if (hasPrompt || hasIncident) {
+      window.history.replaceState({}, '', '/dashboard/assistant');
+    }
+  }, []);
 
   // Initialize messages with the deep-link user message if present.
   // Because this is a useState lazy initializer, it runs on every mount
@@ -632,6 +648,11 @@ function AssistantPageInner() {
     if (!seed || incidentSeeded.current) return;
     if (!selectedPipelineId) return; // wait for pipeline to be ready
     incidentSeeded.current = true;
+    // Now that we're committed to seeding, drop the sessionStorage backup so
+    // a future visit doesn't re-seed the same incident.
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('assistantIncidentSeed');
+    }
 
     const { incidentId, targetFqn } = seed;
 
