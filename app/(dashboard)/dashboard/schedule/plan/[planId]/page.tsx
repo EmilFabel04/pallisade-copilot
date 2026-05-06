@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -576,12 +577,19 @@ export default function PlanDetailPage() {
                               }}
                               resolvedPolicy={mon.targetFqn ? resolvedPolicies[mon.targetFqn] || null : null}
                               onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
-                                if (!selectedPipelineId) return;
-                                await fetch(`/api/schedule/watches/${mon.groupId}/monitors/${monitorId}`, {
+                                if (!selectedPipelineId) {
+                                  toast.error('No pipeline profile selected');
+                                  return;
+                                }
+                                const res = await fetch(`/api/schedule/watches/${mon.groupId}/monitors/${monitorId}`, {
                                   method: 'PUT',
                                   headers: { 'Content-Type': 'application/json' },
                                   body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
                                 });
+                                if (!res.ok) {
+                                  const err = await res.json().catch(() => ({}));
+                                  throw new Error(err.error || `Failed to save (${res.status})`);
+                                }
                                 setEditingMonitorId(null);
                                 await fetchPlan();
                               }}

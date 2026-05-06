@@ -217,6 +217,31 @@ export function WatchDetailPanel({
   const [monitorRuns, setMonitorRuns] = useState<Record<string, TaskRun[]>>({});
   const [monitorRunsLoading, setMonitorRunsLoading] = useState<Record<string, boolean>>({});
 
+  // Shared save handler for the monitor edit panel. Both render paths
+  // (tool_health grouped + flat list) MUST go through this so the page-level
+  // optimistic update fires; otherwise the row keeps showing the pre-save
+  // values until polling refetches, and the user thinks "save didn't work."
+  const handleMonitorConfigSave = useCallback(
+    async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
+      if (!selectedPipelineId) {
+        toast.error('No pipeline profile selected');
+        return;
+      }
+      const res = await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Failed to save (${res.status})`);
+      }
+      onMonitorConfigSaved?.(monitorId, config, policyOverrides);
+      setEditingMonitorId(null);
+    },
+    [selectedPipelineId, watch.id, onMonitorConfigSaved],
+  );
+
   const fetchMonitorRuns = useCallback(async (monitorId: string) => {
     if (monitorRuns[monitorId]) return; // already fetched
     if (!selectedPipelineId) return;
@@ -556,20 +581,7 @@ export function WatchDetailPanel({
                                     policyOverrides: mon.policyOverrides || [],
                                   }}
                                   resolvedPolicy={mon.resolvedPolicy || null}
-                                  onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
-                                    if (!selectedPipelineId) {
-                                      toast.error('No pipeline profile selected');
-                                      return;
-                                    }
-                                    const res = await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
-                                      method: 'PUT',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
-                                    });
-                                    if (!res.ok) throw new Error('Failed to save');
-                                    onMonitorConfigSaved?.(monitorId, config, policyOverrides);
-                                    setEditingMonitorId(null);
-                                  }}
+                                  onSave={handleMonitorConfigSave}
                                 />
                               )}
                               <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex items-center justify-between">
@@ -676,18 +688,7 @@ export function WatchDetailPanel({
                             policyOverrides: mon.policyOverrides || [],
                           }}
                           resolvedPolicy={mon.resolvedPolicy || null}
-                          onSave={async (monitorId: string, config: Record<string, any>, policyOverrides: string[]) => {
-                            if (!selectedPipelineId) {
-                              toast.error('No pipeline profile selected');
-                              return;
-                            }
-                            await fetch(`/api/schedule/watches/${watch.id}/monitors/${monitorId}`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ config, policyOverrides, stackId: selectedPipelineId }),
-                            });
-                            setEditingMonitorId(null);
-                          }}
+                          onSave={handleMonitorConfigSave}
                         />
                       )}
                       <div className="mt-2 pt-2 border-t border-[var(--border-faint)] flex items-center justify-between">
