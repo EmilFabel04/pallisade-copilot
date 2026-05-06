@@ -640,9 +640,10 @@ function AssistantPageInner() {
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Incident context seed: inject a pre-seeded assistant message with the cached
-  // LLM hypothesis when the user opens the co-pilot from an IncidentCard.
-  // Waits for selectedPipelineId to be available before fetching the incident.
+  // Incident context seed: when the user clicks "Open in Co-pilot" on an
+  // IncidentCard, start a brand new chat and ask the LLM to investigate.
+  // We fold the cached hypothesis into the user prompt as context so the LLM
+  // doesn't have to re-derive it. Waits for selectedPipelineId to be ready.
   useEffect(() => {
     const seed = incidentSeedData.current;
     if (!seed || incidentSeeded.current) return;
@@ -656,44 +657,57 @@ function AssistantPageInner() {
 
     const { incidentId, targetFqn } = seed;
 
-    fetch(`/api/incidents?stackId=${selectedPipelineId}&status=active`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        const incident = (data?.incidents as Array<{ id: string; llmHypothesis: string | null }> | null)
-          ?.find((inc) => inc.id === incidentId);
-        const hypothesis = incident?.llmHypothesis ?? null;
-        const content = hypothesis
-          ? `[Incident on \`${targetFqn}\`] Hypothesis: ${hypothesis}\n\nWhat would you like me to investigate?`
-          : `[Incident on \`${targetFqn}\`] No hypothesis available yet.\n\nWhat would you like me to investigate?`;
-        setMessages((prev) => {
-          // Don't double-seed if already present (Strict Mode remount guard)
-          if (prev.some((m) => m.id.startsWith('incident-seed-'))) return prev;
-          return [
-            ...prev,
-            {
-              id: `incident-seed-${incidentId}`,
-              role: 'assistant' as const,
-              content,
-              timestamp: new Date(),
-            },
-          ];
-        });
-      })
-      .catch(() => {
-        // Fallback: seed without hypothesis on fetch failure
-        setMessages((prev) => {
-          if (prev.some((m) => m.id.startsWith('incident-seed-'))) return prev;
-          return [
-            ...prev,
-            {
-              id: `incident-seed-${incidentId}`,
-              role: 'assistant' as const,
-              content: `[Incident on \`${targetFqn}\`]\n\nWhat would you like me to investigate?`,
-              timestamp: new Date(),
-            },
-          ];
-        });
+    (async () => {
+      // Best-effort hypothesis lookup — if it fails we still ask the LLM.
+      let hypothesis: string | null = null;
+      try {
+        const r = await fetch(`/api/incidents?stackId=${selectedPipelineId}&status=active`);
+        if (r.ok) {
+          const data = await r.json();
+          const inc = (data?.incidents as Array<{ id: string; llmHypothesis: string | null }> | null)
+            ?.find((i) => i.id === incidentId);
+          hypothesis = inc?.llmHypothesis ?? null;
+        }
+      } catch { /* fall through */ }
+
+      const prompt = hypothesis
+        ? `An incident is open on \`${targetFqn}\`. Initial hypothesis: ${hypothesis}\n\nInvestigate the most likely root cause and tell me what to do next.`
+        : `An incident is open on \`${targetFqn}\`. Investigate the most likely root cause and tell me what to do next.`;
+
+      // Show the user-side prompt immediately so the chat doesn't look empty
+      // while the LLM is thinking.
+      setMessages((prev) => {
+        const id = `incident-seed-${incidentId}`;
+        if (prev.some((m) => m.id === id)) return prev;
+        return [
+          ...prev,
+          { id, role: 'user' as const, content: prompt, timestamp: new Date() },
+        ];
       });
+
+      setIsLoading(true);
+      try {
+        const result = await sendStreamingMessage(prompt, {
+          sessionId: undefined, // always start a new chat for the incident
+          pipelineStackId: selectedPipelineId || undefined,
+          model: selectedModel,
+          mode: 'debug',
+        });
+        if (result.sessionId) {
+          setSessionId(result.sessionId);
+          const stackQs = selectedPipelineId ? `&pipelineStackId=${encodeURIComponent(selectedPipelineId)}` : '';
+          fetch(`/api/copilot/sessions?limit=50${stackQs}`)
+            .then((res) => res.json())
+            .then((d) => setSessions(d.sessions || []))
+            .catch(() => {});
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return;
+        console.error('Incident seed chat error:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
   }, [selectedPipelineId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch sessions on mount
