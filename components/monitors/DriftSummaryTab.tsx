@@ -11,6 +11,7 @@ import { TrendStrip } from './TrendStrip';
 import { AssetHealthLean } from './AssetHealthLean';
 import { PipelineTier } from './PipelineTier';
 import { CoverageGaps } from './CoverageGaps';
+import { FailingAssetsModal } from './FailingAssetsModal';
 import type { IncidentSummary, IncidentStats } from '@/types/incident';
 import type {
   MonitorHealthSummary,
@@ -39,6 +40,7 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
   const [lineageExtracted, setLineageExtracted] = useState(false);
   const [expandedAssetFqn, setExpandedAssetFqn] = useState<string | null>(null);
   const [activeCategories] = useState<Set<string>>(new Set());
+  const [showFailingModal, setShowFailingModal] = useState(false);
 
   // Per-section ready flags. Each section paints its own skeleton; no global gate.
   const [healthReady, setHealthReady] = useState(false);
@@ -225,7 +227,11 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
   return (
     <div className="space-y-2">
       {healthReady && incidentsReady && health ? (
-        <SummaryHero health={health} incidents={activeIncidents} />
+        <SummaryHero
+          health={health}
+          incidents={activeIncidents}
+          onViewFailing={() => setShowFailingModal(true)}
+        />
       ) : (
         <div className="rounded-lg border border-[var(--subtle-border)] bg-[var(--surface)] px-5 py-4 mb-4 animate-pulse">
           <div className="flex items-center gap-3">
@@ -247,6 +253,8 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
         tools={pipelineTools}
         loading={!pipelineReady}
         stackId={selectedPipelineId}
+        recommendations={recommendations}
+        onRecommendationsChanged={onDriftRunComplete}
       />
 
       <AssetHealthLean
@@ -283,6 +291,15 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
             <p className="text-[13px] text-[var(--muted)]">No monitors configured yet.</p>
           </div>
         )}
+
+      <FailingAssetsModal
+        open={showFailingModal}
+        onClose={() => setShowFailingModal(false)}
+        assets={assetList}
+        recommendations={recommendations}
+        stackId={selectedPipelineId}
+        onRecommendationsChanged={onDriftRunComplete}
+      />
     </div>
   );
 }

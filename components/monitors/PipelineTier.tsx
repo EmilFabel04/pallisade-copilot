@@ -5,11 +5,14 @@ import { cn } from '@/lib/utils';
 import type { PipelineToolStatus } from '@/types/monitors-summary';
 import { PipelineToolDetailPanel } from './PipelineToolDetailPanel';
 import { ToolIcon } from '@/components/icons/ToolIcon';
+import type { DriftRecommendation } from './DriftRecommendationCard';
 
 interface Props {
   tools: PipelineToolStatus[];
   loading: boolean;
   stackId: string;
+  recommendations?: DriftRecommendation[];
+  onRecommendationsChanged?: () => void;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -46,7 +49,13 @@ function timeSince(iso: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export function PipelineTier({ tools, loading, stackId }: Props) {
+export function PipelineTier({
+  tools,
+  loading,
+  stackId,
+  recommendations,
+  onRecommendationsChanged,
+}: Props) {
   const [openTool, setOpenTool] = useState<PipelineToolStatus | null>(null);
 
   if (!loading && tools.length === 0) return null; // suppress section on empty
@@ -99,6 +108,8 @@ export function PipelineTier({ tools, loading, stackId }: Props) {
           tool={openTool}
           stackId={stackId}
           onClose={() => setOpenTool(null)}
+          recommendations={recommendations}
+          onRecommendationsChanged={onRecommendationsChanged}
         />
       )}
     </section>
