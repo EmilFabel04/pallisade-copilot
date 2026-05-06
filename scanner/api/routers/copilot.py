@@ -778,6 +778,7 @@ class IncidentDiagnoseRequest(BaseModel):
     targetFqn: str
     monitorType: str
     runDetails: Dict[str, Any]
+    integrations: Optional[List[Dict[str, Any]]] = None
 
 
 class IncidentDiagnoseResponse(BaseModel):
@@ -788,13 +789,18 @@ class IncidentDiagnoseResponse(BaseModel):
 
 
 @router.post("/incident-diagnose", response_model=IncidentDiagnoseResponse)
-def post_incident_diagnose(req: IncidentDiagnoseRequest) -> IncidentDiagnoseResponse:
-    result: DiagnosisResult = diagnose_incident(DiagnosisRequest(
+async def post_incident_diagnose(
+    req: IncidentDiagnoseRequest,
+    principal: ActingPrincipal = Depends(require_principal),
+) -> IncidentDiagnoseResponse:
+    result: DiagnosisResult = await diagnose_incident(DiagnosisRequest(
+        org_id=principal.organization_id,
         stack_id=req.stackId,
         monitor_run_id=req.monitorRunId,
         target_fqn=req.targetFqn,
         monitor_type=req.monitorType,
         run_details=req.runDetails,
+        integrations=req.integrations,
     ))
     return IncidentDiagnoseResponse(
         hypothesis=result.hypothesis,

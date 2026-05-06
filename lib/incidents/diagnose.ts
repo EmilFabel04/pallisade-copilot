@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { fallbackSignature } from './signature';
+import { resolveStackIntegrations } from '@/lib/integration-credentials';
 
 const SCANNER_URL = process.env.SCANNER_URL ?? 'http://localhost:8000';
 const DEFAULT_CONCURRENCY = Number(process.env.INCIDENT_DIAGNOSE_CONCURRENCY ?? 3);
@@ -74,6 +75,22 @@ export async function diagnoseIncident(incidentId: string, prisma: PrismaClient)
       const secret = process.env.SCANNER_SHARED_SECRET;
       if (secret) headers['X-Internal-Auth'] = secret;
 
+      // Resolve integrations the same way the main copilot chat route does so
+      // the scanner LLM has warehouse/dbt/connector tools available, not just
+      // the lineage graph.
+      let integrations: Awaited<ReturnType<typeof resolveStackIntegrations>> = [];
+      try {
+        integrations = await resolveStackIntegrations(
+          incident.pipelineStackId,
+          incident.organizationId,
+        );
+      } catch (err) {
+        console.warn('[incidents.diagnose] resolveStackIntegrations failed; calling scanner without tools', {
+          incidentId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       const res = await fetch(`${SCANNER_URL}/api/v1/copilot/incident-diagnose`, {
         method: 'POST',
         headers,
@@ -89,6 +106,7 @@ export async function diagnoseIncident(incidentId: string, prisma: PrismaClient)
             status: run?.status ?? 'FAIL',
             ...(run?.details && typeof run.details === 'object' ? run.details as Record<string, unknown> : {}),
           },
+          integrations,
         }),
       });
       if (!res.ok) throw new Error(`scanner returned ${res.status}`);
