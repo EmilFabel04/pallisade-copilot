@@ -192,13 +192,36 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
   ]);
 
   const handleOpenInCopilot = useCallback((incident: IncidentSummary) => {
-    const params = new URLSearchParams({
-      contextType: 'incident',
-      incidentId: incident.id,
-      monitorId: incident.monitorId,
-      targetFqn: incident.targetFqn,
+    // Mirror RunHistoryTable.navigateToScout: stash a {prompt,context,display}
+    // payload in sessionStorage and route to /dashboard/assistant with no
+    // query params. The assistant's deep-link effect picks it up, opens a
+    // fresh copilot session and sends the prompt to the LLM directly.
+    const target = incident.targetFqn || 'unknown table';
+    const type = incident.monitorType || 'monitor';
+    const hypothesis = incident.llmHypothesis;
+    const prompt = hypothesis
+      ? `/debug Investigate the open incident on \`${target}\`. Initial hypothesis: ${hypothesis}. Identify the most likely root cause and recommend the next action.`
+      : `/debug Investigate the open incident on \`${target}\`. Identify the most likely root cause and recommend the next action.`;
+    const context = JSON.stringify({
+      taskName: 'Incident',
+      monitorType: type,
+      targetFqn: target,
+      status: incident.severity,
+      message: hypothesis ?? undefined,
+      details: {
+        incidentId: incident.id,
+        signature: incident.signature ?? undefined,
+        consecutiveCount: incident.consecutiveCount,
+        ownerSystem: incident.ownerSystem ?? undefined,
+        ownerConfidence: incident.ownerConfidence ?? undefined,
+        openedAt: incident.openedAt,
+      },
     });
-    router.push(`/dashboard/assistant?${params.toString()}`);
+    const display = `Investigate the incident on ${target}`;
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('askScoutDeepLink', JSON.stringify({ prompt, context, display }));
+    }
+    router.push('/dashboard/assistant');
   }, [router]);
 
   const onIncidentChanged = useCallback(() => {
