@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { ApplyFixModal } from './ApplyFixModal';
-import { useFixTest } from './FixTestContext';
 
 interface Fix {
   id: string;
@@ -119,7 +118,6 @@ export function SmartFixes({
   autoFetchRecommendations = false,
 }: SmartFixesProps) {
   const router = useRouter();
-  const { navigateToSandbox, setFixToTest } = useFixTest();
   
   const [fixes, setFixes] = useState<Fix[]>(initialFixes || []);
   const [expandedFix, setExpandedFix] = useState<string | null>(null);
@@ -232,42 +230,9 @@ export function SmartFixes({
     setApplyModalOpen(true);
   };
 
-  const handleTestClick = (fix: Fix) => {
-    // Set fix context and navigate to Sandbox Lab
-    setFixToTest({
-      id: fix.id,
-      title: fix.title,
-      description: fix.description,
-      code: fix.code,
-      language: fix.language,
-      stack: fix.stack,
-      confidence: fix.confidence,
-      confidenceScore: fix.confidenceScore,
-      file_path: fix.file_path,
-      why: fix.why,
-      findingId,
-      findingTitle,
-      findingSeverity: finding?.severity,
-      reportId,
-      table: finding?.table || table,
-      column: finding?.column || column,
-      issueType: finding?.type || finding?.scan_type,
-      issueCategory: finding?.category,
-      metricsSnapshot: finding?.ai_context ? {
-        null_rate: finding.ai_context.null_rate as number | undefined,
-        freshness_hours: (finding.ai_context.hours_stale || finding.ai_context.freshness_hours) as number | undefined,
-        row_count: finding.ai_context.row_count as number | undefined,
-      } : undefined,
-      sourceDialect: fix.stack === 'snowflake' ? 'snowflake' : 
-                     fix.stack === 'bigquery' ? 'bigquery' : 
-                     fix.stack === 'redshift' ? 'redshift' : 'snowflake',
-      generationMethod: fix.source || 'template',
-    });
-    
-    // Navigate to Sandbox Lab
-    router.push('/dashboard/sandbox');
-    toast.info('Opening Sandbox Lab to test fix...');
-  };
+  // 'Test in Sandbox' was wired to /dashboard/sandbox, which has never
+  // shipped. Buttons that called handleTestClick have been removed; restore
+  // them when the sandbox route exists again.
 
   if (loading) {
     return (
@@ -316,12 +281,6 @@ export function SmartFixes({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleTestClick(bestFix)}
-              className="text-xs px-3 py-1 rounded bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 transition-colors flex items-center gap-1"
-            >
-              🧪 Test in Sandbox
-            </button>
             {canAutoApply(bestFix) && (
               <button
                 onClick={() => handleApplyClick(bestFix)}
@@ -511,13 +470,6 @@ export function SmartFixes({
                       Code ({fix.language})
                     </div>
                     <div className="flex items-center gap-2">
-                      {/* Test in Sandbox Button */}
-                      <button
-                        onClick={() => handleTestClick(fix)}
-                        className="text-xs px-3 py-1.5 rounded-lg transition-all bg-gradient-to-r from-blue-600/30 to-cyan-600/30 text-cyan-400 hover:from-blue-600/40 hover:to-cyan-600/40 flex items-center gap-1.5 border border-cyan-500/30"
-                      >
-                        🧪 Test in Sandbox
-                      </button>
                       {showApply && (
                         <button
                           onClick={() => handleApplyClick(fix)}

@@ -55,7 +55,7 @@ export function BorderlineFailureCard({ request, onAnswered }: Props) {
       onAnswered();
       if (disposition === 'investigate') {
         router.push(
-          `/dashboard/copilot?mode=debug&node=${encodeURIComponent(p.node_fqn)}&metric=${encodeURIComponent(p.metric)}&z=${p.z_score}`,
+          `/dashboard/assistant?mode=debug&node=${encodeURIComponent(p.node_fqn)}&metric=${encodeURIComponent(p.metric)}&z=${p.z_score}`,
         );
       }
     } catch (e: unknown) {

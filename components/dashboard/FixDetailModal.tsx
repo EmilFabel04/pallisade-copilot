@@ -4,7 +4,6 @@ import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
-import { useFixTest } from './FixTestContext';
 
 interface Fix {
   id: string;
@@ -87,7 +86,6 @@ export function FixDetailModal({
   onBackToFinding
 }: FixDetailModalProps) {
   const router = useRouter();
-  const { setFixToTest } = useFixTest();
   const [copied, setCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [activeSection, setActiveSection] = useState<'code' | 'steps' | 'preview'>('code');
@@ -124,39 +122,10 @@ export function FixDetailModal({
     }
   };
   
-  const handleTestInSandbox = () => {
-    if (!fix) return;
-    
-    setFixToTest({
-      id: fix.id,
-      title: fix.title,
-      description: fix.description,
-      code: fix.code,
-      language: fix.language,
-      stack: fix.stack,
-      confidence: fix.confidence,
-      confidenceScore: fix.confidenceScore,
-      file_path: fix.file_path,
-      why: fix.why,
-      findingId: finding?.id,
-      findingTitle: finding?.title,
-      findingSeverity: finding?.severity,
-      reportId,
-      table: finding?.table,
-      column: finding?.column,
-      issueType: finding?.scan_type,
-      issueCategory: finding?.category,
-      sourceDialect: fix.stack === 'snowflake' ? 'snowflake' : 
-                     fix.stack === 'bigquery' ? 'bigquery' : 
-                     fix.stack === 'redshift' ? 'redshift' : 'snowflake',
-      generationMethod: fix.source || 'template',
-    });
-    
-    router.push('/dashboard/sandbox');
-    toast.info('Opening Sandbox Lab to test fix...');
-    onClose();
-  };
-  
+  // 'Test in Sandbox' was wired to /dashboard/sandbox, which has never
+  // shipped. Button removed; restore when the sandbox route exists.
+
+
   if (!mounted || !isOpen || !fix) return null;
   
   const stackConfig = STACK_ICONS[fix.stack] || STACK_ICONS.sql;
@@ -525,15 +494,7 @@ export function FixDetailModal({
             {effortConfig.icon} {effortConfig.description}
           </div>
           <div className="flex items-center gap-2">
-            {/* Test in Sandbox */}
-            <button
-              onClick={handleTestInSandbox}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-gradient-to-r from-blue-500/20 to-cyan-500/20 text-cyan-400 border border-cyan-500/30 hover:from-blue-500/30 hover:to-cyan-500/30 transition-all flex items-center gap-2"
-            >
-              <span>🧪</span>
-              Test in Sandbox
-            </button>
-            
+
             {/* Apply button */}
             {onApply && (
               <button
