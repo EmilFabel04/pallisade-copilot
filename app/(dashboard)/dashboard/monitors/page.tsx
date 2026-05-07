@@ -178,8 +178,15 @@ export default function MonitorsPage() {
   }, [selectedPipeline?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    // Clear pipeline-scoped state immediately on profile change so stale
+    // watches/plans/tasks from the previous profile don't render while the
+    // new fetches are in flight.
     setSelectedWatch(null);
     setWatchDetailMonitors([]);
+    setWatches([]);
+    setPlans([]);
+    setTasks([]);
+    setResolvedPolicies({});
     setLoading(true);
     Promise.all([fetchWatches(), fetchPlans(), fetchTasks()]).finally(() => {
       setLoading(false);
@@ -265,21 +272,31 @@ export default function MonitorsPage() {
     });
   }, [selectedPipeline?.id]);
 
-  // Fetch watch detail
+  // Fetch watch detail. Guards against stale in-flight responses winning a
+  // race against an optimistic update (toggle enabled, monitor config save):
+  // by the time the GET resolves, the user may have changed something — we
+  // only apply the response if both the watch and pipeline still match.
   useEffect(() => {
     if (!selectedWatch) return;
     if (!selectedPipeline?.id) return;
+    const watchIdAtStart = selectedWatch.id;
+    const pipelineIdAtStart = selectedPipeline.id;
     setWatchDetailLoading(true);
-    fetch(`/api/schedule/watches/${selectedWatch.id}?stackId=${selectedPipeline.id}`)
+    fetch(`/api/schedule/watches/${watchIdAtStart}?stackId=${pipelineIdAtStart}`)
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
-        if (data?.watch) {
-          setWatchDetailMonitors(data.watch.monitors || []);
-          setSelectedWatch((prev) => prev ? { ...prev, ...data.watch } : prev);
-        }
+        if (!data?.watch) return;
+        if (selectedWatchRef.current?.id !== watchIdAtStart) return;
+        if (selectedPipeline?.id !== pipelineIdAtStart) return;
+        setWatchDetailMonitors(data.watch.monitors || []);
+        setSelectedWatch((prev) => prev ? { ...prev, ...data.watch } : prev);
       })
       .catch(() => {})
-      .finally(() => setWatchDetailLoading(false));
+      .finally(() => {
+        if (selectedWatchRef.current?.id === watchIdAtStart) {
+          setWatchDetailLoading(false);
+        }
+      });
   }, [selectedWatch?.id, selectedPipeline?.id]);
 
   // ---------------------------------------------------------------------------

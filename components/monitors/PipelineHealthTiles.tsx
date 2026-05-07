@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { CategorySparklinePanel } from './CategorySparklinePanel';
 import { usePipeline } from '@/contexts/PipelineContext';
+import { cachedFetch, invalidateCache } from '@/lib/fetch-cache';
 
 const STATUS_STYLES: Record<string, { border: string; text: string; accent: string; badgeBg: string }> = {
   stable:   { border: 'border-emerald-500/30', text: 'text-emerald-500', accent: 'bg-emerald-500', badgeBg: 'bg-emerald-500/10' },
@@ -23,13 +24,19 @@ export function PipelineHealthTiles() {
 
   useEffect(() => {
     if (!selectedPipelineId) return;
+    setTrendData(null);
     let active = true;
-    fetch(`/api/schedule/monitor-trends?stackId=${selectedPipelineId}`)
+    const url = `/api/schedule/monitor-trends?stackId=${selectedPipelineId}`;
+    // cachedFetch dedupes against DriftSummaryTab's parallel poll on the
+    // same URL — they share the cache window even though they run on
+    // separate tabs.
+    cachedFetch(url)
       .then((r) => r.ok ? r.json() : null)
       .then((d) => { if (active) setTrendData(d); })
       .catch(() => {});
     const t = setInterval(() => {
-      fetch(`/api/schedule/monitor-trends?stackId=${selectedPipelineId}`)
+      invalidateCache('/api/schedule/monitor-trends');
+      cachedFetch(url)
         .then((r) => r.ok ? r.json() : null)
         .then((d) => { if (active) setTrendData(d); })
         .catch(() => {});
