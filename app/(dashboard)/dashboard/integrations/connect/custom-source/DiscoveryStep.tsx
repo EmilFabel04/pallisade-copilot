@@ -170,16 +170,19 @@ export function DiscoveryStep({
     }
   }
 
-  // Run discovery automatically on mount — only when baseUrl is valid.
-  // Guards against deep-link or refresh-restored partial state where baseUrl
-  // may be empty, which would cause the backend to reject with HTTP 400.
+  // Run discovery automatically once baseUrl AND selectedPipelineId are both
+  // resolved. Previously the effect had `[]` deps and a hasFetched ref that
+  // captured selectedPipelineId at first render — if the pipeline context
+  // resolved later, discovery ran with a null stack_id and silently returned
+  // no candidates.
   useEffect(() => {
-    if (!hasFetched.current && state.baseUrl?.startsWith('https://')) {
-      hasFetched.current = true;
-      runDiscover([]);
-    }
+    if (hasFetched.current) return;
+    if (!state.baseUrl?.startsWith('https://')) return;
+    if (!selectedPipelineId) return;
+    hasFetched.current = true;
+    runDiscover([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [state.baseUrl, selectedPipelineId]);
 
   // Add a warehouse hint chip and re-run discovery
   function addWarehouseHint(raw: string) {

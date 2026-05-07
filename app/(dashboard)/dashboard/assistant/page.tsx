@@ -963,7 +963,7 @@ function AssistantPageInner() {
                   questionKey: result.question_key,
                   answer: result.answer,
                   contextField: result.context_field,
-                  integrationTтype: result.integration_type,
+                  integrationType: result.integration_type,
                 }),
               });
               if (onboardingStatus === 'NOT_STARTED') setOnboardingStatus('IN_PROGRESS');

@@ -504,7 +504,14 @@ export default function MonitorsPage() {
           </svg>
           <h3 className="text-[15px] font-medium text-[var(--muted)] mb-1">No monitors found</h3>
           <p className="text-[13px] text-[var(--text-faint)] mb-4">Create a monitor to get started.</p>
-          <Button size="sm" onClick={() => setShowMonitorModal(true)}>+ Create Monitor</Button>
+          <Button
+            size="sm"
+            disabled={!selectedPipeline?.id}
+            title={!selectedPipeline?.id ? 'Select a pipeline profile first' : undefined}
+            onClick={() => setShowMonitorModal(true)}
+          >
+            + Create Monitor
+          </Button>
         </div>
       );
     }
@@ -531,7 +538,6 @@ export default function MonitorsPage() {
           <TaskCard
             key={task.id}
             task={task}
-            onClick={() => {}}
             onToggleEnabled={(enabled) => handleToggleTaskEnabled(task.id, enabled)}
             onRunNow={() => handleRunTask(task.id)}
           />

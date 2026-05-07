@@ -44,6 +44,7 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
 
   // Per-section ready flags. Each section paints its own skeleton; no global gate.
   const [healthReady, setHealthReady] = useState(false);
+  const [healthError, setHealthError] = useState(false);
   const [incidentsReady, setIncidentsReady] = useState(false);
   const [pipelineReady, setPipelineReady] = useState(false);
   const [trendsReady, setTrendsReady] = useState(false);
@@ -52,15 +53,23 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
 
   const fetchHealth = useCallback(async () => {
     if (!selectedPipelineId) return;
+    // Track the error path separately so we don't paint a fake "0 monitors"
+    // hero when health-summary actually failed (network/500). The hero reads
+    // healthError to render a degraded state instead of "Setting up".
     let nextHealth: MonitorHealthSummary = {
       total: 0, healthy: 0, warning: 0, failing: 0,
       dataAssets: 0, pipelineTools: 0, lastRunAt: null,
     };
+    let ok = false;
     try {
       const r = await cachedFetch(`/api/monitors/health-summary?stackId=${selectedPipelineId}`);
-      if (r.ok) nextHealth = await r.json();
-    } catch {}
+      if (r.ok) {
+        nextHealth = await r.json();
+        ok = true;
+      }
+    } catch { /* fall through, ok stays false */ }
     setHealth(nextHealth);
+    setHealthError(!ok);
     setHealthReady(true);
   }, [selectedPipelineId]);
 
@@ -133,6 +142,7 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
 
   // Reset per-section flags + state on pipeline change.
   useEffect(() => {
+    setHealthError(false);
     setHealth(null);
     setActiveIncidents([]);
     setStats(null);
@@ -249,7 +259,28 @@ export function DriftSummaryTab({ watches: _w, tasks: _t, loading: _l }: Props) 
 
   return (
     <div className="space-y-2">
-      {healthReady && incidentsReady && health ? (
+      {healthReady && healthError ? (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-5 py-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+            <div className="flex-1">
+              <div className="text-[14px] font-semibold text-amber-300">
+                Couldn’t load monitor health.
+              </div>
+              <div className="text-[11px] opacity-70 mt-0.5">
+                The server didn’t respond. Retry shortly.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setHealthReady(false); fetchHealth(); }}
+              className="text-[11px] px-2.5 py-1 rounded-md border border-amber-500/40 text-amber-200 hover:bg-amber-500/10"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : healthReady && incidentsReady && health ? (
         <SummaryHero
           health={health}
           incidents={activeIncidents}

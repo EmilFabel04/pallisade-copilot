@@ -441,7 +441,10 @@ export function PipelineSLAsTab() {
               key={`${item.assignmentId}-${item.nodeFqn}`}
               item={item}
               onView={() => setViewItem(item)}
-              onClick={() => {}}
+              // No edit-mode drawer yet; route Edit to View so the menu
+              // item isn't a silent no-op. Wire to a real edit drawer when
+              // one ships.
+              onClick={() => setViewItem(item)}
               onDelete={() => handleDeleteAssignment(item)}
               onArchive={() => handleStatusChange(item, (item.status || 'active') === 'archived' ? 'active' : 'archived')}
               onToggleActive={() => handleStatusChange(item, (item.status || 'active') === 'active' ? 'inactive' : 'active')}

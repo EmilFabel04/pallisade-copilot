@@ -6,7 +6,8 @@ import { RUN_STATUS_COLORS } from '@/types/schedule';
 
 interface TaskCardProps {
   task: ScheduledTask;
-  onClick: () => void;
+  /** Optional. If omitted the card body is non-interactive (action buttons still work). */
+  onClick?: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onRunNow: () => void;
 }
@@ -41,7 +42,10 @@ export function TaskCard({ task, onClick, onToggleEnabled, onRunNow }: TaskCardP
 
   return (
     <div
-      className="group relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl p-4 hover:border-[var(--overlay-strong)] transition-all cursor-pointer"
+      className={cn(
+        'group relative bg-[var(--surface)] border border-[var(--subtle-border)] rounded-xl p-4 hover:border-[var(--overlay-strong)] transition-all',
+        onClick ? 'cursor-pointer' : 'cursor-default',
+      )}
       onClick={onClick}
     >
       <div className="flex items-start justify-between gap-3">
