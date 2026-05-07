@@ -159,6 +159,15 @@ function AssistantPageInner() {
   // (Incident "Open in Co-pilot" flows through askScoutDeepLink — see
   // DriftSummaryTab/TabActiveIncidents. No dedicated incident ref needed.)
 
+  // ?session=<id> deep-link from the artifacts page. Captured at render
+  // time so it's stable, then consumed by the fetchSessions effect below
+  // (which calls loadSession(initialSessionId) when present).
+  const initialSessionId = useRef<string | null>(
+    typeof window !== 'undefined'
+      ? new URLSearchParams(window.location.search).get('session')
+      : null,
+  );
+
   // After the first render, persist URL-derived deep-link data into
   // sessionStorage (so Strict Mode mount #2 still finds it) and clean the
   // query params off the URL. Done in an effect rather than inline in the
@@ -167,10 +176,11 @@ function AssistantPageInner() {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const hasPrompt = !!params.get('prompt');
+    const hasSession = !!params.get('session');
     if (hasPrompt && deepLinkData.current && !sessionStorage.getItem('askScoutDeepLink')) {
       sessionStorage.setItem('askScoutDeepLink', JSON.stringify(deepLinkData.current));
     }
-    if (hasPrompt) {
+    if (hasPrompt || hasSession) {
       window.history.replaceState({}, '', '/dashboard/assistant');
     }
   }, []);
@@ -649,6 +659,16 @@ function AssistantPageInner() {
         // If deep-link is active (from Ask Scout) or an incident seed is pending,
         // don't auto-load any session — those effects handle their own state.
         if (deepLinkData.current || promptProcessed.current) {
+          return;
+        }
+
+        // ?session=<id> deep-link (e.g. from artifacts page): load the
+        // requested session if it's in the user's list. Falls through to the
+        // most-recent default if the id isn't found.
+        const want = initialSessionId.current;
+        initialSessionId.current = null;
+        if (want && (data.sessions as Array<{ id: string }>).some((s) => s.id === want)) {
+          loadSession(want);
           return;
         }
 

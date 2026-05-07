@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { useTheme } from '@/contexts/ThemeContext';
 import { Settings as SettingsIcon, Bell, Key, CreditCard, User, SlidersHorizontal } from 'lucide-react';
@@ -8,10 +9,18 @@ import NotificationRoutingSettings from '@/components/settings/NotificationRouti
 import ConnectedAccounts from '@/components/settings/ConnectedAccounts';
 import BillingSettings from '@/components/settings/BillingSettings';
 
+const VALID_TABS = ['general', 'notifications', 'api', 'billing'] as const;
+
 export default function SettingsPage() {
   const { data: session } = useSession();
   const { theme, toggleTheme } = useTheme();
-  const [activeTab, setActiveTab] = useState('general');
+  const searchParams = useSearchParams();
+  // Honour ?tab= deep-links (BillingBanner, etc.). Falls back to 'general'.
+  const initialTab = (() => {
+    const t = searchParams.get('tab');
+    return t && (VALID_TABS as readonly string[]).includes(t) ? t : 'general';
+  })();
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [savedNotification, setSavedNotification] = useState(false);
 
   const showSaved = () => {

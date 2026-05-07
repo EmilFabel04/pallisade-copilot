@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import type { ScheduledTask } from '@/types/schedule';
 import type { WatchSummary, MonitoringPlanSummary } from '@/types/health-watch';
 import { getMonitorSLAStatus } from '@/lib/sla-utils';
+import { PIPELINE_TYPE_TO_FAMILY, TOOL_TO_FAMILY } from '@/lib/monitors/families';
 
 // ---------------------------------------------------------------------------
 // Monitor type buckets
@@ -84,6 +85,22 @@ export default function MonitorsPage() {
   // Modal state
   const [showMonitorModal, setShowMonitorModal] = useState(false);
   const [settingsWatchId, setSettingsWatchId] = useState<string | null>(null);
+
+  // Honour ?createFor=<fqn> deep-link from the CoverageGaps "Add monitors"
+  // CTA: auto-open the create-monitor modal once on mount, then strip the
+  // param so a refresh doesn't keep re-opening it.
+  const createForRef = useRef(false);
+  useEffect(() => {
+    if (createForRef.current) return;
+    const createFor = searchParams.get('createFor');
+    if (!createFor) return;
+    createForRef.current = true;
+    setShowMonitorModal(true);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('createFor');
+    const qs = params.toString();
+    router.replace(`/dashboard/monitors${qs ? `?${qs}` : ''}`);
+  }, [searchParams, router]);
 
   // Detail view
   const [selectedWatch, setSelectedWatch] = useState<WatchSummary | null>(null);
@@ -361,11 +378,28 @@ export default function MonitorsPage() {
   const allWatches = [...uniqueWatches, ...planGroups];
 
   const dataWatches = allWatches.filter((w) => watchMatchesBucket(w, DATA_MONITOR_TYPES));
-  const pipelineWatches = allWatches.filter((w) => watchMatchesBucket(w, PIPELINE_MONITOR_TYPES));
+  const allPipelineWatches = allWatches.filter((w) => watchMatchesBucket(w, PIPELINE_MONITOR_TYPES));
 
   // Standalone monitors (not in a watch group)
   const dataTasks = tasks.filter((t) => DATA_MONITOR_TYPES.has((t.monitorType || '').toUpperCase()));
-  const pipelineTasks = tasks.filter((t) => PIPELINE_MONITOR_TYPES.has((t.monitorType || '').toUpperCase()));
+  const allPipelineTasks = tasks.filter((t) => PIPELINE_MONITOR_TYPES.has((t.monitorType || '').toUpperCase()));
+
+  // Honour ?tool=<toolType> deep-link from the pipeline-tile detail modal.
+  // We narrow to watches/tasks whose monitorType belongs to the same family as
+  // the requested tool (e.g. tool=airflow → orchestration family).
+  const toolFilter = searchParams.get('tool');
+  const filterFamily = toolFilter ? (TOOL_TO_FAMILY[toolFilter] || toolFilter) : null;
+  const matchesToolFamily = (monitorType: string | undefined | null): boolean => {
+    if (!filterFamily || !monitorType) return true;
+    const fam = PIPELINE_TYPE_TO_FAMILY[monitorType.toUpperCase()];
+    return fam === filterFamily || fam === toolFilter;
+  };
+  const pipelineWatches = filterFamily
+    ? allPipelineWatches.filter((w) => (w.monitors || []).some((m) => matchesToolFamily(m.monitorType)))
+    : allPipelineWatches;
+  const pipelineTasks = filterFamily
+    ? allPipelineTasks.filter((t) => matchesToolFamily(t.monitorType))
+    : allPipelineTasks;
 
   // ---------------------------------------------------------------------------
   // Policy / override counts helper
@@ -551,6 +585,25 @@ export default function MonitorsPage() {
         {activeTab === 'pipeline' && (
           <>
             <PipelineHealthTiles />
+            {filterFamily && (
+              <div className="mb-3 inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-[var(--accent)]/10 border border-[var(--accent)]/30 text-[12px]">
+                <span className="text-[var(--muted)]">Filtered by tool:</span>
+                <span className="font-medium text-[var(--text)]">{toolFilter}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const params = new URLSearchParams(searchParams.toString());
+                    params.delete('tool');
+                    const qs = params.toString();
+                    router.replace(`/dashboard/monitors${qs ? `?${qs}` : ''}`);
+                  }}
+                  className="text-[var(--muted)] hover:text-[var(--text)]"
+                  aria-label="Clear tool filter"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {selectedPipeline?.id && (
               <TabActiveIncidents stackId={selectedPipeline.id} monitorTypes={PIPELINE_MONITOR_TYPES} />
             )}
