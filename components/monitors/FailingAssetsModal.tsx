@@ -123,6 +123,9 @@ export function FailingAssetsModal({
       } else {
         onRecommendationsChanged();
       }
+    } catch (err) {
+      console.error('[FailingAssetsModal] drift action failed', { recId, err });
+      toast.error('Could not reach the server — try again.');
     } finally {
       setBusyRecId(null);
     }

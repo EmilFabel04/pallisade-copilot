@@ -55,6 +55,11 @@ export function IncidentCard({ incident, onChanged, onOpenInCopilot }: Props) {
       } else {
         onChanged();
       }
+    } catch (err) {
+      // Network failure (offline, CORS, abort). Without this catch the
+      // rejection is unhandled and the user sees no feedback.
+      console.error('[IncidentCard] action failed', { path, err });
+      toast.error('Could not reach the server — try again.');
     } finally {
       setBusy(false);
     }

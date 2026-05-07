@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
+import { toast } from 'sonner';
 import { usePipeline } from '@/contexts/PipelineContext';
 import { ModeSelector, getModeFromSlashCommand } from '@/components/copilot/ModeSelector';
 import { MentionDropdown, type MentionItem } from '@/components/copilot/MentionDropdown';
@@ -744,9 +745,15 @@ function AssistantPageInner() {
           }
           return prev;
         });
+      } else {
+        // Surface the failure rather than silently leaving the row in place
+        // (which made it look like delete worked but didn't persist).
+        const err = await response.json().catch(() => ({}));
+        toast.error(err.error || `Failed to delete chat (${response.status})`);
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
+      toast.error('Could not reach the server — try again.');
     }
   };
 

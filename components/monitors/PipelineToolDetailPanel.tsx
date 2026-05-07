@@ -114,6 +114,9 @@ export function PipelineToolDetailPanel({
       } else {
         onRecommendationsChanged?.();
       }
+    } catch (err) {
+      console.error('[PipelineToolDetailPanel] drift action failed', { recId, err });
+      toast.error('Could not reach the server — try again.');
     } finally {
       setBusyRecId(null);
     }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
@@ -40,31 +40,51 @@ export function CoverageGaps({
   const [running, setRunning] = useState(false);
   const [showRecs, setShowRecs] = useState(false);
   const router = useRouter();
+  // Abort the drift POST + suppress the toast if the component unmounts
+  // mid-flight (e.g. user navigates away). Without this we'd toast against
+  // an unmounted component and leak the request.
+  const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleRunDrift = async () => {
     if (running) return;
     setRunning(true);
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const timeoutId = setTimeout(() => ctrl.abort(), 125_000);
     try {
       const res = await fetch('/api/drift/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stackId }),
-        signal: AbortSignal.timeout(125_000),
+        signal: ctrl.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `drift run failed (${res.status})`);
       }
       const data = await res.json();
+      if (!mountedRef.current) return;
       const n = data.recommendationCount ?? 0;
       toast.success(n > 0
         ? `Drift discovery complete — ${n} recommendation${n === 1 ? '' : 's'}`
         : 'Drift discovery complete — no threshold drift detected');
       onDriftRunComplete();
     } catch (e: any) {
+      if (!mountedRef.current) return;
+      if (e?.name === 'AbortError') return;
       toast.error(`Drift discovery failed: ${e?.message ?? 'unknown error'}`);
     } finally {
-      setRunning(false);
+      clearTimeout(timeoutId);
+      if (mountedRef.current) setRunning(false);
+      abortRef.current = null;
     }
   };
 

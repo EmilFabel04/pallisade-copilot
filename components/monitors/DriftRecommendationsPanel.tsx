@@ -21,6 +21,13 @@ export function DriftRecommendationsPanel({ recommendations, stackId, onClose, o
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // Once the parent has refetched and reports zero pending recs, close the
+  // drawer automatically — leaving an empty drawer open after every rec was
+  // actioned felt broken.
+  useEffect(() => {
+    if (recommendations.length === 0 && !busyId) onClose();
+  }, [recommendations.length, busyId, onClose]);
+
   const callAction = async (recId: string, action: string, value?: string) => {
     setBusyId(recId);
     try {
@@ -40,6 +47,9 @@ export function DriftRecommendationsPanel({ recommendations, stackId, onClose, o
       } else {
         onChanged();
       }
+    } catch (err) {
+      console.error('[DriftRecommendationsPanel] action failed', { recId, err });
+      toast.error('Could not reach the server — try again.');
     } finally {
       setBusyId(null);
     }
