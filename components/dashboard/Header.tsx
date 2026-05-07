@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { PipelineSelector } from './PipelineSelector';
 import BillingBanner from './BillingBanner';
 import { LLMBell } from '@/components/clarifications/LLMBell';
+import { usePipeline } from '@/contexts/PipelineContext';
 
 // Map routes to page titles
 const pageTitles: Record<string, string> = {
@@ -105,6 +106,7 @@ export function DashboardHeader() {
   const { data: session } = useSession();
   const pathname = usePathname();
   const router = useRouter();
+  const { selectedPipelineId } = usePipeline();
   const [showSearch, setShowSearch] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -124,7 +126,12 @@ export function DashboardHeader() {
 
   const fetchUnreadCount = useCallback(async () => {
     try {
-      const res = await fetch('/api/notifications/unread-count');
+      // Scope the badge to the active pipeline so users don't see counts
+      // from a profile they're not currently working on.
+      const qs = selectedPipelineId
+        ? `?pipelineStackId=${encodeURIComponent(selectedPipelineId)}`
+        : '';
+      const res = await fetch(`/api/notifications/unread-count${qs}`);
       if (res.ok) {
         const data = await res.json();
         setUnreadCount(data.count || 0);
@@ -132,11 +139,14 @@ export function DashboardHeader() {
     } catch {
       // Silently fail
     }
-  }, []);
+  }, [selectedPipelineId]);
 
   const checkNewAlerts = useCallback(async () => {
     try {
-      const res = await fetch('/api/notifications?limit=5&unreadOnly=true');
+      const stackQs = selectedPipelineId
+        ? `&pipelineStackId=${encodeURIComponent(selectedPipelineId)}`
+        : '';
+      const res = await fetch(`/api/notifications?limit=5&unreadOnly=true${stackQs}`);
       if (!res.ok) return;
       const data = await res.json();
       const events = data.notifications || [];
@@ -162,7 +172,7 @@ export function DashboardHeader() {
     } catch {
       // Silently fail
     }
-  }, [router]);
+  }, [router, selectedPipelineId]);
 
   useEffect(() => {
     fetchUnreadCount();

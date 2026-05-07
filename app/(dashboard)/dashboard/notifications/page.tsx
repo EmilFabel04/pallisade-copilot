@@ -3,6 +3,7 @@
 import { useSession } from 'next-auth/react';
 import { useState, useEffect, useCallback } from 'react';
 import { cachedFetch } from '@/lib/fetch-cache';
+import { usePipeline } from '@/contexts/PipelineContext';
 import { NotificationCard, type NotificationItem } from '@/components/notifications/NotificationCard';
 import {
   NotificationFilters,
@@ -13,6 +14,7 @@ import {
 
 export default function NotificationsPage() {
   const { data: session } = useSession();
+  const { selectedPipelineId } = usePipeline();
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,6 +34,9 @@ export default function NotificationsPage() {
       try {
         const params = new URLSearchParams();
         params.set('limit', '25');
+        // Scope notifications to the active pipeline profile so users don't
+        // see events from a profile they're not currently working on.
+        if (selectedPipelineId) params.set('pipelineStackId', selectedPipelineId);
         if (severity !== 'ALL') params.set('severity', severity);
         if (category !== 'ALL') params.set('eventType', getCategoryEventPrefix(category));
         if (readFilter === 'UNREAD') params.set('unreadOnly', 'true');
@@ -55,7 +60,7 @@ export default function NotificationsPage() {
         setLoading(false);
       }
     },
-    [severity, category, readFilter],
+    [severity, category, readFilter, selectedPipelineId],
   );
 
   useEffect(() => {

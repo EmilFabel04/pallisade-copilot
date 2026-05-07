@@ -1,9 +1,11 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
 
-// GET /api/notifications/unread-count — get unread notification count for user
-export async function GET() {
+// GET /api/notifications/unread-count — unread count for the active user.
+// Optionally scoped to ?pipelineStackId so the header badge in pipeline-aware
+// pages doesn't tally events from other profiles.
+export async function GET(request: NextRequest) {
   try {
     const session = await auth();
     if (!session?.user) {
@@ -39,9 +41,12 @@ export async function GET() {
       console.warn('[Notifications] Mute query failed, skipping mute filter:', err);
     }
 
+    const pipelineStackId = new URL(request.url).searchParams.get('pipelineStackId');
+
     const count = await prisma.notificationEvent.count({
       where: {
         organizationId: user.organizationId,
+        ...(pipelineStackId ? { pipelineStackId } : {}),
         reads: { none: { userId: user.id } },
         ...(muteExclusions.length > 0 ? { NOT: { OR: muteExclusions } } : {}),
       },

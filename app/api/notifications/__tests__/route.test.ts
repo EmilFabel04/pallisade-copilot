@@ -118,7 +118,8 @@ describe('GET /api/notifications/unread-count', () => {
     mockCount.mockResolvedValue(5);
 
     const { GET } = await import('../unread-count/route');
-    const response = await GET();
+    // GET now accepts NextRequest so it can read ?pipelineStackId=
+    const response = await GET(new Request('http://localhost/api/notifications/unread-count') as any);
     const data = await response.json();
 
     expect(data.count).toBe(5);

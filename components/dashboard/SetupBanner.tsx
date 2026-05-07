@@ -3,52 +3,61 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '../ui/button';
+import { usePipeline } from '@/contexts/PipelineContext';
 
-const DISMISSED_KEY = 'pallisade-setup-banner-dismissed';
+// Per-pipeline dismissal — a fresh empty profile shouldn't inherit a global
+// "I already dismissed setup" flag from another profile.
+const DISMISSED_KEY_PREFIX = 'pallisade-setup-banner-dismissed:';
 
 type BannerState = 'no-warehouse' | 'no-monitors' | 'complete' | 'loading';
 
 export function SetupBanner() {
   const router = useRouter();
+  const { selectedPipelineId } = usePipeline();
   const [state, setState] = useState<BannerState>('loading');
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && localStorage.getItem(DISMISSED_KEY)) {
+    setState('loading');
+    setDismissed(false);
+    if (!selectedPipelineId) return;
+    const key = `${DISMISSED_KEY_PREFIX}${selectedPipelineId}`;
+    if (typeof window !== 'undefined' && localStorage.getItem(key)) {
       setDismissed(true);
       return;
     }
 
+    let active = true;
     async function checkSetup() {
       try {
         const res = await fetch('/api/pipeline');
+        if (!active) return;
         if (!res.ok) {
           setState('no-warehouse');
           return;
         }
         const data = await res.json();
         const pipelines = data.stacks || data.pipelines || [];
-
-        if (pipelines.length === 0) {
+        // Only check the active profile — completion in another profile must
+        // not satisfy the banner here.
+        const me = pipelines.find((p: any) => p.id === selectedPipelineId);
+        if (!me) {
           setState('no-warehouse');
           return;
         }
-
-        const hasConfigured = pipelines.some(
-          (p: any) => p.status !== 'DRAFT'
-        );
-
-        setState(hasConfigured ? 'complete' : 'no-monitors');
+        setState(me.status === 'DRAFT' ? 'no-monitors' : 'complete');
       } catch {
-        setState('complete');
+        if (active) setState('complete');
       }
     }
 
     checkSetup();
-  }, []);
+    return () => { active = false; };
+  }, [selectedPipelineId]);
 
   function handleDismiss() {
-    localStorage.setItem(DISMISSED_KEY, 'true');
+    if (!selectedPipelineId) return;
+    localStorage.setItem(`${DISMISSED_KEY_PREFIX}${selectedPipelineId}`, 'true');
     setDismissed(true);
   }
 

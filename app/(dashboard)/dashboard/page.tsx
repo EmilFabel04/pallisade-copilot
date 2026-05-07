@@ -250,28 +250,11 @@ export default function DashboardPage() {
           }
         }
 
-        // Fallback to generic cache
-        if (!tableCountFound) {
-          const genericCache = localStorage.getItem('pallisade_sources_cache');
-          if (genericCache) {
-            try {
-              const sourcesData = JSON.parse(genericCache);
-              let tableCount = 0;
-              Object.values(sourcesData.data || {}).forEach((nodeData: any) => {
-                tableCount += nodeData.tables?.length || 0;
-              });
-              if (tableCount > 0) {
-                setStats(prev => ({
-                  ...prev,
-                  totalTables: tableCount,
-                }));
-                tableCountFound = true;
-              }
-            } catch (e) {
-              console.error('Error parsing cached sources:', e);
-            }
-          }
-        }
+        // No generic-cache fallback — `pallisade_sources_cache` (without a
+        // pipeline-scoped suffix) is shared across profiles, so reading it
+        // would leak another profile's table count into this tile. If the
+        // per-pipeline cache is cold we fall through to the server fetch
+        // below.
 
         // If no cache, fetch tables from connected warehouse nodes
         if (!tableCountFound && pipelineData) {
