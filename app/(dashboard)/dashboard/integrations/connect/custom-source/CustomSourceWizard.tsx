@@ -167,6 +167,14 @@ export default function CustomSourceWizard({ onClose }: CustomSourceWizardProps 
   /** Fire the /verify SSE stream and update verifyState as events arrive. */
   const runVerify = useCallback(
     async (currentState: WizardState) => {
+      // Guard against null pipeline — submitting without one yields a 400
+      // from the verify endpoint and presents as a confusing failure later
+      // in the wizard. Surface the requirement up front.
+      if (!selectedPipelineId) {
+        setStashError('Select a pipeline profile before verifying.');
+        return;
+      }
+
       const runId = Symbol('verify-run');
       verifyRunRef.current = runId;
 
@@ -302,7 +310,7 @@ export default function CustomSourceWizard({ onClose }: CustomSourceWizardProps 
         }
       }
     },
-    [],
+    [selectedPipelineId],
   );
 
   // Save can only be invoked when verifyState.allPass === true (gated in canSave below). No persist-on-fail path exists.
