@@ -1,7 +1,8 @@
 """Change plan (actions) tool definitions."""
 
 from .registry import register_tool
-from .base import ToolCategory, ToolParameter
+from .base import ToolCategory, ToolParameter, RiskLevel
+from ..artifacts.models import ArtifactSpec
 
 
 @register_tool(
@@ -48,6 +49,11 @@ from .base import ToolCategory, ToolParameter
             required=False,
         ),
     ],
+    risk_level=RiskLevel.MEDIUM,
+    artifact_spec=ArtifactSpec(
+        kind="PR_CHANGE",
+        status_on_success="proposed",  # creation step proposes; apply step applies
+    ),
 )
 def _meta_create_change_plan():
     pass
