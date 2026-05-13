@@ -1306,17 +1306,74 @@ class ToolExecutor:
         )
 
     async def _execute_tool(self, tool: Tool, args: Dict[str, Any]) -> "Union[ToolResult, ToolArtifactResult]":
-        """Execute a specific tool."""
-        
-        # Route to appropriate handler
+        """Dispatch to _execute_<name>, then emit artefact if tool declares one."""
         handler = getattr(self, f"_execute_{tool.name}", None)
-        if handler:
-            return await handler(args)
-        
-        # Fallback for unimplemented tools
-        return ToolResult(
-            success=False,
-            error=f"Tool '{tool.name}' is not yet implemented. Use search_knowledge_base to find expert guidance on this topic instead."
+        if not handler:
+            # Fallback for unimplemented tools
+            return ToolResult(
+                success=False,
+                error=f"Tool '{tool.name}' is not yet implemented. Use search_knowledge_base to find expert guidance on this topic instead."
+            )
+
+        result = await handler(args)
+
+        # Auto-emit artefact if the tool declares an ArtifactSpec and the call succeeded.
+        # Skip when the handler returned a legacy ToolArtifactResult — that path goes
+        # through the existing confirmation/SSE flow, not the new artefact table.
+        from .artifacts.legacy import ToolArtifactResult as _ToolArtifactResult
+        if (
+            tool.artifact_spec
+            and not isinstance(result, _ToolArtifactResult)
+            and getattr(result, "success", False)
+        ):
+            try:
+                await self._emit_for_tool(tool, args, result)
+            except Exception as e:
+                logger.warning(f"[AutoEmit] Failed to emit artefact for tool '{tool.name}': {e}")
+
+        return result
+
+    async def _emit_for_tool(self, tool: Tool, args: Dict[str, Any], result: ToolResult) -> None:
+        """Persist an artefact row for a tool that declares an artifact_spec."""
+        from .artifacts.emitter import emit_artifact
+        from .artifacts.models import ArtifactSpec as _Spec, ArtifactStatus as _Status
+
+        spec = tool.artifact_spec
+        if spec is None:
+            return
+
+        result_data = result.data or {}
+        title = result_data.get(spec.title_field) or tool.name
+        summary = result_data.get(spec.summary_field) if spec.summary_field else None
+        agent_session_id = args.get("__agent_session_id")
+        tool_call_id = args.get("__tool_call_id") or f"{tool.name}:{id(args)}"
+        external_ref = result_data.get("external_ref")
+        payload = result_data.get("payload") or {"kind": spec.kind}
+
+        status_str = spec.status_on_propose if tool.requires_confirmation else spec.status_on_success
+        status = _Status(status_str or "applied")
+
+        repo = ArtifactRepo(
+            base_url=self.context.base_url,
+            org_id=self.context.org_id,
+            user_id=self.context.user_id,
+        )
+        await emit_artifact(
+            repo=repo,
+            spec=_Spec(
+                kind=spec.kind,
+                status_on_propose=spec.status_on_propose,
+                status_on_success=spec.status_on_success,
+            ),
+            tool_call_id=tool_call_id,
+            agent_run_id=getattr(self.context, "agent_run_id", None) or self.context.session_id,
+            source_session_id=self.context.session_id,
+            agent_session_id=agent_session_id,
+            payload=payload,
+            title=title,
+            summary=summary,
+            status=status,
+            external_ref=external_ref,
         )
     
     # ==========================================
