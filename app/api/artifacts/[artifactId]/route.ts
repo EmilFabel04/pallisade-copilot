@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/auth';
 import prisma from '@/lib/db';
+import { ArtifactStatus } from '@prisma/client';
 
 // GET /api/artifacts/[artifactId] - Get single artifact
 export async function GET(
@@ -50,62 +51,60 @@ export async function GET(
 // PATCH /api/artifacts/[artifactId] - Update artifact
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ artifactId: string }> }
+  { params }: { params: Promise<{ artifactId: string }> },
 ) {
-  try {
-    const session = await auth();
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const userId = (session.user as any).id;
+  const organizationId = (session.user as any).organizationId;
+  const { artifactId } = await params;
 
-    const userId = (session.user as any).id;
-    const organizationId = (session.user as any).organizationId;
-    const { artifactId } = await params;
+  const body = await request.json();
+  const { isPinned, isSaved, status, tags, title } = body as {
+    isPinned?: boolean;
+    isSaved?: boolean;
+    status?: ArtifactStatus;
+    tags?: string[];
+    title?: string;
+  };
 
-    // Check artifact exists and belongs to user
-    const existing = await prisma.artifact.findFirst({
-      where: {
-        id: artifactId,
-        organizationId,
-        userId,
-      },
-    });
+  const existing = await prisma.artifact.findFirst({
+    where: { id: artifactId, organizationId, userId },
+  });
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-    if (!existing) {
-      return NextResponse.json({ error: 'Artifact not found' }, { status: 404 });
-    }
-
-    const body = await request.json();
-    const { title, tags, isPinned, type, content } = body;
-
-    const updateData: any = {};
-    if (title !== undefined) updateData.title = title;
-    if (tags !== undefined) updateData.tags = tags;
-    if (isPinned !== undefined) updateData.isPinned = isPinned;
-    if (type !== undefined) updateData.type = type;
-    if (content !== undefined) updateData.content = content;
-
-    const artifact = await prisma.artifact.update({
-      where: { id: artifactId },
-      data: updateData,
-      include: {
-        sourceSession: {
-          select: {
-            id: true,
-            title: true,
-          },
-        },
-      },
-    });
-
-    return NextResponse.json({ artifact });
-  } catch (error) {
-    console.error('[ARTIFACTS] Error updating artifact:', error);
+  // Only allow approve/reject/archive transitions from the public route.
+  const allowedTransitions: Record<string, ArtifactStatus[]> = {
+    proposed: ['approved', 'rejected', 'archived'],
+    approved: ['archived'],
+    applied: ['archived'],
+    rejected: ['archived'],
+    failed: ['archived'],
+    open: ['resolved', 'archived'],
+    resolved: ['archived'],
+  };
+  if (status && !(allowedTransitions[existing.status] ?? []).includes(status)) {
     return NextResponse.json(
-      { error: 'Failed to update artifact' },
-      { status: 500 }
+      { error: `Cannot transition ${existing.status} → ${status} from public route` },
+      { status: 400 },
     );
   }
+
+  const updated = await prisma.artifact.update({
+    where: { id: artifactId },
+    data: {
+      isPinned: isPinned ?? undefined,
+      isSaved: isSaved ?? undefined,
+      status: status ?? undefined,
+      tags: tags ?? undefined,
+      title: title ?? undefined,
+      appliedAt: status === 'applied' ? new Date() : undefined,
+    },
+  });
+
+  return NextResponse.json(updated);
 }
 
 // DELETE /api/artifacts/[artifactId] - Delete artifact
