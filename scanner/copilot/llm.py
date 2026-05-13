@@ -1703,6 +1703,8 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 error=mcp_result.get("error"),
                             )
                         else:
+                            # __tool_call_id is consumed by ToolExecutor._emit_for_tool for artefact idempotency (see emit_artifact)
+                            tool_input["__tool_call_id"] = tool_use_id
                             result = await executor.execute(tool_name, tool_input)
 
                         if isinstance(result, ToolArtifactResult):
@@ -1876,6 +1878,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                     error=mcp_result.get("error"),
                 )
             else:
+                tool_args["__tool_call_id"] = tool_use_id
                 result = await executor.execute(tool_name, tool_args)
         except Exception as e:
             result = ToolResult(success=False, error=str(e))
@@ -2134,6 +2137,7 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 error=mcp_result.get("error"),
                             )
                         else:
+                            tool_input["__tool_call_id"] = tool_use_id
                             result = await executor.execute(tool_name, tool_input)
                     except Exception as tool_err:
                         logger.exception(

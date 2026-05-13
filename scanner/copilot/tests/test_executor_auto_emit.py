@@ -9,6 +9,7 @@ from scanner.copilot.artifacts.models import ArtifactSpec
 @pytest.mark.asyncio
 async def test_auto_emit_fires_when_tool_has_artifact_spec_and_succeeds():
     from scanner.copilot.tool_executor import ToolExecutor
+    from scanner.copilot.artifacts.models import ArtifactRisk
 
     ctx = MagicMock()
     ctx.org_id = "org_1"
@@ -16,6 +17,10 @@ async def test_auto_emit_fires_when_tool_has_artifact_spec_and_succeeds():
     ctx.session_id = "sess_1"
     ctx.base_url = "http://localhost:3000"
     ctx.agent_run_id = "run_1"
+    # MagicMock would return a Mock for arbitrary attribute lookups; pin to None
+    # so getattr(..., "_active_agent_session_id", None) returns None, forcing the
+    # fallback (tool_call_id-keyed) idempotency path.
+    ctx._active_agent_session_id = None
 
     executor = ToolExecutor.__new__(ToolExecutor)
     executor.context = ctx
@@ -24,6 +29,7 @@ async def test_auto_emit_fires_when_tool_has_artifact_spec_and_succeeds():
         name="fake_write_tool",
         description="x",
         category=ToolCategory.CHANGE_PLAN,
+        risk_level=RiskLevel.LOW,
         artifact_spec=ArtifactSpec(
             kind="MONITOR",
             status_on_success="applied",
@@ -55,6 +61,8 @@ async def test_auto_emit_fires_when_tool_has_artifact_spec_and_succeeds():
     kwargs = repo_instance.upsert.await_args.kwargs
     assert kwargs["idempotency_key"] == "tc_1:MONITOR"
     assert kwargs["external_ref"] == {"monitor_id": "m_99"}
+    # Risk level from the Tool definition must be propagated to the artefact row.
+    assert kwargs["risk_level"] == ArtifactRisk.LOW
 
 
 @pytest.mark.asyncio
@@ -93,6 +101,7 @@ async def test_auto_emit_failure_does_not_break_tool_result():
     ctx.session_id = "sess_1"
     ctx.base_url = "http://localhost:3000"
     ctx.agent_run_id = "run_1"
+    ctx._active_agent_session_id = None
 
     executor = ToolExecutor.__new__(ToolExecutor)
     executor.context = ctx
@@ -134,6 +143,7 @@ async def test_auto_emit_refines_pr_change_to_dbt_core_change_when_all_sql_model
     ctx.session_id = "sess_1"
     ctx.base_url = "http://localhost:3000"
     ctx.agent_run_id = "run_1"
+    ctx._active_agent_session_id = None
 
     executor = ToolExecutor.__new__(ToolExecutor)
     executor.context = ctx
@@ -188,6 +198,7 @@ async def test_auto_emit_refines_pr_change_to_dag_when_all_orchestration():
     ctx.session_id = "sess_1"
     ctx.base_url = "http://localhost:3000"
     ctx.agent_run_id = "run_1"
+    ctx._active_agent_session_id = None
 
     executor = ToolExecutor.__new__(ToolExecutor)
     executor.context = ctx
@@ -220,3 +231,58 @@ async def test_auto_emit_refines_pr_change_to_dag_when_all_orchestration():
 
     kwargs = repo_instance.upsert.await_args.kwargs
     assert kwargs["kind"].value == "DAG"
+
+
+@pytest.mark.asyncio
+async def test_auto_emit_reuses_begin_artefact_row_by_agent_session_id():
+    """When _execute_begin_artefact has stashed an active agent session on the
+    context, _emit_for_tool must key the artefact upsert by that session so the
+    subsequent write-tool call UPDATES the draft row instead of creating a new
+    duplicate, and must propagate the tool's risk_level.
+    """
+    from scanner.copilot.tool_executor import ToolExecutor
+    from scanner.copilot.artifacts.models import ArtifactRisk
+
+    ctx = MagicMock()
+    ctx.org_id = "org_1"
+    ctx.user_id = "u_1"
+    ctx.session_id = "sess_parent"
+    ctx.base_url = "http://localhost:3000"
+    ctx.agent_run_id = "run_1"
+    # Simulate begin_artefact having stashed the child session on the context.
+    ctx._active_agent_session_id = "sess_abc"
+    ctx._active_agent_session_kind = "MONITOR"
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor.context = ctx
+
+    tool = Tool(
+        name="fake_write_tool",
+        description="x",
+        category=ToolCategory.CHANGE_PLAN,
+        risk_level=RiskLevel.HIGH,
+        artifact_spec=ArtifactSpec(kind="MONITOR", status_on_success="applied"),
+    )
+
+    async def fake_handler(args):
+        return ToolResult(
+            success=True,
+            data={
+                "title": "Test monitor",
+                "payload": {"kind": "MONITOR", "monitorId": "m_1", "monitorKind": "FRESHNESS"},
+            },
+        )
+
+    executor._execute_fake_write_tool = fake_handler  # type: ignore
+
+    with patch("scanner.copilot.tool_executor.ArtifactRepo") as RepoCls:
+        repo_instance = AsyncMock()
+        repo_instance.upsert.return_value = {"id": "art_reused"}
+        RepoCls.return_value = repo_instance
+
+        await executor._execute_tool(tool, {"__tool_call_id": "tc_write_1"})
+
+    kwargs = repo_instance.upsert.await_args.kwargs
+    assert kwargs["idempotency_key"] == "agent_session:sess_abc"
+    assert kwargs["agent_session_id"] == "sess_abc"
+    assert kwargs["risk_level"] == ArtifactRisk.HIGH

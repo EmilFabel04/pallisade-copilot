@@ -40,7 +40,9 @@ async def test_emit_artifact_calls_repo_upsert_with_idempotency_key():
     assert result == {"id": "art_abc"}
     fake_repo.upsert.assert_awaited_once()
     kwargs = fake_repo.upsert.await_args.kwargs
-    assert kwargs["idempotency_key"] == "tc_42:MONITOR"
+    # When agent_session_id is provided, the emitter keys by the session so that
+    # begin_artefact's draft row and subsequent write-tool emits collapse to one row.
+    assert kwargs["idempotency_key"] == "agent_session:sess_child"
     assert kwargs["kind"] == ArtifactKind.MONITOR
     assert kwargs["status"] == ArtifactStatus.applied
     assert kwargs["payload"]["monitorId"] == "mon_123"
@@ -68,3 +70,5 @@ async def test_emit_artifact_serialises_pydantic_payload():
     # Payload must be serialisable JSON (dict, not BaseModel instance)
     assert isinstance(kwargs["payload"], dict)
     assert kwargs["payload"]["kind"] == "MONITOR"
+    # No agent_session_id was provided, so the emitter falls back to the tool_call_id+kind key.
+    assert kwargs["idempotency_key"] == "tc_1:MONITOR"

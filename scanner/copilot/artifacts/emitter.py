@@ -38,9 +38,18 @@ async def emit_artifact(
 ) -> Dict[str, Any]:
     """Persist (upsert) an Artifact row. Returns the persisted row dict.
 
-    Idempotency key: f"{tool_call_id}:{spec.kind}". Same tool retry → same row.
+    Idempotency key: prefer ``f"agent_session:{agent_session_id}"`` so that
+    ``begin_artefact``'s pre-created draft and the subsequent write-tool
+    auto-emit collapse to the SAME row. Fall back to
+    ``f"{tool_call_id}:{spec.kind}"`` for write tools fired without a
+    preceding ``begin_artefact``.
     """
-    idempotency_key = f"{tool_call_id}:{spec.kind}"
+    # Prefer agent_session_id as the identity key so begin_artefact + subsequent
+    # write-tool auto-emits in the same turn collapse to one row.
+    if agent_session_id:
+        idempotency_key = f"agent_session:{agent_session_id}"
+    else:
+        idempotency_key = f"{tool_call_id}:{spec.kind}"
     return await repo.upsert(
         idempotency_key=idempotency_key,
         kind=ArtifactKind(spec.kind),

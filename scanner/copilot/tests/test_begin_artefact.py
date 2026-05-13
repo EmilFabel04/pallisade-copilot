@@ -48,3 +48,9 @@ async def test_begin_artefact_creates_child_session_and_draft_row():
     assert kwargs["status"] == ArtifactStatus.draft
     assert kwargs["agent_session_id"] == "sess_child"
     assert kwargs["source_session_id"] == "sess_parent"
+    # Identity key must be session-based so the subsequent write-tool auto-emit
+    # UPDATEs this draft row instead of creating a duplicate.
+    assert kwargs["idempotency_key"] == "agent_session:sess_child"
+    # Context must be stashed for _emit_for_tool to pick up.
+    assert ctx._active_agent_session_id == "sess_child"
+    assert ctx._active_agent_session_kind == "MONITOR"

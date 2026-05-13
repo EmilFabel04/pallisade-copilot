@@ -1366,7 +1366,12 @@ class ToolExecutor:
         refined_kind = self._refine_pr_change_kind(spec.kind, patches)
         title = result_data.get(spec.title_field) or tool.name
         summary = result_data.get(spec.summary_field) if spec.summary_field else None
-        agent_session_id = args.get("__agent_session_id")
+        # Prefer the child session stashed by _execute_begin_artefact so that this
+        # auto-emit UPDATES the draft row begin_artefact pre-created (same identity).
+        agent_session_id = (
+            getattr(self.context, "_active_agent_session_id", None)
+            or args.get("__agent_session_id")
+        )
         tool_call_id = args.get("__tool_call_id") or f"{tool.name}:{id(args)}"
         external_ref = result_data.get("external_ref")
         if refined_kind == "DBT_CORE_CHANGE":
@@ -1389,6 +1394,16 @@ class ToolExecutor:
         status_str = spec.status_on_propose if tool.requires_confirmation else spec.status_on_success
         status = _Status(status_str or "applied")
 
+        # Map the tool's RiskLevel (tools/base.py) to ArtifactRisk (artifacts/models.py).
+        # Both enums share LOW/MEDIUM/HIGH string values, so a value-based round-trip is safe.
+        from .artifacts.models import ArtifactRisk as _Risk
+        risk_level: Optional[_Risk] = None
+        if tool.risk_level is not None:
+            try:
+                risk_level = _Risk(tool.risk_level.value)
+            except (ValueError, AttributeError):
+                risk_level = None
+
         repo = ArtifactRepo(
             base_url=self.context.base_url,
             org_id=self.context.org_id,
@@ -1410,6 +1425,7 @@ class ToolExecutor:
             summary=summary,
             status=status,
             external_ref=external_ref,
+            risk_level=risk_level,
         )
     
     # ==========================================
@@ -6301,8 +6317,15 @@ class ToolExecutor:
         tool_call_id = args.get("__tool_call_id") or f"begin_{child_session_id}"
         agent_run_id = getattr(self.context, "agent_run_id", None) or self.context.session_id
 
+        # Use the child session ID as the artefact's identity key so subsequent
+        # write-tool emits in this turn UPDATE this row instead of creating a duplicate.
+        idempotency_key = f"agent_session:{child_session_id}"
+        # Stash on context so _emit_for_tool can find the same row when later write tools fire.
+        self.context._active_agent_session_id = child_session_id
+        self.context._active_agent_session_kind = kind.value
+
         artefact = await repo.upsert(
-            idempotency_key=f"{tool_call_id}:{kind.value}",
+            idempotency_key=idempotency_key,
             kind=kind,
             status=ArtifactStatus.draft,
             payload={"kind": kind.value, "intent": intent},
