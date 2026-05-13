@@ -142,3 +142,39 @@ def _meta_apply_change_plan():
 )
 def _meta_list_change_plans():
     pass
+
+
+@register_tool(
+    name="begin_artefact",
+    description=(
+        "Begin a new typed artefact (PR_CHANGE, MONITOR, DAG, etc.). Forks a child agent "
+        "session that owns the artefact's lifecycle and pre-creates the artefact row at "
+        "status='draft'. Call this BEFORE any write tool that produces the named artefact "
+        "kind. Returns artefact_id and agent_session_id; pass these to subsequent tool calls."
+    ),
+    category=ToolCategory.CHANGE_PLAN,
+    parameters=[
+        ToolParameter(
+            "kind", "string",
+            "Artefact kind to create",
+            enum=[
+                "PR_CHANGE", "WAREHOUSE_QUERY", "SCHEMA_CHANGE",
+                "DBT_CORE_CHANGE", "DBT_CLOUD_CHANGE", "DAG",
+                "INGESTION_CONNECTOR", "MONITOR", "WATCH", "INCIDENT",
+                "TICKET", "NOTIFICATION_RULE", "BI_ASSET",
+                "STORAGE_OBJECT", "SERVER_ACTION", "DOCUMENT",
+            ],
+        ),
+        ToolParameter(
+            "intent", "string",
+            "One-sentence description of what the agent intends to build (e.g. 'Add freshness monitor on analytics.orders').",
+        ),
+        ToolParameter(
+            "subtype", "string",
+            "Optional integration-specific subtype (e.g. 'snowflake', 'airflow', 'fivetran'). Required for kinds with multiple subtypes.",
+            required=False,
+        ),
+    ],
+)
+def _meta_begin_artefact():
+    pass
