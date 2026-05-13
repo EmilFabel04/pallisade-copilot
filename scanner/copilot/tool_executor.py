@@ -1333,6 +1333,24 @@ class ToolExecutor:
 
         return result
 
+    @staticmethod
+    def _refine_pr_change_kind(default_kind: str, patches: List[Dict[str, Any]]) -> str:
+        """Refine a PR_CHANGE artefact kind based on the patch_types in the change plan.
+
+        - All patches are sql_model → DBT_CORE_CHANGE
+        - All patches are orchestration → DAG
+        - All patches are sql_model in a non-dbt path → SCHEMA_CHANGE (deferred — keep PR_CHANGE for now)
+        - Mixed → PR_CHANGE
+        """
+        if default_kind != "PR_CHANGE" or not patches:
+            return default_kind
+        types = {p.get("patch_type") for p in patches if p.get("patch_type")}
+        if types == {"sql_model"}:
+            return "DBT_CORE_CHANGE"
+        if types == {"orchestration"}:
+            return "DAG"
+        return "PR_CHANGE"
+
     async def _emit_for_tool(self, tool: Tool, args: Dict[str, Any], result: ToolResult) -> None:
         """Persist an artefact row for a tool that declares an artifact_spec."""
         from .artifacts.emitter import emit_artifact
@@ -1343,12 +1361,30 @@ class ToolExecutor:
             return
 
         result_data = result.data or {}
+        # Refine the kind based on the change_plan's patches, if present.
+        patches = result_data.get("patches") or []
+        refined_kind = self._refine_pr_change_kind(spec.kind, patches)
         title = result_data.get(spec.title_field) or tool.name
         summary = result_data.get(spec.summary_field) if spec.summary_field else None
         agent_session_id = args.get("__agent_session_id")
         tool_call_id = args.get("__tool_call_id") or f"{tool.name}:{id(args)}"
         external_ref = result_data.get("external_ref")
-        payload = result_data.get("payload") or {"kind": spec.kind}
+        if refined_kind == "DBT_CORE_CHANGE":
+            payload = {
+                "kind": "DBT_CORE_CHANGE",
+                "modelsTouched": [p.get("file_path", "") for p in patches if p.get("patch_type") == "sql_model"],
+                "testsAdded": [],
+                "changePlanId": result_data.get("plan_id") or (result_data.get("payload") or {}).get("changePlanId"),
+            }
+        elif refined_kind == "DAG":
+            payload = {
+                "kind": "DAG",
+                "dagId": (patches[0].get("file_path", "")).rsplit("/", 1)[-1].replace(".py", "") if patches else "unknown",
+                "operation": "edit",
+                "affectedTasks": [],
+            }
+        else:
+            payload = result_data.get("payload") or {"kind": refined_kind}
 
         status_str = spec.status_on_propose if tool.requires_confirmation else spec.status_on_success
         status = _Status(status_str or "applied")
@@ -1361,7 +1397,7 @@ class ToolExecutor:
         await emit_artifact(
             repo=repo,
             spec=_Spec(
-                kind=spec.kind,
+                kind=refined_kind,
                 status_on_propose=spec.status_on_propose,
                 status_on_success=spec.status_on_success,
             ),

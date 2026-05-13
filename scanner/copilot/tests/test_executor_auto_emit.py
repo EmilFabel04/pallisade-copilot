@@ -122,3 +122,101 @@ async def test_auto_emit_failure_does_not_break_tool_result():
     assert result.data["title"] == "ok"
     # Repo was called (verifying the emit path was attempted)
     repo_instance.upsert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_emit_refines_pr_change_to_dbt_core_change_when_all_sql_models():
+    from scanner.copilot.tool_executor import ToolExecutor
+
+    ctx = MagicMock()
+    ctx.org_id = "org_1"
+    ctx.user_id = "u_1"
+    ctx.session_id = "sess_1"
+    ctx.base_url = "http://localhost:3000"
+    ctx.agent_run_id = "run_1"
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor.context = ctx
+
+    tool = Tool(
+        name="create_change_plan",
+        description="x",
+        category=ToolCategory.CHANGE_PLAN,
+        artifact_spec=ArtifactSpec(kind="PR_CHANGE", status_on_success="proposed"),
+    )
+
+    async def fake_handler(args):
+        return ToolResult(
+            success=True,
+            data={
+                "title": "dbt change",
+                "summary": "edit 2 models",
+                "payload": {
+                    "kind": "PR_CHANGE",
+                    "changePlanId": "cp_1",
+                    "filesChanged": 2,
+                    "diffSummary": "",
+                    "validationResults": {},
+                },
+                "patches": [
+                    {"patch_type": "sql_model", "file_path": "models/orders.sql"},
+                    {"patch_type": "sql_model", "file_path": "models/customers.sql"},
+                ],
+            },
+        )
+
+    executor._execute_create_change_plan = fake_handler  # type: ignore
+
+    with patch("scanner.copilot.tool_executor.ArtifactRepo") as RepoCls:
+        repo_instance = AsyncMock()
+        repo_instance.upsert.return_value = {"id": "art_x"}
+        RepoCls.return_value = repo_instance
+
+        await executor._execute_tool(tool, {"__tool_call_id": "tc_1"})
+
+    kwargs = repo_instance.upsert.await_args.kwargs
+    assert kwargs["kind"].value == "DBT_CORE_CHANGE"
+
+
+@pytest.mark.asyncio
+async def test_auto_emit_refines_pr_change_to_dag_when_all_orchestration():
+    from scanner.copilot.tool_executor import ToolExecutor
+
+    ctx = MagicMock()
+    ctx.org_id = "org_1"
+    ctx.user_id = "u_1"
+    ctx.session_id = "sess_1"
+    ctx.base_url = "http://localhost:3000"
+    ctx.agent_run_id = "run_1"
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor.context = ctx
+
+    tool = Tool(
+        name="create_change_plan",
+        description="x",
+        category=ToolCategory.CHANGE_PLAN,
+        artifact_spec=ArtifactSpec(kind="PR_CHANGE", status_on_success="proposed"),
+    )
+
+    async def fake_handler(args):
+        return ToolResult(
+            success=True,
+            data={
+                "title": "dag edit",
+                "payload": {"kind": "PR_CHANGE", "changePlanId": "cp_2", "filesChanged": 1, "diffSummary": "", "validationResults": {}},
+                "patches": [{"patch_type": "orchestration", "file_path": "dags/my_dag.py"}],
+            },
+        )
+
+    executor._execute_create_change_plan = fake_handler  # type: ignore
+
+    with patch("scanner.copilot.tool_executor.ArtifactRepo") as RepoCls:
+        repo_instance = AsyncMock()
+        repo_instance.upsert.return_value = {"id": "art_y"}
+        RepoCls.return_value = repo_instance
+
+        await executor._execute_tool(tool, {"__tool_call_id": "tc_2"})
+
+    kwargs = repo_instance.upsert.await_args.kwargs
+    assert kwargs["kind"].value == "DAG"
