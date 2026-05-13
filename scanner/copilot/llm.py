@@ -39,6 +39,38 @@ def _should_force_initial_tool(query: Optional[str]) -> bool:
         return False
     return bool(_INVESTIGATIVE_QUERY_RE.search(query))
 
+
+ARTEFACT_LIFECYCLE_GUIDANCE = """
+## Artefact Lifecycle — When You Produce Something The User Can Keep
+
+Every concrete thing you build for the user (a PR, a monitor, a query, a document)
+is persisted as a typed **artefact** so the user can review it on /dashboard/artifacts
+and resume the conversation later.
+
+Write tools that produce artefacts:
+- create_change_plan / validate_change_plan / apply_change_plan → produce PR_CHANGE
+  (auto-refined to DBT_CORE_CHANGE / DAG / SCHEMA_CHANGE based on patches)
+- create_monitor / update_monitor / delete_monitor → produce MONITOR
+(Other artefact kinds — WAREHOUSE_QUERY, TICKET, BI_ASSET, etc. — are reserved
+ for future tools; do not invent calls that don't exist.)
+
+How to use them:
+1. **Plan first.** Use read-only tools to gather context (target FQN, current config,
+   downstream impact). Never call a write tool before you understand what it will do.
+2. **Optional: call begin_artefact(kind, intent)** before the first write tool of a
+   flow to pre-create a draft artefact + child agent session. This lets the user
+   "Save to artefacts" while you're still iterating. For single-shot writes (one
+   monitor, one PR) it's fine to skip begin_artefact — the write tool's auto-emit
+   will create the artefact for you.
+3. **Call the write tool.** Tools marked requires_confirmation=True will pause and
+   ask the user to approve. Wait for the explicit __action:confirm message before
+   continuing. Do NOT call the same write tool twice for the same intent.
+4. **After __action:confirm:** the system has already executed the tool and
+   persisted the artefact. Summarize what was done in plain text. Do NOT call the
+   tool again.
+5. **After __action:cancel:** acknowledge briefly and ask what to change.
+"""
+
 try:
     import anthropic
     ANTHROPIC_AVAILABLE = True
@@ -589,6 +621,10 @@ When you call `run_coverage_monitor`, you are running a **one-off check that you
             if policy:
                 prompt += f"\n{policy}\n"
 
+        # Inject artefact lifecycle guidance so the LLM knows write tools persist
+        # typed artefacts and that confirmation flips them to applied.
+        prompt += ARTEFACT_LIFECYCLE_GUIDANCE
+
         # Inject write action policy (always present — write tools are always available)
         prompt += """
 ## Creating & Managing Monitors
@@ -612,6 +648,15 @@ RULES:
 AVAILABLE TOOLS:
 - create_watch: Create a monitor (or monitoring group with multiple checks) and schedule
 - run_watch: Run all checks in an existing monitor immediately (no confirmation needed)
+- begin_artefact: (Optional) Pre-create a draft MONITOR artefact and a child agent session before iterating.
+- create_monitor: Create a single typed MONITOR (use this for individual monitors on a target asset). Returns a MONITOR artefact with config diff.
+- update_monitor: Update an existing monitor's config. Emits a MONITOR artefact carrying the before/after diff.
+- delete_monitor: Destructive. Removes a monitor; emits a MONITOR artefact tagged operation:'delete' for audit.
+
+PREFER create_monitor/update_monitor/delete_monitor over create_watch when:
+- The user names a single specific asset and a single monitor kind.
+- The user wants to modify or remove an existing monitor by id.
+Keep using create_watch when the user is building a multi-monitor group (a "watch").
 
 MONITOR CATEGORY SELECTION (watch_type parameter):
 - pipeline_health: For warehouse tables (BigQuery, Snowflake, Postgres). THIS IS THE DEFAULT — use it for almost all requests.
