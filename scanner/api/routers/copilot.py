@@ -227,6 +227,9 @@ async def chat(
         )
         context.base_url = os.environ.get("NEXTJS_BASE_URL", "http://localhost:3000")
         context.auth_token = raw_request.headers.get("Authorization", "").replace("Bearer ", "")
+        # Wire identity fields needed by artefact auto-emit and begin_artefact.
+        context.user_id = principal.user_id
+        context.session_id = request.session_id or ""
 
         # Log the context
         logger.info(f"Built context with integration_types: {context.integration_types}")
@@ -354,6 +357,9 @@ async def chat_stream(
         )
         context.base_url = os.environ.get("NEXTJS_BASE_URL", "http://localhost:3000")
         context.auth_token = raw_request.headers.get("Authorization", "").replace("Bearer ", "")
+        # Wire identity fields needed by artefact auto-emit and begin_artefact.
+        context.user_id = principal.user_id
+        context.session_id = request.session_id or ""
 
         llm = CopilotLLM(model=request.model)
 

@@ -240,6 +240,13 @@ class CopilotContext:
     auth_token: str = ""
     referenced_entities: List[str] = field(default_factory=list)
 
+    # Acting principal + chat session identity. Required by the artefact
+    # auto-emit path (_emit_for_tool) and begin_artefact, both of which
+    # persist Artifact rows scoped by org/user/session and need a stable
+    # source_session_id. Set by the API layer after build_context returns.
+    user_id: str = ""
+    session_id: str = ""
+
     # Pre-fetched warehouse schema (tables and columns)
     warehouse_schema: Dict[str, List[TableSchema]] = field(default_factory=dict)  # dataset -> tables
 
