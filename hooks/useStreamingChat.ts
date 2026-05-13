@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { UIArtifact } from '@/types/artifacts';
+import type { TypedArtefactEnvelope } from '@/types/artefact-row';
 
 export interface StreamingToolCall {
   id: string;
@@ -33,6 +34,10 @@ export interface StreamingMessage {
   outputTokens: number;
   stopReason: string;
   artifacts: UIArtifact[];
+  // Typed artefacts (PR_CHANGE, MONITOR, …) emitted by the scanner's
+  // auto-emit path as a `typed_artefact` SSE event. Rendered inline in
+  // the chat as TypedArtefactCard components.
+  typedArtefacts: TypedArtefactEnvelope[];
 }
 
 interface PendingToolCall {
@@ -94,6 +99,7 @@ export function useStreamingChat() {
       outputTokens: 0,
       stopReason: '',
       artifacts: [],
+      typedArtefacts: [],
     });
 
     let sessionId: string | null = null;
@@ -235,6 +241,16 @@ export function useStreamingChat() {
               setStreamingMessage(prev => prev ? {
                 ...prev,
                 artifacts: [...prev.artifacts, artifact],
+              } : prev);
+              break;
+            }
+
+            case 'typed_artefact': {
+              // The scanner sends the envelope as the SSE event payload directly.
+              const envelope = data as TypedArtefactEnvelope;
+              setStreamingMessage(prev => prev ? {
+                ...prev,
+                typedArtefacts: [...prev.typedArtefacts, envelope],
               } : prev);
               break;
             }
