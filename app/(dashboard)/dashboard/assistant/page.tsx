@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { cn } from '@/lib/utils';
 import { ChangePlanToolResult, isChangePlanTool, SharePlanModal } from '@/components/copilot/change-plan';
 import type { ChangePlan } from '@/types/change-plan';
-import { MessageActionMenu, MessageActionButton, SaveArtifactModal } from '@/components/artifacts';
+import { MessageActionMenu, MessageActionButton } from '@/components/artifacts/MessageActionMenu';
 import { OnboardingBanner } from '@/components/copilot';
 import { useStreamingChat } from '@/hooks/useStreamingChat';
 import { ToolConfirmation } from '@/components/copilot/ToolConfirmation';
@@ -223,10 +223,9 @@ function AssistantPageInner() {
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
   const [shareToast, setShareToast] = useState<{ message: string; url?: string } | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
-  const [saveArtifactModal, setSaveArtifactModal] = useState<{
-    content: string;
-    messageId: string;
-  } | null>(null);
+  // TODO: re-introduce a "Save to Artefacts" flow once the new artefacts UI lands.
+  // The old SaveArtifactModal + POST /api/artifacts have been retired with the
+  // schema rewrite, so for now the action menu's save callback is a no-op.
   const [onboardingStatus, setOnboardingStatus] = useState<string>('NOT_STARTED');
   const [onboardingLoading, setOnboardingLoading] = useState(false);
   const [onboardingCollapsed, setOnboardingCollapsed] = useState(false);
@@ -1477,7 +1476,7 @@ function AssistantPageInner() {
                               isOpen={activeMenuId === message.id}
                               onClose={() => setActiveMenuId(null)}
                               onSaveToArtifacts={() => {
-                                setSaveArtifactModal({ content: message.content, messageId: message.id });
+                                // TODO: wire up to the new artefacts UI when it lands.
                                 setActiveMenuId(null);
                               }}
                             />
@@ -1547,9 +1546,9 @@ function AssistantPageInner() {
                                       setShareModal({ plan, targetType });
                                     }
                                   }}
-                                  onSaveToArtifacts={(content) => {
-                                    setSaveArtifactModal({ content, messageId: message.id });
-                                  }}
+                                  // onSaveToArtifacts intentionally omitted: the legacy
+                                  // save flow is retired and the PRCard hides its button
+                                  // when this prop is undefined.
                                   associatedPlan={associatedPlan?.plan}
                                 />
                               );
@@ -1949,15 +1948,6 @@ function AssistantPageInner() {
           }}
         />
       )}
-
-      {/* Save Artifact Modal */}
-      <SaveArtifactModal
-        isOpen={!!saveArtifactModal}
-        onClose={() => setSaveArtifactModal(null)}
-        content={saveArtifactModal?.content || ''}
-        sessionId={sessionId}
-        messageId={saveArtifactModal?.messageId || ''}
-      />
 
       {/* Share Toast */}
       {shareToast && (
