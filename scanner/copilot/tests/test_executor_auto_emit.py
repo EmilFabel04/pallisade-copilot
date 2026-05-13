@@ -80,3 +80,45 @@ async def test_auto_emit_skipped_when_tool_has_no_artifact_spec():
         result = await executor._execute_tool(tool, {})
         RepoCls.assert_not_called()
     assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_auto_emit_failure_does_not_break_tool_result():
+    """If artefact persistence fails, the tool result should still be returned successfully."""
+    from scanner.copilot.tool_executor import ToolExecutor
+
+    ctx = MagicMock()
+    ctx.org_id = "org_1"
+    ctx.user_id = "u_1"
+    ctx.session_id = "sess_1"
+    ctx.base_url = "http://localhost:3000"
+    ctx.agent_run_id = "run_1"
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor.context = ctx
+
+    tool = Tool(
+        name="flaky_emit_tool",
+        description="x",
+        category=ToolCategory.CHANGE_PLAN,
+        artifact_spec=ArtifactSpec(kind="MONITOR", status_on_success="applied"),
+    )
+
+    async def fake_handler(args):
+        return ToolResult(success=True, data={"title": "ok", "payload": {"kind": "MONITOR"}})
+
+    executor._execute_flaky_emit_tool = fake_handler  # type: ignore
+
+    with patch("scanner.copilot.tool_executor.ArtifactRepo") as RepoCls:
+        repo_instance = AsyncMock()
+        # Simulate a transient persistence failure
+        repo_instance.upsert.side_effect = RuntimeError("artifact API down")
+        RepoCls.return_value = repo_instance
+
+        result = await executor._execute_tool(tool, {"__tool_call_id": "tc_flaky"})
+
+    # Tool result must still be the successful original result, not None or error
+    assert result.success is True
+    assert result.data["title"] == "ok"
+    # Repo was called (verifying the emit path was attempted)
+    repo_instance.upsert.assert_awaited_once()
