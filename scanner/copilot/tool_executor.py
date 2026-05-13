@@ -1362,7 +1362,12 @@ class ToolExecutor:
 
         result_data = result.data or {}
         # Refine the kind based on the change_plan's patches, if present.
-        patches = result_data.get("patches") or []
+        # Patches may be top-level (mocked tests) or nested under the change plan (real handler).
+        patches = (
+            result_data.get("patches")
+            or (result_data.get("plan") or {}).get("patches")
+            or []
+        )
         refined_kind = self._refine_pr_change_kind(spec.kind, patches)
         title = result_data.get(spec.title_field) or tool.name
         summary = result_data.get(spec.summary_field) if spec.summary_field else None
@@ -1373,7 +1378,15 @@ class ToolExecutor:
             or args.get("__agent_session_id")
         )
         tool_call_id = args.get("__tool_call_id") or f"{tool.name}:{id(args)}"
+        # Build external_ref from explicit field or by lifting known GitHub PR keys.
         external_ref = result_data.get("external_ref")
+        if external_ref is None:
+            lifted: Dict[str, Any] = {}
+            for key in ("pr_url", "pr_number", "branch", "files_changed"):
+                val = result_data.get(key)
+                if val is not None:
+                    lifted[key] = val
+            external_ref = lifted or None
         if refined_kind == "DBT_CORE_CHANGE":
             payload = {
                 "kind": "DBT_CORE_CHANGE",
@@ -1387,6 +1400,15 @@ class ToolExecutor:
                 "dagId": (patches[0].get("file_path", "")).rsplit("/", 1)[-1].replace(".py", "") if patches else "unknown",
                 "operation": "edit",
                 "affectedTasks": [],
+            }
+        elif refined_kind == "PR_CHANGE" and result_data.get("plan_id"):
+            plan_dict = result_data.get("plan") or {}
+            payload = {
+                "kind": "PR_CHANGE",
+                "changePlanId": result_data.get("plan_id"),
+                "filesChanged": result_data.get("files_changed") or result_data.get("patches_count") or len(patches),
+                "diffSummary": result_data.get("message", ""),
+                "validationResults": plan_dict.get("validations") or {},
             }
         else:
             payload = result_data.get("payload") or {"kind": refined_kind}

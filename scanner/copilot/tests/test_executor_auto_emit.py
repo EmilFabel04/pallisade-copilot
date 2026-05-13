@@ -286,3 +286,119 @@ async def test_auto_emit_reuses_begin_artefact_row_by_agent_session_id():
     assert kwargs["idempotency_key"] == "agent_session:sess_abc"
     assert kwargs["agent_session_id"] == "sess_abc"
     assert kwargs["risk_level"] == ArtifactRisk.HIGH
+
+
+@pytest.mark.asyncio
+async def test_auto_emit_handles_nested_patches_in_plan_dict():
+    """The real _execute_create_change_plan returns patches nested under data["plan"]["patches"].
+    _emit_for_tool must look there (in addition to the top-level) so the PR_CHANGE → DBT_CORE_CHANGE
+    refinement fires in production, not just in tests that mock top-level patches.
+    """
+    from scanner.copilot.tool_executor import ToolExecutor
+
+    ctx = MagicMock()
+    ctx.org_id = "org_1"
+    ctx.user_id = "u_1"
+    ctx.session_id = "sess_1"
+    ctx.base_url = "http://localhost:3000"
+    ctx.agent_run_id = "run_1"
+    ctx._active_agent_session_id = None
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor.context = ctx
+
+    tool = Tool(
+        name="create_change_plan",
+        description="x",
+        category=ToolCategory.CHANGE_PLAN,
+        artifact_spec=ArtifactSpec(kind="PR_CHANGE", status_on_success="proposed"),
+    )
+
+    async def fake_handler(args):
+        # Mimic the real handler shape: patches live under data["plan"]["patches"].
+        return ToolResult(
+            success=True,
+            data={
+                "plan_id": "cp_1",
+                "title": "dbt change",
+                "plan": {
+                    "patches": [
+                        {"patch_type": "sql_model", "file_path": "models/x.sql"},
+                    ],
+                },
+            },
+        )
+
+    executor._execute_create_change_plan = fake_handler  # type: ignore
+
+    with patch("scanner.copilot.tool_executor.ArtifactRepo") as RepoCls:
+        repo_instance = AsyncMock()
+        repo_instance.upsert.return_value = {"id": "art_nested"}
+        RepoCls.return_value = repo_instance
+
+        await executor._execute_tool(tool, {"__tool_call_id": "tc_nested"})
+
+    kwargs = repo_instance.upsert.await_args.kwargs
+    assert kwargs["kind"].value == "DBT_CORE_CHANGE"
+    assert kwargs["payload"]["modelsTouched"] == ["models/x.sql"]
+
+
+@pytest.mark.asyncio
+async def test_auto_emit_lifts_pr_url_into_external_ref_for_apply():
+    """The real _execute_apply_change_plan returns pr_url/pr_number/branch/files_changed at the
+    top level (no `external_ref`, no `patches`). _emit_for_tool must lift those keys into
+    external_ref and build a PR_CHANGE payload referencing the plan, so the most useful piece of
+    data (the PR URL) isn't silently dropped.
+    """
+    from scanner.copilot.tool_executor import ToolExecutor
+
+    ctx = MagicMock()
+    ctx.org_id = "org_1"
+    ctx.user_id = "u_1"
+    ctx.session_id = "sess_1"
+    ctx.base_url = "http://localhost:3000"
+    ctx.agent_run_id = "run_1"
+    ctx._active_agent_session_id = None
+
+    executor = ToolExecutor.__new__(ToolExecutor)
+    executor.context = ctx
+
+    tool = Tool(
+        name="apply_change_plan",
+        description="x",
+        category=ToolCategory.CHANGE_PLAN,
+        artifact_spec=ArtifactSpec(kind="PR_CHANGE", status_on_success="applied"),
+    )
+
+    async def fake_handler(args):
+        return ToolResult(
+            success=True,
+            data={
+                "plan_id": "cp_2",
+                "pr_url": "https://github.com/foo/bar/pull/9",
+                "pr_number": 9,
+                "branch": "feat/x",
+                "files_changed": 3,
+                "message": "PR created",
+            },
+        )
+
+    executor._execute_apply_change_plan = fake_handler  # type: ignore
+
+    with patch("scanner.copilot.tool_executor.ArtifactRepo") as RepoCls:
+        repo_instance = AsyncMock()
+        repo_instance.upsert.return_value = {"id": "art_apply"}
+        RepoCls.return_value = repo_instance
+
+        await executor._execute_tool(tool, {"__tool_call_id": "tc_apply"})
+
+    kwargs = repo_instance.upsert.await_args.kwargs
+    assert kwargs["external_ref"] == {
+        "pr_url": "https://github.com/foo/bar/pull/9",
+        "pr_number": 9,
+        "branch": "feat/x",
+        "files_changed": 3,
+    }
+    assert kwargs["payload"]["kind"] == "PR_CHANGE"
+    assert kwargs["payload"]["changePlanId"] == "cp_2"
+    assert kwargs["payload"]["filesChanged"] == 3
