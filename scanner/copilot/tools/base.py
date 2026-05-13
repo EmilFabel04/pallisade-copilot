@@ -53,6 +53,8 @@ class Tool:
     required_integrations: Set[str] = field(default_factory=set)
     alternative_integrations: Set[str] = field(default_factory=set)
     requires_confirmation: bool = False
+    risk_level: Optional["RiskLevel"] = None
+    artifact_spec: Optional["ArtifactSpec"] = None
 
     def to_anthropic_tool(self) -> Dict[str, Any]:
         """Convert to Anthropic tool format."""
@@ -145,3 +147,16 @@ class ToolResult:
             "data": self.data,
             "error": self.error,
         }
+
+
+from enum import Enum as _Enum
+
+# Re-export ArtifactSpec from artefacts.models so tool decorators can attach one
+# without taking a direct dependency on the wider artefacts package.
+from ..artifacts.models import ArtifactSpec  # noqa: F401
+
+
+class RiskLevel(_Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"

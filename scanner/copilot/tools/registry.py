@@ -6,7 +6,8 @@ Decorator-based tool registration and ToolRegistry class.
 
 import re
 from typing import Dict, List, Optional, Set, Any
-from .base import Tool, ToolParameter, ToolResult, ToolCategory
+from .base import Tool, ToolParameter, ToolResult, ToolCategory, RiskLevel
+from ..artifacts.models import ArtifactSpec
 
 # Global registry populated by @register_tool at import time
 _GLOBAL_REGISTRY: Dict[str, Tool] = {}
@@ -20,6 +21,8 @@ def register_tool(
     required_integrations: Optional[Set[str]] = None,
     alternative_integrations: Optional[Set[str]] = None,
     requires_confirmation: bool = False,
+    risk_level: Optional["RiskLevel"] = None,
+    artifact_spec: Optional["ArtifactSpec"] = None,
 ):
     """
     Decorator that registers a tool in the global registry.
@@ -38,6 +41,8 @@ def register_tool(
             required_integrations=required_integrations or set(),
             alternative_integrations=alternative_integrations or set(),
             requires_confirmation=requires_confirmation,
+            risk_level=risk_level,
+            artifact_spec=artifact_spec,
         )
         return fn
     return decorator
