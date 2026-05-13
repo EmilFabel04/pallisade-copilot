@@ -41,8 +41,11 @@ export async function POST(request: NextRequest) {
     where: { idempotencyKey_organizationId: { idempotencyKey, organizationId: orgId } },
     create: { ...data, idempotencyKey },
     update: {
+      // Provenance fields (subtype, *SessionId, toolCallId, agentRunId, integrationId, riskLevel)
+      // are fixed at create-time and intentionally not mutated on retry.
       status, payload, externalRef, summary, title, rollbackHint,
       appliedAt: status === 'applied' ? new Date() : undefined,
+      // isSaved: re-emit can set true, never reset to false.
       isSaved: isSaved || undefined,
     },
   });

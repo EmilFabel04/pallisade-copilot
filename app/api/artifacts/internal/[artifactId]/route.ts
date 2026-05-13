@@ -10,11 +10,17 @@ export async function PATCH(
     return NextResponse.json({ error: 'Unauthorised' }, { status: 401 });
   }
   const { artifactId } = await params;
+  const orgId = request.headers.get('x-organization-id');
+  if (!orgId) {
+    return NextResponse.json({ error: 'Missing org' }, { status: 400 });
+  }
   const body = await request.json();
   const { status, externalRefPatch, payloadPatch } = body;
 
   const existing = await prisma.artifact.findUnique({ where: { id: artifactId } });
-  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  if (!existing || existing.organizationId !== orgId) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  }
 
   const externalRef = externalRefPatch
     ? { ...(existing.externalRef as Record<string, unknown> ?? {}), ...externalRefPatch }
