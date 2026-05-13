@@ -1928,6 +1928,14 @@ The database schema could not be pre-loaded. You MUST discover table and column 
         except Exception as e:
             result = ToolResult(success=False, error=str(e))
 
+        # Drain executor-stashed SSE events (e.g. `typed_artefact` from auto-emit)
+        # before yielding the tool_call_result event.
+        for ev_dict in getattr(result, "stream_events", None) or []:
+            ev_type = ev_dict.pop("type", "typed_artefact")
+            yield StreamEvent(ev_type, ev_dict)
+        if hasattr(result, "stream_events"):
+            result.stream_events = []
+
         yield StreamEvent("tool_call_result", {
             "tool_use_id": tool_use_id,
             "tool_name": tool_name,
@@ -2148,6 +2156,11 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                                 result = await executor.execute_confirmed(
                                     tool_name, art_data,
                                 )
+                                for ev_dict in getattr(result, "stream_events", None) or []:
+                                    ev_type = ev_dict.pop("type", "typed_artefact")
+                                    yield StreamEvent(ev_type, ev_dict)
+                                if hasattr(result, "stream_events"):
+                                    result.stream_events = []
                                 yield StreamEvent("tool_call_result", {
                                     "tool_use_id": tool_use_id,
                                     "tool_name": tool_name,
@@ -2213,6 +2226,11 @@ The database schema could not be pre-loaded. You MUST discover table and column 
                             "input": tool_input,
                             "result": result.to_dict(),
                         })
+                        for ev_dict in getattr(result, "stream_events", None) or []:
+                            ev_type = ev_dict.pop("type", "typed_artefact")
+                            yield StreamEvent(ev_type, ev_dict)
+                        if hasattr(result, "stream_events"):
+                            result.stream_events = []
                         yield StreamEvent("tool_call_result", {
                             "tool_use_id": tool_use_id,
                             "tool_name": tool_name,
